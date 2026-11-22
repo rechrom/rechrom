@@ -1,3 +1,6 @@
+// Chromium identifiers keep their source spelling.
+#![allow(non_camel_case_types)]
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selector {
     Tag(String),

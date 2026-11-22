@@ -287,7 +287,6 @@ impl source::ReplacementPreparationContext for FragmentPreparation<'_, '_, '_, '
             .flatten()
     }
     fn BeforeTextInserted(&self, root: u64, text: &[u16]) -> EditResult<Vec<u16>> {
-        use source::ReplacementPreparationContext;
         let mut text = text.to_vec();
         let Some((control, textarea)) = self.EnclosingTextControl(root) else {
             return Ok(text);

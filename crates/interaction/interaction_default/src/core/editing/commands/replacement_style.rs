@@ -3,12 +3,11 @@
 //! the editing command; opaque declarations are mutated by the Style owner.
 use super::{
     paragraph_editing_context::{EditResult, EditingAborted},
-    replace_selection_command::ReplacementFragmentDOM,
     replacement_markup::{ReplacementInsertedNodes, ReplacementMarkupContext},
     structural_editing_context::{StructuralEditingContext, StructuralPositionQuery},
 };
 use crate::core::editing::{
-    position::{Position, PositionTree},
+    position::Position,
     text_offset_mapping::{NextNode, NextSkippingChildren},
 };
 use foundation::QualifiedName;

@@ -7,7 +7,6 @@ use super::{
     position::{Position, PositionWithAffinity, TextAffinity},
     position_conversion::PositionTreeScope,
     position_iterator::PositionIterator,
-    text_offset_mapping::IsDescendantOf,
     visible_units::{self, EditingBoundaryCrossingRule, VisibleUnitsContext},
 };
 use std::cmp::Ordering;

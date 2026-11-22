@@ -182,7 +182,7 @@ impl SoftNavigationPaintAttributionTracker {
         let reset_text_tracking = inherited.and_then(|state| {
             let contentful = match facts.node {
                 None if facts.is_layout_text => text_aggregator,
-                Some(node) if facts.node_is_text_type || facts.is_paint_timing_image => {
+                Some(_) if facts.node_is_text_type || facts.is_paint_timing_image => {
                     if facts.node_is_text_node {
                         text_aggregator
                     } else {

@@ -384,7 +384,7 @@ impl<B: SchedulerTypes> Scheduler<B> {
 
     // Source: cc/scheduler/scheduler.cc:142-148
     pub fn NotifyReadyToActivate(&mut self, client: &mut dyn SchedulerClient<Types = B>) {
-        if (self.state_machine_.NotifyReadyToActivate()) {
+        if self.state_machine_.NotifyReadyToActivate() {
             self.compositor_timing_history_.ReadyToActivate();
         }
 

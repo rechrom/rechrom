@@ -6,7 +6,7 @@ use crate::{
         geometry::{PointF, Rect, Size},
         input_handler::InputLayerId,
         input_types::ElementId,
-        layer_impl::{LayerImplOwner, LayerImplPushContext},
+        layer_impl::LayerImplPushContext,
         layer_tree_host_impl::HostImplLayerServices,
         layer_tree_impl::{LayerTreeId, PropertyTreesFor},
         scrollbar_layer_impl_base::{
@@ -17,7 +17,7 @@ use crate::{
         input::scrollbar::{ScrollbarOrientation, ScrollbarPart},
         layers::{
             scrollbar_layer_impl_base::{
-                ScrollbarLayerImplBase, ScrollbarLayerImplOwner, ScrollbarLayerImplVirtual,
+                ScrollbarLayerImplBase, ScrollbarLayerImplOwner,
             },
             solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl,
         },

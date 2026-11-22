@@ -14,18 +14,15 @@ use crate::adapter::layer_tree_impl::*;
 use crate::adapter::picture_layer_impl::{PictureLayerImplServices, PictureLayerImplTypes};
 use crate::adapter::property_types::*;
 use crate::adapter::resource_types::SharedImageFormat;
-use crate::adapter::scheduler::*;
 use crate::adapter::time::*;
 use crate::adapter::{image_animation::PaintImageId, input_types::ElementId};
-use crate::cc::base::region::Region;
-use crate::cc::debug::layer_tree_debug_state::LayerTreeDebugState;
 use crate::cc::trees::layer_tree_impl::LayerTreeImpl;
 use crate::cc::trees::layer_tree_settings::LayerTreeSettings;
 use crate::cc::{
     input::scrollbar::{ScrollbarOrientation, ScrollbarPart},
     trees::{frame_data::FrameData, presentation_time_callback_buffer::PendingCallbacks},
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 /// Constructors and direct platform operations at the host source callsites.
 pub trait CpuHostCoreServices<B: HostImplTypes> {

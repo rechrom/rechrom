@@ -27,7 +27,7 @@
 // overlapping_document_marker_list_editor}.{cc,h}. Context-menu marker subset.
 use super::styleable_marker::{
     StyleableMarker, SuggestionMarker, SuggestionMarkerProperties,
-    SuggestionMarkerReplacementScope, SuggestionType,
+    SuggestionType,
 };
 use crate::core::editing::visible_position::DownstreamVisiblePositionContext;
 use crate::core::editing::{
@@ -37,12 +37,11 @@ use crate::core::editing::{
         text_iterator::{TextIterator, TextIteratorContext},
         text_iterator_behavior::TextIteratorBehavior,
     },
-    position::{Position, PositionDOM, PositionTree},
+    position::{Position, PositionDOM},
     position_conversion::PositionTreeScope,
     position_units_word::{self, WordBreakContext},
     selection_adjuster::WordSide,
     text_offset_mapping::{self, InlineContentsContext},
-    visible_position::VisiblePositionContext,
 };
 use std::{
     cell::{Cell, RefCell},

@@ -8,7 +8,7 @@ use super::{
         AverageLagTrackingManager, ClientResourceProvider, EventsMetricsManager, LayerContext,
     },
     metadata::{FrameTimingDetails, PresentationFeedback},
-    resource_events::{ResourceEffect, ResourceEffects},
+    resource_events::ResourceEffect,
     resources::RasterReturnedResource,
     types::LocalSurfaceId,
 };

@@ -7,7 +7,7 @@ use super::{
         self, CanMergeLists, ElementSibling, EnclosingList, EnclosingListChild, EnclosingTableCell,
         HighestEnclosingNodeOfType, InsertListCommand, ListEditingContext, ListType,
     },
-    paragraph_cloning::{self, AtEdge, Contains, InsertAfter},
+    paragraph_cloning::{self, AtEdge, Contains},
     paragraph_editing_context::{EditResult, EditingAborted},
     structural_editing_context::StructuralPositionQuery as Q,
 };

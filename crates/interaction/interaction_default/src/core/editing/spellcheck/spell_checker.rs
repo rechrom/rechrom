@@ -2,7 +2,6 @@
 // Chromium: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
 // Source core/editing/spellcheck/spell_checker.cc:740-752.
 use crate::core::editing::position::{Position, PositionDOM};
-use crate::core::editing::visible_position::DownstreamVisiblePositionContext;
 pub trait SpellCheckingContext: PositionDOM {
     fn EnclosingTextControl(&self, position: &Position<Self::Node>) -> Option<Self::Node>;
     fn IsInput(&self, node: &Self::Node) -> bool;

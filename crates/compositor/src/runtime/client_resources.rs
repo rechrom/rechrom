@@ -23,7 +23,6 @@ use crate::{
 use compositor_resource::client_resource_lifecycle::{
     ApplyReturnedClientResources, ClientResourceImport, DrainClientResourcesForShutdown,
     ExportableClientResource, PrepareClientResourcesForExport, ReleaseAllExportedClientResources,
-    ReturnedClientResource,
 };
 use std::{
     collections::HashMap,

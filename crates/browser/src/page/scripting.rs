@@ -8,9 +8,6 @@ use open::{
 
 #[path = "script_owners.rs"]
 mod owners;
-pub(super) use owners::{
-    InstalledPageWindow, PageWindowPublishError, PreparedPageWindow, RetiredPageWindow,
-};
 
 /// Script-side values needed when installing a document's interaction facade.
 pub(super) struct PageScriptInteractionEnvironment {

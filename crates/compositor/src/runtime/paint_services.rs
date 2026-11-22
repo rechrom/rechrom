@@ -179,7 +179,6 @@ impl<R: CpuSkiaBackend>
         r: &crate::runtime::skia::SkRoundedRect,
         flags: paint::CpuPaintFlags<R>,
     ) {
-        use crate::adapter::display_item_list::DisplayPaintOpBuffer;
         let rect = crate::runtime::skia::SkRoundedRectValue(r);
         list.push(paint::CpuPaintOp::DrawRRect(rect, flags));
     }
@@ -209,7 +208,7 @@ use crate::adapter::{
     geometry::{Point, PointF, RRectF, Rect, RectF},
     layer_tree_impl::Color4f,
     main_layer::LayerContext,
-    paint_geometry::{ChunkGeometryMapper, MaskGeometryMapper},
+    paint_geometry::MaskGeometryMapper,
     pending_layer::{PendingLayerColor, PendingLayerGeometry, PendingMappedVisualRect},
 };
 use crate::third_party::blink::renderer::platform::graphics::paint::{

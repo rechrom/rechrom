@@ -18,7 +18,6 @@ use crate::browser_controls_offset_manager_client::{
 };
 use crate::browser_controls_params::BrowserControlsParams;
 use crate::browser_controls_state::BrowserControlsState;
-use crate::input_types::ElementId;
 use crate::offset_tag::BrowserControlsOffsetTagModifications;
 use crate::offset_tag::OffsetTag;
 use crate::scroll_velocity_tracker::ScrollVelocityTracker;

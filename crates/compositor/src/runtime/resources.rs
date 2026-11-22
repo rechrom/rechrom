@@ -11,7 +11,7 @@ use crate::adapter::{
     layer_tree_impl::ResourceId,
     resource_pool::{
         PoolSharedImage, PoolTransferableResource, ResourcePoolMemoryDump, ResourcePoolTypes,
-        ResourceSyncToken, SharedImageTracingImportance,
+        SharedImageTracingImportance,
     },
     resource_types::SharedImageFormat,
 };

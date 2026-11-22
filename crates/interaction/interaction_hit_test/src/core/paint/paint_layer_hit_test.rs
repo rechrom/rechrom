@@ -52,7 +52,6 @@ use foundation::{gfx, PhysicalOffset, PhysicalRect};
 
 use super::hit_testing_transform_state::{HitTestingTransformState, TransformPaintPropertyNode};
 use super::paint_layer::PaintLayerIteration;
-use crate::core::layout::geometry::physical_rect::PhysicalRectHitTestExt;
 use crate::core::layout::hit_test_location::HitTestLocation;
 use crate::core::layout::hit_test_phase::HitTestPhase;
 use crate::core::layout::hit_test_request::HitTestRequest;

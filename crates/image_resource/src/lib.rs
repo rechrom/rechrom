@@ -1,6 +1,9 @@
 //! Renderer-neutral image identities and immutable content snapshots.
 //! This crate owns no DOM, layout, paint engine, raster backend or scheduler.
 
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case, non_camel_case_types)]
+
 use std::{
     any::Any,
     fmt, io,

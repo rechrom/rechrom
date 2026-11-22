@@ -5,7 +5,7 @@ use super::{
     input_types::ElementId,
     layer_tree_host_impl::ContentColorUsage,
     layer_tree_impl::{Color4f, LayerTreeTypes},
-    main_layer::{MainLayerImpl, MainLayerImplTree, MainLayerTypes},
+    main_layer::{MainLayerImpl, MainLayerTypes},
     recording_source::{RecordingDisplayItemList, RecordingSourceServices, RecordingSourceTypes},
 };
 use crate::cc::{

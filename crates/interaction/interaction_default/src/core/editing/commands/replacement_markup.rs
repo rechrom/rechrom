@@ -8,7 +8,7 @@ use super::{
     structural_editing_context::{StructuralEditingContext, StructuralPositionQuery},
 };
 use crate::core::editing::{
-    position::{Position, PositionDOM, PositionTree},
+    position::{Position, PositionTree},
     text_offset_mapping::{NextNode, NextSkippingChildren},
 };
 

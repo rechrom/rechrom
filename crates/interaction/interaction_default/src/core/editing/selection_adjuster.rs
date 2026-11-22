@@ -31,7 +31,6 @@ use super::{
     text_granularity::TextGranularity,
     visible_position::{VisiblePosition, VisiblePositionContext},
 };
-use crate::core::editing::visible_position::DownstreamVisiblePositionContext;
 use std::cmp::Ordering;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

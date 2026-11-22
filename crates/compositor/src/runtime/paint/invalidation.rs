@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     adapter::{
         geometry::{Rect, RectF},
-        paint_geometry::{ChunkGeometryMapper, GeometryMapperContext},
+        paint_geometry::GeometryMapperContext,
         raster_invalidator::*,
     },
     runtime::types::CpuSkiaBackend,

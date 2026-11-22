@@ -52,8 +52,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> ClientHostContext<'_, B> {
 }
 
 use super::{
-    image_animation::{PaintImageId, PaintImageIdFlatSet},
-    paint_worklet::PaintWorkletTypes,
+    image_animation::PaintImageIdFlatSet,
 };
 use std::{collections::BTreeMap, sync::Arc};
 // External cc/paint job values. Inputs/records retain their actual producer

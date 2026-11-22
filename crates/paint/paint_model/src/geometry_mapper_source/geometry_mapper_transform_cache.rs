@@ -12,7 +12,6 @@ use crate::{
     source_transform::PropertyTransform,
     source_transform::PropertyTreeTransform,
 };
-use std::marker::PhantomData;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex, Weak,

@@ -1,6 +1,9 @@
 //! The initial static block slice of //src/paint. Unsupported paint features
 //! fail explicitly until their source painters are translated.
 
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case)]
+
 pub use paint_chunk::paint_chunker;
 pub use paint_model::display_item_id;
 pub use paint_model::opaque_paint_cache_slot;
@@ -8,7 +11,6 @@ pub use paint_model::paint_clip_path;
 pub use paint_model::path_hit_test;
 pub use paint_model::{basic_shape_path, contoured_border_geometry, contoured_rect};
 pub use paint_model::{geometry_mapper, geometry_mapper_source};
-pub(crate) use paint_record::paint_context;
 pub use prepaint::background_geometry;
 pub(crate) use prepaint::client_rects;
 pub mod layout_object_counter;

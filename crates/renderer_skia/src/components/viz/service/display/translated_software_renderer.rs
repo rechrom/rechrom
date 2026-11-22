@@ -1088,7 +1088,7 @@ impl TranslatedSoftwareRenderer {
                 direct_regions.retain(|region| !region.IsEmpty());
                 let direct_region_count = direct_regions.len();
                 let mut successful_regions = Vec::with_capacity(direct_region_count);
-                for mut region in direct_regions {
+                for region in direct_regions {
                     let mut destination = Rect::new(
                         region.x + transform.rc(0, 3).round() as i32 - self.current_rect.x,
                         region.y + transform.rc(1, 3).round() as i32 - self.current_rect.y,

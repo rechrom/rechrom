@@ -4,7 +4,7 @@
 //! Style, SVG byte-stream or resource graph is flattened at this boundary.
 use foundation::{
     gfx::{PointF, RectF},
-    FloatValueForLength, WindRule,
+    FloatValueForLength,
 };
 use layout_style::style::{basic_shapes::*, style_path::StylePath};
 

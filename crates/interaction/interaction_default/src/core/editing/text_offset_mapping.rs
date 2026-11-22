@@ -340,5 +340,3 @@ pub fn FindForwardInlineContents<C: TextOffsetMappingContext>(
     }
     None
 }
-
-use super::visible_position::VisiblePositionContext;

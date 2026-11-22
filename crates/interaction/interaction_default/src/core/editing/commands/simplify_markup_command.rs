@@ -4,7 +4,7 @@
 use super::{
     paragraph_editing_context::EditResult, structural_editing_context::StructuralEditingContext,
 };
-use crate::core::editing::{position::PositionTree, text_offset_mapping::NextNode};
+use crate::core::editing::text_offset_mapping::NextNode;
 pub trait SimplifyMarkupContext: StructuralEditingContext {
     fn InlineAlwaysCreateLineBoxes(&self, node: u64) -> Option<bool>;
     fn ComputedStylesDiffer(&self, a: u64, b: u64) -> EditResult<Option<bool>>;

@@ -1,6 +1,6 @@
 //! PAC borrows actual native node/item values and retained record allocations.
 use super::*;
-use crate::{adapter::{paint_artifact_compositor::*,pending_layer::{PendingTransformNode,PendingEffectNode}},runtime::types::{CpuSkiaBackend,CpuCompositorTypes,NodeId}};
+use crate::{adapter::{paint_artifact_compositor::*},runtime::types::{CpuSkiaBackend,CpuCompositorTypes,NodeId}};
 use crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache;
 impl<R, B> ArtifactTransformNode<B> for TransformNode<R>
 where

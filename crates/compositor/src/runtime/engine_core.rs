@@ -33,7 +33,7 @@ use crate::{
     engine::{CompositorError, CompositorMainThreadEffect, CompositorViewportState},
     performance::{CompositorPackage, Span},
     third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor,
-    CompositorFrame, CompositorFrameSubmission,
+    CompositorFrameSubmission,
 };
 use paint::PaintArtifact;
 use std::{

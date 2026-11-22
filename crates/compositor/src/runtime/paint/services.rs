@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     adapter::{
         display_item_list::{DisplayCanvas, DisplayPaintOpBuffer},
-        geometry::{Rect, RectF, Vector2dF},
+        geometry::{Rect, Vector2dF},
         input_types::ElementId,
         layer_tree_impl::Color4f,
         prioritized_tile::ScrollOffsetMap,
@@ -281,7 +281,7 @@ impl Recorder {
         offsets: Option<&[usize]>,
     ) {
         use paint::cc::paint::discardable_image_map::{
-            DiscardableImageBackend, ImageGatheringCanvas,
+            ImageGatheringCanvas,
         };
         for index in 0..offsets.map_or(b.Used(), |o| o.len()) {
             let i = offsets.map_or(index, |o| o[index]);

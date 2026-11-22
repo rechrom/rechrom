@@ -352,7 +352,7 @@ impl ResourceFetcher {
     }
     fn FontResource(
         &self,
-        mut request: URLRequest,
+        request: URLRequest,
         world: CSPWorld,
         mode: url_loader::FetchMode,
         credentials: url_loader::FetchCredentialsMode,

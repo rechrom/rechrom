@@ -18,7 +18,7 @@ static CURRENT_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 pub trait UndoStepContext<S: Clone> {
     type Node: Clone + PartialEq;
     fn UpdateStyleAndLayout(&self);
-    fn EventQueueScope(&self) -> EventQueueScope;
+    fn EventQueueScope(&self) -> EventQueueScope<'_>;
     fn RootEditableElement(&self, selection: &S) -> Option<Self::Node>;
     fn DispatchEditableContentChangedEvents(
         &self,

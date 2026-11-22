@@ -261,7 +261,7 @@ pub fn inline() -> Arc<dyn Executor> {
     Arc::new(InlineExecutor)
 }
 
-/// A reusable platform pool with inline progress for nested work when saturated.
+// A reusable platform pool with inline progress for nested work when saturated.
 thread_local! { static CURRENT_POOL: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) }; }
 static NEXT_POOL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 pub struct PoolExecutor {

@@ -4,11 +4,11 @@
 use super::*;
 use crate::{
     adapter::{
-        geometry::{Rect, Size},
+        geometry::Size,
         prioritized_tile::ScrollOffsetMap,
         resource_types::SharedImageFormat,
         tile_manager::{
-            RasterImageProvider, RasterPlaybackRequest, TileManagerRasterBuffer, TileManagerTypes,
+            RasterImageProvider, RasterPlaybackRequest, TileManagerRasterBuffer,
             WorkletImageProvider,
         },
     },

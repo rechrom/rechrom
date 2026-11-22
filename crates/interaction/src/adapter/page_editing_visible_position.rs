@@ -42,7 +42,7 @@ use std::cmp::Ordering;
 #[path = "page_nonlocated_context_menu_geometry.rs"]
 mod nonlocated_context_menu_geometry;
 pub use nonlocated_context_menu_geometry::{
-    NonLocatedGeometryQuery, NonLocatedGeometryResult, QueryNonLocatedGeometry,
+    NonLocatedGeometryQuery, NonLocatedGeometryResult,
 };
 #[path = "page_clipboard_geometry.rs"]
 mod clipboard_geometry;

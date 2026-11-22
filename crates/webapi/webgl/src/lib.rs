@@ -937,7 +937,7 @@ impl CanvasContextFactory for WebGLContextFactory {
     fn Create(
         &mut self,
         context_type: CanvasContextType,
-        mut attributes: CanvasContextCreationAttributesCore,
+        attributes: CanvasContextCreationAttributesCore,
         width: u32,
         height: u32,
     ) -> Option<Box<dyn CanvasRenderingContext>> {

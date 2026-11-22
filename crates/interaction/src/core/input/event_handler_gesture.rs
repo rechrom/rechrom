@@ -34,10 +34,9 @@ use crate::core::input::{
     gesture_manager::GestureEventWithHitTestResults,
     touch_adjustment::{self, TouchAdjustmentCandidateType},
 };
-use foundation::{gfx, LayoutUnit, PhysicalOffset, PhysicalRect, PhysicalSize};
+use foundation::{gfx, LayoutUnit, PhysicalOffset, PhysicalSize};
 use interaction_input::public::common::input::{
     web_gesture_event::WebGestureEvent, web_input_event::Modifiers,
-    web_pointer_properties::PointerType,
 };
 
 type Frame<'scope, R> = Rc<dyn EventHandlerFrame<'scope, R> + 'scope>;

@@ -7,7 +7,7 @@
 // Rust modules replace includes, forward declarations and namespaces.
 use super::prioritized_tile::PrioritizedTile;
 use super::{
-    picture_layer_tiling::PictureLayerTiling, picture_layer_tiling_set::PictureLayerTilingSet,
+    picture_layer_tiling_set::PictureLayerTilingSet,
 };
 use crate::picture_layer_tiling_types::{PictureLayerTilingQueries, PictureLayerTilingTypes};
 use crate::tile_types::{PictureLayerTilingId, TileId};

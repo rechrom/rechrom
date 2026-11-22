@@ -15,12 +15,12 @@ use super::{
     frame_build::FrameBuildServices,
     host_action::HostActionServices,
     host_core::{HostCoreOwners, ImageAnimationDispatch, OsSurfaceTokenSource},
-    host_frame_sink::{HostFrameSinkCallbacks, HostFrameSinkConfig, HostFrameSinkServices},
+    host_frame_sink::{HostFrameSinkConfig, HostFrameSinkServices},
     host_lifecycle::{HostLifecycle, HostLifecycleEffects},
     host_metadata::{HostMetadataConfig, HostMetadataServices},
     host_picture_services::{
         CpuHostPictureMutationServices, CpuHostPictureTileServices, CpuPictureLayerServices,
-        HostPictureEnvironment, HostPictureFeatures, HostPictureState,
+        HostPictureEnvironment, HostPictureFeatures,
     },
     host_services::{CpuHostServices, HostInit},
     images::{CheckerImageClient, CpuImageServices, ImageDecodeCacheRegistry},
@@ -42,7 +42,7 @@ use super::{
     skia::SkRegion,
     tile_execution::TileExecution,
     tree_environment::{TreeEnvironmentConfig, TreeEnvironmentServices},
-    types::{LocalSurfaceId, MainMutatorHostIdentity},
+    types::LocalSurfaceId,
     ui::{UiRasterServices, UiResourceServices},
     worklet::WorkletServices,
 };

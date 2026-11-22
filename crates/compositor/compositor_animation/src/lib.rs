@@ -3,7 +3,7 @@
 //! This package is below the `compositor` facade. It must not depend on the
 //! facade, Page, Paint, Viz, Renderer, or platform presentation.
 
-#![allow(non_snake_case)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ElementListType {

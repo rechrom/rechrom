@@ -309,18 +309,18 @@ pub(crate) fn Cmap(d: &[u8], glyphs: u16, os2: &mut [u8]) -> io::Result<Vec<u8>>
     for (platform, encoding, offset, format, length) in headers {
         let input = &d[offset..offset + length];
         match (platform, encoding, format) {
-            (0, 0 | 1, 4) => (bmp_windows = Some(format4(input, glyphs, os2)?)),
-            (0, 3, 4) => (bmp_unicode = Some(format4(input, glyphs, os2)?)),
-            (0, 3 | 4, 12) => (ucs4 = Some(format_groups(input, 12, glyphs)?)),
-            (0, 5, 14) => (selectors = Some(format14(input)?)),
+            (0, 0 | 1, 4) => bmp_windows = Some(format4(input, glyphs, os2)?),
+            (0, 3, 4) => bmp_unicode = Some(format4(input, glyphs, os2)?),
+            (0, 3 | 4, 12) => ucs4 = Some(format_groups(input, 12, glyphs)?),
+            (0, 5, 14) => selectors = Some(format14(input)?),
             (1, 0, 0) => {
                 u16_at(input, 4)?;
                 mac.extend_from_slice(input.get(6..262).ok_or_else(invalid)?);
             }
-            (3, 0, 4) => (symbol = Some(format4(input, glyphs, os2)?)),
-            (3, 1, 4) => (bmp_windows = Some(format4(input, glyphs, os2)?)),
-            (3, 10, 12) => (ucs4 = Some(format_groups(input, 12, glyphs)?)),
-            (3, 10, 13) => (fallback = Some(format_groups(input, 13, glyphs)?)),
+            (3, 0, 4) => symbol = Some(format4(input, glyphs, os2)?),
+            (3, 1, 4) => bmp_windows = Some(format4(input, glyphs, os2)?),
+            (3, 10, 12) => ucs4 = Some(format_groups(input, 12, glyphs)?),
+            (3, 10, 13) => fallback = Some(format_groups(input, 13, glyphs)?),
             _ => {}
         }
     }

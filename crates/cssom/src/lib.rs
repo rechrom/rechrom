@@ -1,3 +1,6 @@
+// Chromium identifiers keep their source spelling.
+#![allow(non_camel_case_types)]
+
 pub mod container_condition;
 pub use container_condition::*;
 pub mod css_inline_style;

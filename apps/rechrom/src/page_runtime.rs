@@ -2041,7 +2041,7 @@ fn run_impl(
                         WheelPhase::kCancelled => 4.0,
                     },
                 );
-                let mut result = presentation.pipeline.Wheel(&wheel)?;
+                let result = presentation.pipeline.Wheel(&wheel)?;
                 input_trace.set("compositor_owned", result.compositor_owned as u8 as f64);
                 input_trace.set("submitted", result.submitted as u8 as f64);
                 wheel.compositor_owned = result.compositor_owned;

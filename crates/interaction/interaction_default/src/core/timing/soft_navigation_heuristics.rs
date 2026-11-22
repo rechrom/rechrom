@@ -4,7 +4,7 @@
 use super::{
     interaction_effects_monitor::InteractionEffectsMonitor,
     largest_contentful_paint_calculator::{
-        LargestContentfulPaintDetails, LcpCandidates, LcpEnvironment, LcpFeatures,
+        LcpCandidates, LcpEnvironment, LcpFeatures,
     },
     paint_timing_record::PaintTimingRecord,
     performance_event_timing::PerformanceEventTiming,

@@ -273,7 +273,6 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
     ) -> crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
         use crate::{
             adapter::{geometry::Size, input_types::ElementId},
-            cc::input::scrollbar::Scrollbar,
             cc::layers::scrollbar_layer_base::ScrollbarLayerBase,
         };
         let data = self

@@ -177,7 +177,6 @@ pub fn MiddleOfWordPosition<C: TextIteratorContext + InlineContentsContext>(
     use super::{
         iterators::{text_iterator::RangeLength, text_iterator_behavior::TextIteratorBehavior},
         text_offset_mapping::{InlineContentsIterator, TextOffsetMapping},
-        visible_position::VisiblePositionContext,
     };
     if !context
         .VisibleContext()

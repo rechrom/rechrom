@@ -193,7 +193,7 @@ impl RetainedUserScrollAnimator {
             return Err(completion);
         }
 
-        let (mut curve, start_time, replaces_running) = {
+        let (curve, start_time, replaces_running) = {
             let state = self.state.borrow();
             if let Some(running) = state.running.as_ref() {
                 let mut curve = running.curve.Clone();

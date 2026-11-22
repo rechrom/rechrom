@@ -378,7 +378,6 @@ fn stroke_backend_path(
         core::{
             SkPaint::{Cap as SkCap, Join as SkJoin},
             SkPathBuilder::SkPathBuilder,
-            SkPathEffect::SkPathEffect,
             SkStrokeRec::{InitStyle, SkStrokeRec},
         },
         effects::SkDashPathEffect,

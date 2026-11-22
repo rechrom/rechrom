@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+#[cfg(any(unix, test))]
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::OnceLock;

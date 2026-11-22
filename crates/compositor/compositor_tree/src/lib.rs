@@ -3,7 +3,7 @@
 //! Tree owners stay private to the compositor pipeline; this package exposes
 //! no Page, Paint, Viz, renderer, or platform owner.
 
-#![allow(non_camel_case_types)]
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
 pub mod activation;
 pub mod clip_node;

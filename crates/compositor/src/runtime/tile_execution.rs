@@ -116,7 +116,7 @@ impl TileExecution<SkRegion> {
 impl<R: CpuSkiaBackend> TileManagerInitialization<B<R>> for TileExecution<R> {
     fn CreateImageController(
         &mut self,
-        origin: Arc<dyn SequencedTaskRunner>,
+        _origin: Arc<dyn SequencedTaskRunner>,
         _worker: Arc<dyn SequencedTaskRunner>,
         _owner: TileManagerId,
     ) -> ImageControllerId {

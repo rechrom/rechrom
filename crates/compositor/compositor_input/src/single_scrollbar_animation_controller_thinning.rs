@@ -12,7 +12,7 @@ use crate::{
     input_types::{ElementId, InputLayerId},
     scrollbar_animation::ManhattanDistanceToPoint,
     scrollbar_controller_boundary::{
-        ScrollbarInitializationClient, ScrollbarLayerAccess, ScrollbarTransform,
+        ScrollbarInitializationClient, ScrollbarTransform,
     },
 };
 use compositor_scheduler::{TimeDelta, TimeTicks};

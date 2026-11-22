@@ -9,7 +9,7 @@ use super::{host_owners::MutatorEvents, input::MutatorHost};
 use crate::{
     adapter::{
         animation_host::{
-            AnimationHostQueries, AnimationMutationTarget,
+            AnimationMutationTarget,
             ScrollAnimationReentry as ScrollAnimationReentryContract,
         },
         geometry::{PointF, Vector2dF},
@@ -28,14 +28,14 @@ use crate::{
             },
             animation_events::{AnimationEvents, AnimationPlaybackEvent, PlaybackType},
             animation_id_provider::AnimationIdProvider,
-            animation_timeline::{AnimationTimelineContext, AnimationTimelineTypes},
+            animation_timeline::AnimationTimelineContext,
             keyframe_effect::{BoundElementAnimations, KeyframeEffect},
             keyframe_model::{
                 CompositorAnimationCurve, KeyframeCurve, KeyframeModel, KeyframeModelTrace,
                 LimitDirection,
             },
             scroll_offset_animation_curve::{
-                ScrollCurveConfig, ScrollCurveTarget, ScrollOffsetAnimationCurve,
+                ScrollCurveConfig, ScrollCurveTarget,
             },
             scroll_offset_animations_impl::{
                 BorrowedScrollAnimationReceiver, ScrollAnimationTypes,

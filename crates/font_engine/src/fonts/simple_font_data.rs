@@ -12,6 +12,7 @@ use super::font_orientation::FontOrientation;
 use super::font_platform_data::FontPlatformData;
 use super::font_vertical_position_type::FontVerticalPositionType;
 use super::glyph::Glyph;
+#[cfg(target_vendor = "apple")]
 use super::glyph_metrics_map::GlyphMetricsMap;
 use super::shaping::han_kerning::FontData as HanKerningFontData;
 use super::shaping::ng_shape_cache::NGShapeCache;

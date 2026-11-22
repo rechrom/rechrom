@@ -1284,7 +1284,7 @@ impl ListBoxSelectType {
         self.selection
             .ToggleSelection(&NativeSelectKeyboardOperations::ListBox(self, None), option);
     }
-    pub fn UpdateSelectedState(&self, option: OptionRef, mut mode: SelectionMode) {
+    pub fn UpdateSelectedState(&self, option: OptionRef, mode: SelectionMode) {
         self.selection.UpdateSelectedState(
             &NativeSelectKeyboardOperations::ListBox(self, None),
             option,

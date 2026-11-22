@@ -14,7 +14,7 @@ use crate::core::input::{
         self as pointer, PointerAdjustment, PointerAdjustmentCandidateType,
         PointerAdjustmentHitTest, PointerEventDOMPort, PointerEventEnvironment,
         PointerEventFeatures, PointerEventManager, PointerEventTarget, PointerMouseManager,
-        PointerPanAction, PointerResizeArea, PointerTouchAction, PointerTouchManager,
+        PointerPanAction, PointerResizeArea, PointerTouchAction,
     },
     touch_event_manager::{TouchEventEnvironment, TouchEventManager},
 };
@@ -30,7 +30,7 @@ use interaction_input::{
     public::common::{
         frame::user_activation_state::UserActivationNotificationType,
         input::{
-            web_input_event::{Type, WebInputEventPayload},
+            web_input_event::Type,
             web_pointer_event::{TouchState, WebPointerEvent},
             web_pointer_properties::{PointerId, PointerType},
         },

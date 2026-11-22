@@ -3378,7 +3378,6 @@ fn MaskBox(
     box_type: BackgroundBox,
 ) -> PaintRect {
     let box_type = UsedMaskGeometryBox(box_type);
-    let paint = &fragment.paint;
     let mut rect = PaintRect {
         x: absolute_offset.x,
         y: absolute_offset.y,
@@ -3434,7 +3433,6 @@ fn MaskPositioningBox(
     let Some(stitched) = fragment.ViewStitchedDecoration() else {
         return MaskBox(fragment, absolute_offset, box_type);
     };
-    let paint = &fragment.paint;
     let mut rect = PaintRect {
         x: absolute_offset.x + stitched.fragment_origin.x - stitched.fragment_offset.x,
         y: absolute_offset.y + stitched.fragment_origin.y - stitched.fragment_offset.y,
@@ -5290,10 +5288,10 @@ struct ShiftDelta {
     paint_space: Offset,
 }
 
-/// Move a retained node (proven by ShiftPreservesClips) by `delta` under its
-/// new inherited context.
-/// Returns whether the new cull rects need a repaint (CullRectUpdater), as
-/// the rebuild path decides it; the node's repaint bit is raised already.
+// Move a retained node (proven by ShiftPreservesClips) by `delta` under its
+// new inherited context.
+// Returns whether the new cull rects need a repaint (CullRectUpdater), as
+// the rebuild path decides it; the node's repaint bit is raised already.
 thread_local! {
     /// Trace only: ShiftRetainedNode time by part (refresh layer facts,
     /// property/context update, remainder).

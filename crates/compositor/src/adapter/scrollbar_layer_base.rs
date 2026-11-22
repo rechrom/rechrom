@@ -3,7 +3,7 @@
 use super::{
     input_types::ElementId,
     layer_tree_impl::Color4f,
-    main_layer::{LayerContext, MainLayerImpl, MainLayerImplTree, MainLayerTypes},
+    main_layer::{LayerContext, MainLayerImpl, MainLayerTypes},
 };
 use crate::cc::{
     input::scrollbar::{Scrollbar, ScrollbarOrientation},

@@ -5,7 +5,7 @@
 use super::*;
 use interaction::{
     default::{
-        bindings::core::v8::script_promise::{ScriptInvocation, ScriptNativeObject},
+        bindings::core::v8::script_promise::ScriptInvocation,
         core::{
             dom::abort_signal::AbortSignalContext,
             loader::{
@@ -1358,7 +1358,7 @@ impl NavigationApiEnvironment for NavigationWindowEnvironment {
     fn StartNavigationState(
         &self,
         url: &str,
-        source: Option<EventTargetRef>,
+        _source: Option<EventTargetRef>,
         direction: Option<NavigationDirection>,
     ) {
         self.Document().borrow().GetDocument().StartNavigationState(

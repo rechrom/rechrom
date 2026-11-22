@@ -76,7 +76,6 @@ use super::{
         PageEventHandlerTimer, PageEventHandlerWheel,
     },
     page_keyboard_event_manager::PageEventHandlerKeyboard,
-    page_scroll_manager::PageScrollManagerOwners,
 };
 use crate::core::frame::web_frame_widget_impl::{
     FocusedPluginKeyboardState, WidgetKeyboardContext, WidgetKeyboardState,

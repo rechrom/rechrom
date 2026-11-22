@@ -47,7 +47,7 @@ use super::{
     },
 };
 use crate::{
-    adapter::{geometry::SizeF, layer_tree_host_impl::*, layer_tree_impl::ResourceId},
+    adapter::{layer_tree_host_impl::*, layer_tree_impl::ResourceId},
     CompositorTypes,
 };
 use std::sync::Arc;

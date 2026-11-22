@@ -6,11 +6,9 @@ use resource::ResourceEngine;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    io,
     rc::{Rc, Weak},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
     },
 };
 static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);

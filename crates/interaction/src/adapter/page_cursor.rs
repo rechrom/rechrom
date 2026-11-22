@@ -8,7 +8,6 @@
 use dom::{persistent_document::DOMNodeType, Document};
 use layout::paint_input::ECursor as StyleCursor;
 
-pub(crate) use interaction_hit_test::resident::point_queries::ResidentHitTarget as ResidentCursorHit;
 
 /// A resident query requires the translated source owners. A missing owner is
 /// reported explicitly and never falls through to compatibility hit testing.

@@ -4,7 +4,7 @@ use interaction::event::{
 };
 use interaction::input_event::{InputEvent, MouseButton};
 use javascript::javascript_runtime::{
-    JavaScriptException, JavaScriptHostRuntime, JavaScriptRealm, JavaScriptResult,
+    JavaScriptException, JavaScriptHostRuntime, JavaScriptRealm,
     JavaScriptRuntime,
 };
 
@@ -585,7 +585,7 @@ impl DOMJavaScriptBindings {
             EventType::kDOMContentLoaded | EventType::kReadyStateChange | EventType::kLoad
         ));
         use interaction::dispatch::core::dom::events::event::{
-            Bubbles, Cancelable, ComposedMode, Event as NativeEvent, EventInterface, EventRef,
+            Bubbles, Cancelable, ComposedMode, Event as NativeEvent, EventRef,
         };
         let name = if event.custom_type.is_empty() {
             EventTypeName(event.r#type)

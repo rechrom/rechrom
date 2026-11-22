@@ -4,7 +4,7 @@
 use super::super::{
     compare_positions,
     editing_boundaries::EditableBoundaryContext,
-    position::{Position, PositionDOM, PositionTree, PositionWithAffinity, TextAffinity},
+    position::{Position, PositionTree, PositionWithAffinity, TextAffinity},
     position_conversion::PositionTreeScope,
     position_units_paragraph::{self as paragraph, ParagraphContext},
     text_offset_mapping, visible_navigation,
