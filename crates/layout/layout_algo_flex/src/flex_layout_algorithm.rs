@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 
 use foundation::evaluation_input::CalcSizeKeywordBehavior;
 use foundation::{
-    kIndefiniteSize, kNotFound, DynamicTo, EBoxAlignment, EBoxDecorationBreak, EBoxOrient,
+    kIndefiniteSize, kNotFound, EBoxAlignment, EBoxDecorationBreak, EBoxOrient,
     EBoxSizing, EBreakBetween, EReadingFlow, HashMap, HeapVector, IsHorizontalWritingMode,
     LayoutUnit, Length, MakeGarbageCollected, Member, PhysicalRect, To, WtfSizeT,
 };
@@ -1371,7 +1371,7 @@ impl FlexLayoutAlgorithm {
                     } else {
                         let fragment = unsafe {
                             &*To::<PhysicalBoxFragment>(
-                                unsafe { &*layout_result.get() }.GetPhysicalFragment() as *const _,
+                                (&*layout_result.get()).GetPhysicalFragment() as *const _,
                             )
                         };
                         self.BaselineAscent(item, fragment)

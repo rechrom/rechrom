@@ -171,7 +171,7 @@ pub fn CalculateInitialLetterBoxInlineSize(line_info: &LineInfo) -> LayoutUnit {
             inline_size += item_result.inline_size;
             continue;
         }
-        let style = unsafe { &*unsafe { &*item }.Style() };
+        let style = unsafe { &*(&*item).Style() };
         let text_ink_bounds = ComputeTextInkBounds(unsafe { &*shape_result }, style, None);
         inline_size += text_ink_bounds.size.inline_size;
     }

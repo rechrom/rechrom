@@ -7,6 +7,9 @@
 //! (`layout_base/src/invalidation/`) that call this crate's trace phases, so
 //! profiles still attribute structural work to invalidation.
 
+// Translated Chromium identifiers keep their C++ spelling.
+#![allow(non_snake_case)]
+
 pub mod content_change_type;
 pub mod layout_invalidation_reason;
 // Definitions of the `layout_invalidation_reason.h` extern arrays

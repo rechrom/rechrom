@@ -3,6 +3,7 @@
 // connection is pending the mutual LayoutNG/inline assembly, not copied here.
 #[allow(unused_imports)]
 use crate::algorithms::*;
+#[cfg(feature = "expensive_dchecks")]
 use foundation::LayoutUnit;
 use layout_base::internal::inline_item_text_index::InlineItemTextIndex;
 

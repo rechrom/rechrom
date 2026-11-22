@@ -5,7 +5,9 @@ use std::ops::{Deref, DerefMut};
 use foundation::{Traceable, Visitor};
 use layout_base::internal::layout_inline::LayoutInline;
 use layout_base::internal::layout_node_metadata::Element;
-use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+#[cfg(debug_assertions)]
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::LayoutObjectClass;
 
 use crate::list_marker::ListMarker;
 

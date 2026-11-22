@@ -4,11 +4,8 @@
 #![allow(non_snake_case, unused_variables)]
 
 use font_engine::fonts::shaping::forward::{GlyphCallback, ShapeResultView};
-use font_engine::Font;
-use foundation::transform_operations::{
-    RotateTransformOperation, ScaleTransformOperation, TranslateTransformOperation,
-};
-use foundation::{gfx, Length, TextDirection, TransformOperations};
+use foundation::transform_operations::{RotateTransformOperation, ScaleTransformOperation};
+use foundation::{gfx, TextDirection};
 use layout_style::style::content_data::ContentData;
 use std::ffi::c_void;
 

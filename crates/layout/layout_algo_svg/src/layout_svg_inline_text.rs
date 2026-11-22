@@ -9,9 +9,7 @@ use foundation::{
     UnsupportedLayout, Visitor, WritingMode,
 };
 use layout_base::internal::layout_font_resolver::{CurrentFontResolver, FontRequest};
-use layout_base::internal::layout_input::{
-    ComputedStyle as InputComputedStyle, ExtendedStyle, WritingMode as InputWritingMode,
-};
+use layout_base::internal::layout_input::WritingMode as InputWritingMode;
 use layout_base::internal::layout_node_metadata::Node;
 use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layout_base::internal::layout_pass_scope::LayoutPassScope;

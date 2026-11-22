@@ -15,8 +15,8 @@ use crate::{
     },
 };
 use foundation::{
-    kIndefiniteSize, DynamicTo, EBoxDecorationBreak, EBreakBetween, EReadingFlow, HeapVector,
-    IsHorizontalWritingMode, IsParallelWritingMode, LayoutUnit, MakeGarbageCollected, Member, To,
+    kIndefiniteSize, EBoxDecorationBreak, EBreakBetween, EReadingFlow, HeapVector,
+    IsParallelWritingMode, LayoutUnit, MakeGarbageCollected, Member, To,
 };
 use layout_base::{
     block_break_token::BlockBreakToken,
@@ -24,10 +24,8 @@ use layout_base::{
     internal::{
         algorithm_entry::LayoutAlgorithmImplementation,
         block_node::BlockNode,
-        break_appeal::BreakAppeal,
         constraint_space::{ConstraintSpace, LayoutResultCacheSlot},
         constraint_space_builder::ConstraintSpaceBuilder,
-        early_break::*,
         fragmentation_utils::*,
         gap::{
             gap_geometry::{ContainerType, GapGeometry},
@@ -40,12 +38,10 @@ use layout_base::{
             GridLayoutTrackCollection, GridRangeBuilder, GridSizingTrackCollection,
         },
         layout_algorithm::{
-            LayoutAlgorithm, LayoutAlgorithmBuilder, LayoutAlgorithmParams, RelayoutAlgorithm,
-            RelayoutType,
+            LayoutAlgorithm, LayoutAlgorithmParams, RelayoutAlgorithm,
         },
         layout_box::LayoutBox,
         layout_input_node::MinMaxSizesFloatInput,
-        layout_node_metadata::Node,
         length_utils::*,
         min_max_sizes::{MinMaxSizes, MinMaxSizesResult},
         relative_utils::*,
@@ -60,7 +56,7 @@ use layout_geometry::geometry::{
     logical_offset::LogicalOffset,
     logical_rect::LogicalRect,
     logical_size::{kIndefiniteLogicalSize, LogicalSize},
-    static_position::{LogicalAlignmentDirection, LogicalStaticPosition},
+    static_position::LogicalStaticPosition,
 };
 use layout_style::style::{
     computed_style::ComputedStyle,
@@ -646,7 +642,7 @@ impl ContributionContext<'_> {
         let item = unsafe { &*self.item };
         let fragment =
             LogicalBoxFragment::new(item.BaselineWritingDirection(self.direction), unsafe {
-                &*To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment())
+                &*To::<PhysicalBoxFragment>((&*result).GetPhysicalFragment())
             });
         if item.IsBaselineAligned(self.direction) {
             self.CalculateBaselineShim(GetLogicalBaseline(
@@ -1705,7 +1701,7 @@ impl GridLayoutAlgorithm {
                 std::ptr::null(),
             );
             let physical =
-                unsafe { &*To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment()) };
+                unsafe { &*To::<PhysicalBoxFragment>((&*result).GetPhysicalFragment()) };
             let fragment = LogicalBoxFragment::new(direction, physical);
             let inline_baseline = ComputeBaselineOffset(
                 item,
@@ -1919,7 +1915,7 @@ impl GridLayoutAlgorithm {
             let mut unavailable = LayoutUnit::default();
             if IsBreakInside(self.GetBreakToken()) && IsBreakInside(token) {
                 let parent_data = unsafe {
-                    &*To::<GridBreakTokenData>(unsafe { &*self.GetBreakToken() }.TokenData())
+                    &*To::<GridBreakTokenData>((&*self.GetBreakToken()).TokenData())
                 };
                 unavailable = parent_data.offset_in_stitched_container
                     - (placement.offset.block_offset + unsafe { &*token }.ConsumedBlockSize());
@@ -1976,7 +1972,7 @@ impl GridLayoutAlgorithm {
                 relative_offset: placement.relative_offset,
             });
             let fragment = LogicalBoxFragment::new(direction, unsafe {
-                &*To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment())
+                &*To::<PhysicalBoxFragment>((&*result).GetPhysicalFragment())
             });
             state
                 .baselines
@@ -2404,7 +2400,7 @@ impl GridLayoutAlgorithm {
         let subtree: *const GridLayoutSubtree;
         if IsBreakInside(self.GetBreakToken()) {
             let token_data = unsafe {
-                &*To::<GridBreakTokenData>(unsafe { &*self.GetBreakToken() }.TokenData())
+                &*To::<GridBreakTokenData>((&*self.GetBreakToken()).TokenData())
             };
             items = token_data.grid_items.Get();
             subtree = token_data.grid_layout_subtree.Get();
@@ -2418,7 +2414,7 @@ impl GridLayoutAlgorithm {
             let _trace = browser_tracing::span("layout", "layout_algo_grid.ComputeGeometry");
             subtree = self.ComputeGridGeometry(&mut items, &mut intrinsic, &mut oofs);
         }
-        let data = unsafe { &*unsafe { &*subtree }.LayoutData() };
+        let data = unsafe { &*(&*subtree).LayoutData() };
         let mut stitched = LayoutUnit::default();
         let mut previous = LayoutUnit::default();
         let mut placements = Vec::new();
@@ -2432,7 +2428,7 @@ impl GridLayoutAlgorithm {
         if InvolvedInBlockFragmentation(self.GetConstraintSpace(), self.GetBreakToken()) {
             if IsBreakInside(self.GetBreakToken()) {
                 let token_data = unsafe {
-                    &*To::<GridBreakTokenData>(unsafe { &*self.GetBreakToken() }.TokenData())
+                    &*To::<GridBreakTokenData>((&*self.GetBreakToken()).TokenData())
                 };
                 stitched = token_data.offset_in_stitched_container;
                 previous = stitched;

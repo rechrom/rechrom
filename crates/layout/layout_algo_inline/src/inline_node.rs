@@ -52,8 +52,7 @@ use layout_base::internal::layout_text_combine::LayoutTextCombine;
 use layout_base::internal::length_utils::{ComputeMarginsFor, ComputeMinAndMaxContentContribution};
 use layout_base::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
 use layout_base::internal::style_variant::StyleVariant;
-use layout_base::internal::svg_character_data::SvgCharacterData;
-use layout_base::internal::svg_inline_node_data::{SvgTextChunkOffsets, SvgTextContentRange};
+use layout_base::internal::svg_inline_node_data::SvgTextChunkOffsets;
 use layout_base::internal::svg_text_attributes_request::{
     SvgTextAttributesBuildRequest, SvgTextAttributesBuildResult,
 };
@@ -713,7 +712,7 @@ impl InlineNodeDataEditor {
         {
             return std::ptr::null_mut();
         }
-        let current = unsafe { &*unsafe { &*block }.GetInlineNodeData() };
+        let current = unsafe { &*(&*block).GetInlineNodeData() };
         if current.text_content.IsNull() || current.items.is_empty() {
             return std::ptr::null_mut();
         }
@@ -736,7 +735,7 @@ impl InlineNodeDataEditor {
 
     // cpp: layoutng_inline/inline_node.cc:783-883
     fn Run(&mut self) {
-        let new_data = unsafe { &*unsafe { &*self.block_flow_ }.GetInlineNodeData() };
+        let new_data = unsafe { &*(&*self.block_flow_).GetInlineNodeData() };
         let old_data = unsafe { &*self.data_ };
         let old_text = &old_data.text_content;
         let new_text = &new_data.text_content;
@@ -956,6 +955,7 @@ impl InlineNodeDataEditor {
     }
 
     // cpp: layoutng_inline/inline_node.cc:1005-1020
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     fn VerifyItems(&self, items: &InlineItems) {
         #[cfg(debug_assertions)]
         {
@@ -2483,6 +2483,7 @@ pub fn InlineNodeNeedsShapingForTesting(item: &InlineItem) -> bool {
 }
 
 // cpp: layoutng_inline/inline_node.cc:2406-2415
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 pub fn InlineNodeCheckConsistency(this: &InlineNode) {
     #[cfg(debug_assertions)]
     for item_ptr in &this.Data().items {

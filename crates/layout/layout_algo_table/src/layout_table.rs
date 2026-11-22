@@ -472,9 +472,9 @@ pub(crate) fn LayoutInnerTextTableRowNeedsNewline(object: &LayoutObject) -> bool
         return false;
     };
     let mut runner = section.NextSibling();
-    while let Some(object) = (unsafe { runner.as_ref() }) {
+    while let Some(object) = unsafe { runner.as_ref() } {
         if let Some(section) =
-            (unsafe { foundation::DynamicTo::<LayoutTableSection>(object as *const _).as_ref() })
+            unsafe { foundation::DynamicTo::<LayoutTableSection>(object as *const _).as_ref() }
         {
             if section.NumRows() > 0 {
                 return true;

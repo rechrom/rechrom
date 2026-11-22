@@ -3,7 +3,9 @@
 
 #[allow(unused_imports)]
 use crate::algorithms::*;
-use foundation::{String, StringView, WtfSizeT};
+#[cfg(feature = "expensive_dchecks")]
+use foundation::StringView;
+use foundation::{String, WtfSizeT};
 
 // cpp: layoutng_inline/text_diff_range.h:18-20,39-43
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

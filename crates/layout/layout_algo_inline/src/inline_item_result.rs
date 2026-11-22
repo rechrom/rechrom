@@ -3,7 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::algorithms::*;
-use foundation::{Member, String, StringView, Visitor};
+use foundation::{Member, String, StringView};
 use layout_base::internal::inline_item::{InlineItem, InlineItemType};
 use layout_base::internal::inline_item_result::{InlineItemResult, InlineItemResults};
 use layout_base::internal::text_fit_scale::TextFitBlockScale;

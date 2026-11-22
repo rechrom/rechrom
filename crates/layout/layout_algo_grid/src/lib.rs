@@ -1,4 +1,5 @@
-#![allow(non_snake_case, non_camel_case_types)]
+// Translated Chromium identifiers keep their C++ spelling.
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 pub mod algorithms;
 pub mod grid_baseline_accumulator;

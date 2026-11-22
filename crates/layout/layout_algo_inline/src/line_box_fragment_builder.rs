@@ -18,7 +18,7 @@ use crate::layout_result::LayoutResult;
 use crate::logical_line_container::LogicalLineContainer;
 use crate::logical_line_item::LogicalLineItems;
 use crate::physical_fragment::PhysicalFragment;
-use crate::physical_line_box_fragment::{LineBoxType, PhysicalLineBoxFragment};
+use crate::physical_line_box_fragment::LineBoxType;
 use layout_base::internal::block_node::BlockNode;
 use layout_base::internal::constraint_space::ConstraintSpace;
 use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;

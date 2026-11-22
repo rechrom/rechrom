@@ -618,7 +618,7 @@ impl<MappingBuilder: InlineItemsMappingMode> InlineItemsBuilderTemplate<MappingB
             debug_assert_eq!(start, unsafe { &*adjusted_item }.StartOffset());
             debug_assert_eq!(end, unsafe { &*adjusted_item }.EndOffset());
             if !unsafe { &*adjusted_item }.TextShapeResult().is_null() {
-                let shape = unsafe { &*unsafe { &*adjusted_item }.TextShapeResult() };
+                let shape = unsafe { &*(&*adjusted_item).TextShapeResult() };
                 debug_assert_eq!(start, shape.StartIndex());
                 debug_assert_eq!(end, shape.EndIndex());
             }

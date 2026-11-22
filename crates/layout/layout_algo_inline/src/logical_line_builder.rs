@@ -352,6 +352,7 @@ impl LogicalLineBuilder {
 
     // cpp: layoutng_inline/logical_line_builder.h:79-83
     // cpp: layoutng_inline/logical_line_builder.cc:404-445
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     fn PlaceControlItem(
         &mut self,
         item: &InlineItem,

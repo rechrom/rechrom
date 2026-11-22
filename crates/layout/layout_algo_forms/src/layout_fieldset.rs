@@ -119,7 +119,7 @@ impl LayoutFieldset {
         }
 
         if !before_child.is_null() && unsafe { &*before_child }.IsRenderedLegend() {
-            let before_node = unsafe { &*unsafe { &*before_child }.GetNode() }.nextSibling();
+            let before_node = unsafe { &*(&*before_child).GetNode() }.nextSibling();
             before_child = if !before_node.is_null() {
                 unsafe { &*before_node }.GetLayoutObject()
             } else {
