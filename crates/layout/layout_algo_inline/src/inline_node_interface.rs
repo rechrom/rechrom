@@ -39,7 +39,6 @@ unsafe extern "Rust" {
         space: &ConstraintSpace,
         floats: &MinMaxSizesFloatInput,
     ) -> MinMaxSizesResult;
-    fn InlineNodeInvalidatePrepareLayoutForTest(this: &mut InlineNode);
     fn InlineNodeItemsData(this: &InlineNode, first_line: bool) -> *const InlineItemsData;
     fn InlineNodeFirstLineOffsetMap(this: &InlineNode) -> *const Option<TextOffsetMap>;
     fn InlineNodeUseFirstLineStyleItemsData(this: &InlineNode) -> bool;
@@ -69,7 +68,6 @@ unsafe extern "Rust" {
     fn InlineNodeSvgTextPathRangeList(this: &InlineNode) -> *const HeapVector<SvgTextContentRange>;
     fn InlineNodeFontForTab(this: &InlineNode) -> *const Font;
     fn InlineNodeMinimumFontPhysicalSize(this: &InlineNode) -> Option<f32>;
-    fn InlineNodeNeedsShapingForTesting(item: &InlineItem) -> bool;
     fn InlineNodePrepareLayoutIfNeeded(this: &InlineNode);
     fn InlineNodeIsPrepareLayoutFinished(this: &InlineNode) -> bool;
     fn InlineNodePrepareLayout(this: &InlineNode, previous: *mut InlineNodeData);
@@ -119,8 +117,6 @@ unsafe extern "Rust" {
     ) -> bool;
     fn InlineNodeMutableData(this: &InlineNode) -> *mut InlineNodeData;
     fn InlineNodeData(this: &InlineNode) -> *const InlineNodeData;
-    fn InlineNodeMaybeDirtyData(this: &InlineNode) -> *const InlineNodeData;
-    fn InlineNodeEnsureData(this: &InlineNode) -> *const InlineNodeData;
     fn InlineNodeAdjustFontForTextCombineUprightAll(this: &InlineNode);
     fn InlineNodeComputeOffsetMapping(block: *mut LayoutBlockFlow, data: *mut InlineNodeData);
 }
@@ -220,9 +216,6 @@ impl InlineNode {
     ) -> MinMaxSizesResult {
         unsafe { InlineNodeComputeMinMaxSizes(self, mode, space, floats) }
     }
-    pub fn InvalidatePrepareLayoutForTest(&mut self) {
-        unsafe { InlineNodeInvalidatePrepareLayoutForTest(self) }
-    }
     pub fn ItemsData(&self, first_line: bool) -> &InlineItemsData {
         unsafe { &*InlineNodeItemsData(self, first_line) }
     }
@@ -299,9 +292,6 @@ impl InlineNode {
     }
     pub fn MinimumFontPhysicalSize(&self) -> Option<f32> {
         unsafe { InlineNodeMinimumFontPhysicalSize(self) }
-    }
-    pub fn NeedsShapingForTesting(item: &InlineItem) -> bool {
-        unsafe { InlineNodeNeedsShapingForTesting(item) }
     }
     pub fn PrepareLayoutIfNeeded(&self) {
         unsafe { InlineNodePrepareLayoutIfNeeded(self) }
@@ -383,12 +373,6 @@ impl InlineNode {
     }
     pub fn Data(&self) -> &InlineNodeData {
         unsafe { &*InlineNodeData(self) }
-    }
-    pub fn MaybeDirtyData(&self) -> &InlineNodeData {
-        unsafe { &*InlineNodeMaybeDirtyData(self) }
-    }
-    pub fn EnsureData(&self) -> &InlineNodeData {
-        unsafe { &*InlineNodeEnsureData(self) }
     }
     pub fn AdjustFontForTextCombineUprightAll(&self) {
         unsafe { InlineNodeAdjustFontForTextCombineUprightAll(self) }

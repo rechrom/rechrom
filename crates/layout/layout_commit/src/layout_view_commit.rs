@@ -12,16 +12,4 @@ impl LayoutView {
         self.CheckIsNotDestroyed();
         self.base_.UpdateAfterLayout();
     }
-
-    // cpp: layoutng/internal/layout_view.h:135-146
-    #[inline(never)]
-    pub fn CommitPendingSelection(&mut self) {
-        unsafe { LayoutViewCommitPendingSelectionProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_view.h:338-340
-    #[inline(never)]
-    pub fn CacheScrollDimensions(&mut self) {
-        unsafe { LayoutViewCacheScrollDimensionsProvider(self) }
-    }
 }

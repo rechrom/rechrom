@@ -7,36 +7,6 @@
 
 use super::*;
 
-use layout_style::style::computed_style::ComputedStyle as LayoutComputedStyle;
-
-unsafe extern "Rust" {
-    fn LayoutObjectCreateObjectProvider(
-        element: *mut Element,
-        style: &LayoutComputedStyle,
-    ) -> *mut LayoutObject;
-    fn LayoutObjectCreateBlockFlowOrListItemProvider(
-        element: *mut Element,
-        style: &LayoutComputedStyle,
-    ) -> *mut LayoutBlockFlow;
-}
-
-impl LayoutObject {
-    // cpp: layoutng/internal/layout_object.h:827-827
-    #[inline(never)]
-    pub fn CreateObject(element: *mut Element, style: &LayoutComputedStyle) -> *mut LayoutObject {
-        unsafe { LayoutObjectCreateObjectProvider(element, style) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:828-829
-    #[inline(never)]
-    pub fn CreateBlockFlowOrListItem(
-        element: *mut Element,
-        style: &LayoutComputedStyle,
-    ) -> *mut LayoutBlockFlow {
-        unsafe { LayoutObjectCreateBlockFlowOrListItemProvider(element, style) }
-    }
-}
-
 // cpp: layoutng/internal/boundary/layout_boundary.cc:567-693
 #[inline(never)]
 pub(crate) fn CreateLayoutObject(

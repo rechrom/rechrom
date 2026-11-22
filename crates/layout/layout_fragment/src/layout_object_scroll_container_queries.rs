@@ -14,21 +14,6 @@ impl LayoutObject {
             && !self.StyleRef().ScrollMarkerGroupNone()
     }
 
-    pub fn IsBackdropForOverscrollAreaParent(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsBackdropForOverscrollAreaParentProvider(self) }
-    }
-
-    pub fn IsScrollMarker(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsScrollMarkerProvider(self) }
-    }
-
-    pub fn IsScrollMarkerGroupBefore(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsScrollMarkerGroupBeforeProvider(self) }
-    }
-
     pub fn IsScrollContainer(&self) -> bool {
         self.CheckIsNotDestroyed();
         if self.IsLayoutReplaced() {

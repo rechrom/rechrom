@@ -10,20 +10,6 @@ impl LayoutObject {
         unsafe { LayoutObjectAddLayersProvider(self, parent_layer) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:450-450
-    #[inline(never)]
-    pub fn RemoveLayers(&mut self, parent_layer: *mut PaintLayer) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectRemoveLayersProvider(self, parent_layer) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:451-451
-    #[inline(never)]
-    pub fn MoveLayers(&mut self, old_parent: *mut PaintLayer, new_parent: *mut PaintLayer) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectMoveLayersProvider(self, old_parent, new_parent) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:452-454
     #[inline(never)]
     pub fn FindNextLayer(

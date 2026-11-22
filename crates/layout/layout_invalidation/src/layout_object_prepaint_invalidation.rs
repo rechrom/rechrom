@@ -170,12 +170,6 @@ impl LayoutObject {
         unsafe { LayoutObjectEnsureIsReadyForPaintInvalidationProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:1914-1914
-    #[inline(never)]
-    pub fn InvalidateSubtreePositionTry(&mut self, mark_style_dirty: bool) {
-        unsafe { LayoutObjectInvalidateSubtreePositionTryProvider(self, mark_style_dirty) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:2761-2761
     pub fn SetShouldInvalidatePaintForHitTest(&mut self) {
         unsafe { LayoutObjectSetShouldInvalidatePaintForHitTestProvider(self) }
@@ -222,12 +216,6 @@ impl LayoutObject {
         unsafe { LayoutObjectInvalidateSelectedChildrenOnStyleChangeProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:2882-2882
-    #[inline(never)]
-    pub fn InvalidateSelectionOnStyleChange(&mut self) {
-        unsafe { LayoutObjectInvalidateSelectionOnStyleChangeProvider(self) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:2891-2891
     #[inline(never)]
     pub fn SetNeedsPrePaintSubtreeWalk(&mut self, reasons: PrePaintSubtreeWalkReasons) {
@@ -252,34 +240,10 @@ impl LayoutObject {
         unsafe { LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:2944-2944
-    #[inline(never)]
-    pub fn MarkSoftNavigationContextChanged(&mut self) {
-        unsafe { LayoutObjectMarkSoftNavigationContextChangedProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:2958-2958
-    #[inline(never)]
-    pub fn MarkContainerTimingChanged(&mut self) {
-        unsafe { LayoutObjectMarkContainerTimingChangedProvider(self) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:3120-3120
     #[inline(never)]
     pub fn MaybeClearIsScrollAnchorObject(&mut self) {
         unsafe { LayoutObjectMaybeClearIsScrollAnchorObjectProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3264-3264
-    #[inline(never)]
-    pub fn SetSVGDescendantMayHaveTransformRelatedOperations(&mut self) {
-        unsafe { LayoutObjectSetSVGDescendantMayHaveTransformRelatedOperationsProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_object.h:3341-3341
-    #[inline(never)]
-    pub fn UpdateAfterReinsert(&mut self, old_style: &ComputedStyle) {
-        unsafe { LayoutObjectUpdateAfterReinsertProvider(self, old_style) }
     }
 
     // Source: core/layout/layout_object.cc:5659-5671.

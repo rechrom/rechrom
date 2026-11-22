@@ -1,13 +1,5 @@
 use super::*;
 
-impl LayoutObject {
-    // cpp: layoutng/internal/layout_object.h:745-745
-    #[inline(never)]
-    pub fn NotifyPriorityScrollAnchorStatusChanged(&mut self) {
-        unsafe { LayoutObjectNotifyPriorityScrollAnchorStatusChangedProvider(self) }
-    }
-}
-
 // cpp: layoutng/internal/layout_object_tree.cc:146-160
 #[inline(never)]
 pub(super) fn LayoutObjectDepthSlow(object: &LayoutObject) -> u32 {

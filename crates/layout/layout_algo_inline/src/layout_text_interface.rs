@@ -89,7 +89,6 @@ unsafe extern "Rust" {
         offset_map: &mut foundation::TextOffsetMap,
     ) -> String;
     fn LayoutTextLocalSelectionVisualRect(this: &LayoutText) -> PhysicalRect;
-    fn LayoutTextGetTextBoxInfo(this: &LayoutText) -> Vector<TextBoxInfo>;
     fn LayoutTextPositionForCaretOffset(this: &LayoutText, offset: u32) -> Position;
     fn LayoutTextCaretOffsetForPosition(this: &LayoutText, position: &Position) -> Option<u32>;
     fn LayoutTextContainsCaretOffset(this: &LayoutText, offset: i32) -> bool;
@@ -123,7 +122,6 @@ unsafe extern "Rust" {
         start: &mut u32,
         end: &mut u32,
     ) -> bool;
-    fn LayoutTextEnsureNodeId(this: &mut LayoutText) -> DOMNodeId;
     fn LayoutTextSetInlineItems(
         this: &mut LayoutText,
         data: *mut InlineItemsData,
@@ -133,11 +131,6 @@ unsafe extern "Rust" {
     fn LayoutTextClearInlineItems(this: &mut LayoutText);
     fn LayoutTextInlineItems(this: &LayoutText) -> *const InlineItemSpan;
     fn LayoutTextInvalidateSubtreeLayoutForFontUpdates(this: &mut LayoutText);
-    fn LayoutTextLogicalStartingPointAndHeight(
-        this: &LayoutText,
-        point: &mut LogicalOffset,
-        height: &mut LayoutUnit,
-    );
     fn LayoutTextSetPreviousLogicalStartingPoint(this: &LayoutText, point: &LogicalOffset);
     fn LayoutTextWillBeDestroyed(this: &mut LayoutText);
     fn LayoutTextStyleDidChange(
@@ -150,10 +143,6 @@ unsafe extern "Rust" {
     fn LayoutTextInLayoutNGInlineFormattingContextWillChange(this: &mut LayoutText, value: bool);
     fn LayoutTextTextDidChange(this: &mut LayoutText);
     fn LayoutTextInvalidatePaint(this: &LayoutText, context: &PaintInvalidatorContext);
-    fn LayoutTextInvalidateDisplayItemClients(
-        this: &LayoutText,
-        reason: foundation::PaintInvalidationReason,
-    );
     fn LayoutTextSetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
         this: &mut LayoutText,
         reason: *const c_char,
@@ -178,9 +167,6 @@ unsafe extern "Rust" {
     fn LayoutTextGetSelectionDisplayItemClient(
         this: &LayoutText,
     ) -> *const graphics_types::graphics::paint::display_item_client::DisplayItemClient;
-    fn LayoutTextGetOrResetContentCaptureManager(
-        this: &mut LayoutText,
-    ) -> *mut ContentCaptureManager;
     fn LayoutTextNonCollapsedCaretMaxOffset(this: &LayoutText) -> u32;
 }
 
@@ -621,9 +607,6 @@ impl LayoutText {
     pub fn LocalSelectionVisualRect(&self) -> PhysicalRect {
         unsafe { LayoutTextLocalSelectionVisualRect(self) }
     }
-    pub fn GetTextBoxInfo(&self) -> Vector<TextBoxInfo> {
-        unsafe { LayoutTextGetTextBoxInfo(self) }
-    }
 
     // cpp: layoutng/internal/layout_text.h:212-237
     pub fn PositionForCaretOffset(&self, offset: u32) -> Position {
@@ -727,9 +710,6 @@ impl LayoutText {
     ) -> bool {
         unsafe { LayoutTextMapDOMOffsetToTextContentOffset(self, mapping, start, end) }
     }
-    pub fn EnsureNodeId(&mut self) -> DOMNodeId {
-        unsafe { LayoutTextEnsureNodeId(self) }
-    }
     pub fn SetInlineItems(&mut self, data: *mut InlineItemsData, begin: usize, size: usize) {
         unsafe { LayoutTextSetInlineItems(self, data, begin, size) }
     }
@@ -743,13 +723,6 @@ impl LayoutText {
     // cpp: layoutng/internal/layout_text.h:344-367
     pub fn InvalidateSubtreeLayoutForFontUpdates(&mut self) {
         unsafe { LayoutTextInvalidateSubtreeLayoutForFontUpdates(self) }
-    }
-    pub fn LogicalStartingPointAndHeight(
-        &self,
-        point: &mut LogicalOffset,
-        height: &mut LayoutUnit,
-    ) {
-        unsafe { LayoutTextLogicalStartingPointAndHeight(self, point, height) }
     }
     pub fn SetPreviousLogicalStartingPoint(&self, point: &LogicalOffset) {
         unsafe { LayoutTextSetPreviousLogicalStartingPoint(self, point) }
@@ -794,9 +767,6 @@ impl LayoutText {
     }
     pub fn InvalidatePaint(&self, context: &PaintInvalidatorContext) {
         unsafe { LayoutTextInvalidatePaint(self, context) }
-    }
-    pub fn InvalidateDisplayItemClients(&self, reason: foundation::PaintInvalidationReason) {
-        unsafe { LayoutTextInvalidateDisplayItemClients(self, reason) }
     }
 
     // cpp: layoutng/internal/layout_text.h:397-434
@@ -854,9 +824,6 @@ impl LayoutText {
         &self,
     ) -> *const graphics_types::graphics::paint::display_item_client::DisplayItemClient {
         unsafe { LayoutTextGetSelectionDisplayItemClient(self) }
-    }
-    pub fn GetOrResetContentCaptureManager(&mut self) -> *mut ContentCaptureManager {
-        unsafe { LayoutTextGetOrResetContentCaptureManager(self) }
     }
     pub fn NonCollapsedCaretMaxOffset(&self) -> u32 {
         unsafe { LayoutTextNonCollapsedCaretMaxOffset(self) }

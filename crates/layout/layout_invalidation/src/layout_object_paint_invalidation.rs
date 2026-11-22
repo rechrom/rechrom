@@ -74,10 +74,4 @@ impl LayoutObject {
     pub fn InvalidatePaint(&self, context: &PaintInvalidatorContext) {
         unsafe { LayoutObjectInvalidatePaintProvider(self, context) }
     }
-
-    // cpp: layoutng/internal/layout_object.h:2843-2843
-    #[inline(never)]
-    pub fn InvalidateDisplayItemClients(&self, reason: PaintInvalidationReason) {
-        unsafe { LayoutObjectInvalidateDisplayItemClientsProvider(self, reason) }
-    }
 }

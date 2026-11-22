@@ -77,7 +77,6 @@ unsafe extern "Rust" {
     fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(flow: *const LayoutBlockFlow)
         -> bool;
 
-    fn LayoutBlockFlowSetShouldDoFullPaintInvalidationForFirstLine(flow: *mut LayoutBlockFlow);
     fn LayoutBlockFlowPositionForPoint(
         flow: *const LayoutBlockFlow,
         point: &PhysicalOffset,
@@ -85,10 +84,6 @@ unsafe extern "Rust" {
     fn LayoutBlockFlowShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(
         flow: *const LayoutBlockFlow,
     ) -> bool;
-    fn LayoutBlockFlowInvalidateDisplayItemClients(
-        flow: *const LayoutBlockFlow,
-        reason: PaintInvalidationReason,
-    );
     fn LayoutBlockFlowNodeForHitTest(flow: *const LayoutBlockFlow) -> *mut Node;
 }
 
@@ -421,12 +416,6 @@ impl LayoutBlockFlow {
         LayoutBlockFlowUpdateForMulticol(self)
     }
 
-    // cpp: layoutng/internal/layout_block_flow.h:112-112
-    pub fn SetShouldDoFullPaintInvalidationForFirstLine(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutBlockFlowSetShouldDoFullPaintInvalidationForFirstLine(self) };
-    }
-
     // cpp: layoutng/internal/layout_block_flow.h:114-114
     pub fn PositionForPoint(&self, point: &PhysicalOffset) -> PositionWithAffinity {
         self.CheckIsNotDestroyed();
@@ -437,12 +426,6 @@ impl LayoutBlockFlow {
     pub fn ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(&self) -> bool {
         self.CheckIsNotDestroyed();
         unsafe { LayoutBlockFlowShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(self) }
-    }
-
-    // cpp: layoutng/internal/layout_block_flow.h:141-141
-    pub fn InvalidateDisplayItemClients(&self, reason: PaintInvalidationReason) {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutBlockFlowInvalidateDisplayItemClients(self, reason) };
     }
 
     // cpp: layoutng/internal/layout_block_flow.h:143-143

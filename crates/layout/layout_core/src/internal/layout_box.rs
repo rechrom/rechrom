@@ -220,26 +220,12 @@ unsafe extern "Rust" {
     fn LayoutBoxIsFragmentationContextRootProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxShouldPlaceBlockDirectionScrollbarOnLogicalLeftProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxMutableSavePreviousOverflowDataProvider(box_: &mut LayoutBox);
-    fn LayoutBoxMutableSavePreviousGapGeometriesProvider(box_: &mut LayoutBox);
-    fn LayoutBoxMutableClearPreviousGapGeometriesProvider(box_: &mut LayoutBox);
-    fn LayoutBoxMutableSetPreviousGeometryForLayoutShiftTrackingProvider(
-        box_: &mut LayoutBox,
-        paint_offset: &PhysicalOffset,
-        size: &PhysicalSize,
-        visual_overflow_rect: &PhysicalRect,
-    );
-    fn LayoutBoxMutableUpdateBackgroundPaintLocationProvider(
-        box_: &mut LayoutBox,
-        needs_root_element_group: bool,
-    );
     // These declarations have no definitions in the supplied source packages.
     // Their typed providers preserve the source interface for the owner layer.
     fn LayoutBoxPhysicalBackgroundRectProvider(
         box_: &LayoutBox,
         kind: BackgroundRectType,
     ) -> PhysicalRect;
-    fn LayoutBoxScrollerFromScrollMarkerGroupProvider(box_: &LayoutBox) -> *mut LayoutBlock;
-    fn LayoutBoxLayoutSubtreeRootProvider(box_: &mut LayoutBox);
     fn LayoutBoxHitTestAllPhasesProvider(
         box_: &mut LayoutBox,
         result: &mut HitTestResult,
@@ -252,8 +238,6 @@ unsafe extern "Rust" {
         location: &HitTestLocation,
         offset: &PhysicalOffset,
     ) -> bool;
-    fn LayoutBoxHasHitTestableOverflowProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxInvalidateItemsProvider(result: &LayoutResult);
     fn LayoutBoxPositionForPointInFragmentsProvider(
         box_: &LayoutBox,
         offset: &PhysicalOffset,
@@ -267,19 +251,12 @@ unsafe extern "Rust" {
     fn LayoutBoxIntersectsVisibleViewportProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxEnsureIsReadyForPaintInvalidationProvider(box_: &mut LayoutBox);
     fn LayoutBoxClearPaintFlagsProvider(box_: &mut LayoutBox);
-    fn LayoutBoxOverrideTickmarksProvider(box_: &mut LayoutBox, tickmarks: Vector<gfx::Rect>);
-    fn LayoutBoxInvalidatePaintForTickmarksProvider(box_: &mut LayoutBox);
     fn LayoutBoxNonOverflowingScrollRangesProvider(
         box_: &LayoutBox,
     ) -> *const GCedHeapVector<NonOverflowingScrollRange>;
     fn LayoutBoxDisplayLocksAffectedByAnchorsProvider(
         box_: &LayoutBox,
     ) -> *const GCedHeapHashSet<Member<Element>>;
-    fn LayoutBoxNotifyContainingDisplayLocksForAnchorPositioningProvider(
-        box_: &LayoutBox,
-        past: *const GCedHeapHashSet<Member<Element>>,
-        current: *const GCedHeapHashSet<Member<Element>>,
-    );
     fn LayoutBoxBackgroundPaintedExtentProvider(box_: &LayoutBox) -> PhysicalRect;
     fn LayoutBoxForegroundIsKnownToBeOpaqueInRectProvider(
         box_: &LayoutBox,
@@ -288,10 +265,6 @@ unsafe extern "Rust" {
     ) -> bool;
     fn LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxComputeBackgroundPaintLocationProvider(
-        box_: &LayoutBox,
-        needs_root_element_group: bool,
-    ) -> BackgroundPaintLocation;
     fn LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider(box_: &LayoutBox) -> *const BoxStrut;
     fn LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider(
         box_: &mut LayoutBox,
@@ -300,10 +273,6 @@ unsafe extern "Rust" {
     fn LayoutBoxContentLayoutBoxProvider(box_: &mut LayoutBox) -> *mut LayoutBox;
     fn LayoutBoxScrollWidthProvider(box_: &LayoutBox) -> LayoutUnit;
     fn LayoutBoxScrollHeightProvider(box_: &LayoutBox) -> LayoutUnit;
-    fn LayoutBoxUpdateScrollSnapMappingAfterStyleChangeProvider(
-        box_: &mut LayoutBox,
-        old_style: &ComputedStyle,
-    );
     fn LayoutBoxPaintProvider(box_: &LayoutBox, info: &PaintInfo);
     fn LayoutBoxInvalidatePaintProvider(box_: &LayoutBox, context: &PaintInvalidatorContext);
     fn LayoutBoxGetCustomLayoutChildProvider(box_: &LayoutBox) -> *mut CustomLayoutChild;
@@ -386,40 +355,6 @@ impl LayoutBoxMutableForPainting {
         let rare = self.GetLayoutBox().rare_data_.Get();
         if !rare.is_null() {
             unsafe { &mut *rare }.has_previous_content_box_rect_ = false;
-        }
-    }
-
-    // cpp: layoutng/internal/layout_box.h:981-993
-    pub fn SavePreviousGapGeometries(&mut self) {
-        unsafe { LayoutBoxMutableSavePreviousGapGeometriesProvider(self.GetLayoutBox()) }
-    }
-
-    pub fn ClearPreviousGapGeometries(&mut self) {
-        unsafe { LayoutBoxMutableClearPreviousGapGeometriesProvider(self.GetLayoutBox()) }
-    }
-
-    pub fn SetPreviousGeometryForLayoutShiftTracking(
-        &mut self,
-        paint_offset: &PhysicalOffset,
-        size: &PhysicalSize,
-        visual_overflow_rect: &PhysicalRect,
-    ) {
-        unsafe {
-            LayoutBoxMutableSetPreviousGeometryForLayoutShiftTrackingProvider(
-                self.GetLayoutBox(),
-                paint_offset,
-                size,
-                visual_overflow_rect,
-            )
-        }
-    }
-
-    pub fn UpdateBackgroundPaintLocation(&mut self, needs_root_element_group: bool) {
-        unsafe {
-            LayoutBoxMutableUpdateBackgroundPaintLocationProvider(
-                self.GetLayoutBox(),
-                needs_root_element_group,
-            )
         }
     }
 }
@@ -595,11 +530,6 @@ impl LayoutBox {
         unsafe { LayoutBoxContentLayoutBoxProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_box.h:1277-1277,1294-1297
-    pub fn UpdateScrollSnapMappingAfterStyleChange(&mut self, old_style: &ComputedStyle) {
-        unsafe { LayoutBoxUpdateScrollSnapMappingAfterStyleChangeProvider(self, old_style) }
-    }
-
     pub fn InflateVisualRectForFilterUnderContainer(
         &self,
         state: &mut TransformState,
@@ -612,14 +542,6 @@ impl LayoutBox {
     // cpp: layoutng/internal/layout_box.h:327-327,424-424,433-433,442-450
     pub fn PhysicalBackgroundRect(&self, kind: BackgroundRectType) -> PhysicalRect {
         unsafe { LayoutBoxPhysicalBackgroundRectProvider(self, kind) }
-    }
-
-    pub fn ScrollerFromScrollMarkerGroup(&self) -> *mut LayoutBlock {
-        unsafe { LayoutBoxScrollerFromScrollMarkerGroupProvider(self) }
-    }
-
-    pub fn LayoutSubtreeRoot(&mut self) {
-        unsafe { LayoutBoxLayoutSubtreeRootProvider(self) }
     }
 
     pub fn HitTestAllPhases(
@@ -638,15 +560,6 @@ impl LayoutBox {
         offset: &PhysicalOffset,
     ) -> bool {
         unsafe { LayoutBoxMayIntersectProvider(self, result, location, offset) }
-    }
-
-    pub fn HasHitTestableOverflow(&self) -> bool {
-        unsafe { LayoutBoxHasHitTestableOverflowProvider(self) }
-    }
-
-    // cpp: layoutng/internal/layout_box.h:461-461,612-613,690-695
-    pub fn InvalidateItems(result: &LayoutResult) {
-        unsafe { LayoutBoxInvalidateItemsProvider(result) }
     }
 
     pub fn FragmentDataFromPhysicalFragment(
@@ -786,31 +699,12 @@ impl LayoutBox {
         unsafe { LayoutBoxClearPaintFlagsProvider(self) }
     }
 
-    // cpp: layoutng/internal/layout_box.h:1111-1115,1162-1172
-    pub fn OverrideTickmarks(&mut self, tickmarks: Vector<gfx::Rect>) {
-        unsafe { LayoutBoxOverrideTickmarksProvider(self, tickmarks) }
-    }
-
-    pub fn InvalidatePaintForTickmarks(&mut self) {
-        unsafe { LayoutBoxInvalidatePaintForTickmarksProvider(self) }
-    }
-
     pub fn NonOverflowingScrollRanges(&self) -> *const GCedHeapVector<NonOverflowingScrollRange> {
         unsafe { LayoutBoxNonOverflowingScrollRangesProvider(self) }
     }
 
     pub fn DisplayLocksAffectedByAnchors(&self) -> *const GCedHeapHashSet<Member<Element>> {
         unsafe { LayoutBoxDisplayLocksAffectedByAnchorsProvider(self) }
-    }
-
-    pub fn NotifyContainingDisplayLocksForAnchorPositioning(
-        &self,
-        past: *const GCedHeapHashSet<Member<Element>>,
-        current: *const GCedHeapHashSet<Member<Element>>,
-    ) {
-        unsafe {
-            LayoutBoxNotifyContainingDisplayLocksForAnchorPositioningProvider(self, past, current)
-        }
     }
 
     // cpp: layoutng/internal/layout_box.h:1224-1229,1293-1294,1310-1312
@@ -832,13 +726,6 @@ impl LayoutBox {
 
     pub fn BackgroundClipBorderBoxIsEquivalentToPaddingBox(&self) -> bool {
         unsafe { LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider(self) }
-    }
-
-    pub fn ComputeBackgroundPaintLocation(
-        &self,
-        needs_root_element_group: bool,
-    ) -> BackgroundPaintLocation {
-        unsafe { LayoutBoxComputeBackgroundPaintLocationProvider(self, needs_root_element_group) }
     }
 
     // cpp: layoutng/internal/layout_box.h:398-399,421-421

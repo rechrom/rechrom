@@ -38,9 +38,4 @@ impl LayoutObject {
         }
         false
     }
-
-    // cpp: layoutng/internal/layout_object.h:3207-3207
-    pub fn GetDisplayLockContext(&self) -> *mut DisplayLockContext {
-        unsafe { LayoutObjectGetDisplayLockContextProvider(self) }
-    }
 }

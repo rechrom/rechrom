@@ -18,15 +18,6 @@ impl LayoutObject {
     }
 
     #[inline(never)]
-    pub fn CollectOutlineRectsAndAdvance(
-        &self,
-        outline_type: OutlineType,
-        iterator: &mut AccompaniedFragmentIterator,
-    ) -> Vector<PhysicalRect> {
-        unsafe { LayoutObjectCollectOutlineRectsAndAdvanceProvider(self, outline_type, iterator) }
-    }
-
-    #[inline(never)]
     pub fn OutlineRects(
         &self,
         info: *mut LayoutOutlineInfo,

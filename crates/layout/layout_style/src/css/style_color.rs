@@ -722,16 +722,7 @@ unsafe extern "Rust" {
         value: &UnresolvedColorFunction,
         formatter: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result;
-    fn UnresolvedColorMixConstruct(
-        space: ColorSpace,
-        hue: HueInterpolationMethod,
-        c1: &StyleColor,
-        c2: &StyleColor,
-        percentage: f64,
-        alpha_multiplier: f64,
-    ) -> UnresolvedColorMix;
     fn UnresolvedColorMixToCSSValue(value: &UnresolvedColorMix) -> *mut CSSValue;
-    fn UnresolvedColorMixResolve(value: &UnresolvedColorMix, current_color: &Color) -> Color;
     fn UnresolvedRelativeColorConstruct(
         origin: &StyleColor,
         space: ColorSpace,
@@ -767,9 +758,6 @@ unsafe extern "Rust" {
         can_expose_accent_color: bool,
     ) -> Color;
     fn StyleColorIsColorKeyword(keyword: CSSValueID) -> bool;
-    fn StyleColorIsSystemColorIncludingDeprecated(keyword: CSSValueID) -> bool;
-    fn StyleColorIsSystemColor(keyword: CSSValueID) -> bool;
-    fn StyleColorEffectiveColorKeyword(value: &StyleColor) -> CSSValueID;
 }
 
 #[cfg(test)]

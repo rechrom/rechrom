@@ -153,12 +153,6 @@ impl StyleHighlightData {
         }
     }
 
-    // cpp: layoutng_style/style/style_highlight_data.h:54-55
-    // No definition exists in the supplied C++ tree.
-    pub fn StylesDependOnFunc(&self, func: &dyn Fn(&ComputedStyle) -> bool) -> bool {
-        unsafe { StyleHighlightDataStylesDependOnFunc(self, func) }
-    }
-
     // cpp: layoutng_style/style/style_highlight_data.h:57
     // cpp: layoutng_style/style/style_highlight_data.cc:107-125
     pub fn DependsOnSizeContainerQueries(&self) -> bool {
@@ -210,8 +204,4 @@ impl PartialEq for StyleHighlightData {
 
 unsafe extern "Rust" {
     fn StyleHighlightDataEqual(value: &StyleHighlightData, other: &StyleHighlightData) -> bool;
-    fn StyleHighlightDataStylesDependOnFunc(
-        value: &StyleHighlightData,
-        func: &dyn Fn(&ComputedStyle) -> bool,
-    ) -> bool;
 }

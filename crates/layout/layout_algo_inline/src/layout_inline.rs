@@ -99,10 +99,6 @@ unsafe extern "Rust" {
         new_style: &ComputedStyle,
         context: &StyleChangeContext,
     );
-    fn LayoutInlineInvalidateDisplayItemClients(
-        this: &LayoutInline,
-        reason: foundation::PaintInvalidationReason,
-    );
     fn LayoutInlineComputeInitialShouldCreateBoxFragment(this: &LayoutInline) -> bool;
     fn LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle(
         this: &LayoutInline,
@@ -425,9 +421,6 @@ impl LayoutInline {
         context: &StyleChangeContext,
     ) {
         unsafe { LayoutInlineStyleDidChange(self, diff, old_style, new_style, context) }
-    }
-    pub fn InvalidateDisplayItemClients(&self, reason: foundation::PaintInvalidationReason) {
-        unsafe { LayoutInlineInvalidateDisplayItemClients(self, reason) }
     }
     pub fn QuadsInAncestorInternal(
         &self,

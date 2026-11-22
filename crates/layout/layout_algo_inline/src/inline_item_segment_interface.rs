@@ -48,7 +48,6 @@ unsafe extern "Rust" {
         segments: &mut InlineItemSegments,
         items: &HeapVector<Member<InlineItem>>,
     );
-    fn InlineItemSegmentsToRanges(segments: &InlineItemSegments, ranges: &mut RunSegmenterRanges);
     fn InlineItemSegmentsRanges<'a>(
         segments: &'a InlineItemSegments,
         start_offset: u32,
@@ -225,10 +224,6 @@ impl InlineItemSegments {
 
     pub fn ComputeItemIndex(&mut self, items: &HeapVector<Member<InlineItem>>) {
         unsafe { InlineItemSegmentsComputeItemIndex(self, items) }
-    }
-
-    pub fn ToRanges(&self, ranges: &mut RunSegmenterRanges) {
-        unsafe { InlineItemSegmentsToRanges(self, ranges) }
     }
 
     pub fn Ranges(
