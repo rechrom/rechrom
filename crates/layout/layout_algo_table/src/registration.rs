@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     layout_table::LayoutTable, layout_table_caption::LayoutTableCaption,
     layout_table_cell::LayoutTableCell, layout_table_column::LayoutTableColumn,

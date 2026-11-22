@@ -7,8 +7,14 @@ use crate::layout_text_fragment::LayoutTextFragment;
 use crate::offset_mapping::OffsetMapping;
 use foundation::{DynamicTo, EDisplay, EVisibility, String};
 use crate::inline_cursor::InlineCursor;
-unsafe extern "Rust" {
-    fn LayoutInnerTextTableRowNeedsNewline(object: *const LayoutObject) -> bool;
+// The table rows and sections are core/layout/table/ objects: the query is
+// the `inner_text_row_needs_newline` table-virtual slot (filled by
+// layout_algo_table registration) on the object's own factory set.
+fn TableRowNeedsNewline(object: &LayoutObject) -> bool {
+    let virtuals = unsafe { object.FactorySet().as_ref() }
+        .and_then(|objects| objects.table_virtuals)
+        .expect("a LayoutTableRow was created by the registered table package");
+    (virtuals.inner_text_row_needs_newline)(object)
 }
 #[derive(Clone, Copy)]
 pub struct InnerTextLayoutFacts {
@@ -33,7 +39,7 @@ impl LayoutNode<'_> {
             table_row: object.StyleRef().Display() == EDisplay::kTableRow,
             cell_has_next: object.IsTableCell() && !object.NextSibling().is_null(),
             row_needs_newline: object.IsTableRow()
-                && unsafe { LayoutInnerTextTableRowNeedsNewline(object) },
+                && TableRowNeedsNewline(object),
         }
     }
     /// Each callback is the source Result::EmitText(StringView). String clones

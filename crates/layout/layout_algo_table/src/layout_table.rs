@@ -1,11 +1,12 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 // Source: text_iterator.cc:628-640,689-695. Keep table traversal and grouped
 // section ordering in their existing owning package, behind scalar results.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextIteratorTableFacts(
-    object: *const layout_assembly::internal::layout_object::LayoutObject,
+// Registered as TableObjectVirtuals::text_iterator_table_facts.
+pub(crate) fn LayoutTextIteratorTableFacts(
+    object: &layout_assembly::internal::layout_object::LayoutObject,
 ) -> (bool, bool, bool) {
-    let object = unsafe { &*object };
     if object.IsTableCell() {
         let cell = unsafe {
             &*foundation::To::<crate::layout_table_cell::LayoutTableCell>(object as *const _)
@@ -456,9 +457,11 @@ impl Traceable for LayoutTable {
 
 // Source element_inner_text.cc:180-211. Table grouping remains on the original
 // LayoutTable/Section/Row owners, not DOM sibling guesses in the collector.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInnerTextTableRowNeedsNewline(object: *const LayoutObject) -> bool {
-    let row = unsafe { &*foundation::To::<crate::layout_table_row::LayoutTableRow>(object) };
+// Registered as TableObjectVirtuals::inner_text_row_needs_newline.
+pub(crate) fn LayoutInnerTextTableRowNeedsNewline(object: &LayoutObject) -> bool {
+    let row = unsafe {
+        &*foundation::To::<crate::layout_table_row::LayoutTableRow>(object as *const LayoutObject)
+    };
     if row.Table().is_null() {
         return false;
     }

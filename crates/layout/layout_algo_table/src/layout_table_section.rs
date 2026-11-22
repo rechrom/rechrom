@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{layout_table::LayoutTable, layout_table_row::LayoutTableRow};
 use foundation::{EDisplay, MakeGarbageCollected, To, Traceable, Visitor};
 use layout_assembly::internal::{
@@ -14,8 +16,7 @@ use layout_style::style::{
 };
 use std::ops::{Deref, DerefMut};
 // cpp: layoutng_table/layout_table_section.cc:17-20
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInputNodeIsEmptyTableSectionFromTable(node: &LayoutInputNode) -> bool {
+pub fn LayoutInputNodeIsEmptyTableSectionFromTable(node: &LayoutInputNode) -> bool {
     let box_ = unsafe { &*node.GetLayoutBox() };
     box_.IsTableSection() && unsafe { &*To::<LayoutTableSection>(node.GetLayoutBox()) }.IsEmpty()
 }

@@ -462,10 +462,13 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_core/src/fragment/table/table_constraint_space_data.rs`; row-cell and
   section-row scans retain distinct table sampling frames. Collapsed-border
   state and column locations are colocated in `table_borders_types.rs`
-  and `table_column_location.rs`, with heavy border computation still
-  routed through the table provider symbols. Cell/column/row/section state,
-  grouped-child iteration, and the typed `TableNode` facade live in
-  `table_layout_algorithm_types_interface.rs` and `table_node_interface.rs`.
+  and `table_column_location.rs`; the border computation itself is the table
+  crate's `TableBordersAlgorithms` extension trait. Cell/column/row/section
+  records, the grouped-children record (with its Trace) and the typed
+  `TableNode` wrapper live in `table_layout_algorithm_types_interface.rs` and
+  `table_node_interface.rs`; their algorithm members (construction, iteration,
+  Encompass, `TableTypes::Create*`, `TableNode` border/column/size queries)
+  are extension traits in `layout_algo_table::algorithms`.
   `shape-outside` contour, radius, inset, and reference-box validation is owned
   by `layout_core/src/float/shape_style_projection.rs`; author-sized shape
   projection has a float-algorithm sampling frame rather than core input self time.
@@ -1037,6 +1040,26 @@ is no `extern "Rust"`/`#[no_mangle]` coupling. Replaced slots, all filled by
 | `LayoutObjectFactorySet::replaced` | `fn(&mut Node, &ComputedStyle) -> *mut LayoutObject` | `LayoutObjectFactoryScope` (tree building) |
 | `replaced_respects_css_overflow` | `fn(&LayoutReplaced) -> bool` (base body `layout_replaced_core::LayoutReplacedRespectsCSSOverflow`) | the object's retained `FactorySet()` |
 | `replaced_image_state_updater`, `replaced_image_resource_updater`, `replaced_video_poster_resource_updater`, `replaced_broken_image_resource_updater`, `replaced_image_resource_facts`, `replaced_video_state_updater` | existing factory signatures | factory set (resource/state updates) |
+`layout_algo_table` has no `extern "Rust"`/`#[no_mangle]` coupling with base
+either (R7a). Members of base-declared table types that only table code calls
+(`TableNode`, `TableBorders`, `TableTypes`, `CellInlineConstraint`, `Column`,
+`TableGroupedChildren`, its iterator, and the four `LayoutInputNode` table
+members) are extension traits in `layout_algo_table::algorithms`, imported by
+every table module. Table slots, all filled by
+`layout_algo_table::registration::Register`:
+
+| slot | signature | read through |
+|---|---|---|
+| `LayoutAlgorithmSet::{table, table_row, table_section}` | `LayoutAlgorithmEntry` | active pass |
+| `table_support.inline_size` | `fn(&TableNode, &ConstraintSpace, &BoxStrut) -> LayoutUnit` | active pass (`length_utils`) |
+| `table_support.caption_block_size` | `fn(&TableNode, &ConstraintSpace) -> LayoutUnit` | active pass (flex) |
+| `table_support.borders` | `fn(&TableNode) -> *const BoxStrut` | active pass (`length_utils`) |
+| `table_support.finalize_cell` | `fn(LayoutUnit, *mut BoxFragmentBuilder)` | active pass (block) |
+| `LayoutObjectFactorySet::{table, insert_table_child}` | existing factory signatures | `LayoutObjectFactoryScope` |
+| `LayoutObjectFactorySet::table_virtuals` (`TableObjectVirtuals`, every field required) | existing virtual signatures, plus `inner_text_row_needs_newline: fn(&LayoutObject) -> bool` and `text_iterator_table_facts: fn(&LayoutObject) -> (bool, bool, bool)` (R7a) | the object's own `FactorySet()`: valid outside a layout pass (editing queries after layout) |
+
+`table_support` is validated by `validate_performance_ownership` like the
+other support groups.
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs

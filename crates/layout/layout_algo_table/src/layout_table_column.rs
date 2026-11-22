@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{layout_table::LayoutTable, table_break_token_data::TableBreakTokenData};
 use foundation::paint_invalidation_reason::PaintInvalidationReason;
 use foundation::{
@@ -30,8 +32,7 @@ use layout_style::style::{computed_style::ComputedStyle, style_difference::Style
 use std::ops::{Deref, DerefMut};
 
 // cpp: layoutng_table/layout_table_column.cc:21-24
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInputNodeTableColumnSpanFromTable(
+pub fn LayoutInputNodeTableColumnSpanFromTable(
     node: &layout_assembly::internal::layout_input_node::LayoutInputNode,
 ) -> u32 {
     debug_assert!(node.IsTableCol() || node.IsTableColgroup());

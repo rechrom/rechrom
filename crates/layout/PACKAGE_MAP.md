@@ -209,10 +209,10 @@ defined in another:
 | inline → fragment (`LayoutInline*`, `LayoutText*`, `InkOverflow*ForTextCombine`) | 9 | internal to base (LayoutInline/LayoutText methods); **done, R5 part 2** |
 | fragment → inline (`FragmentItemsBuilder*FromInline/ForInline`, `InlineItemsData*`, `FragmentBuilderAddOutOfFlowInlineChildCandidate`) | 6 | **gone, R5 part 2** (bodies in base or inline traits) |
 | block → assembly (`DispatchLayoutBlockFlow*`) | 5 | internal to base |
-| core → table (`LayoutInputNode*FromTable`) | 4 | upward: slot group |
+| core → table (`LayoutInputNode*FromTable`, `TableNode*`, `TableBorders*`, `TableTypes*`, `TableGroupedChildren*`, `*EncompassFromTable`) | 38 | **gone, R7a**: table extension traits (`layout_algo_table::algorithms`), one record member (`TableGroupedChildren::Trace`) in base |
 | core → inline (`AdjustStyleFor*Combine*`, `InlineChildLayoutContextParallelFlowBreakTokens`, `LayoutBoxPositionForPointInFragmentsProvider`) | 4 | 2 internal to base, 2 slots |
 | fragment → assembly (`DispatchBreakTokenAlgorithmDataGetTotalRowGapCount`, `DispatchLayoutBoxModelObjectStickyContainer`) | 2 | callers move up, or 2 slots |
-| inline → table (`LayoutInnerTextTableRowNeedsNewline`, `LayoutTextIteratorTableFacts`) | 2 | lateral: slots registered by table |
+| inline → table (`LayoutInnerTextTableRowNeedsNewline`, `LayoutTextIteratorTableFacts`) | 2 | **done, R7a**: `TableObjectVirtuals` slots (the callers are base `editing/` since R5 part 2) |
 | block → forms (`BlockNodeGetFieldsetContentFromForms`), block → inline (`LayoutBlockFlowShouldTruncateOverflowingTextFromInline`), inline → list (`LayoutEditingListItemValue`), core → block (`InlineChildLayoutContextParallelFlowBreakTokens`) | 1 each | slots |
 
 Risk: `InlineChildLayoutContextParallelFlowBreakTokens` is defined
@@ -844,9 +844,9 @@ moves. "→ down" marks a recommended alternative that needs no slot.
 | `inline_items_data` (3) | `check_consistency`, `open_tag_items`, `offset_map: fn(&InlineItemsData) -> &Option<TextOffsetMap>` | inline | not needed (R5 part 2): record members defined in base |
 | `fragment_items_builder` (2) | `new_for_inline`, `add_previous_items_from_inline` | inline | not needed (R5 part 2): bodies moved to base `fragment/` |
 | `out_of_flow_inline_child_candidate` | current `FragmentBuilderAddOutOfFlowInlineChildCandidate` signature | inline | not needed (R5 part 2): only inline calls it; `FragmentBuilderInlineAlgorithms` |
-| `table_node` (4) | `is_empty_section: fn(&LayoutInputNode) -> bool`; `cell_colspan` / `cell_rowspan` / `column_span: fn(&LayoutInputNode) -> u32` | table | `LayoutInputNode*FromTable` |
+| `table_node` (4) | `is_empty_section: fn(&LayoutInputNode) -> bool`; `cell_colspan` / `cell_rowspan` / `column_span: fn(&LayoutInputNode) -> u32` | table | not needed (R7a): only table calls them; `LayoutInputNodeTableAlgorithms` |
 | `forms_support.fieldset_content` | `fn(&BlockNode) -> BlockNode` | forms | `BlockNodeGetFieldsetContentFromForms` |
-| `editing.table_row_needs_newline` / `.table_facts` | `fn(*const LayoutObject) -> bool` / `fn(*const LayoutObject) -> (bool, bool, bool)` | table | inline → table link-time symbols |
+| `editing.table_row_needs_newline` / `.table_facts` | `fn(*const LayoutObject) -> bool` / `fn(*const LayoutObject) -> (bool, bool, bool)` | table | **done (R7a)** as `TableObjectVirtuals::{inner_text_row_needs_newline, text_iterator_table_facts}: fn(&LayoutObject) -> …`, read through the object's `FactorySet()` |
 | `editing.list_item_value` | `fn(*const LayoutObject) -> Option<i32>` | list | inline → list link-time symbol |
 | `row_gap.sticky_container` / `.total_row_gap_count` | existing `Dispatch*` signatures | base (internal) | fragment → assembly symbols (disappear once the callers move to base) |
 
@@ -1372,7 +1372,7 @@ the moved object-model modules are gated on the feature like
 configuration (as before, it does not link a LayoutText).
 
 **Remaining link-time pairs in `crates/layout`** (not changed):
-base → table 40, base → replaced 23, base → grid 10, base → block 9,
+base → table 40 (0 after R7a), base → replaced 23, base → grid 10, base → block 9,
 base → out_of_flow 2, base → float/forms/list 1 each; intra-base:
 `editing_caret.rs` defines `LayoutTextPositionForPoint`,
 `LayoutInlinePositionForPoint` and `LayoutBoxPositionForPointInFragmentsProvider`
@@ -1467,6 +1467,70 @@ possible follow-up, not a link-time coupling.
   by the concurrent table/grid/block work; the `pub use block_virtual_dispatch`
   line in `lib.rs` may need a trivial merge.
 - `Cargo.lock` is unchanged.
+### Status: R7a table (link-time ABI removed; done, not built)
+
+Same rule and technique as R5 part 2. Every pair between base and
+`layout_algo_table` was base → table (the table crate declared no `extern`
+block); all 40 are gone:
+
+| class | count | what |
+|---|---:|---|
+| A (move to base) | 0 | No body is `core/layout/*.cc` object model that base could own. The four `LayoutInputNode` table members are written in Chromium's `layout_input_node.cc`, but their bodies cast to `LayoutTableSection`/`LayoutTableColumn`/`LayoutTableCell` (table crate types, Chromium `core/layout/table/`) and only table code calls them, so they are class C |
+| B, slot | 2 | `LayoutInnerTextTableRowNeedsNewline`, `LayoutTextIteratorTableFacts` (base `editing/editing_inner_text.rs`, `editing/editing_text_iterator_facts.rs`) → two new `TableObjectVirtuals` fields |
+| C, extension trait | 35 | `TableNodeAlgorithms` (6: `GetTableBordersStrut`, `GetTableBorders`, `ComputeCaptionBlockSize`, `GetColumnConstraints`, `ComputeTableInlineSize`, `AllowColumnPercentages`), `LayoutInputNodeTableAlgorithms` (4), `TableBordersAlgorithms` (14 + `MergeBordersWithoutSection` as a default method), `TableTypesAlgorithms` (3 `Create*`), `CellInlineConstraintAlgorithms` / `ColumnAlgorithms` (`Encompass`, 1 each), `TableGroupedChildrenAlgorithms` (constructor; plus `begin`/`end`, which call the iterator constructor), `TableGroupedChildrenIteratorAlgorithms` (5: constructor, `Increment`, `Decrement`, `Dereference`, `Equals`) |
+| C exception (record member in base) | 1 | `TableGroupedChildren::Trace`: base's GC trace bindings (`layoutng_trace_bindings.rs`) need it; body written into `table_layout_algorithm_types_interface.rs`, the table copy deleted |
+| D (dead) | 2 | base's private `TableGroupedChildrenIterator::Advance{Forward,Backward}ToNonEmptySection` wrappers (listed in `DEAD_CODE.md`); the table bodies stay as plain functions the iterator algorithms call |
+
+**Traits.** All traits are in the new `layout_algo_table/src/algorithms.rs`;
+their methods call the former `#[no_mangle]` functions, which are now plain
+`pub fn` in their original table modules (`table_node.rs`, `table_borders.rs`,
+`table_layout_algorithm_types.rs`, `layout_table_{cell,column,section}.rs`).
+Every table module (tests included) starts with
+`#[allow(unused_imports)] use crate::algorithms::*;`, so the member-call
+syntax (`node.GetTableBorders()`, `TableBorders::new(..)`,
+`TableGroupedChildren::new(..)`) is unchanged and statically dispatched. The
+base inherent wrappers and their `extern` declarations are deleted. Only table
+code called any of these members (checked over `crates/` and `apps/`); base
+keeps reaching table layout through the existing `TableLayoutSupport` slots
+(`inline_size`, `caption_block_size`, `borders`, `finalize_cell`).
+
+**Slots added** (`layout_core/src/internal/layout_object_factory_set.rs`,
+`TableObjectVirtuals`, filled by `table_object_virtuals::Virtuals()` from
+`registration::RegisterTableObjects`):
+
+```rust
+pub inner_text_row_needs_newline: fn(&LayoutObject) -> bool,
+pub text_iterator_table_facts: fn(&LayoutObject) -> (bool, bool, bool),
+```
+
+They are table-object virtual queries, so they live on the table vtable record
+rather than `TableLayoutSupport`: the callers run after layout (editing), and
+read the record from the queried object's own `FactorySet()`, like
+`TableFocusgroupCursor::Facts` reads `focusgroup_facts`. That needs no active
+`LayoutPassScope` and no resident-registry thread-local. `TableObjectVirtuals`
+fields are non-optional, so a missing entry is a compile error in
+`Virtuals()`. A table row/cell without `table_virtuals` panics (the record is
+installed with the table factory that creates those objects).
+
+**Files moved:** none. New: `layout_algo_table/src/algorithms.rs`.
+
+**Remaining link-time pairs between base and table:** 0
+(`layout_algo_table/src` has no `#[no_mangle]` and no `extern` block; base has
+no `*FromTable` declaration).
+
+**Build risks:**
+
+- The trait signatures repeat the deleted base wrappers; the bodies were never
+  type-checked against them except through the link. E0308 shows at the
+  trait impl in `algorithms.rs`.
+- Associated functions without `self` (`TableBorders::new`,
+  `TableBorders::ComputeTableBorders`, `TableTypes::Create*`,
+  `TableGroupedChildren::new`, iterator `new`) resolve through the trait in
+  scope; a file missing the prelude shows E0599.
+- A crate outside table that calls one of these members needs
+  `use layout_algo_table::algorithms::*;` (none found).
+- `table_layout_algorithm_types.rs` dropped its `Visitor` import with the
+  moved `Trace` body.
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 

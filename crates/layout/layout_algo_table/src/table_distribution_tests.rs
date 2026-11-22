@@ -1,3 +1,5 @@
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{table_size_distribution::*, test_thread};
 use foundation::LayoutUnit;
 use layout_assembly::internal::table_layout_algorithm_types::{

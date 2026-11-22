@@ -1,4 +1,6 @@
 //! Source table package. Object factories and algorithms are registered together.
+// Extension traits for base-declared table types (R7a).
+pub mod algorithms;
 pub mod layout_table_column_visitor;
 pub mod table_borders;
 pub mod table_break_token_data;

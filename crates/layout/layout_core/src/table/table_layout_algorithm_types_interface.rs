@@ -1,62 +1,17 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use foundation::{HeapVector, LayoutUnit, Vector, Visitor, WritingDirectionMode};
+use foundation::{HeapVector, LayoutUnit, Vector, Visitor};
 use layout_geometry::geometry::box_strut::BoxStrut;
-use layout_style::style::computed_style::ComputedStyle;
 
 use super::super::block_node::BlockNode;
-use super::super::layout_input_node::LayoutInputNode;
 use super::super::min_max_sizes::MinMaxSizes;
 
-// Non-inline member bodies are owned by //src/layoutng_table.
-unsafe extern "Rust" {
-    fn TableCellInlineConstraintEncompassFromTable(
-        constraint: &mut CellInlineConstraint,
-        other: &CellInlineConstraint,
-    );
-    fn TableColumnEncompassFromTable(column: &mut Column, cell: &Option<CellInlineConstraint>);
-    fn TableTypesCreateColumnFromTable(
-        style: &ComputedStyle,
-        default_inline_size: Option<LayoutUnit>,
-        is_table_fixed: bool,
-    ) -> Column;
-    fn TableTypesCreateCellInlineConstraintFromTable(
-        node: &BlockNode,
-        table_writing_direction: WritingDirectionMode,
-        is_fixed_layout: bool,
-        cell_border: &BoxStrut,
-        cell_padding: &BoxStrut,
-    ) -> CellInlineConstraint;
-    fn TableTypesCreateSectionFromTable(
-        node: &LayoutInputNode,
-        start_row: u32,
-        row_count: u32,
-        block_size: LayoutUnit,
-        treat_as_tbody: bool,
-    ) -> Section;
-    fn TableGroupedChildrenConstructFromTable(table: &BlockNode) -> TableGroupedChildren;
-    fn TableGroupedChildrenTraceFromTable(children: &TableGroupedChildren, visitor: &mut Visitor);
-    fn TableGroupedChildrenIteratorConstructFromTable(
-        grouped_children: &TableGroupedChildren,
-        is_end: bool,
-    ) -> TableGroupedChildrenIterator;
-    fn TableGroupedChildrenIteratorIncrementFromTable(iterator: &mut TableGroupedChildrenIterator);
-    fn TableGroupedChildrenIteratorDecrementFromTable(iterator: &mut TableGroupedChildrenIterator);
-    fn TableGroupedChildrenIteratorDereferenceFromTable(
-        iterator: &TableGroupedChildrenIterator,
-    ) -> BlockNode;
-    fn TableGroupedChildrenIteratorEqualFromTable(
-        left: &TableGroupedChildrenIterator,
-        right: &TableGroupedChildrenIterator,
-    ) -> bool;
-    fn TableGroupedChildrenIteratorAdvanceForwardFromTable(
-        iterator: &mut TableGroupedChildrenIterator,
-    );
-    fn TableGroupedChildrenIteratorAdvanceBackwardFromTable(
-        iterator: &mut TableGroupedChildrenIterator,
-    );
-}
+// Non-inline member bodies (TableTypes::Create*, CellInlineConstraint and
+// Column ::Encompass, TableGroupedChildren construction and iteration) are the
+// table algorithm of Chromium core/layout/table/table_layout_algorithm_types.cc.
+// Only the table package calls them, so they are extension traits in
+// `layout_algo_table::algorithms`.
 
 // cpp: layoutng/internal/table_layout_algorithm_types.h:24-28
 pub struct TableTypes;
@@ -66,45 +21,6 @@ impl TableTypes {
     // yet expose a const constructor. Preserve its value and type as a method.
     pub fn kTableMaxInlineSize() -> LayoutUnit {
         LayoutUnit::from_signed(1_000_000)
-    }
-
-    // cpp: layoutng/internal/table_layout_algorithm_types.h:206-221
-    pub fn CreateColumn(
-        style: &ComputedStyle,
-        default_inline_size: Option<LayoutUnit>,
-        is_table_fixed: bool,
-    ) -> Column {
-        unsafe { TableTypesCreateColumnFromTable(style, default_inline_size, is_table_fixed) }
-    }
-
-    pub fn CreateCellInlineConstraint(
-        node: &BlockNode,
-        table_writing_direction: WritingDirectionMode,
-        is_fixed_layout: bool,
-        cell_border: &BoxStrut,
-        cell_padding: &BoxStrut,
-    ) -> CellInlineConstraint {
-        unsafe {
-            TableTypesCreateCellInlineConstraintFromTable(
-                node,
-                table_writing_direction,
-                is_fixed_layout,
-                cell_border,
-                cell_padding,
-            )
-        }
-    }
-
-    pub fn CreateSection(
-        node: &LayoutInputNode,
-        start_row: u32,
-        row_count: u32,
-        block_size: LayoutUnit,
-        treat_as_tbody: bool,
-    ) -> Section {
-        unsafe {
-            TableTypesCreateSectionFromTable(node, start_row, row_count, block_size, treat_as_tbody)
-        }
     }
 }
 
@@ -117,12 +33,6 @@ pub struct CellInlineConstraint {
     pub percent: Option<f32>,
     pub percent_border_padding: LayoutUnit,
     pub is_constrained: bool,
-}
-
-impl CellInlineConstraint {
-    pub fn Encompass(&mut self, other: &Self) {
-        unsafe { TableCellInlineConstraintEncompassFromTable(self, other) }
-    }
 }
 
 // cpp: layoutng/internal/table_layout_algorithm_types.h:44-56
@@ -183,11 +93,6 @@ impl Column {
             is_table_fixed,
             is_mergeable,
         }
-    }
-
-    // cpp: layoutng/internal/table_layout_algorithm_types.h:103-103
-    pub fn Encompass(&mut self, cell: &Option<CellInlineConstraint>) {
-        unsafe { TableColumnEncompassFromTable(self, cell) }
     }
 
     // cpp: layoutng/internal/table_layout_algorithm_types.h:104-110
@@ -331,20 +236,22 @@ pub struct TableGroupedChildren {
 }
 
 impl TableGroupedChildren {
-    pub fn new(table: &BlockNode) -> Self {
-        unsafe { TableGroupedChildrenConstructFromTable(table) }
-    }
-
+    // Record member kept with the declaration (like TableBorders::Trace): the
+    // base GC trace bindings need it. The constructor and begin/end are table
+    // algorithms in `layout_algo_table::algorithms::TableGroupedChildrenAlgorithms`.
+    // cpp: layoutng_table/table_layout_algorithm_types.cc:345-351
     pub fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { TableGroupedChildrenTraceFromTable(self, visitor) }
-    }
-
-    pub fn begin(&self) -> TableGroupedChildrenIterator {
-        TableGroupedChildrenIterator::new(self, false)
-    }
-
-    pub fn end(&self) -> TableGroupedChildrenIterator {
-        TableGroupedChildrenIterator::new(self, true)
+        for node in &self.captions {
+            node.Trace(visitor);
+        }
+        for node in &self.columns {
+            node.Trace(visitor);
+        }
+        self.header.Trace(visitor);
+        for node in &self.bodies {
+            node.Trace(visitor);
+        }
+        self.footer.Trace(visitor);
     }
 }
 
@@ -377,40 +284,12 @@ pub struct TableGroupedChildrenIterator {
     pub position_: u32,
 }
 
+// The constructor, ++/--, * and == are table algorithms
+// (`layout_algo_table::algorithms::TableGroupedChildrenIteratorAlgorithms`).
+// The private Advance*ToNonEmptySection helpers are plain functions there.
 impl TableGroupedChildrenIterator {
-    pub fn new(grouped_children: &TableGroupedChildren, is_end: bool) -> Self {
-        unsafe { TableGroupedChildrenIteratorConstructFromTable(grouped_children, is_end) }
-    }
-
-    pub fn Increment(&mut self) -> &mut Self {
-        unsafe { TableGroupedChildrenIteratorIncrementFromTable(self) };
-        self
-    }
-
-    pub fn Decrement(&mut self) -> &mut Self {
-        unsafe { TableGroupedChildrenIteratorDecrementFromTable(self) };
-        self
-    }
-
-    pub fn Dereference(&self) -> BlockNode {
-        unsafe { TableGroupedChildrenIteratorDereferenceFromTable(self) }
-    }
-
-    pub fn Equals(&self, rhs: &Self) -> bool {
-        unsafe { TableGroupedChildrenIteratorEqualFromTable(self, rhs) }
-    }
-
     // cpp: layoutng/internal/table_layout_algorithm_types.h:286-286
     pub fn TreatAsTBody(&self) -> bool {
         self.current_section_ == CurrentSection::kBody
-    }
-
-    // cpp: layoutng/internal/table_layout_algorithm_types.h:289-290
-    fn AdvanceForwardToNonEmptySection(&mut self) {
-        unsafe { TableGroupedChildrenIteratorAdvanceForwardFromTable(self) }
-    }
-
-    fn AdvanceBackwardToNonEmptySection(&mut self) {
-        unsafe { TableGroupedChildrenIteratorAdvanceBackwardFromTable(self) }
     }
 }

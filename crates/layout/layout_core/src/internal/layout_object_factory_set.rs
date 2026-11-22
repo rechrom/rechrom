@@ -143,6 +143,17 @@ pub struct TableObjectVirtuals {
         fn(&LayoutBox, foundation::OverlayScrollbarClipBehavior) -> foundation::PhysicalRect,
     pub computed_row_span: fn(&LayoutBox) -> u32,
     pub update_from_element: fn(&mut LayoutObject),
+    // cpp: core/editing/element_inner_text.cc:180-211
+    // Whether a LayoutTableRow is followed by another row of its table (next
+    // row, or a later section with rows). Base editing (InnerTextLayoutFacts)
+    // calls it on a table row after layout; the object's own FactorySet()
+    // carries the record, so no layout pass needs to be active.
+    pub inner_text_row_needs_newline: fn(&LayoutObject) -> bool,
+    // cpp: core/editing/iterators/text_iterator.cc:628-640,689-695
+    // For a LayoutTableCell / LayoutTableRow: (has table, is the table's
+    // first cell, table is inline). Called by base editing's
+    // EditingTextIteratorObjectFacts like `inner_text_row_needs_newline`.
+    pub text_iterator_table_facts: fn(&LayoutObject) -> (bool, bool, bool),
 }
 
 // cpp: layoutng/internal/layout_object_factory_set.h:45-85

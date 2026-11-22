@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     layout_table_column_visitor::{ColumnVisitor, VisitLayoutTableColumn},
     table_layout_utils::{
@@ -101,8 +103,7 @@ fn sections(grouped: &TableGroupedChildren) -> Vec<BlockNode> {
 }
 
 // cpp: layoutng_table/table_borders.cc:113-246
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersComputeFromTable(table: &BlockNode) -> *const TableBorders {
+pub fn TableBordersComputeFromTable(table: &BlockNode) -> *const TableBorders {
     let style = table.Style();
     let collapsed = style.BorderCollapse() == EBorderCollapse::kCollapse;
     let pointer = MakeGarbageCollected(TableBorders::new(
@@ -263,8 +264,7 @@ pub extern "Rust" fn TableBordersComputeFromTable(table: &BlockNode) -> *const T
 }
 
 // cpp: layoutng_table/table_borders.cc:248-250
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersConstructFromTable(
+pub fn TableBordersConstructFromTable(
     border: &BoxStrut,
     collapsed: bool,
 ) -> TableBorders {
@@ -280,8 +280,7 @@ pub extern "Rust" fn TableBordersConstructFromTable(
 
 // cpp: layoutng_table/table_borders.cc:253-292
 #[cfg(debug_assertions)]
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersDumpEdgesFromTable(
+pub fn TableBordersDumpEdgesFromTable(
     borders: &mut TableBorders,
 ) -> foundation::String {
     if borders.edges_per_row_ == 0 {
@@ -315,8 +314,7 @@ pub extern "Rust" fn TableBordersDumpEdgesFromTable(
 }
 // cpp: layoutng_table/table_borders.cc:294-309
 #[cfg(debug_assertions)]
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersEqualFromTable(left: &TableBorders, right: &TableBorders) -> bool {
+pub fn TableBordersEqualFromTable(left: &TableBorders, right: &TableBorders) -> bool {
     left.edges_.len() == right.edges_.len()
         && left
             .edges_
@@ -336,8 +334,7 @@ pub extern "Rust" fn TableBordersEqualFromTable(left: &TableBorders, right: &Tab
 }
 
 // cpp: layoutng_table/table_borders.cc:313-366
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersGetCellBordersFromTable(
+pub fn TableBordersGetCellBordersFromTable(
     borders: &TableBorders,
     row: u32,
     column: u32,
@@ -389,8 +386,7 @@ pub extern "Rust" fn TableBordersGetCellBordersFromTable(
 }
 
 // cpp: layoutng_table/table_borders.cc:368-378
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersUpdateTableBorderFromTable(
+pub fn TableBordersUpdateTableBorderFromTable(
     borders: &mut TableBorders,
     rows: u32,
     columns: u32,
@@ -405,8 +401,7 @@ pub extern "Rust" fn TableBordersUpdateTableBorderFromTable(
 }
 
 // cpp: layoutng_table/table_borders.cc:380-395
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersCellBorderFromTable(
+pub fn TableBordersCellBorderFromTable(
     borders: &TableBorders,
     cell: &BlockNode,
     row: u32,
@@ -435,8 +430,7 @@ pub extern "Rust" fn TableBordersCellBorderFromTable(
     )
 }
 // cpp: layoutng_table/table_borders.cc:399-410
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersCellPaddingForMeasureFromTable(
+pub fn TableBordersCellPaddingForMeasureFromTable(
     _borders: &TableBorders,
     style: &ComputedStyle,
     direction: WritingDirectionMode,
@@ -458,8 +452,7 @@ pub extern "Rust" fn TableBordersCellPaddingForMeasureFromTable(
 }
 
 // cpp: layoutng_table/table_borders.cc:412-482
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersMergeBordersFromTable(
+pub fn TableBordersMergeBordersFromTable(
     borders: &mut TableBorders,
     row: u32,
     column: u32,
@@ -552,8 +545,7 @@ pub extern "Rust" fn TableBordersMergeBordersFromTable(
 }
 
 // cpp: layoutng_table/table_borders.cc:484-508
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersMergeRowAxisBorderFromTable(
+pub fn TableBordersMergeRowAxisBorderFromTable(
     borders: &mut TableBorders,
     row: u32,
     column: u32,
@@ -579,8 +571,7 @@ pub extern "Rust" fn TableBordersMergeRowAxisBorderFromTable(
     }
 }
 // cpp: layoutng_table/table_borders.cc:510-534
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersMergeColumnAxisBorderFromTable(
+pub fn TableBordersMergeColumnAxisBorderFromTable(
     borders: &mut TableBorders,
     row: u32,
     column: u32,
@@ -607,8 +598,7 @@ pub extern "Rust" fn TableBordersMergeColumnAxisBorderFromTable(
 }
 
 // cpp: layoutng_table/table_borders.cc:538-569
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersMarkInnerBordersAsDoNotFillFromTable(
+pub fn TableBordersMarkInnerBordersAsDoNotFillFromTable(
     borders: &mut TableBorders,
     row: u32,
     column: u32,
@@ -649,8 +639,7 @@ fn empty_edge() -> Edge {
 }
 
 // cpp: layoutng_table/table_borders.cc:572-600
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersEnsureCellColumnFitsFromTable(
+pub fn TableBordersEnsureCellColumnFitsFromTable(
     borders: &mut TableBorders,
     column: u32,
 ) {
@@ -691,8 +680,7 @@ pub extern "Rust" fn TableBordersEnsureCellColumnFitsFromTable(
     borders.edges_per_row_ = desired;
 }
 // cpp: layoutng_table/table_borders.cc:604-611
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableBordersEnsureCellRowFitsFromTable(borders: &mut TableBorders, row: u32) {
+pub fn TableBordersEnsureCellRowFitsFromTable(borders: &mut TableBorders, row: u32) {
     debug_assert_ne!(borders.edges_per_row_, 0);
     let count = borders.edges_.len() / borders.edges_per_row_ as usize;
     let desired = row + 2;

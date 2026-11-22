@@ -2,10 +2,14 @@
 //! These values are consumed immediately; no style/geometry model is retained.
 use super::*;
 use foundation::LayoutUnit;
-unsafe extern "Rust" {
-    // Implemented by layout_algo_table's owning LayoutTable/Cell/Row classes.
-    // Assembly cannot depend backward on that package's internal objects.
-    fn LayoutTextIteratorTableFacts(object: *const LayoutObject) -> (bool, bool, bool);
+// LayoutTable/Cell/Row are core/layout/table/ objects: the facts come from
+// the `text_iterator_table_facts` table-virtual slot (filled by
+// layout_algo_table registration) on the object's own factory set.
+fn TableFacts(object: &LayoutObject) -> (bool, bool, bool) {
+    let virtuals = unsafe { object.FactorySet().as_ref() }
+        .and_then(|objects| objects.table_virtuals)
+        .expect("a LayoutTableCell/Row was created by the registered table package");
+    (virtuals.text_iterator_table_facts)(object)
 }
 pub struct EditingTextIteratorObjectFacts {
     pub visible: bool,
@@ -209,7 +213,7 @@ impl LayoutNode<'_> {
         let box_ = unsafe { DynamicTo::<LayoutBox>(object as *const _).as_ref() };
         let (table_exists, table_first_cell, table_inline) =
             if object.IsTableCell() || object.IsTableRow() {
-                unsafe { LayoutTextIteratorTableFacts(object) }
+                TableFacts(object)
             } else {
                 (false, false, false)
             };

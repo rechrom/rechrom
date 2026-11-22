@@ -120,25 +120,12 @@ impl LayoutInputNode {
         axes
     }
 
-    // cpp: layoutng/internal/layout_input_node.h:117
-    // The body is owned by //src/layoutng_table/layout_table_section.cc.
-    pub fn IsEmptyTableSection(&self) -> bool {
-        unsafe { LayoutInputNodeIsEmptyTableSectionFromTable(self) }
-    }
-
-    // cpp: layoutng/internal/layout_input_node.h:123-127
-    // These bodies are owned by //src/layoutng_table.
-    pub fn TableColumnSpan(&self) -> u32 {
-        unsafe { LayoutInputNodeTableColumnSpanFromTable(self) }
-    }
-
-    pub fn TableCellColspan(&self) -> u32 {
-        unsafe { LayoutInputNodeTableCellColspanFromTable(self) }
-    }
-
-    pub fn TableCellRowspan(&self) -> u32 {
-        unsafe { LayoutInputNodeTableCellRowspanFromTable(self) }
-    }
+    // cpp: layoutng/internal/layout_input_node.h:117,123-127
+    // IsEmptyTableSection, TableColumnSpan, TableCellColspan and
+    // TableCellRowspan cast to the LayoutTable* objects of
+    // core/layout/table/. Only the table package calls them: they are its
+    // `LayoutInputNodeTableAlgorithms` extension trait
+    // (`layout_algo_table::algorithms`).
 
     // cpp: layoutng/internal/layout_input_node.h:218
     // The body is owned by //src/layoutng_custom/custom_layout_child.cc.
@@ -333,10 +320,6 @@ impl LayoutInputNode {
 // Cross-package method definitions have to be linked through typed functions:
 // Rust cannot add inherent methods to LayoutInputNode from another crate.
 unsafe extern "Rust" {
-    fn LayoutInputNodeIsEmptyTableSectionFromTable(node: &LayoutInputNode) -> bool;
-    fn LayoutInputNodeTableColumnSpanFromTable(node: &LayoutInputNode) -> u32;
-    fn LayoutInputNodeTableCellColspanFromTable(node: &LayoutInputNode) -> u32;
-    fn LayoutInputNodeTableCellRowspanFromTable(node: &LayoutInputNode) -> u32;
     fn LayoutInputNodeGetCustomLayoutChildFromCustom(
         node: &LayoutInputNode,
     ) -> *mut CustomLayoutChild;
