@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-#[path = "float/layout_opportunity.rs"]
 mod layout_algo_float_layout_opportunity;
 
 pub use layout_algo_float_layout_opportunity::*;

@@ -31,24 +31,20 @@ use crate::layout_registry::LayoutRegistry;
 use crate::layout_boundary_support::{LayoutBoundarySupport, LayoutUpdateKind};
 pub use layout_commit::{PaintClientCommit, PaintCommitOutput};
 
-#[path = "invalidation/tree_facts.rs"]
 mod layout_invalidation_tree_facts;
 use layout_invalidation_tree_facts::{collect_layout_tree_facts, LayoutTreeFacts};
 
-#[path = "layout_tree_update.rs"]
 mod layout_tree_update;
 pub use layout_tree_update::LayoutTreeUpdate;
 // `impl LayoutEngine` families, grouped like the facade's `layout::views`.
 // A child of this module so the families keep access to the engine's private
 // state; the crate root re-exports it as `crate::engine`.
-#[path = "engine/mod.rs"]
 pub mod engine;
 pub use self::engine::form_control::input_control_platform::FormControlMutation;
 pub use self::engine::observers::intersection_observer_geometry::NativeIntersectionRoot;
 pub use self::engine::scroll::scroll_anchor_suppression::SuppressScrollAnchorScope;
 pub use self::engine::selection::document_markers::DocumentMarkerInvalidationType;
 
-#[path = "layout_output.rs"]
 mod layout_output;
 #[cfg(feature = "translation_in_progress")]
 pub use layout_output::EditingBidiRangeAdjustment;
@@ -83,37 +79,26 @@ pub enum LayoutEngineError {
     RuntimeError(&'static str),
 }
 
-#[path = "fragment/prepaint_input_update.rs"]
 mod layout_fragment_prepaint_input_update;
 use layout_fragment_prepaint_input_update::{
     UpdateFragmentPaintStyle, UpdatePrePaintInputs, VisitMutablePaintInputs,
 };
-#[path = "fragment/engine_paint_update.rs"]
 mod layout_fragment_engine_paint_update;
 use layout_fragment_engine_paint_update::EnginePaintUpdate;
-#[path = "fragment/layout_paint_output.rs"]
 mod layout_fragment_layout_paint_output;
-#[path = "fragment/retained_scroll_refresh.rs"]
 mod layout_fragment_retained_scroll_refresh;
-#[path = "fragment/sticky_layout_commit.rs"]
 mod layout_fragment_sticky_layout_commit;
-#[path = "invalidation/constraint_equivalence.rs"]
 mod layout_invalidation_constraint_equivalence;
 use layout_invalidation_constraint_equivalence::{
     SameConstraintScalars, SameConstraints, SameImageCatalogGeometry, SameOptionalArc,
     SameShapeImageCatalog,
 };
-#[path = "invalidation/engine_mutation.rs"]
 mod layout_invalidation_engine_mutation;
 use layout_invalidation_engine_mutation::EngineMutation;
-#[path = "commit/engine_paint_commit.rs"]
 mod layout_commit_engine_paint_commit;
 use layout_commit_engine_paint_commit::PaintCommit;
-#[path = "commit/container_query_sizes.rs"]
 mod layout_commit_container_query_sizes;
-#[path = "commit/engine_layout_publish.rs"]
 mod layout_commit_engine_layout_publish;
-#[path = "reuse/engine_output_reuse.rs"]
 mod layout_reuse_engine_output_reuse;
 /// Native invalidation outcome of HTMLMediaElement::UpdateLayoutObject.
 /// Page routes its existing lifecycle wake from this scalar; it does not infer
@@ -1513,13 +1498,10 @@ impl LayoutEngine {
     }
 }
 
-#[path = "editing/engine_password_echo.rs"]
 mod layout_algo_inline_engine_password_echo;
 
-#[path = "forms/slider_track_geometry.rs"]
 mod layout_algo_forms_slider_track_geometry;
 
-#[path = "forms/spin_button_geometry.rs"]
 mod layout_algo_forms_spin_button_geometry;
 
 #[cfg(feature = "translation_in_progress")]

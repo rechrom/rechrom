@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-#[path = "out_of_flow/anchor_position_scroll_data.rs"]
 mod layout_algo_out_of_flow_anchor_position_scroll_data;
 
 pub use layout_algo_out_of_flow_anchor_position_scroll_data::*;

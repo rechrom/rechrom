@@ -5,7 +5,6 @@ use super::layout_input::{ComputedStyle, Edges, GridTrackBreadthKind, GridTrackL
 use super::paint_input::PaintStyleData;
 use std::borrow::Cow;
 
-#[path = "invalidation/css_zoom.rs"]
 mod layout_invalidation_css_zoom;
 use layout_invalidation_css_zoom::ZoomedStyleNonUnit;
 

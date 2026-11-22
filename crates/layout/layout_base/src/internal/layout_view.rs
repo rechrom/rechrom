@@ -1,8 +1,6 @@
 #![allow(non_snake_case)]
-#[path = "fragment/layout_view_visual_rect.rs"]
 mod layout_fragment_visual_rect;
 
-#[path = "fragment/frame_view_pending_property_updates.rs"]
 mod frame_view_pending_property_updates;
 use frame_view_pending_property_updates::FrameViewPendingPropertyUpdates;
 
@@ -41,41 +39,29 @@ use super::scroll_types::{IncludeScrollbarsInRect, ScrollOffset};
 use super::scrollbar_mode::mojom::blink::ScrollbarMode;
 use super::variable_length_transform_result::VariableLengthTransformResult;
 
-#[path = "invalidation/layout_view_destruction.rs"]
 mod layout_invalidation_layout_view_destruction;
 use layout_invalidation_layout_view_destruction::LayoutViewWillBeDestroyed;
 
-#[path = "invalidation/layout_view_invalidation.rs"]
 mod layout_invalidation_layout_view_invalidation;
 
-#[path = "invalidation/layout_view_child_mutation.rs"]
 mod layout_invalidation_layout_view_child_mutation;
 
-#[path = "block/layout_view_root_layout.rs"]
 mod layout_algo_block_layout_view_root_layout;
 
-#[path = "block/layout_view_block_queries.rs"]
 mod layout_algo_block_layout_view_block_queries;
 
-#[path = "svg/svg_text_descendant_index.rs"]
 mod layout_algo_svg_svg_text_descendant_index;
 
-#[path = "inline/layout_view_variable_length_transform_index.rs"]
 mod layout_algo_inline_layout_view_variable_length_transform_index;
 
-#[path = "list/layout_view_list_index.rs"]
 mod layout_algo_list_layout_view_list_index;
 
-#[path = "fragment/layout_view_geometry.rs"]
 mod layout_fragment_layout_view_geometry;
 
-#[path = "fragment/layout_view_fragment_queries.rs"]
 mod layout_fragment_layout_view_fragment_queries;
 
-#[path = "fragment/layout_view_paint_policy.rs"]
 mod layout_fragment_layout_view_paint_policy;
 
-#[path = "commit/layout_view_commit.rs"]
 mod layout_commit_layout_view_commit;
 
 // The corresponding C++ classes are only forward-declared in layout_view.h.

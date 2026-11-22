@@ -111,30 +111,23 @@ use crate::layout_boundary_support::LayoutBoundaryEnvironment;
 // Paint export retains an optical axis selected implicitly by the source face.
 const OPTICAL_SIZE_TAG: u32 = u32::from_be_bytes(*b"opsz");
 
-#[path = "reuse/layout_environment_cache.rs"]
 mod layout_reuse_layout_environment_cache;
 use layout_reuse_layout_environment_cache::FontBinding;
 pub(crate) use layout_reuse_layout_environment_cache::ReusableLayoutEnvironment;
-#[path = "float/shape_image_environment.rs"]
 mod layout_algo_float_shape_image_environment;
 use layout_algo_float_shape_image_environment::InputShapeImageResolver;
-#[path = "inline/text_input_environment.rs"]
 mod layout_algo_inline_text_input_environment;
 use layout_algo_inline_text_input_environment::{
     InputHyphenationResolver, InputPhraseBreakResolver, InputTextTransformResolver,
 };
-#[path = "layout_environment.rs"]
 mod layout_boundary_layout_environment;
 pub(crate) use layout_boundary_layout_environment::LayoutEnvironment;
 
-#[path = "reuse/font_resolver.rs"]
 mod layout_reuse_font_resolver;
 pub(crate) use layout_reuse_font_resolver::ConstructionFontResolver;
 use layout_reuse_font_resolver::EngineFontResolver;
-#[path = "invalidation/layout_object_factory.rs"]
 mod layout_invalidation_layout_object_factory;
 pub(crate) use layout_invalidation_layout_object_factory::CreateLayoutObject;
-#[path = "fragment/fragment_export_support.rs"]
 mod layout_fragment_fragment_export_support;
 pub(crate) use layout_fragment_fragment_export_support::{
     ExportAppliedTextDecoration, ExportSelectionPaintStyle, ExportSelectionTextDecoration,
@@ -144,7 +137,6 @@ use layout_fragment_fragment_export_support::{
     InputId,
     Number, PublicWritingMode, StyleSourceEntry,
 };
-#[path = "fragment/fragment_property_export.rs"]
 mod layout_fragment_fragment_property_export;
 pub(crate) use layout_fragment_fragment_property_export::ExportSelectionPrePaintInvalidation;
 pub(crate) use layout_fragment_fragment_property_export::{
@@ -163,21 +155,18 @@ pub(crate) use layout_fragment_fragment_property_export::{
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties,
 };
-#[path = "fragment/fragment_paint_data_init.rs"]
 mod layout_fragment_fragment_paint_data_init;
 use layout_fragment_fragment_paint_data_init::ReadyPrePaintInvalidation;
 pub(crate) use layout_fragment_fragment_paint_data_init::{
     InitializeInlineItemPaintData, InitializePhysicalFragmentPaintData,
     PaintResourcesAreCompatible, SynchronizeBoxFragmentData, SynchronizeInlineFragmentData,
 };
-#[path = "fragment/text_paint_export.rs"]
 mod layout_fragment_text_paint_export;
 pub(crate) use layout_fragment_text_paint_export::{
     BuildPaintGlyphRuns, ExportTextPaintBaseline, LiveFirstLineDecorationRect, LiveTextItemFacts,
     LiveTextLineGeometry, LiveTextLineSnapDelta,
 };
 use layout_fragment_text_paint_export::{ExportShapeResult, ExportTextCombineEmphasis};
-#[path = "fragment/fragment_geometry_export.rs"]
 mod layout_fragment_fragment_geometry_export;
 use layout_fragment_fragment_geometry_export::ExportBoxPaintGeometry;
 pub(crate) use layout_fragment_fragment_geometry_export::{
@@ -185,10 +174,8 @@ pub(crate) use layout_fragment_fragment_geometry_export::{
     ExportSelfOutlineGeometry, ExportStitchedDecorationData, LiveBoxDecorationBreak,
     LiveScrollGeometry,
 };
-#[path = "fragment/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;
 pub(crate) use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;
-#[path = "fragment/specialized_paint_export.rs"]
 mod layout_fragment_specialized_paint_export;
 pub(crate) use layout_fragment_specialized_paint_export::ExportTablePaintData;
 pub(crate) use layout_fragment_specialized_paint_export::ExportOverflowClipMargin;
@@ -196,30 +183,23 @@ pub(crate) use layout_fragment_specialized_paint_export::{
     ExportColumnRulePaintData, ExportFieldsetPaintData, ExportFrameSetPaintData,
     ExportGapRulePaintData, ExportMathMLPaintData, LiveFirstBaseline,
 };
-#[path = "fragment/collapsed_table_paint_export.rs"]
 mod layout_fragment_collapsed_table_paint_export;
 pub(crate) use layout_fragment_collapsed_table_paint_export::ExportCollapsedTablePaintData;
-#[path = "fragment/ink_overflow_export.rs"]
 mod layout_fragment_ink_overflow_export;
 use layout_fragment_ink_overflow_export::ExportInkRect;
-#[path = "fragment/nine_piece_image_export.rs"]
 mod layout_fragment_nine_piece_image_export;
 use layout_fragment_nine_piece_image_export::ExportNinePieceImages;
-#[path = "fragment/global_paint_export.rs"]
 mod layout_fragment_global_paint_export;
 pub(crate) use layout_fragment_global_paint_export::{
     CanvasBackgroundForRoot, DocumentElementBackgroundForObject, PageBackgroundViewFacts,
     ViewBackgroundForRoot,
 };
-#[path = "fragment/inline_fragment_paint_policy.rs"]
 mod layout_fragment_inline_fragment_paint_policy;
 pub(crate) use layout_fragment_inline_fragment_paint_policy::{
     ComputedStyleRequiresPaintBackedInlineFragment, RequiresPaintBackedInlineFragment,
 };
-#[path = "fragment/scrollbar_thumb_geometry.rs"]
 mod layout_fragment_scrollbar_thumb_geometry;
 use layout_fragment_scrollbar_thumb_geometry::SetScrollbarThumb;
-#[path = "fragment/sticky_paint_export.rs"]
 mod layout_fragment_sticky_paint_export;
 pub(crate) use layout_fragment_sticky_paint_export::LiveStickyPaintProperties;
 pub(crate) fn UpdateStickyOffsets(
@@ -232,7 +212,6 @@ pub(crate) fn UpdateStickyOffsets(
 // Scroll-only paint-property update, corresponding to Blink's scroll translation
 // and sticky property update. The caller has verified unchanged LayoutResult;
 // styles, fragments, clips and resources keep their existing owned snapshot.
-#[path = "fragment/scroll_paint_property_refresh.rs"]
 mod layout_fragment_scroll_paint_property_refresh;
 
 pub fn RefreshScrollPaintProperties(
@@ -247,14 +226,11 @@ pub fn RefreshScrollPaintProperties(
     )
 }
 
-#[path = "fragment/scroll_paint_property_index.rs"]
 mod layout_fragment_scroll_paint_property_index;
 pub(crate) use layout_fragment_scroll_paint_property_index::ScrollPaintPropertyIndex;
 
-#[path = "invalidation/prepare_tree.rs"]
 mod layout_invalidation_prepare_tree;
 
-#[path = "inline/initial_letter_style.rs"]
 mod layout_algo_inline_initial_letter_style;
 use layout_algo_inline_initial_letter_style::InitialLetterTextStyle;
 // cpp: layoutng/internal/boundary/layout_boundary.h:34-40
@@ -289,9 +265,7 @@ pub fn PrepareLayoutObjectTreeDefault(
     PrepareLayoutObjectTree(root, space, layout_space, false, true, true, true, None)
 }
 
-#[path = "fragment/layout_result_publish.rs"]
 mod layout_fragment_layout_result_publish;
-#[path = "fragment/retained_paint_refresh.rs"]
 mod layout_fragment_retained_paint_refresh;
 
 /// Refresh local paint inputs from existing source objects, retaining layout
@@ -327,7 +301,6 @@ pub fn PublishLayoutResult(
     )
 }
 
-#[path = "fragment/paint_cache_refresh.rs"]
 mod layout_fragment_paint_cache_refresh;
 
 pub(crate) fn RefreshCompatibleNodeInputCache(

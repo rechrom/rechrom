@@ -21,7 +21,6 @@ pub mod internal {
     pub mod anchor_map;
     pub mod anchor_map_services;
     pub mod anchor_position_scroll_data;
-    #[path = "core/anchor_scope.rs"]
     pub mod anchor_scope;
     pub mod anchor_scroll_services;
     pub mod boundary {
@@ -38,7 +37,6 @@ pub mod internal {
     pub mod block_node;
     pub mod block_node_data;
     pub mod break_appeal {
-        #[path = "fragmentation/break_appeal.rs"]
         mod layout_algo_fragmentation_break_appeal;
         pub use layout_algo_fragmentation_break_appeal::*;
     }
@@ -51,28 +49,23 @@ pub mod internal {
         pub mod out_of_flow_data;
         pub mod successful_position_fallback;
     }
-    #[path = "core/constraint_space.rs"]
     pub mod constraint_space;
     pub mod constraint_space_builder;
     pub mod constraint_space_builder_style;
     pub mod constraint_space_custom_data {
-        #[path = "custom/constraint_space_custom_data.rs"]
         mod layout_algo_custom_constraint_space_custom_data;
         pub use layout_algo_custom_constraint_space_custom_data::*;
     }
     pub mod content_change_type;
     pub mod custom_layout_payload {
-        #[path = "custom/custom_layout_payload.rs"]
         mod layout_algo_custom_custom_layout_payload;
         pub use layout_algo_custom_custom_layout_payload::*;
     }
     pub mod custom_scrollbar;
     pub mod devtools_flex_info {
-        #[path = "flex/devtools_flex_info.rs"]
         mod layout_algo_flex_devtools_flex_info;
         pub use layout_algo_flex_devtools_flex_info::*;
     }
-    #[path = "core/disable_layout_side_effects_scope.rs"]
     pub mod disable_layout_side_effects_scope;
     pub mod document_marker;
     pub mod early_break;
@@ -81,27 +74,22 @@ pub mod internal {
     }
     pub mod exclusions {
         pub mod exclusion_area {
-            #[path = "float/exclusion_area.rs"]
             mod layout_algo_float_exclusion_area;
             pub use layout_algo_float_exclusion_area::*;
         }
         pub mod exclusion_space {
-            #[path = "float/exclusion_space.rs"]
             mod layout_algo_float_exclusion_space;
             pub use layout_algo_float_exclusion_space::*;
         }
         pub mod layout_opportunity;
-        #[path = "exclusions/line_layout_opportunity.rs"]
         pub mod line_layout_opportunity;
         pub mod shape_exclusions {
-            #[path = "float/shape_exclusions.rs"]
             mod layout_algo_float_shape_exclusions;
             pub use layout_algo_float_shape_exclusions::*;
         }
     }
     pub mod form_control_sizing_service;
     pub mod form_control_types {
-        #[path = "forms/form_control_types.rs"]
         mod layout_algo_forms_form_control_types;
         pub use layout_algo_forms_form_control_types::*;
     }
@@ -110,31 +98,26 @@ pub mod internal {
     pub mod fragment_repeater;
     pub mod fragmentation_utils;
     pub mod frame_set_layout_data {
-        #[path = "fragment/frame_set_layout_data.rs"]
         mod layout_fragment_frame_set_layout_data;
         pub use layout_fragment_frame_set_layout_data::*;
     }
     pub mod gap {
         pub mod cross_gap {
-            #[path = "fragment/cross_gap.rs"]
             mod layout_fragment_cross_gap;
             pub use layout_fragment_cross_gap::*;
         }
         pub mod gap_decoration_utils;
         pub mod gap_geometry;
         pub mod gap_intersection {
-            #[path = "fragment/gap_intersection.rs"]
             mod layout_fragment_gap_intersection;
             pub use layout_fragment_gap_intersection::*;
         }
         #[allow(non_upper_case_globals)]
         pub mod gap_utils {
-            #[path = "fragment/gap_utils.rs"]
             mod layout_fragment_gap_utils;
             pub use layout_fragment_gap_utils::*;
         }
         pub mod main_gap {
-            #[path = "fragment/main_gap.rs"]
             mod layout_fragment_main_gap;
             pub use layout_fragment_main_gap::*;
         }
@@ -143,21 +126,17 @@ pub mod internal {
     pub mod grid_item;
     pub mod grid_lanes_item_group;
     pub mod grid_layout_data {
-        #[path = "grid/grid_layout_data.rs"]
         mod layout_algo_grid_grid_layout_data;
         pub use layout_algo_grid_grid_layout_data::*;
     }
     pub mod grid_subtree {
-        #[path = "grid/grid_subtree.rs"]
         mod layout_algo_grid_grid_subtree;
         pub use layout_algo_grid_grid_subtree::*;
     }
     pub mod grid_track_collection {
-        #[path = "grid/grid_track_collection_types.rs"]
         mod layout_algo_grid_grid_track_collection_types;
         pub use layout_algo_grid_grid_track_collection_types::*;
     }
-    #[path = "core/hit_test_phase.rs"]
     pub mod hit_test_phase;
     pub mod hyphen_result;
     pub mod ink_overflow;
@@ -167,7 +146,6 @@ pub mod internal {
     pub mod inline_item_segment;
     pub mod inline_item_span;
     pub mod inline_item_text_index {
-        #[path = "inline/inline_item_text_index.rs"]
         mod layout_algo_inline_inline_item_text_index;
         pub use layout_algo_inline_inline_item_text_index::*;
     }
@@ -215,7 +193,6 @@ pub mod internal {
     pub mod layout_text;
     pub mod layout_text_combine;
     pub mod layout_text_core;
-    #[path = "core/layout_theme.rs"]
     pub mod layout_theme;
     pub mod layout_transform;
     pub mod layout_tree_invalidation;
@@ -223,7 +200,6 @@ pub mod internal {
     pub mod layout_view;
     pub mod length_utils;
     pub mod line_clamp_data {
-        #[path = "block/line_clamp_data.rs"]
         mod layout_algo_block_line_clamp_data;
         pub use layout_algo_block_line_clamp_data::*;
     }
@@ -239,10 +215,8 @@ pub mod internal {
             pub mod image_resource_observer;
         }
     }
-    #[path = "core/map_coordinates_flags.rs"]
     pub mod map_coordinates_flags;
     pub mod mathml_paint_info {
-        #[path = "fragment/mathml_paint_info.rs"]
         mod layout_fragment_mathml_paint_info;
         pub use layout_fragment_mathml_paint_info::*;
     }
@@ -253,14 +227,12 @@ pub mod internal {
     pub mod naming_scope;
     pub mod node_rare_data_field;
     pub mod non_overflowing_scroll_range {
-        #[path = "out_of_flow/non_overflowing_scroll_range.rs"]
         mod layout_algo_out_of_flow_non_overflowing_scroll_range;
         pub use layout_algo_out_of_flow_non_overflowing_scroll_range::*;
     }
     pub mod oof_positioned_node;
     pub mod outline_geometry;
     pub mod outline_info {
-        #[path = "fragment/outline_info.rs"]
         mod layout_fragment_outline_info;
         pub use layout_fragment_outline_info::*;
     }
@@ -281,11 +253,9 @@ pub mod internal {
     pub mod scrollbar_orientation;
     pub mod scrollbar_part;
     pub mod scrollbar_theme_metrics;
-    #[path = "core/selection_state.rs"]
     pub mod selection_state;
     pub mod shapes {
         pub mod shape {
-            #[path = "float/shape.rs"]
             mod layout_algo_float_shape;
             pub use layout_algo_float_shape::*;
         }
@@ -295,10 +265,8 @@ pub mod internal {
     }
     pub mod snap_area;
     pub mod space_utils;
-    #[path = "core/split_axis_item.rs"]
     pub mod split_axis_item;
     pub mod sticky_position_scrolling_constraints;
-    #[path = "core/style_variant.rs"]
     pub mod style_variant;
     pub mod svg_character_data;
     pub mod svg_inline_node_data;
@@ -307,12 +275,10 @@ pub mod internal {
     pub mod svg_text_attributes_request;
     pub mod table_borders;
     pub mod table_column_location {
-        #[path = "table/table_column_location.rs"]
         mod layout_algo_table_table_column_location;
         pub use layout_algo_table_table_column_location::*;
     }
     pub mod table_constraint_space_data {
-        #[path = "table/table_constraint_space_data.rs"]
         mod layout_algo_table_table_constraint_space_data;
         pub use layout_algo_table_table_constraint_space_data::*;
     }
@@ -320,19 +286,15 @@ pub mod internal {
     pub mod table_layout_algorithm_types;
     pub mod table_node;
     pub mod text_combine_style_service;
-    #[path = "core/text_decoration_offset.rs"]
     pub mod text_decoration_offset;
     pub mod text_fit_scale {
-        #[path = "inline/text_fit_scale.rs"]
         mod layout_algo_inline_text_fit_scale;
         pub use layout_algo_inline_text_fit_scale::*;
     }
     pub mod text_item_type {
-        #[path = "inline/text_item_type.rs"]
         mod layout_algo_inline_text_item_type;
         pub use layout_algo_inline_text_item_type::*;
     }
-    #[path = "core/text_offset_range.rs"]
     pub mod text_offset_range;
     pub mod text_overflow_post_layout_snapshot;
     pub mod transform_utils;
@@ -341,7 +303,6 @@ pub mod internal {
     pub mod unpositioned_float;
     pub mod unpositioned_list_marker;
     pub mod used_font {
-        #[path = "inline/used_font_interface.rs"]
         mod layout_algo_inline_used_font_interface;
         pub use layout_algo_inline_used_font_interface::*;
     }
@@ -355,45 +316,35 @@ pub mod internal {
 // Fragment-local Paint sidecar values and the paint-input schema re-exports
 // (`fragment_tree` specializes the generic ones with `PaintStyle` and
 // `PaintProperties`).
-#[path = "fragment/boundary_types.rs"]
 pub mod boundary_types;
 // Lifetime handle of the canonical source LayoutResult.
-#[path = "fragment/layout_result_handle.rs"]
 pub mod layout_result_handle;
 // Traceable bindings of the fragment data types in `internal`.
-#[path = "fragment/fragment_data_trace_bindings.rs"]
 mod fragment_data_trace_bindings;
 // Method bodies of fragment data types whose declarations live in the type's
 // file; that file imports them directly (they were link-time symbols before R7a).
 // cpp: layoutng_grid/grid_track_collection.cc
-#[path = "fragment/grid/grid_track_collection.rs"]
 pub mod grid_track_collection_implementation;
 // cpp: layoutng_inline/used_font.cc
-#[path = "fragment/inline/used_font.rs"]
 mod used_font_implementation;
 // Gap segment-state aggregation over the gap types in `internal::gap`;
 // `layout_algo_grid` re-exports it.
-#[path = "fragment/grid/gap_segment_state_aggregator.rs"]
 pub mod grid_gap_segment_state_aggregator;
 
 // The per-box cached-result lookup is base code (`reuse/`); the module name
 // keeps its reuse profiler attribution.
-#[path = "reuse/cache_lookup.rs"]
 pub mod layout_reuse_package;
 
 // Completed-client tree traversal is base code (`commit/`); the module name
 // keeps its commit profiler attribution.
-#[path = "commit/client_commit.rs"]
 pub mod layout_commit_package;
 
 // Layout boundary object indexing lives in `fragment/`; the module name keeps
 // the `layout_fragment` profiler attribution.
-#[path = "fragment/layout_boundary_object_index.rs"]
 pub mod layout_fragment_object_index;
 
 // Sticky-position refresh lives in `fragment/`; the module name keeps the
 // `layout_fragment` profiler attribution.
-#[path = "fragment/paint_layer_scrollable_area_sticky_offsets.rs"]
 pub mod layout_fragment_sticky_offsets;
 
 // LayoutTextFragment (Chromium core/layout/layout_text_fragment.h) and
@@ -402,25 +353,19 @@ pub mod layout_fragment_sticky_offsets;
 // `inline/` with the other LayoutText/LayoutInline classes; base declares them
 // so `layout_algo_inline` only depends on base, never the reverse.
 #[cfg(feature = "translation_in_progress")]
-#[path = "inline/layout_text_fragment.rs"]
 pub mod layout_text_fragment;
 // LayoutBR, LayoutCounter, LayoutRubyAsBlock and LayoutWordBreak (Chromium
 // core/layout/layout_br.cc, layout_counter.cc, layout_ruby_as_block.cc,
 // layout_word_break.cc) are object-model classes: base since R5 part 2.
 // `layout_algo_inline::registration` still constructs them.
 #[cfg(feature = "translation_in_progress")]
-#[path = "inline/layout_br.rs"]
 pub mod layout_br;
 #[cfg(feature = "translation_in_progress")]
-#[path = "inline/layout_counter.rs"]
 pub mod layout_counter;
 #[cfg(feature = "translation_in_progress")]
-#[path = "inline/layout_ruby_as_block.rs"]
 pub mod layout_ruby_as_block;
 #[cfg(feature = "translation_in_progress")]
-#[path = "inline/layout_word_break.rs"]
 pub mod layout_word_break;
-#[path = "inline/offset_mapping.rs"]
 pub mod offset_mapping;
 
 pub mod layout_registry;
@@ -457,10 +402,8 @@ pub use internal::editing::forward::{
     PositionWithAffinity as EditingPositionWithAffinity, TextAffinity as EditingTextAffinity,
 };
 
-#[path = "editing/editing_caret.rs"]
 pub(crate) mod layout_algo_inline_editing_caret;
 
-#[path = "editing/editing_caret_rect.rs"]
 pub(crate) mod layout_algo_inline_editing_caret_rect;
 
 
@@ -479,13 +422,9 @@ pub use layout_fragment_package::*;
 // ink_overflow) and name FragmentItem/UsedFont directly. They live beside
 // those fragment-tree users in `fragment/`. Paint reaches them through
 // `layout::paint::<module>` re-exports and does not compile them.
-#[path = "fragment/decorating_box.rs"]
 pub mod decorating_box;
-#[path = "fragment/inline_paint_context.rs"]
 pub mod inline_paint_context;
-#[path = "fragment/line_relative_rect.rs"]
 pub mod line_relative_rect;
-#[path = "fragment/text_decoration_info.rs"]
 pub mod text_decoration_info;
 
 // The CSS colour parser is owned and compiled by `css_parser` (feature
