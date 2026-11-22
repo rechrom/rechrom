@@ -21,6 +21,7 @@
 //! | [`lifecycle`] | lifecycle results and errors (`LayoutEngineError`, `ScrollLayoutUpdate`, `LayoutUpdateKind`) |
 //! | [`mutation`] | boundary 3: `LayoutMutation`, `LayoutTreeUpdate`, the tree builder's parent `LayoutObject`, and mutation results |
 //! | [`input`] | Style/DOM-projected inputs: `ConstraintSpace`, `ElementData`, `NodeKind`, style projection, theme metrics |
+//! | [`result`] | what Layout produces for Paint/Interaction: `LayoutResultHandle`, `LayoutPaintOutput`, `PaintFragmentCursor`, fragment views (`ResidentBoxGeometry`, `FragmentCursor`), fragment Paint sidecars, `PaintResources` |
 //! | [`output`] | borrowed `LayoutOutput` access, `LayoutNode`, hit-test cursors, intersection roots |
 //! | [`fragment`] | the resident fragment tree: `LayoutResultHandle`, `PhysicalFragment`, `FragmentItem`, inline cursors |
 //! | [`paint`] | boundary 4: `LayoutPaintOutput`, `PaintFragmentCursor`, fragment Paint sidecars, Paint-owned sources compiled in the assembly |
@@ -115,6 +116,40 @@ topic!(
     /// Fragment paint-input value schema.
     paint_input
 );
+
+/// What Layout produces for Paint and Interaction (boundary 4 and the
+/// fragment queries): the retained source result, the borrowed views that
+/// walk its resident fragments, and the fragment-local Paint sidecars those
+/// views lend out.
+///
+/// The fragment tree is part of Layout's base (`layout_core/src/fragment/`,
+/// compiled in `layout_assembly`); nothing here copies it. Every item is also
+/// reachable at its older topic path (`fragment`, `paint`, `output`), which
+/// names the same re-export.
+pub mod result {
+    // The retained source result: a lifetime handle for Chromium's canonical
+    // LayoutResult plus its result-local Paint state.
+    pub use layout_assembly::fragment_tree::LayoutResultHandle;
+    // Boundary 4: the published paint output and its fragment cursor, the
+    // lease that keeps borrowed fragments alive, and the LayoutObject
+    // identity Paint keys display-item clients by.
+    pub use layout_assembly::layout_engine::{
+        LayoutPaintOutput, PaintFragmentCursor, PaintFragmentLease, PaintLayoutObjectIdentity,
+    };
+    // The borrowed fragment view Interaction hit-tests through.
+    pub use layout_assembly::layout_engine::FragmentCursor;
+    // Fragment views: the resident box-geometry reader, fragment kind,
+    // PrePaint's previous geometry and delayed-invalidation source object.
+    pub use layout_assembly::fragment_tree::{
+        FragmentKind, PrePaintSourceObject, PreviousBoxGeometry, ResidentBoxGeometry,
+    };
+    // Fragment-local Paint sidecars and the resources they reference.
+    pub use layout_assembly::fragment_tree::{
+        FragmentPaintData, FragmentPaintRect, PaintProperties, PaintResources, SvgTextPaintData,
+    };
+    // The receipt Paint hands back when its artifact is complete.
+    pub use layout_assembly::layout_engine::{PaintClientCommit, PaintCommitOutput};
+}
 topic!(
     /// Editing positions, selection and caret state.
     editing
