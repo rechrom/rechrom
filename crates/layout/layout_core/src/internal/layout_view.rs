@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
-#[path = "../../../layout_fragment/src/layout_view_visual_rect.rs"]
+#[path = "../fragment/layout_view_visual_rect.rs"]
 mod layout_fragment_visual_rect;
 
-#[path = "../../../layout_fragment/src/frame_view_pending_property_updates.rs"]
+#[path = "../fragment/frame_view_pending_property_updates.rs"]
 mod frame_view_pending_property_updates;
 use frame_view_pending_property_updates::FrameViewPendingPropertyUpdates;
 
@@ -41,41 +41,41 @@ use super::scroll_types::{IncludeScrollbarsInRect, ScrollOffset};
 use super::scrollbar_mode::mojom::blink::ScrollbarMode;
 use super::variable_length_transform_result::VariableLengthTransformResult;
 
-#[path = "../../../layout_invalidation/src/layout_view_destruction.rs"]
+#[path = "../invalidation/layout_view_destruction.rs"]
 mod layout_invalidation_layout_view_destruction;
 use layout_invalidation_layout_view_destruction::LayoutViewWillBeDestroyed;
 
-#[path = "../../../layout_invalidation/src/layout_view_invalidation.rs"]
+#[path = "../invalidation/layout_view_invalidation.rs"]
 mod layout_invalidation_layout_view_invalidation;
 
-#[path = "../../../layout_invalidation/src/layout_view_child_mutation.rs"]
+#[path = "../invalidation/layout_view_child_mutation.rs"]
 mod layout_invalidation_layout_view_child_mutation;
 
-#[path = "../../../layout_algo_block/src/layout_view_root_layout.rs"]
+#[path = "../block/layout_view_root_layout.rs"]
 mod layout_algo_block_layout_view_root_layout;
 
-#[path = "../../../layout_algo_block/src/layout_view_block_queries.rs"]
+#[path = "../block/layout_view_block_queries.rs"]
 mod layout_algo_block_layout_view_block_queries;
 
-#[path = "../../../layout_algo_svg/src/svg_text_descendant_index.rs"]
+#[path = "../svg/svg_text_descendant_index.rs"]
 mod layout_algo_svg_svg_text_descendant_index;
 
-#[path = "../../../layout_algo_inline/src/layout_view_variable_length_transform_index.rs"]
+#[path = "../inline/layout_view_variable_length_transform_index.rs"]
 mod layout_algo_inline_layout_view_variable_length_transform_index;
 
-#[path = "../../../layout_algo_list/src/layout_view_list_index.rs"]
+#[path = "../list/layout_view_list_index.rs"]
 mod layout_algo_list_layout_view_list_index;
 
-#[path = "../../../layout_fragment/src/layout_view_geometry.rs"]
+#[path = "../fragment/layout_view_geometry.rs"]
 mod layout_fragment_layout_view_geometry;
 
-#[path = "../../../layout_fragment/src/layout_view_fragment_queries.rs"]
+#[path = "../fragment/layout_view_fragment_queries.rs"]
 mod layout_fragment_layout_view_fragment_queries;
 
-#[path = "../../../layout_fragment/src/layout_view_paint_policy.rs"]
+#[path = "../fragment/layout_view_paint_policy.rs"]
 mod layout_fragment_layout_view_paint_policy;
 
-#[path = "../../../layout_commit/src/layout_view_commit.rs"]
+#[path = "../commit/layout_view_commit.rs"]
 mod layout_commit_layout_view_commit;
 
 // The corresponding C++ classes are only forward-declared in layout_view.h.

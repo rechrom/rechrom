@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_out_of_flow/src/anchor_map.rs"]
+#[path = "../../../layout_fragment/src/out_of_flow/anchor_map.rs"]
 mod layout_algo_out_of_flow_anchor_map;
 
 pub use layout_algo_out_of_flow_anchor_map::*;

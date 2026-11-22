@@ -45,13 +45,13 @@ impl PaintFragmentLease {
     }
 }
 
-#[path = "../../layout_fragment/src/fragment_client_rect_queries.rs"]
+#[path = "fragment/fragment_client_rect_queries.rs"]
 mod layout_fragment_fragment_client_rect_queries;
-#[path = "../../layout_fragment/src/fragment_cursor_children.rs"]
+#[path = "fragment/fragment_cursor_children.rs"]
 mod layout_fragment_fragment_cursor_children;
-#[path = "../../layout_fragment/src/layout_metrics.rs"]
+#[path = "fragment/layout_metrics.rs"]
 mod layout_fragment_layout_metrics;
-#[path = "../../layout_fragment/src/text_fragment_queries.rs"]
+#[path = "fragment/text_fragment_queries.rs"]
 mod layout_fragment_text_fragment_queries;
 
 #[cfg(feature = "translation_in_progress")]
@@ -2134,7 +2134,7 @@ impl LayoutNode<'_> {
     }
 }
 
-#[path = "../../layout_fragment/src/grid_focusgroup_cursor.rs"]
+#[path = "fragment/grid_focusgroup_cursor.rs"]
 mod layout_fragment_grid_focusgroup_cursor;
 pub use layout_fragment_grid_focusgroup_cursor::TableFocusgroupCursor;
 

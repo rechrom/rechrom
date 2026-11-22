@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/scroll_anchor.rs"]
+#[path = "../fragment/scroll_anchor.rs"]
 mod layout_fragment_scroll_anchor;
 
 pub use layout_fragment_scroll_anchor::*;

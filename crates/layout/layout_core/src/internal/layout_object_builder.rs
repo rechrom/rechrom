@@ -24,32 +24,32 @@ use foundation::{
 use layout_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::{collections::HashMap, sync::Arc};
 
-#[path = "../../../layout_algo_block/src/fragmentation_context.rs"]
+#[path = "../block/fragmentation_context.rs"]
 mod layout_algo_block_fragmentation_context;
 #[path = "../../../layout_algo_inline/src/collapsible_whitespace.rs"]
 mod layout_algo_inline_collapsible_whitespace;
-#[path = "../../../layout_commit/src/output_node_lookup.rs"]
+#[path = "../commit/output_node_lookup.rs"]
 mod layout_commit_output_node_lookup;
 #[path = "../../../layout_commit/src/scroll_offset_snapshot.rs"]
 mod layout_commit_scroll_offset_snapshot;
-#[path = "../../../layout_fragment/src/paint_input_update.rs"]
+#[path = "../fragment/paint_input_update.rs"]
 mod layout_fragment_paint_input;
-#[path = "../../../layout_fragment/src/scroll_input_update.rs"]
+#[path = "../fragment/scroll_input_update.rs"]
 mod layout_fragment_scroll_input;
 #[path = "../../../layout_invalidation/src/input_invalidation.rs"]
 mod layout_invalidation_input_updates;
 pub(crate) use layout_invalidation_input_updates::PaintResourceFacts;
-#[path = "../../../layout_invalidation/src/managed_input_admission.rs"]
+#[path = "../invalidation/managed_input_admission.rs"]
 mod layout_invalidation_managed_input_admission;
-#[path = "../../../layout_invalidation/src/managed_object_update.rs"]
+#[path = "../invalidation/managed_object_update.rs"]
 mod layout_invalidation_managed_object_update;
 #[path = "../../../layout_invalidation/src/node_input_update.rs"]
 mod layout_invalidation_node_input;
 #[path = "../../../layout_invalidation/src/tree_update.rs"]
 mod layout_invalidation_package;
-#[path = "../../../layout_reuse/src/managed_input_index.rs"]
+#[path = "../reuse/managed_input_index.rs"]
 mod layout_reuse_managed_input_index;
-#[path = "../../../layout_reuse/src/managed_object_compatibility.rs"]
+#[path = "../reuse/managed_object_compatibility.rs"]
 mod layout_reuse_managed_object_compatibility;
 #[path = "../../../layout_reuse/src/paint_only_font_binding.rs"]
 mod layout_reuse_paint_only_font_binding;

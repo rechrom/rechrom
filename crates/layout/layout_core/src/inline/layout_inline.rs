@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
-#[path = "../../layout_fragment/src/layout_inline_visual_rect.rs"]
+#[path = "../fragment/layout_inline_visual_rect.rs"]
 mod visual_rect;
 
-#[path = "layout_inline_caret.rs"]
+#[path = "../../../layout_algo_inline/src/layout_inline_caret.rs"]
 mod layout_inline_caret;
 
 use foundation::graphics_types;
@@ -42,13 +42,13 @@ use super::super::outline_rect_collector::{
 };
 use graphics_types::graphics::visual_rect_flags::VisualRectFlags;
 
-#[path = "../../layout_fragment/src/inline_client_geometry.rs"]
+#[path = "../fragment/inline_client_geometry.rs"]
 mod layout_fragment_inline_client_geometry;
 pub(crate) use layout_fragment_inline_client_geometry::{
     InlineClientGeometry, LayoutInlineClientRectsInContainers,
 };
 
-#[path = "../../layout_fragment/src/inline_quad_geometry.rs"]
+#[path = "../fragment/inline_quad_geometry.rs"]
 mod layout_fragment_inline_quad_geometry;
 use layout_fragment_inline_quad_geometry::{
     LayoutInlineMarginOutsets, LayoutInlineQuadsForSelfInternal,

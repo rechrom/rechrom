@@ -2,7 +2,7 @@
 //!
 //! Scrollbar decisions are queried for many boxes during layout. The complete
 //! geometry calculation stays out of line so sampling profiles attribute the
-//! cumulative work to `layout_algo_sizing`, while scalar admissions remain
+//! cumulative work to the sizing library, while scalar admissions remain
 //! inlineable.
 
 #![allow(non_snake_case)]

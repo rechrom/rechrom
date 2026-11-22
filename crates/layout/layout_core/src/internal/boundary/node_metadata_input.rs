@@ -14,9 +14,9 @@ use super::super::layout_node_metadata::{
 };
 use super::super::layout_object_factory_set::LayoutObjectFactorySet;
 
-#[path = "../../../../layout_invalidation/src/node_metadata_finalize.rs"]
+#[path = "../../invalidation/node_metadata_finalize.rs"]
 mod layout_invalidation_node_metadata_finalize;
-#[path = "../../../../layout_invalidation/src/node_metadata_incremental_relations.rs"]
+#[path = "../../invalidation/node_metadata_incremental_relations.rs"]
 mod layout_invalidation_node_metadata_incremental_relations;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

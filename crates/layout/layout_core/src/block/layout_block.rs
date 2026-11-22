@@ -32,17 +32,17 @@ use super::super::outline_info::LayoutOutlineInfo;
 use super::super::outline_rect_collector::OutlineRectCollector;
 use layout_style::style::outline_type::{OutlineType, ShouldIncludeBlockInkOverflow};
 
-#[path = "../../layout_invalidation/src/positioned_object_invalidation.rs"]
+#[path = "../invalidation/positioned_object_invalidation.rs"]
 mod layout_invalidation_positioned_object_invalidation;
 
-#[path = "../../layout_invalidation/src/layout_block_style_change.rs"]
+#[path = "../invalidation/layout_block_style_change.rs"]
 mod layout_invalidation_layout_block_style_change;
 use layout_invalidation_layout_block_style_change::LayoutBlockStyleDidChange;
 
 #[path = "layout_block_caret.rs"]
 mod layout_block_caret;
 
-#[path = "../../layout_invalidation/src/layout_block_child_mutation.rs"]
+#[path = "../invalidation/layout_block_child_mutation.rs"]
 mod layout_invalidation_layout_block_child_mutation;
 use layout_invalidation_layout_block_child_mutation::LayoutBlockAddChildBeforeDescendant;
 

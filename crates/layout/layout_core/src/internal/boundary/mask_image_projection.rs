@@ -23,7 +23,7 @@ use layout_style::style::{
     style_image::StyleImage,
 };
 
-#[path = "../../../../layout_fragment/src/mask_image_style_projection.rs"]
+#[path = "../../fragment/mask_image_style_projection.rs"]
 mod layout_fragment_mask_image_style_projection;
 pub(super) use layout_fragment_mask_image_style_projection::ApplyMaskImages;
 

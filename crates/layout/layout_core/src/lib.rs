@@ -7,6 +7,7 @@ pub mod internal {
     pub mod anchor_map;
     pub mod anchor_map_services;
     pub mod anchor_position_scroll_data;
+    #[path = "../../../layout_fragment/src/core/anchor_scope.rs"]
     pub mod anchor_scope;
     pub mod anchor_scroll_services;
     pub mod boundary {
@@ -32,6 +33,7 @@ pub mod internal {
         pub mod out_of_flow_data;
         pub mod successful_position_fallback;
     }
+    #[path = "../../../layout_fragment/src/core/constraint_space.rs"]
     pub mod constraint_space;
     pub mod constraint_space_builder;
     pub mod constraint_space_builder_style;
@@ -40,6 +42,7 @@ pub mod internal {
     pub mod custom_layout_payload;
     pub mod custom_scrollbar;
     pub mod devtools_flex_info;
+    #[path = "../../../layout_fragment/src/core/disable_layout_side_effects_scope.rs"]
     pub mod disable_layout_side_effects_scope;
     pub mod document_marker;
     pub mod early_break;
@@ -50,6 +53,7 @@ pub mod internal {
         pub mod exclusion_area;
         pub mod exclusion_space;
         pub mod layout_opportunity;
+        #[path = "../../../../layout_fragment/src/core/exclusions/line_layout_opportunity.rs"]
         pub mod line_layout_opportunity;
         pub mod shape_exclusions;
     }
@@ -74,6 +78,7 @@ pub mod internal {
     pub mod grid_layout_data;
     pub mod grid_subtree;
     pub mod grid_track_collection;
+    #[path = "../../../layout_fragment/src/core/hit_test_phase.rs"]
     pub mod hit_test_phase;
     pub mod hyphen_result;
     pub mod ink_overflow;
@@ -127,6 +132,7 @@ pub mod internal {
     pub mod layout_text;
     pub mod layout_text_combine;
     pub mod layout_text_core;
+    #[path = "../../../layout_fragment/src/core/layout_theme.rs"]
     pub mod layout_theme;
     pub mod layout_transform;
     pub mod layout_tree_invalidation;
@@ -146,6 +152,7 @@ pub mod internal {
             pub mod image_resource_observer;
         }
     }
+    #[path = "../../../layout_fragment/src/core/map_coordinates_flags.rs"]
     pub mod map_coordinates_flags;
     pub mod mathml_paint_info;
     pub mod measure_cache;
@@ -175,6 +182,7 @@ pub mod internal {
     pub mod scrollbar_orientation;
     pub mod scrollbar_part;
     pub mod scrollbar_theme_metrics;
+    #[path = "../../../layout_fragment/src/core/selection_state.rs"]
     pub mod selection_state;
     pub mod shapes {
         pub mod shape;
@@ -184,8 +192,10 @@ pub mod internal {
     }
     pub mod snap_area;
     pub mod space_utils;
+    #[path = "../../../layout_fragment/src/core/split_axis_item.rs"]
     pub mod split_axis_item;
     pub mod sticky_position_scrolling_constraints;
+    #[path = "../../../layout_fragment/src/core/style_variant.rs"]
     pub mod style_variant;
     pub mod svg_character_data;
     pub mod svg_inline_node_data;
@@ -199,9 +209,11 @@ pub mod internal {
     pub mod table_layout_algorithm_types;
     pub mod table_node;
     pub mod text_combine_style_service;
+    #[path = "../../../layout_fragment/src/core/text_decoration_offset.rs"]
     pub mod text_decoration_offset;
     pub mod text_fit_scale;
     pub mod text_item_type;
+    #[path = "../../../layout_fragment/src/core/text_offset_range.rs"]
     pub mod text_offset_range;
     pub mod text_overflow_post_layout_snapshot;
     pub mod transform_utils;
@@ -225,12 +237,12 @@ pub mod layout_commit_package;
 
 // Layout boundary object indexing is compiled at the reciprocal assembly but
 // physically owned by layout_fragment for profiler attribution.
-#[path = "../../layout_fragment/src/layout_boundary_object_index.rs"]
+#[path = "fragment/layout_boundary_object_index.rs"]
 pub mod layout_fragment_object_index;
 
 // Sticky-position refresh is compiled at the reciprocal assembly
 // boundary but physically owned by layout_fragment for profiler attribution.
-#[path = "../../layout_fragment/src/paint_layer_scrollable_area_sticky_offsets.rs"]
+#[path = "fragment/paint_layer_scrollable_area_sticky_offsets.rs"]
 pub mod layout_fragment_sticky_offsets;
 
 pub mod layout_registry;

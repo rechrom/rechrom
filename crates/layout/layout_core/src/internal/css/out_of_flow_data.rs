@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../../layout_algo_out_of_flow/src/out_of_flow_data.rs"]
+#[path = "../../out_of_flow/out_of_flow_data.rs"]
 mod layout_algo_out_of_flow_out_of_flow_data;
 
 pub use layout_algo_out_of_flow_out_of_flow_data::*;

@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_algo_grid/src/grid_layout_data.rs"]
+#[path = "../../../layout_fragment/src/grid/grid_layout_data.rs"]
 mod layout_algo_grid_grid_layout_data;
 
 pub use layout_algo_grid_grid_layout_data::*;

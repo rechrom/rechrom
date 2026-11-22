@@ -12,7 +12,7 @@ pub use layout_fragment_boundary::{
     SvgTextPaintData, SvgViewportGeometry, TextCombineEmphasisPaintData, TextCombinePaintData,
 };
 
-#[path = "paint_resource_usage.rs"]
+#[path = "../../layout_core/src/fragment/paint_resource_usage.rs"]
 pub mod paint_resource_usage;
 
 pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
