@@ -3784,7 +3784,12 @@ impl PageMouseFrameGeometry {
         };
         let mut layout = state.layout_engine.borrow_mut();
         for (node_id, facts) in editing_facts {
-            layout.UpdateEditingNodeFactsForFocus(node_id, facts);
+            layout.ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                layout::views::selection::SelectionMutation::UpdateEditingNodeFactsForFocus {
+                    node_id,
+                    facts,
+                },
+            ));
         }
         for node_id in update.snap_container_candidates {
             if let Some(mut source) = layout.ScrollMut().NativeScrollSource(node_id) {
@@ -4673,7 +4678,11 @@ impl PageState {
             let mut layout = self.layout_engine.borrow_mut();
             pending.into_iter().fold(false, |changed, pending| {
                 (pending.document_identity == document_identity
-                    && layout.InvalidateTextOverflowLayoutForNode(pending.node_id))
+                    && layout.ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                        layout::views::selection::SelectionMutation::InvalidateTextOverflowLayoutForNode {
+                            node_id: pending.node_id,
+                        },
+                    )))
                     || changed
             })
         };
@@ -8567,7 +8576,11 @@ impl Page {
             self.state
                 .layout_engine
                 .borrow_mut()
-                .InvalidateBlockCaretText(&block_text_invalidations);
+                .ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                    layout::views::selection::SelectionMutation::InvalidateBlockCaretText {
+                        anchors: &block_text_invalidations,
+                    },
+                ));
         }
         let revision = self.state.layout_editing.selections.Revision();
         let selection_changed = self.selection_revision != revision;

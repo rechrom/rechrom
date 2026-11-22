@@ -209,6 +209,8 @@ pub enum LayoutMutation<'a> {
     /// Scroll-family commands. `apply_mutation` runs them before any generic
     /// mutation bookkeeping, exactly as their former direct entry points did.
     Scroll(ScrollMutation),
+    // Wave E: selection
+    Selection(crate::layout_selection::SelectionMutation<'a>),
 }
 
 /// Scroll-family commands carried by [`LayoutMutation::Scroll`].

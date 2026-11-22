@@ -18,7 +18,6 @@ use layout_assembly::layout_engine::{
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
     NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate,
 };
-use layout_assembly::layout_selection::{LayoutSelectionRange, SelectionStyleAndPaintInvalidation};
 use layout_assembly::native_autoscroll_source::NativeLogicalScrollArea;
 use layout_assembly::native_mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
@@ -30,7 +29,6 @@ use layout_assembly::native_pointer_scroll_controls::{
 };
 use layout_assembly::native_scroll_source::NativeCompositorScrollArea;
 use layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
-use layout_assembly::password_echo::{PasswordEchoLayoutSettings, PasswordEchoTimerScheduler};
 use layout_assembly::style_projection::StyleResourceBindings;
 use layout_style::style::computed_style::ComputedStyle;
 
@@ -320,79 +318,6 @@ impl LayoutEngine {
     #[inline]
     pub fn GetLayoutTree(&self) -> Option<&LayoutObjectTree> {
         self.engine.GetLayoutTree()
-    }
-
-    // Selection, caret and editing invalidations.
-
-    #[inline]
-    pub fn CommitLayoutSelection<I: Iterator<Item = u64> + Clone>(
-        &mut self,
-        range: Option<LayoutSelectionRange<I>>,
-        hidden: bool,
-    ) -> bool {
-        self.engine.CommitLayoutSelection(range, hidden)
-    }
-
-    #[inline]
-    pub fn MarkSelectionEndpointPaintingLayerNeedsRepaint(&mut self, node_id: u64) {
-        self.engine
-            .MarkSelectionEndpointPaintingLayerNeedsRepaint(node_id)
-    }
-
-    #[inline]
-    pub fn InvalidateStyleAndPaintForSelection(&mut self) -> SelectionStyleAndPaintInvalidation {
-        self.engine.InvalidateStyleAndPaintForSelection()
-    }
-
-    #[inline]
-    pub fn InvalidateBlockCaretText(&mut self, anchors: &[u64]) {
-        self.engine.InvalidateBlockCaretText(anchors)
-    }
-
-    #[inline]
-    pub fn SelectionTextOverflowOwnerIdentity(&self, node_id: u64) -> Option<usize> {
-        self.engine.SelectionTextOverflowOwnerIdentity(node_id)
-    }
-
-    #[inline]
-    pub fn SetContainsSelectionFocusByIdentity(
-        &mut self,
-        owner_identity: usize,
-        contains_focus: bool,
-    ) -> Option<u64> {
-        self.engine
-            .SetContainsSelectionFocusByIdentity(owner_identity, contains_focus)
-    }
-
-    #[inline]
-    pub fn InvalidateTextOverflowLayoutForNode(&mut self, node_id: u64) -> bool {
-        self.engine.InvalidateTextOverflowLayoutForNode(node_id)
-    }
-
-    #[inline]
-    pub fn UpdateEditingNodeFactsForFocus(
-        &mut self,
-        node_id: u64,
-        facts: layout_assembly::EditingNodeFacts,
-    ) -> bool {
-        self.engine.UpdateEditingNodeFactsForFocus(node_id, facts)
-    }
-
-    #[inline]
-    pub fn InvalidateDocumentMarkerPaint(&mut self, id: u64) -> bool {
-        self.engine.InvalidateDocumentMarkerPaint(id)
-    }
-
-    #[inline]
-    pub fn MomentarilyRevealLastTypedCharacterIfSecure(
-        &mut self,
-        node_id: u64,
-        offset: usize,
-        settings: Option<PasswordEchoLayoutSettings>,
-        scheduler: &dyn PasswordEchoTimerScheduler,
-    ) -> bool {
-        self.engine
-            .MomentarilyRevealLastTypedCharacterIfSecure(node_id, offset, settings, scheduler)
     }
 
     }

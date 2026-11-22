@@ -104,6 +104,9 @@ impl EngineMutation for LayoutEngine {
             }) => {
                 return self.UpdateScrollbarsHiddenIfOverlay(node_id, hidden);
             }
+            LayoutMutation::Selection(mutation) => {
+                return apply_selection_mutation(self, mutation);
+            }
             mutation => mutation,
         };
         // A cancelled/restarted timer has no source mutation. Reject it before
@@ -589,9 +592,46 @@ impl EngineMutation for LayoutEngine {
             // Wave E command families (returned above).
             LayoutMutation::FormControl(_)
             | LayoutMutation::EventRegistry(_)
-            | LayoutMutation::Scroll(_) => {
+            | LayoutMutation::Scroll(_)
+            | LayoutMutation::Selection(_) => {
                 unreachable!("Wave E command mutations return before bookkeeping")
             }
         }
+    }
+}
+
+// Wave E: selection. Exactly the former direct engine calls.
+fn apply_selection_mutation(
+    engine: &mut LayoutEngine,
+    mutation: crate::layout_selection::SelectionMutation<'_>,
+) -> bool {
+    use crate::layout_selection::SelectionMutation;
+    match mutation {
+        SelectionMutation::CommitLayoutSelection { range, hidden } => {
+            engine.CommitLayoutSelection(range, hidden)
+        }
+        SelectionMutation::MarkSelectionEndpointPaintingLayerNeedsRepaint { node_id } => {
+            engine.MarkSelectionEndpointPaintingLayerNeedsRepaint(node_id);
+            false
+        }
+        SelectionMutation::InvalidateBlockCaretText { anchors } => {
+            engine.InvalidateBlockCaretText(anchors);
+            false
+        }
+        SelectionMutation::InvalidateTextOverflowLayoutForNode { node_id } => {
+            engine.InvalidateTextOverflowLayoutForNode(node_id)
+        }
+        SelectionMutation::UpdateEditingNodeFactsForFocus { node_id, facts } => {
+            engine.UpdateEditingNodeFactsForFocus(node_id, facts)
+        }
+        SelectionMutation::InvalidateDocumentMarkerPaint { id } => {
+            engine.InvalidateDocumentMarkerPaint(id)
+        }
+        SelectionMutation::MomentarilyRevealLastTypedCharacterIfSecure {
+            node_id,
+            offset,
+            settings,
+            scheduler,
+        } => engine.MomentarilyRevealLastTypedCharacterIfSecure(node_id, offset, settings, scheduler),
     }
 }

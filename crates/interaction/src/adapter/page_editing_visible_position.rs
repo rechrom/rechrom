@@ -1288,7 +1288,7 @@ pub fn CommitLayoutSelectionForFocus(
         None
     } else {
         Some(layout::editing::LayoutSelectionRange {
-            nodes: range.Nodes(&flat),
+            nodes: layout::views::selection::LayoutSelectionNodes::new(range.Nodes(&flat)),
             start: NativePosition(range.StartPosition(), TextAffinity::Downstream)
                 .expect("non-null flat selection start")
                 .position,
@@ -1297,7 +1297,12 @@ pub fn CommitLayoutSelectionForFocus(
                 .position,
         })
     };
-    engine.CommitLayoutSelection(native, hidden)
+    engine.ApplyMutation(layout::mutation::LayoutMutation::Selection(
+        layout::views::selection::SelectionMutation::CommitLayoutSelection {
+            range: native,
+            hidden,
+        },
+    ))
 }
 
 /// FrameCaret::CaretPosition (frame_caret.cc:107-114). VisibleSelection owns

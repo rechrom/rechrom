@@ -62,6 +62,7 @@ pub mod views {
     pub mod event_registry;
     pub mod form_control;
     pub mod scroll;
+    pub mod selection;
 }
 
 pub use engine::LayoutEngine;
