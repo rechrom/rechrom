@@ -3,7 +3,6 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{gfx, DynamicTo, LayoutUnit, MakeGarbageCollected, Member, PhysicalRect, Visitor};
-use layout_geometry::geometry::axis::PhysicalAxes;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_style::style::computed_style::ComputedStyle;
@@ -15,7 +14,6 @@ use super::layout_node_metadata::{ContainerNode, Element};
 use super::layout_object::LayoutObject;
 use super::layout_scrollable_area::PaintLayerScrollableArea;
 pub use super::paint_layer::PaintLayer;
-use super::sticky_position_scrolling_constraints::StickyConstraintsData;
 use foundation::PhysicalOffset;
 
 mod layout_fragment_background_transfer;

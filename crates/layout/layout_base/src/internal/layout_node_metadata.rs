@@ -14,7 +14,7 @@ use super::boundary::layout_boundary::ReusableLayoutEnvironment;
 use super::form_control_types::FormControlType;
 use super::layout_box::LayoutBox;
 use super::layout_input::{
-    CompatibilityMode, ComputedStyle as InputComputedStyle, ContentLockState, DocumentRole,
+    CompatibilityMode, ContentLockState, DocumentRole,
     ElementData, NodeConstructionData, NodeKind, PaintPathVerb, StyleResourceData, SvgLengthAdjust,
     SvgShapeGeometry, ViewportGeometry,
 };

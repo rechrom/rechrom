@@ -4,7 +4,6 @@
 
 use font_engine::ShapeResult;
 use foundation::{LayoutUnit, Member, String, Visitor};
-use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng/internal/hyphen_result.h:17-39
 #[derive(Clone)]

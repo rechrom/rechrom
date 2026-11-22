@@ -9,7 +9,6 @@ use foundation::{
     DynamicTo, MakeGarbageCollected, Member, PhysicalOffset, String, Traceable, UChar, Visitor,
 };
 use crate::internal::editing::forward::Position;
-use crate::internal::layout_block::LayoutBlock;
 use crate::internal::layout_node_metadata::{Element, Node, Text};
 use crate::internal::layout_object::{HitTestResult, LayoutObject};
 use crate::internal::layout_text::LayoutText;

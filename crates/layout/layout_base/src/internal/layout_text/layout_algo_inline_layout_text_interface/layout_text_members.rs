@@ -4,7 +4,6 @@
 #![allow(non_snake_case)]
 
 use font_engine::text::implementation::character_break_iterator::LengthOfGraphemeCluster;
-use font_engine::Font;
 use foundation::{
     graphics_types::graphics::paint::display_item_client::DisplayItemClient, DynamicTo,
     ETextSecurity, ETextTransform, String, StringView, TextOffsetMap, To, Visitor,

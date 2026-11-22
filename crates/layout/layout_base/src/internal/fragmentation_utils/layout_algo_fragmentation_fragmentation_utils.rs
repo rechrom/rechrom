@@ -1231,7 +1231,7 @@ pub fn MovePastBreakpointWithoutChildFull(
     capacity: LayoutUnit,
     appeal: BreakAppeal,
     builder: *mut BoxFragmentBuilder,
-    is_row_item: bool,
+    _is_row_item: bool,
     flex_column_break_info: *mut FlexColumnBreakInfo,
 ) -> bool {
     debug_assert_eq!(result.Status(), EStatus::kSuccess);
