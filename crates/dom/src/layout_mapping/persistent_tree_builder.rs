@@ -5,12 +5,16 @@ use crate::persistent_document::{
 };
 use crate::svg_path_parser::ParseSVGPathDefault;
 use crate::{Document, UserInteractionState, DOM};
-use layout_assembly::internal::form_control_types::FormControlType;
-use layout_assembly::internal::layout_input::*;
-use layout_assembly::internal::layout_object::LayoutObject;
+use foundation::TransformMatrix;
+use layout::input::{
+    ComputedStyle, Display, DocumentRole, ElementData, EmbeddedContentKind, FocusedImageMapArea,
+    FormControlType, ImageMapAreaShape, ListStyleType, NodeKind, SvgTextPathData, SvgUseData,
+    SvgViewBoxData, TextAreaSizing, TextFieldSizing,
+};
+use layout::mutation::{LayoutMutation, LayoutTreeUpdate};
+use layout::object::LayoutObject;
 #[cfg(test)]
-use layout_assembly::layout_engine::LayoutEngine;
-use layout_assembly::layout_engine::{LayoutMutation, LayoutTreeUpdate};
+use layout::LayoutEngine;
 use layout_style::style::appearance::AppearanceValue;
 use layout_style::style::computed_style::{
     ComputedStyle as StyleComputedStyle, ComputedStyleBuilder,
@@ -56,12 +60,12 @@ fn ResolveFocusedImageMapArea(
     let source = unsafe { resolved.computed_style_owner.Get().as_ref() }?;
     let (shape, coordinates) = ResolveImageMapAreaGeometry(document, area)?;
     Some(
-        layout_assembly::internal::layout_input::FocusedImageMapArea {
+        layout::input::FocusedImageMapArea {
             shape,
             coordinates,
             has_outline: source.HasOutline(),
             outline_style_is_auto: source.OutlineStyleIsAuto(),
-            outline_color: layout_assembly::internal::boundary::paint_style_export::StyleColor(
+            outline_color: layout::paint_input::StyleColor(
                 source,
                 source.OutlineColor(),
             ),
@@ -1038,7 +1042,7 @@ fn FindFirstLetterCandidate<'a>(
 struct FirstLetterInsertion<'a> {
     originating_index: usize,
     originating_id: u64,
-    svg_clip_resources: layout_assembly::internal::paint_input::SvgClipResourceBinding,
+    svg_clip_resources: layout::paint_input::SvgClipResourceBinding,
     pseudo: &'a PseudoElement,
     candidate: FirstLetterCandidate<'a>,
     consumed: bool,
@@ -1053,7 +1057,7 @@ fn AppendInitialLetter(
     name: &str,
     generated: bool,
     svg_filter_graphs: &std::sync::Arc<
-        Vec<layout_assembly::internal::paint_input::SvgFilterGraph>,
+        Vec<layout::paint_input::SvgFilterGraph>,
     >,
 ) {
     let data = ElementData {
@@ -1064,7 +1068,7 @@ fn AppendInitialLetter(
         .expect("first-letter pseudo style must be owned");
     let resolved_resources = document.ResolvedStyleResourcesFor(insertion.originating_index);
     let replaced_image_shader = None;
-    let resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+    let resources = layout::input::StyleResourceBindings::FromParts(
         svg_filter_graphs,
         &insertion.svg_clip_resources,
         &resolved_resources.svg_mask_resource,
@@ -1125,9 +1129,9 @@ fn AppendListMarker(
     id: u64,
     parent: *mut LayoutObject,
     item_style: &StyleComputedStyle,
-    svg_clip_resources: &layout_assembly::internal::paint_input::SvgClipResourceBinding,
+    svg_clip_resources: &layout::paint_input::SvgClipResourceBinding,
     svg_filter_graphs: &std::sync::Arc<
-        Vec<layout_assembly::internal::paint_input::SvgFilterGraph>,
+        Vec<layout::paint_input::SvgFilterGraph>,
     >,
     marker_pseudo: Option<&PseudoElement>,
     pseudo_parent: usize,
@@ -1148,7 +1152,7 @@ fn AppendListMarker(
         return;
     };
     let marker_image = (!marker_has_custom_content)
-        .then(|| layout_assembly::style_projection::ProjectListMarkerImage(marker_style))
+        .then(|| layout::input::ProjectListMarkerImage(marker_style))
         .flatten();
     let marker_text = if marker_has_custom_content {
         marker_pseudo.map_or_else(String::new, |pseudo| pseudo.text.clone())
@@ -1167,7 +1171,7 @@ fn AppendListMarker(
     }
     let resolved_resources = document.ResolvedStyleResourcesFor(originating_index);
     let replaced_image_shader = None;
-    let resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+    let resources = layout::input::StyleResourceBindings::FromParts(
         svg_filter_graphs,
         svg_clip_resources,
         &resolved_resources.svg_mask_resource,
@@ -1249,7 +1253,7 @@ fn AppendListMarker(
                                 }
                             }
                             let image_resources =
-                        layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                        layout::input::StyleResourceBindings::FromParts(
                             svg_filter_graphs,
                             svg_clip_resources,
                             &resolved_resources.svg_mask_resource,
@@ -1274,7 +1278,7 @@ fn AppendListMarker(
                 }
             } else if let Some(image) = marker_image {
                 let image_resources =
-                    layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                    layout::input::StyleResourceBindings::FromParts(
                         svg_filter_graphs,
                         svg_clip_resources,
                         &resolved_resources.svg_mask_resource,
@@ -1361,10 +1365,10 @@ fn AppendOverscrollAreaParents(
     container: usize,
     parent: *mut LayoutObject,
     svg_filter_graphs: &std::sync::Arc<
-        Vec<layout_assembly::internal::paint_input::SvgFilterGraph>,
+        Vec<layout::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        layout_assembly::internal::paint_input::SvgClipResourceSnapshot,
+        layout::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
     if !unsafe { &*parent }.IsBox() {
@@ -1396,7 +1400,7 @@ fn AppendOverscrollAreaParents(
         );
         let resolved = document.ResolvedStyleResourcesFor(area);
         let image = None;
-        let resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+        let resources = layout::input::StyleResourceBindings::FromParts(
             svg_filter_graphs,
             &clip,
             &resolved.svg_mask_resource,
@@ -1442,10 +1446,10 @@ fn AppendPseudoElement(
     before: bool,
     mut first: Option<&mut FirstLetterInsertion<'_>>,
     svg_filter_graphs: &std::sync::Arc<
-        Vec<layout_assembly::internal::paint_input::SvgFilterGraph>,
+        Vec<layout::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        layout_assembly::internal::paint_input::SvgClipResourceSnapshot,
+        layout::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
     let Some(p) = pseudo else {
@@ -1463,7 +1467,7 @@ fn AppendPseudoElement(
     );
     let resolved_resources = document.ResolvedStyleResourcesFor(originating_index);
     let replaced_image_shader = None;
-    let resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+    let resources = layout::input::StyleResourceBindings::FromParts(
         svg_filter_graphs,
         &clip_resources,
         &resolved_resources.svg_mask_resource,
@@ -1657,7 +1661,7 @@ fn AppendPseudoElement(
                     }
                     let image_bit = 1u64 << if before { 44 } else { 43 };
                     let image_resources =
-                        layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                        layout::input::StyleResourceBindings::FromParts(
                             svg_filter_graphs,
                             &clip_resources,
                             &resolved_resources.svg_mask_resource,
@@ -1693,10 +1697,10 @@ fn AppendChildren<'a>(
     flattened: Option<(usize, &'a StyleComputedStyle)>,
     first: Option<&mut FirstLetterInsertion<'a>>,
     svg_filter_graphs: &std::sync::Arc<
-        Vec<layout_assembly::internal::paint_input::SvgFilterGraph>,
+        Vec<layout::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        layout_assembly::internal::paint_input::SvgClipResourceSnapshot,
+        layout::paint_input::SvgClipResourceSnapshot,
     >,
 ) {
     let children = AttachmentChildren(document, index);
@@ -1723,10 +1727,10 @@ fn AppendSelectedChildren<'a>(
     flattened: Option<(usize, &'a StyleComputedStyle)>,
     mut first: Option<&mut FirstLetterInsertion<'a>>,
     svg_filter_graphs: &std::sync::Arc<
-        Vec<layout_assembly::internal::paint_input::SvgFilterGraph>,
+        Vec<layout::paint_input::SvgFilterGraph>,
     >,
     svg_clip_path_graphs: &std::sync::Arc<
-        layout_assembly::internal::paint_input::SvgClipResourceSnapshot,
+        layout::paint_input::SvgClipResourceSnapshot,
     >,
     children: &[usize],
 ) {
@@ -1792,7 +1796,7 @@ fn AppendSelectedChildren<'a>(
                     let resolved_resources = document.ResolvedStyleResourcesFor(style_index);
                     let replaced_image_shader = None;
                     let resources =
-                        layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                        layout::input::StyleResourceBindings::FromParts(
                             svg_filter_graphs,
                             &clip,
                             &resolved_resources.svg_mask_resource,
@@ -1950,7 +1954,7 @@ fn AppendSelectedChildren<'a>(
         let attached_style = unsafe { adjusted_style.as_ref() }.unwrap_or(source_style);
         let resolved_resources = document.ResolvedStyleResourcesFor(child);
         let replaced_image_shader = None;
-        let resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+        let resources = layout::input::StyleResourceBindings::FromParts(
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,
@@ -2090,7 +2094,7 @@ fn AppendSelectedChildren<'a>(
                 let button_resolved_resources = document.ResolvedStyleResourcesFor(button_index);
                 let replaced_image_shader = None;
                 let button_resources =
-                    layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                    layout::input::StyleResourceBindings::FromParts(
                         svg_filter_graphs,
                         &button_clip,
                         &button_resolved_resources.svg_mask_resource,
@@ -2143,7 +2147,7 @@ fn AppendSelectedChildren<'a>(
                 let status_resolved_resources = document.ResolvedStyleResourcesFor(status_index);
                 let replaced_image_shader = None;
                 let status_resources =
-                    layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                    layout::input::StyleResourceBindings::FromParts(
                         svg_filter_graphs,
                         &status_clip,
                         &status_resolved_resources.svg_mask_resource,
@@ -2273,7 +2277,7 @@ fn AppendSelectedChildren<'a>(
                         document.ResolvedStyleResourcesFor(placeholder);
                     let replaced_image_shader = None;
                     let placeholder_resources =
-                        layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                        layout::input::StyleResourceBindings::FromParts(
                             svg_filter_graphs,
                             &placeholder_clip,
                             &placeholder_resolved_resources.svg_mask_resource,
@@ -2346,7 +2350,7 @@ fn AppendSelectedChildren<'a>(
             let editor_resolved_resources = document.ResolvedStyleResourcesFor(editor_index);
             let replaced_image_shader = None;
             let editor_resources =
-                layout_assembly::style_projection::StyleResourceBindings::FromParts(
+                layout::input::StyleResourceBindings::FromParts(
                     svg_filter_graphs,
                     &editor_clip,
                     &editor_resolved_resources.svg_mask_resource,
@@ -2647,7 +2651,7 @@ pub fn EmitLayoutMutations(
         );
         let resolved_resources = document.ResolvedStyleResourcesFor(index);
         let replaced_image_shader = None;
-        let root_resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+        let root_resources = layout::input::StyleResourceBindings::FromParts(
             &svg_filter_graphs,
             &root_clip_resources,
             &resolved_resources.svg_mask_resource,
@@ -2946,6 +2950,7 @@ pub fn BuildLayoutObjectTree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layout::input::{Offset, SvgViewportData, SvgViewportLength};
     use std::collections::BTreeMap;
     trait Numeric {
         fn number(self) -> f64;
@@ -3158,12 +3163,12 @@ mod tests {
             }
             n!(marker.stroke_width_units);
             match marker.orient {
-                layout_assembly::internal::layout_input::SvgMarkerOrient::Angle(v) => {
+                layout::input::SvgMarkerOrient::Angle(v) => {
                     n!(0);
                     n!(v);
                 }
-                layout_assembly::internal::layout_input::SvgMarkerOrient::Auto => n!(1),
-                layout_assembly::internal::layout_input::SvgMarkerOrient::AutoStartReverse => {
+                layout::input::SvgMarkerOrient::Auto => n!(1),
+                layout::input::SvgMarkerOrient::AutoStartReverse => {
                     n!(2)
                 }
             }
@@ -3343,7 +3348,7 @@ mod tests {
             }
         }
 
-        let assembly = layout_assembly::engine_assembly::LayoutAssembly::default();
+        let assembly = layout::LayoutAssembly::default();
         let mut engine = LayoutEngine::new(&assembly);
         let interaction = UserInteractionState::default();
         owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));
@@ -3435,7 +3440,7 @@ mod tests {
         }
         let changed_id = owner.GetDocument().Node(ids["changed"]).Id();
         let sibling_id = owner.GetDocument().Node(ids["sibling"]).Id();
-        let assembly = layout_assembly::engine_assembly::LayoutAssembly::default();
+        let assembly = layout::LayoutAssembly::default();
         let mut engine = LayoutEngine::new(&assembly);
         let interaction = UserInteractionState::default();
         owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));

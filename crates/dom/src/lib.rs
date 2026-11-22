@@ -1,8 +1,6 @@
 // Test linkage to the real replaced-object provider used by browser layout.
 #[cfg(test)]
-extern crate layoutng_block as _;
-#[cfg(test)]
-extern crate layoutng_replaced as _;
+extern crate layout as _;
 
 // Compile the canonical HTML implementation against this unit-test DOM,
 // rather than importing a second non-test DOM through an html dev-dependency.
@@ -81,7 +79,6 @@ pub enum Child {
 }
 
 pub mod layout_mapping;
-extern crate layout_assembly as layout_core;
 
 mod lifecycle;
 

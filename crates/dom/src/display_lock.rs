@@ -316,8 +316,8 @@ impl DisplayLockContext {
     fn ContentLockState(
         &self,
         env: Environment,
-    ) -> layout_assembly::internal::layout_input::ContentLockState {
-        layout_assembly::internal::layout_input::ContentLockState::new(
+    ) -> layout::input::ContentLockState {
+        layout::input::ContentLockState::new(
             self.is_locked,
             self.ShouldLayoutChildren(env),
             self.ShouldPrePaintChildren(env),
@@ -452,7 +452,7 @@ impl PersistentDocument {
     pub fn DisplayLockContentState(
         &self,
         element: usize,
-    ) -> Option<layout_assembly::internal::layout_input::ContentLockState> {
+    ) -> Option<layout::input::ContentLockState> {
         self.arena[element]
             .display_lock_context
             .borrow()

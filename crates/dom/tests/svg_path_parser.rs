@@ -1,5 +1,5 @@
 use dom::svg_path_parser::ParseSVGPathDefault;
-use layout_assembly::internal::layout_input::{Offset, PaintPathVerb};
+use layout::input::{Offset, PaintPathVerb};
 
 fn near(actual: f64, expected: f64, tolerance: f64) -> bool {
     (actual - expected).abs() <= tolerance

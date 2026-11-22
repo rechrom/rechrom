@@ -443,7 +443,7 @@ impl PersistentDocument {
         usize::from(self.EditingIgnoresContent(node))
     }
 
-    pub fn EditingNodeFacts(&self, node: usize) -> layout_assembly::EditingNodeFacts {
+    pub fn EditingNodeFacts(&self, node: usize) -> layout::editing::EditingNodeFacts {
         let owner = &self.arena[node];
         let is_editable = self.IsEditableForEditing(node);
         let ignores_content = !self.CanContainRangeEndPoint(node)
@@ -462,7 +462,7 @@ impl PersistentDocument {
         } else {
             usize::from(ignores_content)
         };
-        layout_assembly::EditingNodeFacts {
+        layout::editing::EditingNodeFacts {
             is_html_table: self.Node(node).IsHTMLElement("table"),
             has_focus_within: self.HasElementFocusWithin(node),
             is_editable,

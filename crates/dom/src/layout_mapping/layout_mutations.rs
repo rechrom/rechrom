@@ -1,13 +1,9 @@
 #![allow(non_snake_case)]
 
 use crate::{UserInteractionState, DOM};
-use layout_assembly::{
-    editing_state::LayoutEditingState,
-    internal::layout_input::{
-        CompatibilityMode as LayoutCompatibilityMode, ConstraintSpace, Offset,
-    },
-    layout_engine::LayoutMutation,
-};
+use layout::editing::LayoutEditingState;
+use layout::input::{CompatibilityMode as LayoutCompatibilityMode, ConstraintSpace, Offset};
+use layout::mutation::LayoutMutation;
 use std::rc::Rc;
 
 // DOM owns style/input state. Chromium tree ownership and application of these
@@ -263,7 +259,7 @@ impl DOM {
         let resolved_resources = document.ResolvedStyleResourcesFor(index);
         let svg_filter_graphs = document.SVGFilterGraphs().unwrap();
         let replaced_image_shader = None;
-        let style_resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+        let style_resources = layout::input::StyleResourceBindings::FromParts(
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,
@@ -324,7 +320,7 @@ impl DOM {
         let resolved_resources = document.ResolvedStyleResourcesFor(index);
         let svg_filter_graphs = document.SVGFilterGraphs().unwrap();
         let replaced_image_shader = None;
-        let style_resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
+        let style_resources = layout::input::StyleResourceBindings::FromParts(
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,

@@ -2,7 +2,7 @@
 //! Document loading, resident parsing, and document resource lifetimes.
 //! Page owns script execution, render readiness, layout and frame scheduling.
 #[cfg(test)]
-extern crate layoutng_replaced;
+extern crate layout as _;
 
 mod diagnostic_read_ahead;
 mod document_loader;

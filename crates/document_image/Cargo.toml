@@ -10,6 +10,6 @@ cssom = { path = "../cssom" }
 dom = { path = "../dom" }
 html = { path = "../document/html" }
 image_resource = { path = "../image_resource" }
-layout_assembly = { path = "../layout/layout_assembly" }
+layout = { path = "../layout/layout" }
 layout_style = { path = "../layout/layout_style" }
 paint = { path = "../paint" }

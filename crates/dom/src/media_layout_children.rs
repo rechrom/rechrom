@@ -4,7 +4,7 @@
 //! Chromium: MediaControlsImpl cc:391-392,460-465; TextTrackContainer cc:70-74;
 //! MediaRemotingInterstitial cc:29-37; PictureInPictureInterstitial cc:60-71.
 use super::{editing_node::DOMNodeClass, DOMNamespace, DOMOwnerHandle, PersistentDocument};
-pub use layout_assembly::internal::layout_input::MediaChildKind;
+pub use layout::input::MediaChildKind;
 
 /// Alias of the canonical ControlsImpl's own source state. DOM never builds a
 /// second controls state machine to freeze an event path.

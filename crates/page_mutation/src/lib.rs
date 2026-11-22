@@ -1,7 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 use cssom::CSSStyleSheet;
 use dom::dom_mutation::DOMMutation;
-use layout_assembly::internal::layout_input::{FontFace, Offset, PaintImage, Size};
+use layout::input::{FontFace, Offset, PaintImage, Size};
 use std::sync::Arc;
 
 // cpp: page_mutation/page_mutation.h:17-22

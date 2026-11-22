@@ -6,15 +6,15 @@ use crate::Element;
 use font_engine::text::implementation::character_break_iterator::LengthOfGraphemeCluster;
 use font_engine::text::implementation::unicode_category::Category;
 use foundation::{unicode, StringView};
-use layout_assembly::internal::form_control_types::FormControlType;
-use layout_assembly::internal::layout_input::{
+use layout::input::FormControlType;
+use layout::input::{
     ComputedStyle, Display, ElementData, ExtendedStyle, FrameDimension, FrameDimensionType,
     MathTokenKind, NodeKind, Offset, PaintPathCommand, PaintPathVerb, SvgLengthAdjust,
     SvgShapeData, SvgShapeGeometry, SvgTextPathData, SvgUseData, SvgViewBoxData, SvgViewportData,
     SvgViewportLength, WhiteSpace,
 };
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::layout_engine::LayoutTreeUpdate;
+use layout::object::LayoutObject;
+use layout::mutation::LayoutTreeUpdate;
 use layout_style::style::appearance::AppearanceValue;
 
 unsafe extern "C" {
@@ -165,7 +165,7 @@ pub(super) fn svg_text_path_layout_needed(
             return true;
         }
         if current.RuntimeClass()
-            != layout_assembly::internal::layout_object::LayoutObjectClass::SvgInline
+            != layout::object::LayoutObjectClass::SvgInline
         {
             return false;
         }
@@ -582,7 +582,7 @@ pub(super) fn element_metadata_svg(
 ) {
     data.svg_path_element = node.node_name() == "path";
     if node.node_name() == "marker" {
-        use layout_assembly::internal::layout_input::{SvgMarkerData, SvgMarkerOrient};
+        use layout::input::{SvgMarkerData, SvgMarkerOrient};
         let angle = |value: &str| {
             let value = value.trim_end_matches(|c: char| c.is_ascii_whitespace());
             let (number, multiplier) = if let Some(n) = value.strip_suffix("deg") {
@@ -1069,7 +1069,7 @@ pub(super) fn needs_svg_filter_resources(
 pub(super) fn resolve_svg_clip_path(
     style: &mut ComputedStyle,
     source: &layout_style::style::computed_style::ComputedStyle,
-    snapshot: &std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>,
+    snapshot: &std::sync::Arc<layout::paint_input::SvgClipResourceSnapshot>,
     scope: layout_style::style::reference_clip_path_operation::SvgClipResourceScope,
 ) {
     style.svg_clip_resources = svg_clip_resource_binding(source, snapshot, scope);
@@ -1077,16 +1077,16 @@ pub(super) fn resolve_svg_clip_path(
 
 pub(super) fn svg_clip_resource_binding(
     style: &layout_style::style::computed_style::ComputedStyle,
-    snapshot: &std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>,
+    snapshot: &std::sync::Arc<layout::paint_input::SvgClipResourceSnapshot>,
     scope: layout_style::style::reference_clip_path_operation::SvgClipResourceScope,
-) -> layout_assembly::internal::paint_input::SvgClipResourceBinding {
+) -> layout::paint_input::SvgClipResourceBinding {
     // Every native element retains its document/tree-scope resource identity.
     // Resource definitions need the generation even without their own IRI
     // properties, because source cycle caching belongs to the target owner.
     let _ = style;
     // This is a resource binding, not a second representation of clip-path.
     // Chromium ComputedStyle remains the sole owner of the actual operation.
-    layout_assembly::internal::paint_input::SvgClipResourceBinding {
+    layout::paint_input::SvgClipResourceBinding {
         snapshot: std::sync::Arc::clone(snapshot),
         scope,
     }

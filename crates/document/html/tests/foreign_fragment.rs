@@ -1,5 +1,5 @@
 // Link the Rust layout destructor boundary retained by DOM.
-use layout_algo_replaced as _;
+use layout as _;
 
 use dom::persistent_document::{DOMNamespace, DOM};
 use html::html_parser::ParseHTMLFragment;

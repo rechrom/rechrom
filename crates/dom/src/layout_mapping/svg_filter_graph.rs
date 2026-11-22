@@ -1,8 +1,14 @@
 //! Document-owned SVG filter resource snapshots.  CSS keeps only the IRI;
 //! this is the DOM -> Layout projection of the referenced SVG graph.
 use crate::persistent_document::{DOMNamespace, DOMNode, DOMNodeType};
-use layout_assembly::internal::layout_input_types::Color;
-use layout_assembly::internal::paint_input::*;
+use layout::input::Color;
+use layout::paint_input::{
+    SvgBlendMode, SvgColorMatrixType, SvgCompositeOperator, SvgFilterChannel, SvgFilterEdgeMode,
+    SvgFilterGraph, SvgFilterInput, SvgFilterLength, SvgFilterPrimitive, SvgFilterPrimitiveKind,
+    SvgFilterRegion, SvgFilterUnits, SvgLightSource, SvgLightingType, SvgMeetOrSlice,
+    SvgMorphologyOperator, SvgPreserveAspectRatio, SvgPreserveAspectRatioAlign,
+    SvgTransferFunction, SvgTurbulenceType,
+};
 use layout_style::style::computed_style::ComputedStyle;
 use std::sync::Arc;
 
@@ -531,7 +537,7 @@ fn flood_color(element: FilterElement<'_>, style: Option<&ComputedStyle>) -> Res
     if raw.eq_ignore_ascii_case("currentcolor") {
         return Err("feFlood currentColor requires computed SVG style".into());
     }
-    let mut color = layout_assembly::css_color_parser::ParseCSSColor(raw)
+    let mut color = layout::input::ParseCSSColor(raw)
         .ok_or_else(|| "invalid feFlood flood-color".to_owned())?;
     color.alpha *= number(style_value(element, "flood-opacity"), 1.0).clamp(0.0, 1.0) as f32;
     Ok(color)
@@ -570,7 +576,7 @@ fn lighting_color(
     if raw.eq_ignore_ascii_case("currentcolor") {
         return Err("SVG lighting-color currentColor requires computed primitive style".into());
     }
-    layout_assembly::css_color_parser::ParseCSSColor(raw)
+    layout::input::ParseCSSColor(raw)
         .ok_or_else(|| "invalid SVG lighting-color".to_owned())
 }
 fn linear_rgb(element: FilterElement<'_>, style: Option<&ComputedStyle>, inherited: bool) -> bool {

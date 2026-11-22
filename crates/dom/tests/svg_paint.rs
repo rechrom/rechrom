@@ -1,11 +1,10 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::internal::layout_input::Offset;
-use layout_assembly::internal::paint_input::{PaintShaderKind, PaintSpreadMethod};
+use layout::input::Offset;
+use layout::paint_input::{PaintShaderKind, PaintSpreadMethod};
 use std::collections::HashMap;
 
-extern crate layoutng_block;
-extern crate layoutng_replaced;
+extern crate layout as _;
 
 const MARKUP: &str = r##"<html><body><svg viewBox="0 0 200 100"><defs>
 <linearGradient id="MixedCase" x2="50%"><stop id="first" offset="70%" stop-color="red" stop-opacity=".5"/>

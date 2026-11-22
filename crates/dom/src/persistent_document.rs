@@ -6,7 +6,7 @@ use cssom::{CSSDeclaration, CSSOMAdoptionError, CSSOMEvent, CSSOMMutation, CSSSt
 use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
 use foundation::Persistent;
 use foundation::{StringView, TextDirection};
-use layout_assembly::internal::layout_input::{Offset, TrackedElementSubRect};
+use layout::input::{Offset, TrackedElementSubRect};
 use layout_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -869,7 +869,7 @@ pub enum PseudoContent {
     Text(String),
     Image {
         resource_id: u64,
-        shader: Option<std::sync::Arc<layout_assembly::internal::paint_input::PaintShader>>,
+        shader: Option<std::sync::Arc<layout::paint_input::PaintShader>>,
         natural_width: Option<f64>,
         natural_height: Option<f64>,
         resolution_scale: f64,
@@ -1020,7 +1020,7 @@ pub struct ResolvedNodeStyle {
 #[derive(Clone, Default, PartialEq)]
 pub struct ResolvedStyleResources {
     pub svg_mask_resource:
-        Option<std::sync::Arc<layout_assembly::internal::paint_input::SvgMaskGraph>>,
+        Option<std::sync::Arc<layout::paint_input::SvgMaskGraph>>,
     pub svg_pattern_content_target: Option<u64>,
     // Source ContainerQueryEvaluator dimensions for SVG animated length units.
     // None means the embedding has not supplied a container-query environment;
@@ -1031,9 +1031,9 @@ pub struct ResolvedStyleResources {
     /// substitution. Layout borrows it without parser or custom-property data.
     pub svg_marker_resolved_lengths:
         Option<std::sync::Arc<layout_style::css::svg_length_value::SVGMarkerLengthValues>>,
-    pub svg_fill_server: Option<layout_assembly::internal::paint_input::SvgPaintServer>,
-    pub svg_stroke_server: Option<layout_assembly::internal::paint_input::SvgPaintServer>,
-    pub svg_markers: Vec<layout_assembly::internal::paint_input::SvgMarkerInstance>,
+    pub svg_fill_server: Option<layout::paint_input::SvgPaintServer>,
+    pub svg_stroke_server: Option<layout::paint_input::SvgPaintServer>,
+    pub svg_markers: Vec<layout::paint_input::SvgMarkerInstance>,
 }
 
 impl PartialEq for ResolvedNodeStyle {
@@ -1313,10 +1313,10 @@ pub struct PersistentDocument {
     // Local SVG resource identity/content is owned by this document. Frames
     // retain immutable graph Arcs; style replacement never rewrites them.
     svg_clip_resources:
-        Option<std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>>,
+        Option<std::sync::Arc<layout::paint_input::SvgClipResourceSnapshot>>,
     svg_clip_resource_inputs: Option<(u64, u64)>,
     svg_filter_graphs:
-        std::sync::Arc<Vec<layout_assembly::internal::paint_input::SvgFilterGraph>>,
+        std::sync::Arc<Vec<layout::paint_input::SvgFilterGraph>>,
     resolved_style_revision: u64,
     // SVGResources tracks changes to resource definitions/descendants, rather
     // than invalidating the catalog for an unrelated HTML color or hover edit.
@@ -2263,7 +2263,7 @@ impl PersistentDocument {
 
     pub fn SVGResources(
         &self,
-    ) -> Option<&std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>>
+    ) -> Option<&std::sync::Arc<layout::paint_input::SvgClipResourceSnapshot>>
     {
         let inputs = self.SVGResourceInputKey()?;
         (self.svg_clip_resource_inputs == Some(inputs))
@@ -2273,7 +2273,7 @@ impl PersistentDocument {
 
     pub(crate) fn SVGFilterGraphs(
         &self,
-    ) -> Option<&std::sync::Arc<Vec<layout_assembly::internal::paint_input::SvgFilterGraph>>>
+    ) -> Option<&std::sync::Arc<Vec<layout::paint_input::SvgFilterGraph>>>
     {
         self.SVGResources()?;
         Some(&self.svg_filter_graphs)
@@ -2282,9 +2282,9 @@ impl PersistentDocument {
     pub(crate) fn PublishSVGResources(
         &mut self,
         mut snapshot: std::sync::Arc<
-            layout_assembly::internal::paint_input::SvgClipResourceSnapshot,
+            layout::paint_input::SvgClipResourceSnapshot,
         >,
-        filters: std::sync::Arc<Vec<layout_assembly::internal::paint_input::SvgFilterGraph>>,
+        filters: std::sync::Arc<Vec<layout::paint_input::SvgFilterGraph>>,
     ) -> bool {
         // cpp: SVGFilterElement::PrimitiveAttributeChanged/InvalidateFilterChain.
         // Filter content participates in the same document resource lifecycle;
@@ -2332,7 +2332,7 @@ impl PersistentDocument {
                 .expect("SVG resource revision exhausted")
         });
         std::sync::Arc::make_mut(&mut snapshot).version =
-            layout_assembly::internal::paint_input::SvgClipResourceVersion {
+            layout::paint_input::SvgClipResourceVersion {
                 document_id: self.arena_id,
                 revision,
             };
@@ -3706,7 +3706,7 @@ impl PersistentDocument {
         if value.trim().eq_ignore_ascii_case("currentcolor") {
             return "#000000".into();
         }
-        let Some(color) = layout_assembly::css_color_parser::ParseCSSColor(value) else {
+        let Some(color) = layout::input::ParseCSSColor(value) else {
             return "#000000".into();
         };
         let channel = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
