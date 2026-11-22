@@ -206,8 +206,8 @@ defined in another:
 | core → fragment (`LayoutBox*Provider`) | 13 | downward; becomes direct calls once the providers move to base with their LayoutBox methods |
 | invalidation → assembly (`Dispatch*`) | 12 | internal to base (the callers move to base, §4) |
 | core → invalidation (`LayoutObject*Provider`) | 10 | internal to base once the providers move down |
-| inline → fragment (`LayoutInline*`, `LayoutText*`, `InkOverflow*ForTextCombine`) | 9 | internal to base (LayoutInline/LayoutText methods) |
-| fragment → inline (`FragmentItemsBuilder*FromInline/ForInline`, `InlineItemsData*`, `FragmentBuilderAddOutOfFlowInlineChildCandidate`) | 6 | upward: slots, or move the callers up (§6.2) |
+| inline → fragment (`LayoutInline*`, `LayoutText*`, `InkOverflow*ForTextCombine`) | 9 | internal to base (LayoutInline/LayoutText methods); **done, R5 part 2** |
+| fragment → inline (`FragmentItemsBuilder*FromInline/ForInline`, `InlineItemsData*`, `FragmentBuilderAddOutOfFlowInlineChildCandidate`) | 6 | **gone, R5 part 2** (bodies in base or inline traits) |
 | block → assembly (`DispatchLayoutBlockFlow*`) | 5 | internal to base |
 | core → table (`LayoutInputNode*FromTable`) | 4 | upward: slot group |
 | core → inline (`AdjustStyleFor*Combine*`, `InlineChildLayoutContextParallelFlowBreakTokens`, `LayoutBoxPositionForPointInFragmentsProvider`) | 4 | 2 internal to base, 2 slots |
@@ -835,11 +835,12 @@ moves. "→ down" marks a recommended alternative that needs no slot.
 | `container_query_sizes` | `fn(&LayoutEngine) -> Vec<ContainerQuerySizeSnapshot>` | commit | `container_query_sizes` |
 | `scroll_offsets.commit` / `.output` | `fn(&mut LayoutObjectTree)` / `fn(&LayoutObjectTree) -> Vec<(u64, Offset)>` | commit | `scroll_offset_snapshot` |
 | `inline_support.parallel_flow_break_tokens` | `fn(&InlineChildLayoutContext) -> &HeapVector<Member<BreakToken>>` | inline | **done (R5)**; was a link-time symbol declared in core, defined in inline *and* block |
-| `inline_support.position_for_point_in_fragments` | current `LayoutBoxPositionForPointInFragmentsProvider` signature | inline | link-time symbol |
-| `inline_support.should_truncate_overflowing_text` | `fn(*const LayoutBlockFlow) -> bool` | inline | `LayoutBlockFlowShouldTruncateOverflowingTextFromInline` |
-| `inline_items_data` (3) | `check_consistency`, `open_tag_items`, `offset_map: fn(&InlineItemsData) -> &Option<TextOffsetMap>` | inline | fragment → inline link-time symbols (or move `InlineItemsData` callers up) |
-| `fragment_items_builder` (2) | `new_for_inline`, `add_previous_items_from_inline` | inline | link-time symbols (vanish if `FragmentItemsBuilder` moves to inline) |
-| `out_of_flow_inline_child_candidate` | current `FragmentBuilderAddOutOfFlowInlineChildCandidate` signature | inline | link-time symbol |
+| `inline_support.get_offset_mapping` | `fn(*mut LayoutBlockFlow) -> *const OffsetMapping` | inline | **done (R5 part 2)**; read through `LayoutPassScope::ResidentInlineSupport()` |
+| `inline_support.position_for_point_in_fragments` | current `LayoutBoxPositionForPointInFragmentsProvider` signature | inline | not needed (R5 part 2): the definition is base `editing/editing_caret.rs` |
+| `inline_support.should_truncate_overflowing_text` | `fn(*const LayoutBlockFlow) -> bool` | inline | not needed (R5 part 2): LayoutBlockFlow member body moved to base |
+| `inline_items_data` (3) | `check_consistency`, `open_tag_items`, `offset_map: fn(&InlineItemsData) -> &Option<TextOffsetMap>` | inline | not needed (R5 part 2): record members defined in base |
+| `fragment_items_builder` (2) | `new_for_inline`, `add_previous_items_from_inline` | inline | not needed (R5 part 2): bodies moved to base `fragment/` |
+| `out_of_flow_inline_child_candidate` | current `FragmentBuilderAddOutOfFlowInlineChildCandidate` signature | inline | not needed (R5 part 2): only inline calls it; `FragmentBuilderInlineAlgorithms` |
 | `table_node` (4) | `is_empty_section: fn(&LayoutInputNode) -> bool`; `cell_colspan` / `cell_rowspan` / `column_span: fn(&LayoutInputNode) -> u32` | table | `LayoutInputNode*FromTable` |
 | `forms_support.fieldset_content` | `fn(&BlockNode) -> BlockNode` | forms | `BlockNodeGetFieldsetContentFromForms` |
 | `editing.table_row_needs_newline` / `.table_facts` | `fn(*const LayoutObject) -> bool` / `fn(*const LayoutObject) -> (bool, bool, bool)` | table | inline → table link-time symbols |
@@ -1082,7 +1083,7 @@ R4 before R5 was assumed for the opaque handle. With fragments in base
 LayoutInline directly, and "fragment" in the R5 steps means base's
 `layout_core/src/fragment/`.
 
-### Status: R5 inline crate (crate boundary done, link-time ABI kept)
+### Status: R5 inline crate (crate boundary done; link-time ABI removed in part 2)
 
 Done; no behaviour change, nothing built yet. `layout_algo_inline` is a real
 crate above base. `layout_assembly` no longer `include!`s its `lib.rs`, the
@@ -1181,6 +1182,122 @@ macros, and no other base → inline paths. `pub(crate)` uses were audited with
 - `cargo test -p layout_assembly` cannot link on MSVC: base's `extern "Rust"`
   declarations are defined in `layout_algo_inline` above it (already true for
   the table and forms symbols).
+
+Both "Unresolved" items above are decided and done in part 2 below.
+
+### Status: R5 part 2 (inline split by responsibility; done, not built)
+
+**Rule** (user decision). Ownership follows Chromium's directories, read from
+each body's `// cpp:` citation (snapshot `layoutng_inline/X.cc` = Chromium
+`core/layout/X.cc` for object-model classes, `core/layout/inline/X.cc`
+otherwise):
+
+- **(A)** `core/layout/*.cc` object model → base.
+- **(B)** `core/layout/inline/*` algorithms → `layout_algo_inline`; where base
+  needs one, a registry slot.
+- **(C)** Exception: the fragment result (FragmentItem(s), InlineCursor and the
+  FragmentItemsBuilder that constructs them) stays in base. Applied with the
+  same reason to the *record members* of the inline data base's fragment tree
+  stores (InlineItem copy/Trace/index checks, InlineItemSegment packing/clone,
+  InlineItemsData/InlineNodeData readers, InlineItemResult::Trace): base's
+  `Clone`/`Traceable` impls and fragment readers need them, and a slot on
+  per-item copy/trace would put an indirect call on a hot path (rule 4). The
+  InlineNode accessors Chromium defines inline in `inline_node.h` (`Data`,
+  `ItemsData`, `IsBidiEnabled`, `HasFloats`, `Svg*List`, ...) are defined
+  with base's InlineNode declaration for the same reason; SVG text and base
+  call them.
+
+**Link-time symbols** (all 176 base↔inline pairs: 173 base → inline, 3
+inline → base):
+
+| class | count | where |
+|---|---:|---|
+| A | 93 | LayoutText 56 (`layout_text.rs`, `layout_text_editing_queries.rs`, `layout_text_quad_geometry.rs`, 2 of them LayoutTextFragment), LayoutInline 14 (`layout_inline_core.rs`, `layout_inline_data.rs`), LayoutTextCombine 20 + text-combine style 2 (`layout_text_combine.rs`, `text_combine_style_service.rs`), `LayoutBlockFlow::ShouldTruncateOverflowingText` 1 (`block/text_overflow_layout_service.rs`); moved to `layout_core/src/{inline,block}/` and called directly |
+| A (inline → base) | 3 | `InkOverflow*ForTextCombine`: intra-base direct calls now |
+| C | 38 | FragmentItemsBuilder 2 (`fragment/fragment_items_builder_inline.rs`); InlineNode header accessors 18; InlineItem record 7 (Clone, clone_adjusted, IndexInItems, UpdateIndex, CheckTextType, FontWithSvgScaling, Trace); InlineItemSegment record 6 (NewFromRange, NewFromItem, ToRunSegmenterRange, Pack/UnpackSegmentData, Clone); InlineItemsData 3; InlineNodeData::DisableBidi 1; InlineItemResult::Trace 1. Bodies are written into the base interface files |
+| B, slot | 1 | `InlineNode::GetOffsetMapping` |
+| B, extension trait | 41 | `InlineNodeAlgorithms` (20), `InlineItemAlgorithms` (5), `InlineItemSegmentsAlgorithms` (10), `InlineItemResultAlgorithms` (4 + ToString), `HyphenResultAlgorithms` (1 + new), `FragmentBuilderInlineAlgorithms` (1) |
+
+Also moved (object model without link-time pairs, rule 1): `layout_br.rs`,
+`layout_counter.rs`, `layout_ruby_as_block.rs`, `layout_word_break.rs` →
+`layout_core/src/inline/`, declared at the base root
+(`translation_in_progress`) and re-exported by the inline crate under the old
+`crate::` paths. LayoutCounter's six `*FromInline` declarations now resolve to
+base's own untranslated stubs (intra-base).
+
+**Extension traits.** Rust cannot add inherent methods to a base type from
+another crate, so members of base-declared types whose bodies are inline
+algorithms are traits in `layout_algo_inline` (`algorithms.rs` re-exports
+them). Every inline module and `layout_algo_block::block_inline_layout`
+glob-import `algorithms::*`, so Chromium's member-call syntax is unchanged and
+the calls are static, direct calls inside the crate. The base inherent
+wrappers and their `extern` declarations are deleted, so a missing import is a
+compile error, never a silent fallback. `FindTextScale(Internal)` moved to
+`layout_algo_inline::inline_item_result`.
+
+**Slot added** (`layout_core/src/internal/layout_algorithm_set.rs`):
+
+```rust
+// InlineLayoutSupport
+pub get_offset_mapping: Option<fn(*mut LayoutBlockFlow) -> *const OffsetMapping>,
+```
+
+Filled with `layout_algo_inline::inline_node::InlineNodeGetOffsetMapping`;
+counted by `validate_performance_ownership`. Base calls it from
+`OffsetMapping`, `text_control_hard_wrap`, `layout_selection` (through
+`LayoutText::GetOffsetMapping`) and the editing queries, which run after layout
+and often outside a `LayoutPassScope`. So `InlineNode::GetOffsetMapping` reads
+`LayoutPassScope::ResidentInlineSupport()`: the active pass's set, else the
+last set a pass installed on this thread, like the existing resident SVG and
+MathML supports. Layout always runs a pass (installing the set) before an
+offset mapping exists; with no inline support installed it raises
+`UnsupportedLayout`. All inline slots with signatures are listed in
+`README.md`.
+
+**Editing files.** The 19 files (`editing_*`, `layout_output_editing_queries`,
+`visual_caret_movement`, `spatial_navigation_geometry`,
+`inline_cursor_editing_queries`, `physical_box_editing_queries`,
+`layout_inline_caret`, `collapsible_whitespace`, `engine_password_echo`) name
+only base and fragment-tree types (exception C readers), so they moved
+physically to `layout_core/src/editing/`; the `#[path]`s now stay inside base.
+Their module names (`layout_algo_inline_*`) are unchanged.
+
+**Facade.** `layout_algo_inline` is an optional dependency enabled by
+`inline_layout`; `DispatchIsLayoutTextCombine` and
+`LayoutBlockFlowShouldTruncateOverflowingTextFromInline` are re-exported from
+base. Five untranslated stubs whose declarations are gone were removed
+(`InlineNodeSetTextWithOffset`, `...FindSvgTextChunks`,
+`...ComputeOffsetMapping`, `...CheckConsistency`, `InlineItemResultToString`).
+
+**Block-only build** (`layout_assembly` without `translation_in_progress`):
+the moved object-model modules are gated on the feature like
+`layout_text_fragment`; their call sites keep the old declarations under
+`cfg(not(feature = "translation_in_progress"))`. Nothing defines them in that
+configuration (as before, it does not link a LayoutText).
+
+**Remaining link-time pairs in `crates/layout`** (not changed):
+base → table 40, base → replaced 23, base → grid 10, base → block 9,
+base → out_of_flow 2, base → float/forms/list 1 each; intra-base:
+`editing_caret.rs` defines `LayoutTextPositionForPoint`,
+`LayoutInlinePositionForPoint` and `LayoutBoxPositionForPointInFragmentsProvider`
+`#[no_mangle]` for base's own declarations; inline → foundation/font_engine
+(`StringIs8BitForInline`, `StringBuilder*`, `*Enabled` features,
+`FontEmphasisMarkHeight`, `FontDescriptionSetWidthVariantForInline`); inline
+`line_utils` declares `NGContainingLineBoxOf`/`InSameNGLineBox` with no
+definition (unreferenced).
+
+**Build risks:**
+
+- Signatures that were never type-checked (link-time) are now direct calls;
+  the scan found only alias differences (`UChar32`/`i32`, `UChar`/`u16`,
+  `Vector`/`Vec`), but an E0308 in a moved body is fixed at the call.
+- A missing trait import shows as E0599 (no method) in a crate outside
+  inline that calls an inline-algorithm member; add
+  `use layout_algo_inline::algorithms::*;`.
+- `unused_unsafe` warnings are allowed in the interface files whose wrappers
+  now call safe functions; other files may show unused-import warnings.
+- `Cargo.lock` is unchanged (the facade's inline dependency only became
+  optional).
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 
