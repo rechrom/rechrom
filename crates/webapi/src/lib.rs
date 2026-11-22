@@ -1,8 +1,5 @@
 #![allow(non_snake_case)]
 
-#[cfg(test)]
-extern crate layout_algo_replaced as _;
-
 pub mod dom_bindings;
 mod url_record;
 pub mod web_api_engine;

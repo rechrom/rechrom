@@ -1,5 +1,5 @@
 use dom::svg_path_parser::ParseSVGPathDefault;
-use layout_assembly::internal::layout_input::PaintPathVerb;
+use layout::input::PaintPathVerb;
 use skia::{
     include::core::SkPathTypes::SkPathDirection,
     src::core::{

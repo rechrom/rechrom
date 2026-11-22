@@ -2,7 +2,7 @@
 //! own conversion and source scroll semantics; Page owns layout and mutation.
 use super::*;
 use foundation::gfx;
-use layout_assembly::internal::layout_input::Offset;
+use layout::input::Offset;
 
 /// Immutable values from the current layout viewport, in LayoutZoomFactor
 /// coordinates. This does not expose a LayoutObject, scroll area or Page.
