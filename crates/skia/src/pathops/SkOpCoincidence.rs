@@ -537,7 +537,7 @@ impl SkOpCoincidence {
             if self.fHead.is_null()
                 || !Self::releaseRecord(core::ptr::addr_of_mut!(self.fHead), test)
             {
-                let success = Self::releaseRecord(core::ptr::addr_of_mut!(self.fTop), test);
+                let _success = Self::releaseRecord(core::ptr::addr_of_mut!(self.fTop), test);
             }
         }
         let mut cs = (*coin).existing(cts, opp);

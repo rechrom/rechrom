@@ -6,8 +6,7 @@ use super::{
     SkSLType::Type,
 };
 use crate::src::sksl::{
-    SkSLContext::Context, SkSLDefines::ExpressionArray, SkSLOperator::OperatorPrecedence,
-    SkSLPosition::Position,
+    SkSLContext::Context, SkSLOperator::OperatorPrecedence, SkSLPosition::Position,
 };
 use core::{pin::Pin, ptr::NonNull};
 // Source: src/sksl/ir/SkSLConstructorDiagonalMatrix.h:30-30
@@ -105,9 +104,7 @@ unsafe impl AnyConstructor for ConstructorDiagonalMatrix {
         unsafe { self.get_unchecked_mut().base.argumentSpan_mut() }
     }
 }
-use super::SkSLType::{
-    checkForOutOfRangeLiteralExpr, checkForOutOfRangeLiteralValue, isAllowedInES2Context,
-};
+use super::SkSLType::isAllowedInES2Context;
 use crate::src::sksl::SkSLConstantFolder::ConstantFolder;
 impl ConstructorDiagonalMatrix {
     // Source: src/sksl/ir/SkSLConstructorDiagonalMatrix.cpp:16-30

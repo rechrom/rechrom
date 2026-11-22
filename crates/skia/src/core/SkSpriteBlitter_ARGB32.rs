@@ -111,7 +111,7 @@ unsafe impl crate::src::core::SkBlitter::SkBlitter for Sprite_D32_S32 {
         _: &mut [u8],
         _: &mut [i16],
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::src::core::SkBlitter_Sprite::sprite_blit_anti_h()
     }
     unsafe fn blitRect(self: core::pin::Pin<&mut Self>, x: i32, y: i32, width: i32, height: i32) {

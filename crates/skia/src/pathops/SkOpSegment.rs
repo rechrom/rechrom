@@ -16,7 +16,7 @@ use crate::{
     include::pathops::SkPathOps::SkPathOp,
     src::core::{SkPath::Verb, SkPoint::SkPoint},
 };
-use core::ptr::{addr_of, addr_of_mut, null_mut};
+use core::ptr::{addr_of, null_mut};
 
 pub struct SkOpSegment {
     pub(super) fHead: SkOpSpan,
@@ -1570,7 +1570,7 @@ impl SkOpSegment {
                                 loop {
                                     if candidate != oppSpan {
                                         let oppStart = (*candidate).ptT();
-                                        let mut oppP = (*oppStart).next();
+                                        let oppP = (*oppStart).next();
                                         while oppP != oppStart {
                                             let segment = (*oppP).segment();
                                             if core::ptr::eq(segment, self) {

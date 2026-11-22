@@ -377,7 +377,7 @@ pub fn backport(picture: &dyn SkPicture) -> Result<Option<Box<SkPictureData>>, c
 // Source: include/core/SkPicture.h:192-192
 pub fn serialize_stream(
     picture: &dyn SkPicture,
-    mut stream: Pin<&mut dyn SkWStream>,
+    stream: Pin<&mut dyn SkWStream>,
     procs: Option<&SkSerialProcs>,
 ) -> Result<(), crate::RasterError> {
     unsafe { serialize(picture, stream, procs, None, false) }

@@ -208,7 +208,7 @@ unsafe fn extract_field(
 impl FieldAccess {
     // Source: src/sksl/ir/SkSLFieldAccess.cpp:84-103
     pub unsafe fn Make(
-        context: &Context,
+        _context: &Context,
         pos: Position,
         base: IRNodeBox<dyn Expression>,
         fieldIndex: i32,

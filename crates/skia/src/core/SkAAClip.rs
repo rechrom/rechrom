@@ -51,7 +51,7 @@ impl<'a> SkAAClipBlitter<'a> {
     }
     pub fn init(
         self: core::pin::Pin<&mut Self>,
-        mut blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
         clip: &'a SkAAClip,
     ) {
         unsafe { self.get_unchecked_mut() }.init_fields(blitter, clip);
@@ -59,7 +59,7 @@ impl<'a> SkAAClipBlitter<'a> {
     // Called before wrapper publication or through its exclusive pinned lease.
     pub(crate) fn init_fields(
         &mut self,
-        mut blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        blitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
         clip: &'a SkAAClip,
     ) {
         crate::SkASSERT!(@source b"src/core/SkAAClip.h\0".as_ptr(), 98; @condition b"aaclip && !aaclip->isEmpty()\0".as_ptr(); !clip.is_empty());
@@ -1259,7 +1259,7 @@ impl SkAAClip {
         }
     }
     #[cfg(not(sk_debug))]
-    pub fn debug(&self, compress_y: bool) {}
+    pub fn debug(&self, _compress_y: bool) {}
 }
 
 // Source: src/core/SkAAClip.cpp:972-1009

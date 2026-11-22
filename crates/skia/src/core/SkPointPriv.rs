@@ -1,4 +1,4 @@
-use crate::src::core::SkPoint::{set_point_length, SkIPoint, SkPoint};
+use crate::src::core::SkPoint::{SkIPoint, SkPoint};
 use crate::src::core::SkRect::SkRect;
 pub struct SkPointPriv;
 

@@ -6,8 +6,7 @@ use super::{
     SkSLType::Type,
 };
 use crate::src::sksl::{
-    SkSLContext::Context, SkSLDefines::ExpressionArray, SkSLOperator::OperatorPrecedence,
-    SkSLPosition::Position,
+    SkSLContext::Context, SkSLOperator::OperatorPrecedence, SkSLPosition::Position,
 };
 use core::{pin::Pin, ptr::NonNull};
 // Source: src/sksl/ir/SkSLConstructorSplat.h:31-31
@@ -107,9 +106,7 @@ unsafe impl AnyConstructor for ConstructorSplat {
         unsafe { self.get_unchecked_mut().base.argumentSpan_mut() }
     }
 }
-use super::SkSLType::{
-    checkForOutOfRangeLiteralExpr, checkForOutOfRangeLiteralValue, isAllowedInES2Context,
-};
+use super::SkSLType::isAllowedInES2Context;
 use crate::src::sksl::SkSLConstantFolder::ConstantFolder;
 impl ConstructorSplat {
     // Source: src/sksl/ir/SkSLConstructorSplat.cpp:14-36

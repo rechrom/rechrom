@@ -127,7 +127,7 @@ use std::sync::Arc;
 // Source: src/core/SkPixelRef.cpp:33-43
 impl SkPixelRef {
     pub fn new(width: i32, height: i32, pixels: *mut c_void, rowBytes: usize) -> Self {
-        let mut result = Self {
+        let result = Self {
             storage: SkPixelStorage::new(Type::kPixelRef),
             dimensionsFields: PixelRefDimensions {
                 fWidth: width,

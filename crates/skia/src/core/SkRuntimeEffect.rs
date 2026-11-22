@@ -1730,7 +1730,7 @@ impl Drop for RuntimeChildren {
         // Pop removes the exact slot before child destruction. If a Rust child
         // destructor panics, Finish drops the remaining sequence in native order,
         // then empty Vec field drop releases its allocation before later owners.
-        let mut finish = Finish(self);
+        let finish = Finish(self);
         finish.0.clear_reverse();
     }
 }

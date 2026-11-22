@@ -474,7 +474,6 @@ pub fn GetSampleUsage(
 }
 // Source: src/sksl/SkSLAnalysis.cpp:358-366
 pub unsafe fn ReferencesBuiltin(program: &super::ir::SkSLProgram::Program, builtin: i32) -> bool {
-    use super::ir::SkSLVariable::Variable;
     crate::SkASSERT!(@source b"src/sksl/SkSLAnalysis.cpp\0".as_ptr(),359; @condition b"program.fUsage\0".as_ptr(); program.fUsage.is_some());
     let mut found = false;
     program

@@ -123,7 +123,7 @@ impl BinaryExpression {
         op: Operator,
         right: Option<IRNodeBox<dyn Expression>>,
     ) -> Option<IRNodeBox<dyn Expression>> {
-        let mut left = left?;
+        let left = left?;
         let right = right?;
         let rawLeftType = borrow_type(
             if left.isIntLiteral() && right.expression_type().isInteger() {

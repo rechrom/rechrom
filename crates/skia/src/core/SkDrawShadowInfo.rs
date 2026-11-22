@@ -268,7 +268,7 @@ pub mod SkDrawShadowMetrics {
         }
         // Native POD outputs are initialized before consumption in every branch;
         // initialized scratch permits the existing safe reference output API.
-        let mut ambientBlur;
+        let ambientBlur;
         let mut spotBlur = 0.0;
         let mut spotScale = 0.0;
         let mut spotOffset = SkPoint::make(0.0, 0.0);

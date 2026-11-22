@@ -39,7 +39,7 @@ pub unsafe trait SkBlitter {
     // Source: src/core/SkBlitter.h:129-129
     // Implementors advertising direct access must retain a writable pixmap
     // lease for all returned bounds through the drawing call.
-    fn canDirectBlit(mut self: core::pin::Pin<&mut Self>) -> Option<DirectBlit> {
+    fn canDirectBlit(self: core::pin::Pin<&mut Self>) -> Option<DirectBlit> {
         None
     }
 
@@ -76,32 +76,32 @@ pub unsafe trait SkBlitter {
         1
     }
     unsafe fn blitFatAntiRect(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         rect: &crate::src::core::SkRect::SkRect,
     ) {
         blitFatAntiRect(self, rect)
     }
     unsafe fn blitV(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         x: i32,
-        mut y: i32,
-        mut height: i32,
+        y: i32,
+        height: i32,
         alpha: u8,
     ) {
         blitV(self, x, y, height, alpha)
     }
     unsafe fn blitRect(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         x: i32,
-        mut y: i32,
+        y: i32,
         width: i32,
-        mut height: i32,
+        height: i32,
     ) {
         blitRect(self, x, y, width, height)
     }
     unsafe fn blitAntiRect(
-        mut self: core::pin::Pin<&mut Self>,
-        mut x: i32,
+        self: core::pin::Pin<&mut Self>,
+        x: i32,
         y: i32,
         width: i32,
         height: i32,
@@ -114,27 +114,27 @@ pub unsafe trait SkBlitter {
     /// Safety: uphold blitMask's initialized mask and exclusive destination
     /// lease for every rectangle produced by the actual region intersection.
     unsafe fn blitMaskRegion(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         mask: &crate::src::core::SkMask::SkMask,
         clip: &crate::src::core::SkRegion::SkRegion,
     ) {
         blitMaskRegion(self, mask, clip)
     }
     unsafe fn blitRectRegion(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         rect: &crate::src::core::SkRect::SkIRect,
         clip: &crate::src::core::SkRegion::SkRegion,
     ) {
         blitRectRegion(self, rect, clip)
     }
     unsafe fn blitRegion(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         clip: &crate::src::core::SkRegion::SkRegion,
     ) {
         blitRegion(self, clip)
     }
     unsafe fn blitMask(
-        mut self: core::pin::Pin<&mut Self>,
+        self: core::pin::Pin<&mut Self>,
         mask: &crate::src::core::SkMask::SkMask,
         clip: &crate::src::core::SkRect::SkIRect,
     ) {
@@ -898,7 +898,7 @@ unsafe impl SkBlitter for SkNullBlitter {
         this.storage.allocBlitMemory(sz)
     }
     unsafe fn blitH(self: core::pin::Pin<&mut Self>, _x: i32, _y: i32, _width: i32) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
     unsafe fn blitAntiH(
         self: core::pin::Pin<&mut Self>,
@@ -907,10 +907,10 @@ unsafe impl SkBlitter for SkNullBlitter {
         _aa: &mut [u8],
         _runs: &mut [i16],
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
     unsafe fn blitV(self: core::pin::Pin<&mut Self>, _x: i32, _y: i32, _height: i32, _alpha: u8) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
     unsafe fn blitRect(
         self: core::pin::Pin<&mut Self>,
@@ -919,14 +919,14 @@ unsafe impl SkBlitter for SkNullBlitter {
         _width: i32,
         _height: i32,
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
     unsafe fn blitMask(
         self: core::pin::Pin<&mut Self>,
         _mask: &crate::src::core::SkMask::SkMask,
         _clip: &crate::src::core::SkRect::SkIRect,
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
 }
 // Source: src/core/SkBlitter.h:287-296
@@ -941,7 +941,7 @@ pub enum SkBlitterClipper<'a> {
 impl<'a> SkBlitterClipper<'a> {
     // Source: src/core/SkBlitter.cpp:595-613
     pub fn apply(
-        mut blitter: core::pin::Pin<&'a mut dyn SkBlitter>,
+        blitter: core::pin::Pin<&'a mut dyn SkBlitter>,
         clip: Option<&'a crate::src::core::SkRegion::SkRegion>,
         ir: Option<&crate::src::core::SkRect::SkIRect>,
     ) -> Self {

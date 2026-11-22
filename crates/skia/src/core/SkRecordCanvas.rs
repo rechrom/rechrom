@@ -20,7 +20,7 @@ use crate::src::{
     core::{SkDrawable::SkDrawable, SkPicture::SkPicture},
     image::SkImage::SkImage,
 };
-use core::{mem::ManuallyDrop, pin::Pin, ptr::NonNull};
+use core::{pin::Pin, ptr::NonNull};
 use std::sync::Arc;
 // Source: src/core/SkRecordCanvas.h:62-79
 pub struct SkDrawableList {

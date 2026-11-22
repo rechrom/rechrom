@@ -143,7 +143,7 @@ pub unsafe fn FindChase(
                     *endPtr = end;
                 }
                 if sortable {
-                    let success = (*segment).markAngle(maxWinding, sumWinding, angle, null_mut());
+                    let _success = (*segment).markAngle(maxWinding, sumWinding, angle, null_mut());
                 }
             }
         }

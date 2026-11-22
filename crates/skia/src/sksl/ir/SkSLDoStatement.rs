@@ -14,7 +14,7 @@ use crate::src::sksl::{
     SkSLPosition::{ForLoopPositions, Position},
     SkSLProgramSettings::ProgramConfig,
 };
-use core::{mem::ManuallyDrop, pin::Pin, ptr::NonNull};
+use core::{mem::ManuallyDrop, pin::Pin};
 type ExprSlot = Option<IRNodeBox<dyn Expression>>;
 type StmtSlot = Option<IRNodeBox<dyn Statement>>;
 // Source: src/sksl/ir/SkSLDoStatement.h:27-27

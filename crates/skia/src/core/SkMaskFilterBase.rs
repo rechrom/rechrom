@@ -50,7 +50,7 @@ pub trait SkMaskFilterBase: crate::src::core::SkFlattenable::SkFlattenableView {
         rrect: &crate::src::core::SkRRect::SkRRect,
         matrix: &SkMatrix,
         clip: &crate::src::core::SkRasterClip::SkRasterClip,
-        mut blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
         cache: Option<&mut crate::src::core::SkResourceCache::SkResourceCache>,
     ) -> Result<bool, crate::RasterError> {
         unsafe { filter_rrect(self, rrect, matrix, clip, blitter, cache) }
@@ -61,7 +61,7 @@ pub trait SkMaskFilterBase: crate::src::core::SkFlattenable::SkFlattenableView {
         rects: &[SkRect],
         matrix: &SkMatrix,
         clip: &crate::src::core::SkRasterClip::SkRasterClip,
-        mut blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
         cache: Option<&mut crate::src::core::SkResourceCache::SkResourceCache>,
     ) -> Result<FilterReturn, crate::RasterError> {
         unsafe { filter_rects(self, rects, matrix, clip, blitter, cache) }
@@ -496,7 +496,7 @@ unsafe fn filter_rrect(
     rrect: &crate::src::core::SkRRect::SkRRect,
     matrix: &SkMatrix,
     clip: &crate::src::core::SkRasterClip::SkRasterClip,
-    mut blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
+    blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
     cache: Option<&mut crate::src::core::SkResourceCache::SkResourceCache>,
 ) -> Result<bool, crate::RasterError> {
     let mut storage = core::pin::pin!(NinePatchStorage::empty());
@@ -532,7 +532,7 @@ unsafe fn filter_rects(
     rects: &[SkRect],
     matrix: &SkMatrix,
     clip: &crate::src::core::SkRasterClip::SkRasterClip,
-    mut blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
+    blitter: core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>,
     cache: Option<&mut crate::src::core::SkResourceCache::SkResourceCache>,
 ) -> Result<FilterReturn, crate::RasterError> {
     let mut patch = core::pin::pin!(NinePatchStorage::empty());

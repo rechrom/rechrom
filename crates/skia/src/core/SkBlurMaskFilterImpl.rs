@@ -401,7 +401,6 @@ impl SkBlurMaskFilterImpl {
         mut cache: Option<&mut crate::src::core::SkResourceCache::SkResourceCache>,
     ) -> Result<bool, crate::RasterError> {
         use crate::src::core::SkMask::SkAutoMaskFreeImage;
-        use crate::src::core::SkMaskFilterBase::NinePatch;
         use crate::src::core::SkRRect::{Corner::*, Type as RType};
         use crate::src::core::SkScalar::SkScalarCeilToInt;
         match rrect.getType() {

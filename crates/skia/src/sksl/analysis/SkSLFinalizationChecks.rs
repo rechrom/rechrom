@@ -15,7 +15,6 @@ use crate::src::sksl::{
     SkSLContext::Context,
     SkSLErrorReporter::ErrorReporterExt,
 };
-use core::ptr::NonNull;
 unsafe fn error(c: &Context, p: crate::src::sksl::SkSLPosition::Position, m: &[u8]) {
     let mut e = c.fErrors;
     e.as_mut().error(p, m);

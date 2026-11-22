@@ -427,9 +427,9 @@ fn blur_x_radius_1(
     s0: &Fp88,
     g0: &Fp88,
     g1: &Fp88,
-    g2: &Fp88,
-    g3: &Fp88,
-    g4: &Fp88,
+    _g2: &Fp88,
+    _g3: &Fp88,
+    _g4: &Fp88,
     d0: &mut Fp88,
     d8: &mut Fp88,
 ) {
@@ -453,8 +453,8 @@ fn blur_x_radius_2(
     g0: &Fp88,
     g1: &Fp88,
     g2: &Fp88,
-    g3: &Fp88,
-    g4: &Fp88,
+    _g3: &Fp88,
+    _g4: &Fp88,
     d0: &mut Fp88,
     d8: &mut Fp88,
 ) {
@@ -486,7 +486,7 @@ fn blur_x_radius_3(
     g1: &Fp88,
     g2: &Fp88,
     g3: &Fp88,
-    g4: &Fp88,
+    _g4: &Fp88,
     d0: &mut Fp88,
     d8: &mut Fp88,
 ) {
@@ -704,9 +704,9 @@ fn blur_y_radius_1(
     s0: &Fp88,
     g0: &Fp88,
     g1: &Fp88,
-    g2: &Fp88,
-    g3: &Fp88,
-    g4: &Fp88,
+    _g2: &Fp88,
+    _g3: &Fp88,
+    _g4: &Fp88,
     d: &mut [Fp88; 8],
 ) -> Fp88 {
     let v0 = mulhi(s0, g0);
@@ -725,8 +725,8 @@ fn blur_y_radius_2(
     g0: &Fp88,
     g1: &Fp88,
     g2: &Fp88,
-    g3: &Fp88,
-    g4: &Fp88,
+    _g3: &Fp88,
+    _g4: &Fp88,
     d: &mut [Fp88; 8],
 ) -> Fp88 {
     let v0 = mulhi(s0, g0);
@@ -749,7 +749,7 @@ fn blur_y_radius_3(
     g1: &Fp88,
     g2: &Fp88,
     g3: &Fp88,
-    g4: &Fp88,
+    _g4: &Fp88,
     d: &mut [Fp88; 8],
 ) -> Fp88 {
     let v0 = mulhi(s0, g0);
