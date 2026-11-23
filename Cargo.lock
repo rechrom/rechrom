@@ -2298,6 +2298,7 @@ dependencies = [
  "compositor_tile",
  "compositor_tree",
  "foundation",
+ "getrandom 0.4.3",
  "paint",
  "paint_model",
  "paint_skia",
