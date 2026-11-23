@@ -7,7 +7,6 @@ use super::{
     host_services::{CpuHostServices, HostInit},
     layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
     execution::EngineMainHostEffects,
-    paint_services::CpuMainPaintServices,
     resources::RasterReturnedResource,
     skia::SkRegion,
     types::{CpuCompositorTypes, LocalSurfaceId},
@@ -173,13 +172,25 @@ impl EngineCore {
         }
     }
 
+    /// Creates the main half: the CPU main paint services, the main
+    /// LayerTreeHost with its Proxy endpoint and the PAC, whose root it
+    /// attaches before any producer commit (native PAC::Update returns while
+    /// the root has no host).
+    pub(crate) fn CreateLayerize(
+        features: layerize::commit::main_paint_config::CpuPaintFeatures,
+        diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
+        init: layerize::commit::main_effects::MainHostInit<
+            <Root as layerize::commit::CommitStateTypes>::MutatorHostHandle,
+        >,
+    ) -> Result<layerize::LayerizeEngine<Root>, CompositorError> {
+        layerize::LayerizeEngine::<Root>::new(features, diagnostics, init)
+            .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))
+    }
+
     pub(crate) fn new(
         mut services: CpuHostServices<Root>,
         init: HostInit<Root>,
-        main_init: layerize::commit::main_effects::MainHostInit<
-            <Root as layerize::commit::CommitStateTypes>::MutatorHostHandle,
-        >,
-        paint: Arc<CpuMainPaintServices<SkRegion>>,
+        layerize: layerize::LayerizeEngine<Root>,
         main_effects: Arc<EngineMainHostEffects>,
         lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
         scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
@@ -188,9 +199,6 @@ impl EngineCore {
         next_property_owner: u64,
         input_client: std::sync::Arc<super::input_client::QueuedInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
-        // Native PAC::Update intentionally returns when the root has no host;
-        // the engine attaches the actual PAC root before any producer commit.
-        let layerize = layerize::LayerizeEngine::<Root>::new(paint, main_init);
         let mut host = services.CreateClientHost(init);
         host.BaseMutable().CreateInputHandler(&mut HostImplContext {
             services: &mut services,

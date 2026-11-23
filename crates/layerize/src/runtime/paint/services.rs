@@ -9,9 +9,9 @@ use crate::{
         layer_tree_impl::Color4f,
         prioritized_tile::ScrollOffsetMap,
     },
+    commit::skia_region::SkRegion,
     runtime::{
         paint_services::{CpuPaintFeatures, CpuPaintPlatform, CpuMainPaintServices},
-        skia::SkRegion,
     },
 };
 use paint::cc::paint::blend_mode::BlendMode;
@@ -28,15 +28,7 @@ use std::{
     },
 };
 
-/// Diagnostics are independent of normal Paint. Under-invalidation checking
-/// is selected through CpuPaintFeatures and requires a pixel-diagnostic backend;
-/// this constructor explicitly rejects it instead of returning empty pixels.
-#[derive(Clone, Copy, Debug)]
-pub struct SkiaPaintDiagnostics {
-    pub trace: bool,
-    pub verbose_level: i32,
-    pub histogram: bool,
-}
+pub use crate::commit::main_paint_config::SkiaPaintDiagnostics;
 #[derive(Debug)]
 pub enum PaintConfigurationError {
     UnderInvalidationRasterBackendRequired,
@@ -143,7 +135,7 @@ impl CpuPaintValueServices<SkRegion> for SkiaPaintValueServices {
         bounds: Rect,
         offsets: &ScrollOffsetMap,
         decoding: Option<
-            &mut BTreeMap<crate::adapter::image_animation::PaintImageId, ImageDecodingMode>,
+            &mut BTreeMap<crate::commit::paint::image_metadata::PaintImageId, ImageDecodingMode>,
         >,
         worklets: Option<&mut CpuPaintWorkletInputs>,
     ) -> CpuDiscardableImageMap {
@@ -187,7 +179,7 @@ impl CpuPaintValueServices<SkRegion> for SkiaPaintValueServices {
         all: &BTreeMap<usize, Rect>,
         scrolls: &BTreeMap<
             ElementId,
-            crate::cc::paint::display_item_list::RasterInducingScrollInfo,
+            crate::commit::paint::display_item_list::RasterInducingScrollInfo,
         >,
     ) {
         if self.diagnostics.config.trace {
@@ -201,7 +193,7 @@ impl CpuPaintValueServices<SkRegion> for SkiaPaintValueServices {
         all: &BTreeMap<usize, Rect>,
         scrolls: &BTreeMap<
             ElementId,
-            crate::cc::paint::display_item_list::RasterInducingScrollInfo,
+            crate::commit::paint::display_item_list::RasterInducingScrollInfo,
         >,
     ) -> String {
         let ops = (0..b.Used())

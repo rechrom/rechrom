@@ -27,7 +27,7 @@ use super::{
     latency_info_swap_promise_monitor::LatencyMonitorRegistry,
     layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
     metrics::{MetricsConfig, MetricsServices},
-    paint_services::{CpuImplPaintServices, CpuMainPaintServices},
+    paint_services::CpuImplPaintServices,
     render::{RenderConfig, RenderServices},
     resource_events::ResourceEffects,
     resource_services::{PictureReleaseServices, ResourceServices},
@@ -128,8 +128,8 @@ pub(crate) fn Create(
     config: CompositorConfig,
     executors: CompositorExecutors,
     options: FactoryOptions,
-    paint: Arc<CpuMainPaintServices<SkRegion>>,
-    impl_paint: CpuImplPaintServices<SkRegion>,
+    paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
+    paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
 ) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
@@ -158,6 +158,39 @@ pub(crate) fn Create(
     ));
     let main_animations = AnimationHostOwner::default();
     let impl_animations = AnimationHostOwner::default();
+    // The main half (LayerizeEngine): main paint services, the main
+    // LayerTreeHost and its Proxy endpoint. Chromium's WebLayerTreeView
+    // forwards the embedder background color to LayerTreeHost. An alpha-zero
+    // root keeps popup Pages compositable over the document instead of
+    // producing an opaque white fill quad.
+    let main_effects = Arc::new(super::execution::EngineMainHostEffects::new(
+        executors.compositor.clone(),
+        commands.clone(),
+        main_animations.clone(),
+        options.events.clone(),
+    ));
+    let layerize = EngineCore::CreateLayerize(
+        paint_features,
+        paint_diagnostics,
+        layerize::commit::main_effects::MainHostInit {
+            id: owner,
+            owner: PropertyTreesOwnerId::FromOwnerValue(owner),
+            mutator: main_animations.identity(),
+            settings: options.settings.clone(),
+            threaded: config.thread,
+            background_color: config.transparent_background.then_some(Color4f {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            }),
+            sink: main_effects.clone()
+                as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
+        },
+    )?;
+    // The impl half receives only the shared paint value capability for
+    // tiles and images.
+    let impl_paint = CpuImplPaintServices::new(layerize.PaintValues());
     let latency_monitors = LatencyMonitorRegistry::default();
     let scheduler_effects = SchedulerEffects::default();
     let scheduler_host = Arc::new(EngineSchedulerHost::new(
@@ -338,31 +371,8 @@ pub(crate) fn Create(
         draw: Box::new(capabilities.render.clone()),
         surface: Box::new(capabilities.render.clone()),
     };
-    let main_effects = Arc::new(super::execution::EngineMainHostEffects::new(
-        executors.compositor.clone(),
-        commands.clone(),
-        main_animations.clone(),
-        options.events,
-    ));
     let settings = options.settings;
     let scheduler_settings = settings.ToSchedulerSettings(options.picture.as_ref());
-    // Chromium's WebLayerTreeView forwards the embedder background color to
-    // LayerTreeHost. An alpha-zero root keeps popup Pages compositable over
-    // the document instead of producing an opaque white fill quad.
-    let main_init = layerize::commit::main_effects::MainHostInit {
-        id: owner,
-        owner: PropertyTreesOwnerId::FromOwnerValue(owner),
-        mutator: main_animations.identity(),
-        settings: settings.clone(),
-        threaded: config.thread,
-        background_color: config.transparent_background.then_some(Color4f {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        }),
-        sink: main_effects.clone() as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
-    };
     let image_worker_task_runner: <CompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
         Arc::new(super::execution::EngineSequencedTaskRunner::new(
             executors.compositor.clone(),
@@ -396,8 +406,7 @@ pub(crate) fn Create(
     let core = EngineCore::new(
         services,
         init,
-        main_init,
-        paint,
+        layerize,
         main_effects,
         lifecycle,
         queries,
@@ -642,30 +651,26 @@ pub(crate) fn CreateDefault(
         });
     }
     let options = FactoryOptions::cpu_default(&config);
-    let paint = super::paint::NewCpuMainPaintServices(
-        super::paint_services::CpuPaintFeatures {
-            cc_slimming: true,
-            singular_transform_fix: true,
-            merge_fixed_layers: true,
-            merge_sticky_layers: true,
-            raster_inducing_scroll: cfg!(any(target_os = "linux", target_os = "windows")),
-            scrolling_contents_cull_rect: true,
-            remove_scroll_node_workaround: true,
-            selection_edge_visibility_uses_full_edge: true,
-            canvas_draw_element: false,
-            expensive_dchecks: cfg!(debug_assertions),
-            paint_under_invalidation_checking: false,
-            layer_merge_distance_limit: 0x10000000,
-        },
-        super::paint::SkiaPaintDiagnostics {
-            trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
-            verbose_level: 0,
-            histogram: false,
-        },
-    )
-    .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))?;
-    // The main half keeps the PAC/conversion/recording owner; the impl half
-    // receives only the shared paint value capability for tiles and images.
-    let impl_paint = CpuImplPaintServices::new(&paint);
-    Create(config, executors, options, Arc::new(paint), impl_paint)
+    // The main half (LayerizeEngine, created in Create) keeps the
+    // PAC/conversion/recording owner built from these values.
+    let features = layerize::commit::main_paint_config::CpuPaintFeatures {
+        cc_slimming: true,
+        singular_transform_fix: true,
+        merge_fixed_layers: true,
+        merge_sticky_layers: true,
+        raster_inducing_scroll: cfg!(any(target_os = "linux", target_os = "windows")),
+        scrolling_contents_cull_rect: true,
+        remove_scroll_node_workaround: true,
+        selection_edge_visibility_uses_full_edge: true,
+        canvas_draw_element: false,
+        expensive_dchecks: cfg!(debug_assertions),
+        paint_under_invalidation_checking: false,
+        layer_merge_distance_limit: 0x10000000,
+    };
+    let diagnostics = layerize::commit::main_paint_config::SkiaPaintDiagnostics {
+        trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
+        verbose_level: 0,
+        histogram: false,
+    };
+    Create(config, executors, options, features, diagnostics)
 }

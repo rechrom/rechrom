@@ -34,26 +34,15 @@ impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
     for CpuCompositorTypes<R>
 {
     type Skia = R;
-    // Source: cc/layers/painted_scrollbar_layer.cc RasterizeScrollbarPart.
-    fn RasterizeScrollbarThumb(
-        scrollbar: &super::paint::Scrollbar,
-        logical_size: crate::adapter::geometry::Size,
+    // Source: cc/resources/ui_resource_bitmap.cc UIResourceBitmap(SkBitmap).
+    fn CreateUIResourceBitmap(
         pixel_size: crate::adapter::geometry::Size,
+        pixels: Vec<u8>,
+        row_bytes: usize,
+        opaque: bool,
     ) -> super::host_resources::UIBitmap {
-        use crate::cc::input::scrollbar::Scrollbar as _;
-        let mut canvas = super::paint::ScrollbarCanvas::new(logical_size, pixel_size);
-        let mut adapter = scrollbar.clone();
-        adapter.PaintThumb(
-            &mut canvas,
-            &crate::adapter::geometry::Rect::new(0, 0, logical_size.width(), logical_size.height()),
-        );
         super::host_resources::UIBitmap(std::sync::Arc::new(
-            super::host_resources::RawUIBitmap::new(
-                canvas.pixel_size(),
-                canvas.pixels().to_vec(),
-                canvas.row_bytes(),
-                false,
-            ),
+            super::host_resources::RawUIBitmap::new(pixel_size, pixels, row_bytes, opaque),
         ))
     }
     // Source: cc/resources/ui_resource_request.h:17-56.
@@ -67,16 +56,6 @@ impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
     fn UIResourceBitmapSize(bitmap: &super::host_resources::UIBitmap) -> crate::adapter::geometry::Size {
         use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
         bitmap.GetSize()
-    }
-    fn EmptyUIResourceBitmap() -> super::host_resources::UIBitmap {
-        super::host_resources::UIBitmap(std::sync::Arc::new(
-            super::host_resources::RawUIBitmap::new(
-                crate::adapter::geometry::Size::default(),
-                Vec::new(),
-                0,
-                false,
-            ),
-        ))
     }
     // Source draw_property_utils.cc:1590-1605. The runtime DrawContext type
     // is used only as the canonical CPU type family for ComputeClips; no

@@ -49,6 +49,12 @@ mod validation;
 pub use paint::paint_property_tree::PaintPropertyChangeType as PaintPropertyChange;
 pub use subset::PaintChunkSubset;
 pub use validation::{PaintInputError, ValidateArtifact};
+// Skia CPU paint platform (moved from compositor/src/runtime/paint/services.rs).
+mod services;
+pub use services::{
+    NewCpuMainPaintServices, PaintConfigurationError, SkiaPaintDiagnostics, SkiaPaintPlatform,
+    SkiaPaintValueServices, SkiaRasterTrackingServices,
+};
 
 /// Retains the actual producer artifact, including resources and recording basis.
 #[derive(Clone)]

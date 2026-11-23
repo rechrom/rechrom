@@ -18,6 +18,7 @@ use crate::{
         layerize_error::{LayerizeError, LayerizeErrorKind},
         layerize_family::LayerizeFamily,
         main_effects::{MainHostInit, PacScrollEffect},
+        main_paint_config::{CpuPaintFeatures, SkiaPaintDiagnostics},
         paint::canvas_child_record::CanvasChildRecordReplay,
         property_tree_services::{PropertyTreeFeatures, PropertyTreesOwnerId},
         skia_region::SkRegion,
@@ -31,7 +32,10 @@ use crate::{
             ViewTransitionElementResourceRects,
         },
         pac_scroll::{PacScrollCallbacks, PacScrollEffects},
-        paint::{CpuPaintRecord, PaintArtifact, PaintChunkSubset, PaintInput, PropertyTreeState},
+        paint::{
+            CpuPaintRecord, CpuPaintValueServices, NewCpuMainPaintServices, PaintArtifact,
+            PaintChunkSubset, PaintConfigurationError, PaintInput, PropertyTreeState,
+        },
         paint_services::CpuMainPaintServices,
     },
     third_party::blink::renderer::platform::graphics::compositing::{
@@ -65,7 +69,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     /// Creates the main LayerTreeHost and the canonical PAC with its scroll
     /// callbacks, then attaches `PAC::RootLayer()` to the host (native
     /// PAC::Update returns while the root has no host).
-    pub fn new(
+    pub fn WithPaintServices(
         paint: Arc<CpuMainPaintServices<F::Skia>>,
         init: MainHostInit<F::MutatorHostHandle>,
     ) -> Self {
@@ -104,6 +108,11 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     }
     pub fn Paint(&self) -> &Arc<CpuMainPaintServices<F::Skia>> {
         &self.paint
+    }
+    /// The shared cc/paint value capability the impl half's tile, raster and
+    /// image-decode owners replay committed records with.
+    pub fn PaintValues(&self) -> Arc<dyn CpuPaintValueServices<F::Skia>> {
+        self.paint.PaintValues()
     }
     /// The main LayerTreeHost, for its plain LayerTreeHost setters/getters.
     pub fn Main(&self) -> &CpuMainLayerHost<F> {
@@ -331,6 +340,18 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
 /// The canvas-child raster input (`CanvasChildRecordReplay`) is the CPU
 /// SkRegion recording the raster package downcasts to.
 impl<F: LayerizeFamily<Skia = SkRegion>> LayerizeEngine<F> {
+    /// The default CPU main half: the Skia paint platform services
+    /// (`NewCpuMainPaintServices`) with the embedding's feature state, then
+    /// the main host and PAC as in `WithPaintServices`.
+    pub fn new(
+        features: CpuPaintFeatures,
+        diagnostics: SkiaPaintDiagnostics,
+        init: MainHostInit<F::MutatorHostHandle>,
+    ) -> Result<Self, PaintConfigurationError> {
+        let paint = Arc::new(NewCpuMainPaintServices(features, diagnostics)?);
+        Ok(Self::WithPaintServices(paint, init))
+    }
+
     /// LocalFrameView::PushPaintArtifactToCompositor -> PAC::Update against
     /// the previously pushed artifact, then the publication of PAC's
     /// canvas-child recordings for this source frame. The artifact becomes

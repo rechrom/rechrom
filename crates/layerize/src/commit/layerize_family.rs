@@ -70,13 +70,15 @@ pub trait LayerizeFamily:
     /// The external Skia value backend (the compositor's `R`).
     type Skia: PaintSkiaBackend;
 
-    /// Source: PaintedScrollbarLayer::RasterizeScrollbarPart
-    /// (cc/layers/painted_scrollbar_layer.cc). The family allocates the
-    /// impl-side UIResourceBitmap from the painted thumb canvas.
-    fn RasterizeScrollbarThumb(
-        scrollbar: &crate::runtime::paint::Scrollbar,
-        logical_size: Size,
+    /// Source: cc/resources/ui_resource_bitmap.h UIResourceBitmap(SkBitmap).
+    /// The impl family allocates its UIResourceBitmap from the pixels the
+    /// main half painted (PaintedScrollbarLayer::RasterizeScrollbarPart,
+    /// cc/layers/painted_scrollbar_layer.cc).
+    fn CreateUIResourceBitmap(
         pixel_size: Size,
+        pixels: Vec<u8>,
+        row_bytes: usize,
+        opaque: bool,
     ) -> Self::UIResourceBitmap;
 
     /// Source: cc/resources/ui_resource_request.h:17-56. The impl family owns
@@ -91,7 +93,9 @@ pub trait LayerizeFamily:
     fn UIResourceBitmapSize(bitmap: &Self::UIResourceBitmap) -> Size;
     /// The empty native bitmap a DELETE request carries (its payload is not
     /// read by LayerTreeHostImpl for that request type).
-    fn EmptyUIResourceBitmap() -> Self::UIResourceBitmap;
+    fn EmptyUIResourceBitmap() -> Self::UIResourceBitmap {
+        Self::CreateUIResourceBitmap(Size::default(), Vec::new(), 0, false)
+    }
 
     /// Source: cc/trees/draw_property_utils.cc:1590-1605, the
     /// UpdatePropertyTrees step of LayerTreeHost::DoUpdateLayers

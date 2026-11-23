@@ -17,15 +17,7 @@ mod layerize_engine;
 /// The main-half engine. During S1a only the compositor's EngineCore and
 /// EngineAssembly name it (S1b moves it to Page).
 pub use layerize_engine::LayerizeEngine;
-/// Paint-value bindings of the main half. Until S1a-3 B3 the compositor's
-/// EngineCore still drives them directly.
+/// Paint-value bindings, main paint services and the main LayerTreeHost.
+/// Public because LayerizeEngine's API returns these owners; the impl half
+/// names none of them (crates/layerize/tests/layerize_boundary.rs).
 pub mod runtime;
-
-/// Main-half type families of the Blink compositing translations. Until
-/// S1a-3 B3 the compositor's EngineCore still drives them directly.
-pub mod main_types {
-    pub use crate::adapter::{
-        content_layer_client_impl, paint_artifact_compositor, paint_chunks_to_cc_layer,
-        paint_geometry, pending_layer, property_tree_manager, raster_invalidator,
-    };
-}

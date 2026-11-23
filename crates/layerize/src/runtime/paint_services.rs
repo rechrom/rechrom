@@ -21,23 +21,7 @@ use std::sync::{
     Arc,
 };
 
-/// Explicit embedding feature values. There is deliberately no Default: the
-/// embedding supplies the actual enabled runtime/feature-list state.
-#[derive(Clone, Copy, Debug)]
-pub struct CpuPaintFeatures {
-    pub cc_slimming: bool,
-    pub singular_transform_fix: bool,
-    pub merge_fixed_layers: bool,
-    pub merge_sticky_layers: bool,
-    pub raster_inducing_scroll: bool,
-    pub scrolling_contents_cull_rect: bool,
-    pub remove_scroll_node_workaround: bool,
-    pub selection_edge_visibility_uses_full_edge: bool,
-    pub canvas_draw_element: bool,
-    pub expensive_dchecks: bool,
-    pub paint_under_invalidation_checking: bool,
-    pub layer_merge_distance_limit: i32,
-}
+pub use crate::commit::main_paint_config::CpuPaintFeatures;
 
 /// Only native diagnostics and the external SkPicture recording target. All
 /// recording, invalidation, conversion and layerization policy stays canonical.
@@ -1034,3 +1018,14 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
 }
 
 impl<R: PaintSkiaBackend> crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJsonColor for CpuMainPaintServices<R>{fn ColorNameForLayoutTree(&self,color:Color4f)->String{self.platform.ColorNameForLayoutTree(color)}}
+
+// Source: cc/trees/tree_synchronizer.cc TRACE_EVENT scopes, which
+// FinishCommit runs on impl with the main services lent to the commit.
+// Moved from compositor/src/runtime/paint_services.rs.
+impl<R: PaintSkiaBackend> crate::commit::main_callbacks::SynchronizationTrace
+    for CpuMainPaintServices<R>
+{
+    fn TraceScope(&self, name: &str, count: Option<usize>) {
+        self.Platform().TraceScope("cc", name, count)
+    }
+}

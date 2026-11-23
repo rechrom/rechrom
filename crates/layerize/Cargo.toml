@@ -35,3 +35,5 @@ foundation = { path = "../foundation" }
 canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 serde_json = "1"
+# Paint metric sampler seed of the Skia paint platform (runtime/paint/services.rs).
+getrandom = "0.4"

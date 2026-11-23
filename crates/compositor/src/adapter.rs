@@ -28,17 +28,14 @@ pub mod layer_tree_impl;
 pub mod main_layer;
 pub mod micro_benchmark;
 pub mod occlusion;
-pub mod paint_geometry;
 pub mod paint_worklet;
 pub mod painted_scrollbar_layer;
 pub mod painted_scrollbar_layer_impl;
-pub mod pending_layer;
 pub mod picture_layer;
 pub mod picture_layer_impl;
 pub mod presentation;
 pub mod prioritized_tile;
 pub mod property_tree;
-pub mod property_tree_manager;
 pub mod property_types;
 pub mod raster_task;
 pub mod recording_source;
@@ -75,17 +72,13 @@ pub mod viewport;
 /// Compatibility export for the platform-neutral structured trace value now
 /// owned by the scheduler package.
 pub use compositor_scheduler::TraceValue;
-pub mod content_layer_client_impl;
 pub mod picture_layer_tiling;
 pub mod tile_manager;
 
-pub mod paint_artifact_compositor;
-pub mod paint_chunks_to_cc_layer;
 
 pub mod render_surface_impl;
 
 pub mod host_picture;
 
-pub mod raster_invalidator;
 
 pub mod client_layer_tree_host_impl;

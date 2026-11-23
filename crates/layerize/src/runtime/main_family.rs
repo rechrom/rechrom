@@ -182,7 +182,22 @@ impl<F: LayerizeFamily> ScrollbarLayerTypes for F {
         logical_size: Size,
         pixel_size: Size,
     ) -> <Self as crate::commit::CommitTypes>::UIResourceBitmap {
-        <F as LayerizeFamily>::RasterizeScrollbarThumb(scrollbar, logical_size, pixel_size)
+        // Source: cc/layers/painted_scrollbar_layer.cc RasterizeScrollbarPart.
+        // The thumb is painted on the main thread; the family allocates the
+        // impl-side UIResourceBitmap from the painted pixels.
+        use crate::cc::input::scrollbar::Scrollbar as _;
+        let mut canvas = paint::ScrollbarCanvas::new(logical_size, pixel_size);
+        let mut adapter = scrollbar.clone();
+        adapter.PaintThumb(
+            &mut canvas,
+            &crate::adapter::geometry::Rect::new(0, 0, logical_size.width(), logical_size.height()),
+        );
+        <F as LayerizeFamily>::CreateUIResourceBitmap(
+            canvas.pixel_size(),
+            canvas.pixels().to_vec(),
+            canvas.row_bytes(),
+            false,
+        )
     }
     fn WithPaintedScrollbarAnimation(
         scrollbar: &Self::Scrollbar,

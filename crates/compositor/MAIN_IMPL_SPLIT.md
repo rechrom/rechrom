@@ -1,6 +1,6 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2, the blanket family impls, B3a, B3b and B3c done (see "S1a-3 status" and "Plan
+Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2, the blanket family impls, B3a-B3d done (see "S1a-3 status" and "Plan
 correction" at the end); S1a-3 B3-B4 and the thread split (S1b/S1d) are not
 implemented.
 
@@ -661,8 +661,33 @@ Approved for S1a-3: option (h) as above; during S1a only,
   `CompositorPaintInputKind` as before). Plain LayerTreeHost setters are
   reached through `LayerizeEngine::{Main, MainMut}`.
 
-Next: B3 task 3 (empty `MAIN_HALF_REEXPORT_ALLOWED`: point compositor imports
-at `layerize::commit` or delete dead stubs), then B4 (layerize unit tests).
+- **B3d done (no main-half re-export stubs).** Deleted the compositor stubs
+  `adapter/{content_layer_client_impl, paint_artifact_compositor,
+  paint_chunks_to_cc_layer, paint_geometry, pending_layer,
+  property_tree_manager, raster_invalidator}.rs` and the whole
+  `src/third_party` tree; `layerize::main_types` is gone. The compositor's
+  `runtime/paint.rs` re-exports only `layerize::commit::paint` (plus the
+  Paint engine values). `runtime/paint/services.rs` (Skia CPU paint platform,
+  `NewCpuMainPaintServices`) is a git mv to `layerize/src/runtime/paint/`
+  (layerize depends on `getrandom`); `CpuPaintFeatures` and
+  `SkiaPaintDiagnostics` moved to `commit::main_paint_config`.
+  `LayerizeEngine::new(features, diagnostics, init)` (an
+  `F: LayerizeFamily<Skia = SkRegion>` constructor; the generic one is
+  `WithPaintServices`) builds the main paint services itself; the factory
+  creates it through `EngineCore::CreateLayerize` before the impl services
+  and leases `LayerizeEngine::PaintValues()` to `CpuImplPaintServices::new`.
+  `SynchronizationTrace` moved to `commit::main_callbacks` (implemented by
+  `CpuMainPaintServices` in layerize). `LayerizeFamily::RasterizeScrollbarThumb`
+  became `CreateUIResourceBitmap(pixel_size, pixels, row_bytes, opaque)`: the
+  main half paints the thumb (`main_family.rs`), the family only allocates
+  the bitmap (`EmptyUIResourceBitmap` is now a provided method).
+  `layerize_boundary.rs` has no re-export allowance any more; only
+  `LAYERIZE_ENGINE_ALLOWED` remains. The compositor unit test of
+  `ArtifactPaintRecord` (`runtime/paint/artifact_record.rs`) was deleted with
+  the stubs (it named PAC traits); B4 re-adds it in layerize.
+
+Next: B4 (layerize unit tests: lowering.rs/metadata.rs imports and
+dev-dependencies, the ArtifactPaintRecord test).
 
 ### Plan correction: option (a) does not compile
 

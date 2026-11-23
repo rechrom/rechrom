@@ -6,7 +6,7 @@
 pub mod paint;
 mod main_family;
 /// Main paint services (PAC, chunk conversion, GeometryMapper, main Layer
-/// services). Until S1a-3 B3 the compositor's EngineCore still drives them.
+/// services), owned by LayerizeEngine.
 pub mod paint_services;
 pub(crate) mod main_endpoint;
 pub(crate) mod main_frame_lifecycle;

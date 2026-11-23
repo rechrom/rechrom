@@ -43,3 +43,11 @@ pub trait MainViewTransitionRequest {
     fn maybe_cross_frame_sink(&self) -> bool;
     fn TakeFinishedCallback(&mut self) -> Option<Self::FinishedCallback>;
 }
+
+/// TRACE_EVENT scopes of cc/trees/tree_synchronizer.cc, which
+/// LayerTreeHostImpl::FinishCommit runs with the main paint services lent to
+/// the commit. Moved from compositor/src/adapter/tree_sync.rs, which
+/// re-exports it.
+pub trait SynchronizationTrace {
+    fn TraceScope(&self, name: &str, count: Option<usize>);
+}

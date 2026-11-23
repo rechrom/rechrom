@@ -17,7 +17,6 @@
 
 pub mod adapter;
 pub mod cc;
-pub mod third_party;
 pub mod ui;
 
 pub mod performance;
