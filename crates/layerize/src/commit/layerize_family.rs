@@ -12,10 +12,10 @@
 //! the template-parameter projection of it, not a second model.
 use super::{
     commit_state::CommitStateTypes, push_properties::PushPropertiesTypes,
-    region_backend::SkRegionBackend, skia_value_backend::MainSkiaBackend,
+    skia_value_backend::PaintSkiaBackend,
 };
 
 pub trait LayerizeFamily: PushPropertiesTypes + CommitStateTypes {
     /// The external Skia value backend (the compositor's `R`).
-    type Skia: MainSkiaBackend + SkRegionBackend + Send + Sync + 'static;
+    type Skia: PaintSkiaBackend;
 }

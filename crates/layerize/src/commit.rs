@@ -4,6 +4,7 @@
 //! under which LayerTreeHostImpl::FinishCommit reads main-thread state.
 //! Nothing here names Blink paint types.
 
+pub mod color_space;
 pub mod commit_state;
 mod float_clip_rect_transform;
 pub mod geometry;
@@ -46,3 +47,9 @@ pub use compositor_tree::{
 };
 
 pub use commit_state::{CommitStateTypes, CommitTypes, PropertyTreesFor};
+
+// Shared cc/gfx values named by cc/paint on both threads.
+// Source: cc/tiles/prioritized_tile.h (ScrollOffsetMap);
+//         ui/gfx/display_color_spaces.h (ContentColorUsage).
+pub use compositor_frame::surface_id::ContentColorUsage;
+pub use compositor_tile::prioritized_tile_types::ScrollOffsetMap;

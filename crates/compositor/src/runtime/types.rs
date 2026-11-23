@@ -32,24 +32,11 @@ where
         + crate::adapter::damage_context::DamageFilters,
 {
 }
-pub trait CpuSkiaBackend:
-    SkRegionBackend
-    + RoundedRectTransformBackend
-    + SkiaValueBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
-    + Send
-    + Sync
-    + 'static
-{
-}
-impl<R> CpuSkiaBackend for R where
-    R: SkRegionBackend
-        + RoundedRectTransformBackend
-        + SkiaValueBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
-        + Send
-        + Sync
-        + 'static
-{
-}
+pub use layerize::commit::skia_value_backend::PaintSkiaBackend;
+/// cc/paint's backend (`PaintSkiaBackend`, commit vocabulary) plus the impl
+/// filter facets.
+pub trait CpuSkiaBackend: PaintSkiaBackend + SkiaValueBackend {}
+impl<R> CpuSkiaBackend for R where R: PaintSkiaBackend + SkiaValueBackend {}
 
 /// This marker has no resident service/host/tree. All owner constructors receive
 /// actual owned native components and all runtime services remain call-scoped.

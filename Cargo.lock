@@ -2288,8 +2288,10 @@ version = "0.0.1"
 dependencies = [
  "compositor_animation",
  "compositor_draw",
+ "compositor_frame",
  "compositor_input",
  "compositor_scheduler",
+ "compositor_tile",
  "compositor_tree",
  "foundation",
  "paint",

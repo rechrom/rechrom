@@ -1883,60 +1883,10 @@ pub mod host_impl_chunk_c {
     pub use crate::cc::tiles::raster_tile_priority_queue::Type as HostRasterQueueType;
     // Source dependency: cc/paint/paint_op_buffer.h:111.
     pub const kMinNumberOfSlowPathsForMSAA: i32 = 6;
-    // Source dependency: cc/paint/target_color_params.h:18-35. This typed paint
-    // boundary retains both native fields and the source default sRGB/no headroom.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct HostTargetColorParams<C> {
-        pub color_space: C,
-        pub hdr_headroom: Option<f32>,
-    }
-    impl<C: HostColorSpace> Default for HostTargetColorParams<C> {
-        fn default() -> Self {
-            Self {
-                color_space: C::CreateSRGB(),
-                hdr_headroom: None,
-            }
-        }
-    }
-    impl<C> HostTargetColorParams<C> {
-        pub fn GetHdrHeadroom(&self) -> f32 {
-            self.hdr_headroom.unwrap_or(0.)
-        }
-    }
-    // Color math is supplied by the existing geometry/color owner.
-    // Source dependency: ui/gfx/color_space.h:65-92.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    #[repr(u8)]
-    pub enum HostColorSpacePrimaryID {
-        INVALID = 0,
-        BT709,
-        BT470M,
-        BT470BG,
-        SMPTE170M,
-        SMPTE240M,
-        FILM,
-        BT2020,
-        SMPTEST428_1,
-        SMPTEST431_2,
-        P3,
-        XYZ_D50,
-        ADOBE_RGB,
-        APPLE_GENERIC_RGB,
-        WIDE_GAMUT_COLOR_SPIN,
-        CUSTOM,
-        EBU_3213_E,
-    }
-    impl HostColorSpacePrimaryID {
-        pub const kMaxValue: Self = Self::EBU_3213_E;
-    }
-    pub trait HostColorSpace: Clone + Ord {
-        fn CreateSRGB() -> Self;
-        fn IsValid(&self) -> bool;
-        fn IsHDR(&self) -> bool;
-        fn GetPrimaryID(&self) -> HostColorSpacePrimaryID;
-        /// Exact fixed argument used by HostImpl: native Contains(CreateSRGB()).
-        fn ContainsSRGB(&self) -> bool;
-    }
+    // Source dependency: cc/paint/target_color_params.h:18-35; ui/gfx/color_space.h.
+    pub use layerize::commit::color_space::{
+        HostColorSpace, HostColorSpacePrimaryID, HostTargetColorParams,
+    };
     pub trait HostDisplayColorSpaces<C> {
         fn GetRasterAndCompositeColorSpace(&self, usage: ContentColorUsage) -> C;
         fn GetHdrHeadroom(&self) -> f32;
@@ -2197,14 +2147,7 @@ pub mod host_impl_chunk_g {
     pub trait HostScrollRenderSurface<B: LayerTreeTypes> {
         fn DrawableContentRect(&self, trees: &PropertyTreesFor<B>) -> RectF;
     }
-    // Source dependency: cc/paint/paint_image.h:219-232.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    #[repr(i32)]
-    pub enum HostImageDecodingMode {
-        kUnspecified = 0,
-        kSync = 1,
-        kAsync = 2,
-    }
+    pub use layerize::commit::color_space::HostImageDecodingMode;
     // Source: cc/trees/layer_tree_host_impl.cc:4459-4461.
     // Native decode tracker owns/consumes this once endpoint and passes its actual
     // boolean result to canonical RunImageDecodeCallback on the compositor sequence.

@@ -14,6 +14,10 @@ compositor_input = { path = "../compositor/compositor_input" }
 compositor_draw = { path = "../compositor/compositor_draw" }
 compositor_animation = { path = "../compositor/compositor_animation" }
 compositor_scheduler = { path = "../compositor/compositor_scheduler" }
+# cc value roots shared with the impl half: ScrollOffsetMap (cc/tiles/
+# prioritized_tile.h) and gfx::ContentColorUsage (viz surface values).
+compositor_tile = { path = "../compositor/compositor_tile" }
+compositor_frame = { path = "../compositor/compositor_frame" }
 skia = { path = "../skia" }
 # cc::FilterOperations (cc/paint) for the shared filter facets; the main half
 # also reads PaintArtifact once PAC moves here.

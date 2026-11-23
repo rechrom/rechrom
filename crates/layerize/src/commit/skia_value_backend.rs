@@ -45,3 +45,26 @@ pub trait MainSkiaBackend {
         resolution_scale: f32,
     ) -> Option<Self::Path>;
 }
+
+/// The Skia value backend cc/paint records are generic over (PaintRecord,
+/// PaintFlags, DisplayItemList ops). cc/paint runs on both threads in
+/// Chromium, so this is commit vocabulary; the compositor's `CpuSkiaBackend`
+/// adds only the impl filter facets on top of it.
+pub trait PaintSkiaBackend:
+    super::region_backend::SkRegionBackend
+    + super::transform::RoundedRectTransformBackend
+    + MainSkiaBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
+    + Send
+    + Sync
+    + 'static
+{
+}
+impl<R> PaintSkiaBackend for R where
+    R: super::region_backend::SkRegionBackend
+        + super::transform::RoundedRectTransformBackend
+        + MainSkiaBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
+        + Send
+        + Sync
+        + 'static
+{
+}
