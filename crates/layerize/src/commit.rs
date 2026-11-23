@@ -5,6 +5,7 @@
 //! Nothing here names Blink paint types.
 
 pub mod commit_state;
+mod float_clip_rect_transform;
 pub mod geometry;
 pub mod layer_impl_factory;
 pub mod layer_tree_debug_state;
@@ -19,7 +20,9 @@ pub mod scroll_elasticity;
 pub mod scroll_elasticity_utils;
 pub mod scroll_node;
 pub mod skia_filters;
+pub mod skia_region;
 pub mod skia_value_backend;
+pub mod transform;
 pub mod values;
 
 // cc value modules translated in the shared model packages. Both halves name

@@ -32,7 +32,6 @@ mod invalidation;
 pub use invalidation::*;
 mod geometry_mapper;
 pub use geometry_mapper::CpuGeometryMapper;
-mod geometry_values;
 mod pending_nodes;
 mod pending_values;
 pub use pending_values::*;

@@ -2293,6 +2293,8 @@ dependencies = [
  "compositor_tree",
  "foundation",
  "paint",
+ "paint_model",
+ "paint_skia",
  "skia",
 ]
 

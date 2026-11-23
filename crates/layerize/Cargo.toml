@@ -18,4 +18,8 @@ skia = { path = "../skia" }
 # cc::FilterOperations (cc/paint) for the shared filter facets; the main half
 # also reads PaintArtifact once PAC moves here.
 paint = { path = "../paint" }
+# PaintModel's geometry-mapper matrix facets and Paint's Skia path compiler,
+# implemented by the shared Transform / SkRegion value backends.
+paint_model = { path = "../paint/paint_model" }
+paint_skia = { path = "../paint/paint_skia" }
 foundation = { path = "../foundation" }

@@ -1,16 +1,15 @@
 //! Thin native gfx value operations for the source FloatClipRect owner.
-use crate::{
-    adapter::{
-        geometry::{RectF, Vector2dF},
-        paint_geometry::FloatClipRectTransform,
-    },
-    runtime::geometry::{RoundedRectTransformBackend, Transform},
+//! Moved from compositor/src/runtime/paint/geometry_values.rs with the
+//! Transform value it implements (coherence: the trait is Paint's).
+use super::{
+    geometry::{RectF, Vector2dF},
+    transform::{RoundedRectTransformBackend, Transform},
 };
+use paint_model::geometry_mapper_source::traits::FloatClipRectTransform;
 impl<R: RoundedRectTransformBackend> FloatClipRectTransform for Transform<R> {
     fn IsIdentityOr2dTranslation(&self) -> bool {
-        crate::adapter::paint_chunks_to_cc_layer::ConversionTransform::IsIdentityOr2dTranslation(
-            self,
-        )
+        // Same predicate as the compositor's ConversionTransform impl.
+        self.as_source().IsIdentityOrTranslation() && self.as_source().rc(2, 3) == 0.
     }
     fn To2dTranslation(&self) -> Vector2dF {
         let value = self.as_source().To2dTranslation();

@@ -358,19 +358,24 @@ Done:
   `ScrollbarLayerTypes::RasterizeScrollbarThumb`, which builds the impl
   `UIBitmap`).
 
-Next (rest of S1a-2b): move into commit, with their impls, the values both
-halves use that main code names concretely:
+- **Shared Skia/gfx values (S1a-2b part 5).** `layerize::commit::skia_region`
+  (git mv of `runtime/skia.rs`) holds `SkRegion`, its `SkRegionBackend`,
+  `RoundedRectTransformBackend` and `MainSkiaBackend` impls, the SkRRect
+  helpers and `stroke_backend_path`. `layerize::commit::transform` (git mv of
+  `runtime/geometry.rs`) holds `Transform<R>` and `RoundedRectTransformBackend`
+  with the impls of the shared facets (gfx `Transform`, `PropertyTransform`,
+  `PropertyTreeTransform`, both `OcclusionTransform`s, `ScrollbarTransform`,
+  `DamageTransform`, `GeometryMapperMatrix`); `FloatClipRectTransform` moved
+  with it (`commit/float_clip_rect_transform.rs`, was
+  `runtime/paint/geometry_values.rs`). The compositor files of the old names
+  re-export them and keep only impls of compositor-local traits
+  (`runtime/skia.rs`: Damage/Occlusion/RenderSurface filter facets;
+  `runtime/geometry.rs`: `DrawTransform`, `LayerTreeTransform`,
+  `LayerImplTransform`, `ConversionTransform`, through the new public
+  `Transform::{FromSource, MapPoint, MapRect, FlattenedSkMatrix, GetInverse}`).
+  layerize now depends on `paint_model` and `paint_skia`.
 
-1. `SkRegion` (`runtime/skia.rs:13`) with its `SkRegionBackend`,
-   `RoundedRectTransformBackend` and `MainSkiaBackend` impls (`runtime/skia.rs`,
-   the stroke helpers around `stroke_backend_path` go with them). Once the
-   type lives in layerize, every impl of a layerize or sub-crate trait for it
-   must also be in layerize; impls of compositor traits for it stay. Concrete
-   main users: `runtime/paint/discardable_image_map.rs:453,1104`.
-2. `Transform<R>` and `RoundedRectTransformBackend` (`runtime/geometry.rs:11-17`,
-   used by `CommitTypes::Transform`).
-
-Then S1a-2c, then S1a-3.
+Next: S1a-2c, then S1a-3.
 
 ### Plan correction: option (a) does not compile
 
