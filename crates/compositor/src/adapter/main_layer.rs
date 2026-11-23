@@ -241,17 +241,7 @@ impl<G: std::ops::DerefMut, T: ?Sized> std::ops::DerefMut for LiveFieldWrite<G, 
     }
 }
 
-// Native Viz request identity; result ownership/destruction remains in Viz.
-pub trait MainLayerCopyOutputRequest {
-    type TaskRunner;
-    fn has_result_task_runner(&self) -> bool;
-    fn set_result_task_runner(&mut self, runner: Self::TaskRunner);
-    fn has_area(&self) -> bool;
-    fn area(&self) -> &Rect;
-    fn set_area(&mut self, area: Rect);
-    fn has_source(&self) -> bool;
-    fn source(&self) -> super::layer_tree_impl::UnguessableToken;
-}
+pub use layerize::commit::layer_value_backend::{MainLayerCopyOutputRequest, MainLayerPath};
 
 // External gfx::MaskFilterInfo value constructor (ui/gfx/geometry/mask_filter_info.h).
 // This constructs the requested owned value; source decisions remain above.
@@ -276,7 +266,3 @@ pub fn MaskFilterInfoForLayer(
 pub use layerize::commit::layer_impl_factory::LayerImplFactory;
 pub use layerize::commit::push_properties::{LayerValue, MainLayerImpl, MainLayerImplTree, PushPropertiesTypes};
 
-// External SkPath::RRect(SkRRect(gfx::RRectF)) value construction only.
-pub trait MainLayerPath: super::property_types::PropertyPath {
-    fn FromRRect(value: &super::geometry::RRectF) -> Self;
-}

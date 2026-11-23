@@ -19,12 +19,7 @@ pub trait DrawTransform: PropertyTreeTransform {
     fn MapRectInt(&self, rect: Rect) -> Rect;
     fn ApplyMaskFilterInfo(&self, info: &mut MaskFilterInfo);
 }
-pub trait DrawFilters: PropertyTreeFilters {
-    fn HasReferenceFilter(&self) -> bool;
-    fn HasFilterThatMovesPixels(&self) -> bool;
-    fn ExpandRect(&self, rect: Rect, scale: Vector2dF) -> Rect;
-    fn HasBlurFilter(&self) -> bool;
-}
+pub use layerize::commit::layer_value_backend::DrawFilters;
 pub trait DrawLayer<T: super::layer_tree_impl::ImplTreeTransform> {
     type Types: LayerTreeTypes<Transform = T>;
     fn transform_tree_index(&self) -> i32;

@@ -15,3 +15,7 @@ compositor_draw = { path = "../compositor/compositor_draw" }
 compositor_animation = { path = "../compositor/compositor_animation" }
 compositor_scheduler = { path = "../compositor/compositor_scheduler" }
 skia = { path = "../skia" }
+# cc::FilterOperations (cc/paint) for the shared filter facets; the main half
+# also reads PaintArtifact once PAC moves here.
+paint = { path = "../paint" }
+foundation = { path = "../foundation" }

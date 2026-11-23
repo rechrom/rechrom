@@ -330,18 +330,20 @@ Done:
   `cc::layers::layer::LayerDebugInfo` re-export them. `CompositorLayer` and the
   impl contexts implement the foreign traits for local types.
 
-Still on the main family, with their impls in the compositor:
+- **Property-tree value facets (S1a-2b part 2).**
+  `layerize::commit::layer_value_backend` holds `DrawFilters`,
+  `MainLayerPath` and `MainLayerCopyOutputRequest` (re-exported from
+  `adapter::draw_property` / `adapter::main_layer`). Their impls for foreign
+  types moved with them: `DrawFilters for FilterOperations` and the
+  `FilterMapTransform` matrix binding to `layerize::commit::skia_filters`
+  (the compositor's damage/occlusion/render-surface filter facets import the
+  binding from there), `MainLayerPath for SkPath` to `layerize/src/skia_path.rs`.
+  `CopyOutputRequest` is a compositor type, so its impl stays in
+  `runtime/types.rs`. layerize now depends on `paint` and `foundation`.
 
-- `DrawFilters`: `runtime/skia.rs:252` implements it for paint's
-  `FilterOperations`.
-- `MainLayerPath`: implemented for `SkPath` at `runtime/skia.rs:294`.
-- `MainLayerCopyOutputRequest`: implemented at `runtime/types.rs:144`.
-
-Each trait has to move together with its impl when the implemented type is
-foreign to the compositor (`FilterOperations` from `paint`, `SkPath` from
-`skia`): those impls go to layerize (which then needs a `paint` dependency;
-the main half reads `PaintArtifact` anyway). `CopyOutputRequest` is a
-compositor type, so its impl may stay.
+Next (S1a-2b part 3): the main part of `SkiaValueBackend` / `CpuSkiaBackend`
+(`runtime/types.rs:18,61`) as `MainSkiaBackend` in commit, then
+`LayerizeFamily` (see "Plan correction").
 
 ### Plan correction: option (a) does not compile
 
@@ -385,8 +387,6 @@ main half through one commit trait.**
    `F: LayerizeFamily`, using `F::Skia` where it used `R`. This is the same
    amount of genericization option (a) needed (it added `I` everywhere).
 
-Remaining S1a-2b work under (h): `MainSkiaBackend` in commit (with
-`DrawFilters`, `MainLayerPath`, `MainLayerCopyOutputRequest` and the
-`FilterOperations`/`SkPath` impls), then `LayerizeFamily` and its compositor
-impl. S1a-2c and S1a-3 are unchanged except that main-trait impls become
-blanket impls as in point 3.
+Remaining S1a-2b work under (h): `MainSkiaBackend` in commit, then
+`LayerizeFamily` and its compositor impl. S1a-2c and S1a-3 are unchanged
+except that main-trait impls become blanket impls as in point 3.

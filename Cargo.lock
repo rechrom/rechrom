@@ -2291,6 +2291,8 @@ dependencies = [
  "compositor_input",
  "compositor_scheduler",
  "compositor_tree",
+ "foundation",
+ "paint",
  "skia",
 ]
 

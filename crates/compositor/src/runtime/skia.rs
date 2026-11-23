@@ -208,62 +208,11 @@ impl RoundedRectTransformBackend for SkRegion {
 }
 
 use crate::adapter::{geometry::Rect, occlusion::SkMatrix};
-use foundation::gfx;
-use paint::cc::paint::filter_operation::{
-    FilterMapTransform as FilterMapTransformContract, FilterType,
-};
 pub use paint::cc::paint::filter_operations::FilterOperations;
 
-/// Feature-selected native matrix used only for FilterOperation::mapVector.
-/// Adapter property trees keep their source-shaped nine scalar values while
-/// each production Skia path executes its own matrix implementation.
-struct FilterMapTransform {
-    matrix: TranslatedMatrix,
-}
-impl FilterMapTransform {
-    fn new(values: [f32; 9]) -> Self {
-        {
-            Self {
-                matrix: TranslatedMatrix::MakeAll(
-                    values[0], values[1], values[2], values[3], values[4], values[5], values[6],
-                    values[7], values[8],
-                ),
-            }
-        }
-    }
-}
-impl FilterMapTransformContract for FilterMapTransform {
-    fn MapVector(&self, x: f32, y: f32) -> (f32, f32) {
-        {
-            let mapped = self.matrix.mapVector(TranslatedPoint::make(x, y));
-            (mapped.x(), mapped.y())
-        }
-    }
-}
-fn sk_filter_rect(rect: Rect) -> gfx::Rect {
-    gfx::Rect::new(
-        gfx::Point::new(rect.x, rect.y),
-        gfx::Size::new(rect.width, rect.height),
-    )
-}
-fn filter_rect(rect: gfx::Rect) -> Rect {
-    Rect::new(rect.x(), rect.y(), rect.width(), rect.height())
-}
-impl crate::adapter::draw_property::DrawFilters for FilterOperations {
-    fn HasReferenceFilter(&self) -> bool {
-        Self::HasReferenceFilter(self)
-    }
-    fn HasFilterThatMovesPixels(&self) -> bool {
-        Self::HasFilterThatMovesPixels(self)
-    }
-    fn HasBlurFilter(&self) -> bool {
-        self.HasFilterOfType(FilterType::BLUR)
-    }
-    fn ExpandRect(&self, rect: Rect, scale: Vector2dF) -> Rect {
-        let matrix = FilterMapTransform::new([scale.x(), 0., 0., 0., scale.y(), 0., 0., 0., 1.]);
-        filter_rect(Self::ExpandRect(self, sk_filter_rect(rect), Some(&matrix)))
-    }
-}
+// DrawFilters and the FilterOperation matrix binding moved to
+// layerize::commit::skia_filters (coherence with the DrawFilters trait).
+use layerize::commit::skia_filters::{filter_rect, sk_filter_rect, FilterMapTransform};
 impl crate::adapter::damage_context::DamageFilters for FilterOperations {
     fn HasFilterThatMovesPixels(&self) -> bool {
         Self::HasFilterThatMovesPixels(self)
@@ -291,27 +240,6 @@ impl crate::adapter::occlusion::OcclusionFilters for FilterOperations {
 }
 
 pub use skia::src::core::SkPath::SkPath;
-impl crate::adapter::main_layer::MainLayerPath for SkPath {
-    fn FromRRect(value: &RRectF) -> Self {
-        {
-            use skia::{
-                include::core::SkPathTypes::SkPathDirection,
-                src::core::{SkPoint::SkPoint, SkRRect::SkRRect, SkRect::SkRect},
-            };
-            let rect = SkRect::MakeLTRB(
-                value.rect.x(),
-                value.rect.y(),
-                value.rect.right(),
-                value.rect.bottom(),
-            );
-            let radii = value.corner_radii.map(|r| SkPoint {
-                fX: r.x(),
-                fY: r.y(),
-            });
-            SkPath::RRectDefault(&SkRRect::MakeRectRadii(&rect, &radii), SkPathDirection::kCW)
-        }
-    }
-}
 
 fn stroke_backend_path(
     path: &SkPath,
