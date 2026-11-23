@@ -12,7 +12,8 @@
 use crate::{
     adapter::main_layer::{LayerContext, MainLayerHostId},
     commit::{
-        commit_state::{CommitState, ThreadUnsafeCommitState},
+        commit_state::CommitState,
+        completion_event::CompletionEvent,
         compositor_commit_data::CompositorCommitData,
         input_types::ElementId,
         layerize_error::{LayerizeError, LayerizeErrorKind},
@@ -20,6 +21,7 @@ use crate::{
         main_effects::{MainHostInit, PacScrollEffect},
         main_paint_config::{CpuPaintFeatures, SkiaPaintDiagnostics},
         paint::canvas_child_record::CanvasChildRecordReplay,
+        proxy::ProtectedCommitLease,
         property_tree_services::{PropertyTreeFeatures, PropertyTreesOwnerId},
         skia_region::SkRegion,
         CommitTypes,
@@ -42,11 +44,51 @@ use crate::{
         paint_artifact_compositor::PaintArtifactCompositor, paint_chunks_to_cc_layer,
     },
 };
-use std::sync::Arc;
+use std::{ptr::NonNull, sync::Arc};
+
+/// Owner of the main LayerTreeHost allocation. The protected commit lease
+/// (`commit::proxy::ProtectedCommitLease`) and this owner derive their
+/// accesses from the same pointer. Every owner-side access goes through the
+/// single waiting accessor `Get` / `GetMut`, which first waits for the
+/// protected sequence (LayerTreeHost::WaitForProtectedSequenceCompletion,
+/// decision D2; S1B_PROXY_DESIGN.md R1).
+struct MainHostOwner<F: LayerizeFamily>(NonNull<CpuMainLayerHost<F>>);
+impl<F: LayerizeFamily> MainHostOwner<F> {
+    fn new(host: Box<CpuMainLayerHost<F>>) -> Self {
+        Self(NonNull::from(Box::leak(host)))
+    }
+    fn Wait(endpoint: &EngineMainEndpoint) {
+        use crate::commit::protected_sequence_synchronizer::ProtectedSequenceSynchronizer;
+        endpoint.WaitForProtectedSequenceCompletion();
+        debug_assert!(endpoint.ImplOnOwnerSequence() || !endpoint.InProtectedSequence());
+    }
+    fn Get(&self, endpoint: &EngineMainEndpoint) -> &CpuMainLayerHost<F> {
+        Self::Wait(endpoint);
+        // SAFETY: owned allocation; the impl side holds no lease after the
+        // wait above.
+        unsafe { self.0.as_ref() }
+    }
+    fn GetMut(&mut self, endpoint: &EngineMainEndpoint) -> &mut CpuMainLayerHost<F> {
+        Self::Wait(endpoint);
+        // SAFETY: as in `Get`; `&mut self` excludes other owner-side borrows.
+        unsafe { self.0.as_mut() }
+    }
+    fn Pointer(&self) -> NonNull<CpuMainLayerHost<F>> {
+        self.0
+    }
+}
+impl<F: LayerizeFamily> Drop for MainHostOwner<F> {
+    fn drop(&mut self) {
+        // SAFETY: allocated by `new`; LayerizeEngine::drop waited for any
+        // outstanding commit lease first.
+        drop(unsafe { Box::from_raw(self.0.as_ptr()) });
+    }
+}
 
 // Compile-time thread-safety of the family-independent main-half owners the
 // impl thread reads inside the protected sequence (S1B_PROXY_DESIGN.md B4).
 // The family-bound assertions are in the compositor, which names the family.
+#[allow(dead_code)]
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
     fn assertions() {
@@ -71,10 +113,9 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
     // slot was occupied, coalesced per property node (the latest value wins).
     pending_composited_animation: Option<::paint::CompositedAnimationPropertyUpdate>,
     // The main LayerTreeHost (declared after PAC: its root is detached in
-    // Shutdown after PAC destruction). Boxed: the protected commit lease
-    // (S1B_PROXY_DESIGN.md B4) points at this allocation, which must not move
-    // with the engine.
-    main: Box<CpuMainLayerHost<F>>,
+    // Shutdown after PAC destruction). A stable allocation: the protected
+    // commit lease (S1B_PROXY_DESIGN.md B4) points at it.
+    main: MainHostOwner<F>,
     endpoint: Arc<EngineMainEndpoint>,
 }
 
@@ -86,7 +127,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         paint: Arc<CpuMainPaintServices<F::Skia>>,
         init: MainHostInit<F::MutatorHostHandle>,
     ) -> Self {
-        let endpoint = Arc::new(EngineMainEndpoint::new(init.sink));
+        let endpoint = Arc::new(EngineMainEndpoint::new(init.sink, init.impl_on_owner_sequence));
         let mut main = Box::new(CpuMainLayerHost::new(
             MainLayerHostId(init.id),
             init.owner,
@@ -115,7 +156,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
             _scroll_callbacks: callbacks,
             scroll_effects,
             pending_composited_animation: None,
-            main,
+            main: MainHostOwner::new(main),
             endpoint,
         }
     }
@@ -129,10 +170,10 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     }
     /// The main LayerTreeHost, for its plain LayerTreeHost setters/getters.
     pub fn Main(&self) -> &CpuMainLayerHost<F> {
-        &self.main
+        self.main.Get(&self.endpoint)
     }
     pub fn MainMut(&mut self) -> &mut CpuMainLayerHost<F> {
-        &mut self.main
+        self.main.GetMut(&self.endpoint)
     }
     pub fn MainFrameLifecycle(&self) -> &MainFrameLifecycle {
         &self.main_frame_lifecycle
@@ -183,7 +224,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         &mut self,
         range: <F as CommitTypes>::SurfaceRange,
     ) -> Arc<dyn ::paint::ForeignLayer> {
-        self.main
+        self.main.GetMut(&self.endpoint)
             .CreateVideoSurfaceForeignLayer(self.paint.as_ref(), self.paint.as_ref(), range)
     }
 
@@ -193,10 +234,10 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     /// so it cannot overtake the final delta. Returns the main page scale
     /// factor when the viewport scale or inner viewport scroll changed.
     pub fn ApplyCompositorChanges(&mut self, data: &mut CompositorCommitData) -> Option<f32> {
-        let scroll_state = self.main.ApplyCompositorChanges(data);
+        let scroll_state = self.main.GetMut(&self.endpoint).ApplyCompositorChanges(data);
         let viewport_changed =
             data.page_scale_delta != 1.0 || !data.inner_viewport_scroll.scroll_delta.IsZero();
-        let scale = viewport_changed.then(|| self.main.PageScaleFactor());
+        let scale = viewport_changed.then(|| self.main.GetMut(&self.endpoint).PageScaleFactor());
         self.scroll_effects
             .Push(PacScrollEffect::DidUpdateCompositorScrollState(scroll_state));
         scale
@@ -210,7 +251,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         needs_repaint: bool,
     ) -> bool {
         let mut hosts = CpuMainLayerHosts {
-            host: &mut self.main,
+            host: self.main.GetMut(&self.endpoint),
         };
         let mut context =
             LayerContext::<F>::new(&mut hosts, self.paint.as_ref()).WithDerivedServices(self.paint.as_ref());
@@ -231,7 +272,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         update: &::paint::CompositedAnimationPropertyUpdate,
     ) -> bool {
         let mut hosts = CpuMainLayerHosts {
-            host: &mut self.main,
+            host: self.main.GetMut(&self.endpoint),
         };
         let mut context =
             LayerContext::<F>::new(&mut hosts, self.paint.as_ref()).WithDerivedServices(self.paint.as_ref());
@@ -281,7 +322,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     /// PAC half of ApplySourceScrollAnimation.
     pub fn DropCompositorScrollDeltaNextCommit(&mut self, element: ElementId) {
         let mut hosts = CpuMainLayerHosts {
-            host: &mut self.main,
+            host: self.main.GetMut(&self.endpoint),
         };
         let mut context =
             LayerContext::<F>::new(&mut hosts, self.paint.as_ref()).WithDerivedServices(self.paint.as_ref());
@@ -299,39 +340,47 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         id: u32,
         rects: &ViewTransitionElementResourceRects<F>,
     ) {
-        self.main.NotifyTransitionRequestsFinished(id, rects)
+        self.main.GetMut(&self.endpoint).NotifyTransitionRequestsFinished(id, rects)
     }
 
     /// ProxyMain::BeginMainFrame after Paint: LayerTreeHost::UpdateLayers
     /// (only when the frame requested UPDATE_LAYERS), WillCommit and
     /// ActivateCommitState. Persistent source frame numbering advances after
     /// the activated commit has taken its value (layer_tree_host.cc:487).
+    /// WillCommit stores `completion`, which opens the protected sequence
+    /// (layer_tree_host.cc:501); the returned lease is the `&unsafe_state`
+    /// ProxyMain posts with NotifyReadyToCommitOnImpl (proxy_main.cc:474-477).
     pub fn ActivateCommitState(
         &mut self,
         update_layers: bool,
         features: &dyn PropertyTreeFeatures,
         owner: PropertyTreesOwnerId,
-    ) -> CommitState<F> {
+        completion: CompletionEvent,
+        blocking: bool,
+    ) -> (CommitState<F>, ProtectedCommitLease<F>) {
+        let main = self.main.GetMut(&self.endpoint);
         if update_layers {
-            self.main
-                .UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
+            main.UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
         }
-        self.main.WillCommit(self.paint.as_ref(), self.paint.as_ref());
-        let state = self.main.ActivateCommitState(owner);
-        self.main.pending_commit_state_mut().source_frame_number += 1;
+        main.WillCommit(self.paint.as_ref(), self.paint.as_ref());
+        let state = main.ActivateCommitState(owner);
+        main.pending_commit_state_mut().source_frame_number += 1;
+        self.endpoint.BeginProtectedSequence(completion.clone());
         self.endpoint.DidBeginCommit();
-        state
+        let lease = ProtectedCommitLease::new(
+            self.main.Pointer(),
+            self.paint.clone(),
+            self.endpoint.clone(),
+            completion,
+            blocking,
+        );
+        (state, lease)
     }
 
-    /// Lends the resident main state to LayerTreeHostImpl::FinishCommit
-    /// inside the protected sequence (ProxyImpl::ScheduledActionCommit).
-    pub fn WithCommitContext<T>(
-        &mut self,
-        f: impl FnOnce(&ThreadUnsafeCommitState<F>, &mut LayerContext<'_, F>, MainLayerHostId) -> T,
-    ) -> T {
-        let _protected = self.endpoint.EnterProtectedSequence();
-        self.main
-            .WithCommitContext(self.paint.as_ref(), self.paint.as_ref(), f)
+    /// LayerTreeHost::CommitComplete (layer_tree_host.cc:552-570): retires
+    /// the signaled commit completion on the owner sequence.
+    pub fn CommitComplete(&self) {
+        self.endpoint.CommitComplete();
     }
 
     /// Native child client finalization needs the current main tree; the
@@ -339,14 +388,22 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     pub fn Shutdown(&mut self) {
         if let Some(pac) = self.pac.take() {
             let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
+                host: self.main.GetMut(&self.endpoint),
             };
             let mut context = LayerContext::<F>::new(&mut hosts, self.paint.as_ref())
                 .WithDerivedServices(self.paint.as_ref());
             pac.Destroy(&mut context);
         }
-        self.main
+        self.main.GetMut(&self.endpoint)
             .SetRootLayer(None, self.paint.as_ref(), self.paint.as_ref());
+    }
+}
+
+impl<F: LayerizeFamily> Drop for LayerizeEngine<F> {
+    /// The main host may not be freed while the impl side holds the commit
+    /// lease (ProxyMain::Stop waits for the impl thread, proxy_main.cc:916-946).
+    fn drop(&mut self) {
+        self.endpoint.WaitForCommitRelease();
     }
 }
 
@@ -376,10 +433,10 @@ impl<F: LayerizeFamily<Skia = SkRegion>> LayerizeEngine<F> {
         sequence: &mut i32,
     ) -> Result<Option<Arc<canvas::CanvasChildRecordPublication>>, LayerizeError> {
         let had_canvas_children = self.pac.as_ref().unwrap().CanvasChildIds().next().is_some();
-        let source_frame = u64::try_from(self.main.pending_commit_state().source_frame_number)
+        let source_frame = u64::try_from(self.main.GetMut(&self.endpoint).pending_commit_state().source_frame_number)
             .expect("source main-frame number is nonnegative");
         let mut hosts = CpuMainLayerHosts {
-            host: &mut self.main,
+            host: self.main.GetMut(&self.endpoint),
         };
         let mut context =
             LayerContext::<F>::new(&mut hosts, self.paint.as_ref()).WithDerivedServices(self.paint.as_ref());

@@ -79,5 +79,9 @@ pub struct MainHostInit<M> {
     pub settings: super::layer_tree_settings::LayerTreeSettings,
     pub threaded: bool,
     pub background_color: Option<compositor_draw::Color4f>,
+    /// The impl half runs on the same sequence as this host (in-process
+    /// Proxy transport, S1B_PROXY_DESIGN.md D1): protected-sequence waits
+    /// return immediately, as for CompositorMode::SINGLE_THREADED.
+    pub impl_on_owner_sequence: bool,
     pub sink: std::sync::Arc<dyn MainHostEffectSink>,
 }

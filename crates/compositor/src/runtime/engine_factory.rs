@@ -184,6 +184,8 @@ pub(crate) fn Create(
                 blue: 0.0,
                 alpha: 0.0,
             }),
+            // Both halves still run on this compositor sequence (S1b-2..S1b-6).
+            impl_on_owner_sequence: true,
             sink: main_effects.clone()
                 as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
         },

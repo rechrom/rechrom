@@ -38,6 +38,7 @@ type Root = CpuCompositorTypes<SkRegion>;
 // read by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the
 // main LayerTreeHost (lent inside the protected sequence), its
 // ThreadUnsafeCommitState (read by FinishCommit) and the moved CommitState.
+#[allow(dead_code)]
 const _: () = {
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
@@ -63,7 +64,9 @@ pub(crate) struct EngineCore {
     lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
     pub(crate) scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
     pub(crate) frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
-    ready_commit: Option<CommitState<Root>>,
+    // ProxyImpl's DataForCommit: the commit state and the protected lease of
+    // the main ThreadUnsafeCommitState (proxy_impl.h:243-263).
+    ready_commit: Option<(CommitState<Root>, layerize::commit::proxy::ProtectedCommitLease<Root>)>,
     // Source frame identity of the last commit consumed by
     // ProxyImpl::ScheduledActionCommit.  The FrameSink separately records the
     // source frame used by DrawLayers, so the output boundary can distinguish
@@ -424,10 +427,13 @@ impl EngineCore {
             .expect("native property-tree identity exhausted");
         // UpdateLayers (when requested), WillCommit, ActivateCommitState and
         // the source frame advance run on the main half.
+        // ProxyMain creates the MANUAL-reset commit completion (proxy_main.cc:471).
         self.ready_commit = Some(self.layerize.ActivateCommitState(
             update_layers,
             features,
             property_owner,
+            layerize::commit::completion_event::CompletionEvent::new(),
+            false,
         ));
         self.ready_commit_notified = false;
         drop(tree_trace);
@@ -439,7 +445,7 @@ impl EngineCore {
     pub(crate) fn Commit(&mut self) {
         let _trace = Span(CompositorPackage::Tree, "Compositor.Tree.Commit");
         assert!(self.ready_commit_notified);
-        let mut state = self
+        let (mut state, mut lease) = self
             .ready_commit
             .take()
             .expect("source ready-to-commit state");
@@ -450,18 +456,23 @@ impl EngineCore {
             services: &mut self.services,
         };
         host.BeginCommit(state.source_frame_number, state.trace_id, &mut context);
-        // The main half enters the protected sequence and lends its resident
-        // state; the TreeSynchronizer context wraps the lent LayerContext.
+        // FinishCommit reads the main state through the protected lease
+        // posted with ReadyToCommit; the TreeSynchronizer context wraps the
+        // lent LayerContext.
         let trace = self.layerize.Paint().clone();
-        self.layerize
-            .WithCommitContext(|unsafe_state, layer, main_host| {
-                let mut main_context = super::sync::MainSynchronizationContext {
-                    main: layer,
-                    host: main_host,
-                    trace: trace.as_ref(),
-                };
-                host.FinishCommit(&mut state, unsafe_state, &mut main_context, &mut context);
-            });
+        lease.WithCommitContext(|unsafe_state, layer, main_host| {
+            let mut main_context = super::sync::MainSynchronizationContext {
+                main: layer,
+                host: main_host,
+                trace: trace.as_ref(),
+            };
+            host.FinishCommit(&mut state, unsafe_state, &mut main_context, &mut context);
+        });
+        // Releasing the lease signals the commit completion (the
+        // ScopedCommitCompletionEvent of proxy_impl.cc:42-81); the main side
+        // then retires it (LayerTreeHost::CommitComplete).
+        drop(lease);
+        self.layerize.CommitComplete();
         // Source: cc/trees/proxy_impl.cc::ScheduledActionCommit. The finish
         // timestamp belongs to FinishCommit, before the potentially expensive
         // ScheduledActionPostCommit and independently scheduled frame draw.

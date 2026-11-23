@@ -535,3 +535,29 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   `Arc<Mutex<..>>` (ReportTimeSwapPromise pushes into it after moving with
   the commit). `cargo check -p rechrom_app` passes; the layerize unit tests
   were not run (memory limit; check only).
+- **S1b-2 done (real synchronizer, one thread).**
+  `commit::completion_event::CompletionEvent` translates
+  cc/base/completion_event.h (manual reset, `Mutex + Condvar`, `Arc`
+  shared; Rust extension `SignalAbandoned` / `WasAbandoned`). The endpoint
+  stores the commit completion (`BeginProtectedSequence` from WillCommit,
+  `InProtectedSequence` = stored and unsignaled, `WaitForCommitCompletion`
+  waits and clears, `CommitComplete` retires a signaled one,
+  `WaitForCommitRelease` for teardown); `IsOwnerThread` stays the sink's
+  sequence check minus the impl's lease scope. While both halves share the
+  sequence (`MainHostInit::impl_on_owner_sequence = true`, set by the
+  factory), `WaitForProtectedSequenceCompletion` returns immediately, as
+  Chromium's SINGLE_THREADED branch (layer_tree_host.cc:521-522): the
+  current single-thread flow still touches the main tree between WillCommit
+  and COMMIT (e.g. ApplyCompositorDeltas of a pipelined BMF), so a real wait
+  would self-deadlock. `commit::proxy::ProtectedCommitLease<F>` (raw host
+  pointer, paint services, endpoint, completion, `blocking`; `unsafe impl
+  Send`; `Drop` signals, abandoned if FinishCommit never ran;
+  `TakeCompletion` for S1b-4's ScopedCommitCompletionEvent).
+  `LayerizeEngine` owns the host as `MainHostOwner` (raw allocation) whose
+  `Get`/`GetMut` are the single waiting accessor (D2) for every main-tree
+  access, including `Main()`/`MainMut()`; `ActivateCommitState` takes the
+  completion and returns `(CommitState, ProtectedCommitLease)`;
+  `WithCommitContext` is gone; `Drop` waits for the lease. EngineCore keeps
+  `ready_commit = (state, lease)`, commits through the lease, drops it and
+  calls `LayerizeEngine::CommitComplete`. Not done: the cross-thread unit
+  test for the synchronizer (tests are not built on this machine).

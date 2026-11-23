@@ -4,8 +4,17 @@
 //! S1a-3 B3). The impl half supplies the sequence, effect queue, task runner
 //! and AnimationHost query through `MainHostEffectSink`; it keeps the
 //! AnimationHost mutations itself.
+//!
+//! The protected sequence (cc/base/protected_sequence_synchronizer.h,
+//! LayerTreeHost::IsOwnerThread / InProtectedSequence /
+//! WaitForProtectedSequenceCompletion, layer_tree_host.cc:329-336,520-570)
+//! is started on the owner sequence by WillCommit storing the commit
+//! completion event and concluded on the impl side by signaling it
+//! (S1B_PROXY_DESIGN.md B4). The event lives here rather than on the host so
+//! the impl side can query it without borrowing the host.
 use super::main_host::CpuMainHostEndpoint;
 use crate::commit::{
+    completion_event::CompletionEvent,
     input_types::ElementId,
     main_callbacks::TaskRunner,
     main_effects::{LocalSurfaceId, MainHostEffect, MainHostEffectSink},
@@ -13,7 +22,7 @@ use crate::commit::{
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex, MutexGuard,
 };
 
 pub struct EngineMainEndpoint {
@@ -21,16 +30,28 @@ pub struct EngineMainEndpoint {
     tasks: TaskRunner,
     commit_requested: AtomicBool,
     rendering_paused: AtomicBool,
-    protected_sequence: AtomicBool,
+    // Source: layer_tree_host.h commit_completion_event_.
+    commit_completion: Mutex<Option<CompletionEvent>>,
+    // The impl side is running FinishCommit through the commit lease. While
+    // both halves share one sequence (S1b-2..S1b-6) that code runs on the
+    // owner sequence but is impl code, so it is not the owner thread.
+    impl_in_commit_lease: AtomicBool,
+    // Both halves run on the owner sequence (in-process Proxy transport,
+    // decision D1). A blocking wait could never be satisfied there; this is
+    // the CompositorMode::SINGLE_THREADED early return of
+    // layer_tree_host.cc:521-522.
+    impl_on_owner_sequence: bool,
 }
 impl EngineMainEndpoint {
-    pub fn new(sink: Arc<dyn MainHostEffectSink>) -> Self {
+    pub fn new(sink: Arc<dyn MainHostEffectSink>, impl_on_owner_sequence: bool) -> Self {
         Self {
             tasks: sink.MainThreadTaskRunner(),
             sink,
             commit_requested: AtomicBool::new(false),
             rendering_paused: AtomicBool::new(false),
-            protected_sequence: AtomicBool::new(false),
+            commit_completion: Mutex::new(None),
+            impl_in_commit_lease: AtomicBool::new(false),
+            impl_on_owner_sequence,
         }
     }
     fn Post(&self, effect: MainHostEffect) {
@@ -42,36 +63,110 @@ impl EngineMainEndpoint {
     pub fn SetRenderingPaused(&self, paused: bool) {
         self.rendering_paused.store(paused, Ordering::Release);
     }
-    /// The Engine's &mut owner guarantees that main mutation and its protected
-    /// commit walk cannot overlap. The guard marks that actual logical phase;
-    /// it is not a synthetic successful wait or a new worker implementation.
-    pub fn EnterProtectedSequence(&self) -> EngineProtectedSequence<'_> {
-        assert!(self.sink.RunsTasksInCurrentSequence());
-        assert!(!self.protected_sequence.swap(true, Ordering::AcqRel));
-        EngineProtectedSequence(self)
+    fn completion(&self) -> MutexGuard<'_, Option<CompletionEvent>> {
+        self.commit_completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// Both halves share the owner sequence (no blocking waits).
+    pub fn ImplOnOwnerSequence(&self) -> bool {
+        self.impl_on_owner_sequence
+    }
+    /// LayerTreeHost::WillCommit stores the commit completion
+    /// (layer_tree_host.cc:428,483,501): the protected sequence starts on
+    /// the owner sequence.
+    pub fn BeginProtectedSequence(&self, completion: CompletionEvent) {
+        debug_assert!(self.sink.RunsTasksInCurrentSequence());
+        let mut current = self.completion();
+        // Source: layer_tree_host.cc:428 DCHECK(!commit_completion_event_).
+        // A signaled event not yet retired by CommitComplete is allowed; an
+        // unsignaled one is a second overlapping commit.
+        assert!(
+            current.as_ref().is_none_or(CompletionEvent::IsSignaled),
+            "previous commit still holds the protected sequence"
+        );
+        *current = Some(completion);
+    }
+    /// Source: layer_tree_host.cc:526-536 WaitForCommitCompletion. The event
+    /// is cloned out so impl-side `InProtectedSequence` queries never wait on
+    /// this mutex while the owner blocks.
+    pub fn WaitForCommitCompletion(&self) {
+        debug_assert!(self.IsOwnerThread());
+        let Some(event) = self.completion().clone() else {
+            return;
+        };
+        event.Wait();
+        assert!(
+            !event.WasAbandoned(),
+            "the impl half terminated inside the protected sequence"
+        );
+        let mut current = self.completion();
+        if current
+            .as_ref()
+            .is_some_and(|current| current.SameEvent(&event))
+        {
+            *current = None;
+        }
+    }
+    /// Source: layer_tree_host.cc:552-570 (LayerTreeHost::CommitComplete): a
+    /// signaled completion is retired without blocking.
+    pub fn CommitComplete(&self) {
+        let mut current = self.completion();
+        if current.as_ref().is_some_and(CompletionEvent::IsSignaled) {
+            let event = current.take().unwrap();
+            assert!(
+                !event.WasAbandoned(),
+                "the impl half terminated inside the protected sequence"
+            );
+        }
+    }
+    /// Owner teardown: waits until no commit lease can still reach the main
+    /// host, without the abandonment assertion (a terminated impl side has
+    /// already been reported).
+    pub fn WaitForCommitRelease(&self) {
+        if self.impl_on_owner_sequence {
+            return;
+        }
+        let event = self.completion().clone();
+        if let Some(event) = event.filter(|event| !event.IsSignaled()) {
+            event.Wait();
+        }
+    }
+    /// The impl side enters FinishCommit through the commit lease. The scope
+    /// restores the flag on drop, including unwind.
+    pub(crate) fn EnterCommitLease(&self) -> CommitLeaseScope<'_> {
+        assert!(
+            self.InProtectedSequence(),
+            "commit lease used outside the protected sequence"
+        );
+        assert!(!self.impl_in_commit_lease.swap(true, Ordering::AcqRel));
+        CommitLeaseScope(self)
     }
 }
-pub struct EngineProtectedSequence<'a>(&'a EngineMainEndpoint);
-impl Drop for EngineProtectedSequence<'_> {
+pub(crate) struct CommitLeaseScope<'a>(&'a EngineMainEndpoint);
+impl Drop for CommitLeaseScope<'_> {
     fn drop(&mut self) {
-        assert!(self.0.protected_sequence.swap(false, Ordering::AcqRel));
+        assert!(self.0.impl_in_commit_lease.swap(false, Ordering::AcqRel));
     }
 }
 impl ProtectedSequenceSynchronizer for EngineMainEndpoint {
+    // Source: layer_tree_host.cc:329-332.
     fn IsOwnerThread(&self) -> bool {
-        self.sink.RunsTasksInCurrentSequence() && !self.protected_sequence.load(Ordering::Acquire)
+        self.sink.RunsTasksInCurrentSequence() && !self.impl_in_commit_lease.load(Ordering::Acquire)
     }
+    // Source: layer_tree_host.cc:334-336 (in_commit(): a stored completion
+    // event that has not been signaled).
     fn InProtectedSequence(&self) -> bool {
-        self.sink.RunsTasksInCurrentSequence() && self.protected_sequence.load(Ordering::Acquire)
+        self.completion()
+            .as_ref()
+            .is_some_and(|event| !event.IsSignaled())
     }
+    // Source: layer_tree_host.cc:520-524.
     fn WaitForProtectedSequenceCompletion(&self) {
-        // Both phases belong to this sequenced Engine. A main-owner access is
-        // admitted only after the synchronous commit scope has ended; worker
-        // raster tasks never borrow main Layer state or enter this endpoint.
-        assert!(
-            self.IsOwnerThread(),
-            "main owner cannot mutate during protected commit"
-        );
+        if self.impl_on_owner_sequence {
+            return;
+        }
+        self.WaitForCommitCompletion();
     }
 }
 impl CpuMainHostEndpoint for EngineMainEndpoint {

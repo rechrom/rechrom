@@ -6,6 +6,7 @@
 
 pub mod color_space;
 pub mod commit_state;
+pub mod completion_event;
 mod float_clip_rect_transform;
 pub mod geometry;
 pub mod layer_impl_factory;
@@ -25,6 +26,7 @@ pub mod property_tree_services;
 pub mod property_types;
 pub mod paint;
 pub mod protected_sequence_synchronizer;
+pub mod proxy;
 pub mod push_properties;
 pub mod rtree;
 pub mod scroll_elasticity;
