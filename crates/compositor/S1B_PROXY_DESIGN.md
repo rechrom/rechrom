@@ -561,3 +561,15 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   `ready_commit = (state, lease)`, commits through the lease, drops it and
   calls `LayerizeEngine::CommitComplete`. Not done: the cross-thread unit
   test for the synchronizer (tests are not built on this machine).
+- **S1b-3 done (messages, types only).** `commit::proxy` holds
+  `BeginMainFrameAndCommitState<F>` (cc/trees/proxy_common.h),
+  `CommitPipelineStage`, `MainToImpl<F>`, `ImplToMain<F>` and re-exports
+  `CommitEarlyOutReason`. Deviations from table 1.1: `CommitEarlyOutReason`
+  already lives in the shared `compositor_scheduler` crate, so it is
+  re-exported instead of git-moved; `MutatorEvents` (and the other
+  impl-built payloads: swap promises, LayerTreeMutator, ProxyImpl init
+  values, presentation feedback, DrawImage) are named through the new
+  `commit::proxy::ProxyTypes: LayerizeFamily` associated types, which the
+  compositor implements in S1b-4; the `MutatorEvents` value moves with its
+  main consumer in S1b-5. The metrics-only `BeginMainFrameReasons` is not
+  translated.

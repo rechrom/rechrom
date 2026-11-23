@@ -104,3 +104,144 @@ impl<F: LayerizeFamily> Drop for ProtectedCommitLease<F> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Proxy messages (S1b-3). The enums are the posted tasks of
+// cc/trees/proxy_main.cc (ProxyMain -> ProxyImpl) and proxy_impl.cc
+// (ProxyImpl -> ProxyMain). Values that only the impl half can construct are
+// named through `ProxyTypes`, which the compositor implements for its family.
+
+pub use compositor_scheduler::commit_earlyout_reason::CommitEarlyOutReason;
+use crate::commit::{
+    commit_state::{CommitState, CommitTimestamps},
+    compositor_commit_data::CompositorCommitData,
+    geometry::Rect,
+    main_effects::LocalSurfaceId,
+};
+use compositor_scheduler::{begin_frame::BeginFrameArgs, TimeTicks};
+
+/// The impl-provided payload types of the Proxy messages. Main code treats
+/// them as opaque values (it moves them, never inspects them), except where
+/// a later step translates the main consumer (MutatorEvents in S1b-5).
+pub trait ProxyTypes: LayerizeFamily {
+    /// cc::MutatorEvents (animation events for the main AnimationHost).
+    type MutatorEvents: Send;
+    /// std::unique_ptr<cc::SwapPromise> returned by an aborted main frame.
+    type ProxySwapPromise: Send;
+    /// std::unique_ptr<cc::LayerTreeMutator> (ProxyMain::SetMutator).
+    type LayerTreeMutator: Send;
+    /// The impl construction values ProxyMain::InitializeOnImplThread
+    /// passes to the ProxyImpl constructor (proxy_main.cc:80-89).
+    type ImplInit: Send;
+    /// The presentation callbacks and FrameTimingDetails of
+    /// ProxyMain::DidPresentCompositorFrame (proxy_main.h:71-78).
+    type PresentationFeedback: Send;
+    /// The std::unique_ptr<DrawImage> of ProxyImpl::QueueImageDecodeOnImpl.
+    type ProxyDrawImage: Send;
+}
+
+/// Source: cc/trees/proxy_common.h:20-39 (BeginMainFrameAndCommitState),
+/// filled by ProxyImpl::ScheduledActionSendBeginMainFrame
+/// (proxy_impl.cc:808-830). `reason` (BeginMainFrameReasons, metrics only)
+/// is not translated.
+pub struct BeginMainFrameAndCommitState<F: ProxyTypes> {
+    pub begin_frame_args: BeginFrameArgs,
+    pub commit_data: Box<CompositorCommitData>,
+    pub completed_image_decode_requests: Vec<(i32, bool)>,
+    pub mutator_events: Option<F::MutatorEvents>,
+    /// Bit encoding of the FrameSequenceTrackerType for active trackers.
+    pub active_sequence_trackers: u64,
+    pub evicted_ui_resources: bool,
+    pub trace_id: i64,
+    pub consecutive_no_damage_main_frames: i32,
+}
+
+/// Source: cc/trees/proxy_main.h:50-55.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CommitPipelineStage {
+    NO_PIPELINE_STAGE,
+    ANIMATE_PIPELINE_STAGE,
+    UPDATE_LAYERS_PIPELINE_STAGE,
+    COMMIT_PIPELINE_STAGE,
+}
+
+/// ProxyMain -> ProxyImpl posted tasks (cc/trees/proxy_impl.h:75-110).
+pub enum MainToImpl<F: ProxyTypes> {
+    /// ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
+    Initialize {
+        completion: CompletionEvent,
+        init: F::ImplInit,
+    },
+    /// ProxyImpl::SetNeedsCommitOnImpl (proxy_impl.cc:294-298); the
+    /// metrics-only BeginMainFrameReason is not translated.
+    SetNeedsCommit { urgent: bool, unthrottle_next: bool },
+    /// ProxyImpl::SetNeedsRedrawOnImpl.
+    SetNeedsRedraw(Rect),
+    /// ProxyImpl::SetDeferBeginMainFrameFromMain (proxy_impl.cc:232-243).
+    SetDeferBeginMainFrame(bool),
+    /// ProxyImpl::SetPauseRendering.
+    SetPauseRendering {
+        pause_rendering: bool,
+        delay_until_visibility_change: bool,
+    },
+    /// ProxyImpl::SetVisibleOnImpl (proxy_impl.cc:325).
+    SetVisible(bool),
+    /// ProxyImpl::SetTargetLocalSurfaceIdOnImpl.
+    SetTargetLocalSurfaceId(LocalSurfaceId),
+    /// ProxyImpl::NotifyNewLocalSurfaceIdExpectedWhilePaused.
+    NotifyNewLocalSurfaceIdExpectedWhilePaused,
+    /// ProxyImpl::BeginMainFrameAbortedOnImpl (proxy_impl.cc:306-323).
+    BeginMainFrameAborted {
+        reason: CommitEarlyOutReason,
+        main_thread_start_time: TimeTicks,
+        swap_promises: Vec<F::ProxySwapPromise>,
+        scroll_and_viewport_changes_synced: bool,
+    },
+    /// ProxyImpl::NotifyReadyToCommitOnImpl (proxy_impl.cc:425-493). The
+    /// completion event travels inside the lease.
+    NotifyReadyToCommit {
+        lease: ProtectedCommitLease<F>,
+        commit_state: Box<CommitState<F>>,
+        main_thread_start_time: TimeTicks,
+        scroll_and_viewport_changes_synced: bool,
+        commit_timeout: bool,
+    },
+    /// ProxyImpl::InitializeMutatorOnImpl (proxy_impl.cc:185-190).
+    SetMutator(F::LayerTreeMutator),
+    /// ProxyImpl::QueueImageDecodeOnImpl.
+    QueueImageDecode {
+        request_id: i32,
+        image: F::ProxyDrawImage,
+        speculative: bool,
+    },
+    /// ProxyMain::Stop -> DestroyProxyImplOnImplThread
+    /// (proxy_main.cc:916-946).
+    Stop { completion: CompletionEvent },
+}
+
+/// ProxyImpl -> ProxyMain posted tasks (cc/trees/proxy_main.h:57-86).
+pub enum ImplToMain<F: ProxyTypes> {
+    BeginMainFrame(Box<BeginMainFrameAndCommitState<F>>),
+    DidCompleteCommit {
+        source_frame_number: i32,
+        timestamps: CommitTimestamps,
+    },
+    DidCommitAndDrawFrame(i32),
+    DidPresentCompositorFrame {
+        frame_token: u32,
+        feedback: F::PresentationFeedback,
+    },
+    NotifyImageDecodeRequestFinished {
+        request_id: i32,
+        decode_succeeded: bool,
+    },
+    NotifyTransitionRequestFinished {
+        sequence_id: u32,
+        rects: crate::runtime::main_host::ViewTransitionElementResourceRects<F>,
+    },
+    DidCompletePageScaleAnimation,
+    DidChangeBeginFrameSourcePaused(bool),
+    BeginMainFrameNotExpectedSoon,
+    BeginMainFrameNotExpectedUntil(TimeTicks),
+    DidLoseLayerTreeFrameSink,
+}
