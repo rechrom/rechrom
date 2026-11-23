@@ -480,12 +480,39 @@ Approved for S1a-3: option (h) as above; during S1a only,
   `LayerizeFamily` for impl-provided items (`RasterizeScrollbarThumb` builds
   the impl `UIBitmap`; `SurfaceRangeTypes` is already a commit trait).
 
-Next: B2 (Blink compositing translations, `runtime/paint/*` main parts,
-`paint_services.rs`, `pac_scroll.rs`, `canvas_child_record.rs`, then the
-blanket family impls), B3 (`main_host`, `main_endpoint`,
-`main_frame_lifecycle`, animation coalescing, `LayerizeEngine`), B4 (boundary
-test to zero allowance plus the LayerizeEngine exception, layerize unit
-tests).
+- **B2 trial (not committed).** Moving only the Blink translations
+  (`third_party/blink/renderer/platform/graphics/{compositing,paint}/*`,
+  `third_party.rs`) and the adapters `paint_artifact_compositor`,
+  `paint_chunks_to_cc_layer`, `content_layer_client_impl`, `pending_layer`,
+  `property_tree_manager`, `paint_geometry`, `raster_invalidator` compiles as
+  `cargo check -p layerize` with these fixes: drop the unused
+  `layer_tree_impl::LayerTreeTypes` imports (PAC, PropertyTreeManager and
+  their adapters); layerize dependencies `browser_tracing` and `serde_json`;
+  aliases `layer_tree_impl::SelectionBoundType`, `cc::input::{
+  layer_selection_bound, main_thread_scrolling_reason, overscroll_behavior,
+  scroll_snap_data, touch_action}`, `cc::trees::{property_tree, scroll_node,
+  clip_node, transform_node, sticky_position_constraint}`; move the
+  `ConversionTransform for Transform<R>` impl from `runtime/geometry.rs` to
+  `adapter/paint_chunks_to_cc_layer.rs`; compositor stubs re-export
+  `layerize::third_party::...` and a temporary `layerize::main_types`
+  module. The app check then fails only with orphan errors (E0210/E0117),
+  because `runtime/paint.rs:405,424,439`, `runtime/paint/{conversion,
+  conversion_values, invalidation, pending_values}.rs` implement the moved
+  main traits for layerize values. So the Blink move and the `runtime/paint`
+  main parts must land in one commit (B2 is one compile unit). Those files
+  name `CpuCompositorTypes` (artifact_nodes 15x, pending_values 11x,
+  paint_services 8x, raster 6x, picture 4x) and `CpuSkiaBackend`; they
+  become generic over `F: LayerizeFamily` / `F::Skia: PaintSkiaBackend`
+  as planned. Impl-only pieces stay: `raster.rs` (tile raster bindings),
+  `record_bindings.rs`, the impl facets in `picture.rs`, and the impl
+  family's `RasterInvalidationTracking` (`runtime/picture_types.rs:112`
+  names Blink `RasterInvalidationTracking`; B4 must route it through
+  `commit` or move that associated type).
+
+Next: B2 as one commit (above), then the blanket family impls, B3
+(`main_host`, `main_endpoint`, `main_frame_lifecycle`, animation coalescing,
+`LayerizeEngine`), B4 (boundary test to zero allowance plus the
+LayerizeEngine exception, layerize unit tests).
 
 ### Plan correction: option (a) does not compile
 
