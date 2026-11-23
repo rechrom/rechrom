@@ -2300,6 +2300,7 @@ dependencies = [
  "foundation",
  "getrandom 0.4.3",
  "paint",
+ "paint_input_types",
  "paint_model",
  "paint_skia",
  "serde_json",
