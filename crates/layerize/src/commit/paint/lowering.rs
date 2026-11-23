@@ -648,11 +648,7 @@ fn ResolvedWavyDefinition(op: &PaintOp, thickness: f32) -> paint::wavy_geometry:
 #[cfg(test)]
 mod wavy_tests {
     use super::*;
-    use crate::runtime::{
-        paint::SkiaPaintDiagnostics,
-        paint_services::{CpuPaintFeatures, CpuMainPaintServices},
-        skia::SkRegion,
-    };
+    use crate::commit::main_paint_config::{CpuPaintFeatures, SkiaPaintDiagnostics};
 
     #[test]
     fn retained_custom_wave_precedes_default_wave_resolution() {
@@ -692,7 +688,7 @@ mod wavy_tests {
 
     #[test]
     fn lowering_retains_prepaint_canonical_filter_owner() {
-        let services = CpuMainPaintServices::<SkRegion>::new_cpu(
+        let services = crate::runtime::paint::NewCpuMainPaintServices(
             CpuPaintFeatures {
                 cc_slimming: false,
                 singular_transform_fix: false,
@@ -740,7 +736,7 @@ mod wavy_tests {
 
     #[test]
     fn equal_wavy_geometry_and_color_reuse_the_cached_tile_record() {
-        let services = CpuMainPaintServices::<SkRegion>::new_cpu(
+        let services = crate::runtime::paint::NewCpuMainPaintServices(
             CpuPaintFeatures {
                 cc_slimming: false,
                 singular_transform_fix: false,

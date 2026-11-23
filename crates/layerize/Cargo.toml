@@ -37,3 +37,7 @@ browser_tracing = { path = "../tracing" }
 serde_json = "1"
 # Paint metric sampler seed of the Skia paint platform (runtime/paint/services.rs).
 getrandom = "0.4"
+
+[dev-dependencies]
+# PaintResources values built by the cc/paint metadata unit tests.
+paint_input_types = { path = "../layout/paint_input_types" }

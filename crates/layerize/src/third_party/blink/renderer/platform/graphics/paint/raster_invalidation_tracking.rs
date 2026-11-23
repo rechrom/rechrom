@@ -362,7 +362,7 @@ fn PixelsDiffer(first: u32, second: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::skia::SkRegion;
+    use crate::commit::skia_region::SkRegion;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]

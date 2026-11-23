@@ -1,7 +1,7 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2, the blanket family impls, B3a-B3d done (see "S1a-3 status" and "Plan
-correction" at the end); S1a-3 B3-B4 and the thread split (S1b/S1d) are not
+Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B4 (with the blanket family impls) done (see "S1a-3 status" and "Plan
+correction" at the end); the S1a Send+Sync endpoint and real protected-sequence synchronizer, and the thread split (S1b/S1d) are not
 implemented.
 
 ## Chromium reference
@@ -686,8 +686,26 @@ Approved for S1a-3: option (h) as above; during S1a only,
   `ArtifactPaintRecord` (`runtime/paint/artifact_record.rs`) was deleted with
   the stubs (it named PAC traits); B4 re-adds it in layerize.
 
-Next: B4 (layerize unit tests: lowering.rs/metadata.rs imports and
-dev-dependencies, the ArtifactPaintRecord test).
+- **B4 done (layerize unit tests).** `cargo test --profile iteration -p
+  layerize --lib` passes (40 tests) and `--test layerize_boundary` passes.
+  Test imports now name `commit::{main_paint_config, skia_region}` and
+  `runtime::paint::NewCpuMainPaintServices`; `paint_input_types` is a
+  dev-dependency (metadata.rs). The subset and raster-invalidator tests set
+  `artifact.debug_info_enabled.0 = true`, because debug names are recorded
+  only with paint debug info enabled (paint_controller.cc:609-611) and the
+  iteration profile has no debug assertions. The ArtifactPaintRecord test is
+  back in layerize `runtime/paint/artifact_record.rs`: the custom-data
+  replacement is the family-independent `ReplaceCustomDataInRecord<R>`
+  (the family impl delegates to it), tested over SkRegion; the trivial
+  `ops()` -> `ArtifactRecordOp` mapping has no unit test any more.
+
+S1a remaining (before S1b): make `CpuMainHostEndpoint` /
+`MainHostEffectSink` and the paint services lent to `FinishCommit`
+`Send + Sync` (blocked by the non-Send mutator backend in the compositor's
+`AnimationHostOwner`), and replace the single-sequence protected-sequence
+asserts in `runtime/main_endpoint.rs` with a real synchronizer.
+`LayerizeFamily::UpdateMainPropertyTrees` is a hook only until
+draw_property_utils is classified (S4).
 
 ### Plan correction: option (a) does not compile
 

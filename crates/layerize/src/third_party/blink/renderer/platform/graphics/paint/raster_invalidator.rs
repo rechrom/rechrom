@@ -728,12 +728,12 @@ impl<M: RasterInvalidationTypes> RasterInvalidationSink for RasterInvalidatorSin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commit::skia_region::SkRegion;
     use crate::runtime::{
         paint::{
             CpuGeometryMapper, CpuPaintRecord, CpuRasterTrackingServices, CpuTrackingBitmap,
             PaintArtifact, PaintChunk, PaintChunkSubset, PropertyTreeState,
         },
-        skia::SkRegion,
     };
     use paint::{
         display_item_id::{DisplayItemId, DisplayItemIdType},
@@ -803,6 +803,9 @@ mod tests {
 
     fn artifact(chunks: Vec<PaintChunk>) -> Arc<PaintArtifact> {
         let mut artifact = PaintArtifact::default();
+        // Debug names are recorded only with paint debug info enabled
+        // (paint_controller.cc:609-611), which DCHECK builds imply.
+        artifact.debug_info_enabled.0 = true;
         for chunk in &chunks {
             artifact.RecordDebugInfo(
                 chunk.id.client_id as usize,

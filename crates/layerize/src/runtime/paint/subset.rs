@@ -200,6 +200,9 @@ mod tests {
         let mut artifact = PaintArtifact::default();
         artifact.chunks = vec![first, second].into();
         artifact.display_items = vec![item(); 3].into();
+        // Debug names are recorded only with paint debug info enabled
+        // (paint_controller.cc:609-611), which DCHECK builds imply.
+        artifact.debug_info_enabled.0 = true;
         artifact.RecordDebugInfo(7, Arc::<str>::from("source-client"), 11);
         Arc::new(artifact)
     }
