@@ -46,9 +46,7 @@ impl ImageLease {
     fn image(&self) -> &paint::paint_engine::LayoutPaintImage {
         &self
             .record
-            .artifact()
-            .resources
-            .as_ref()
+            .resources()
             .expect("validated native image catalog")
             .images[self.catalog_index]
     }
@@ -81,9 +79,7 @@ impl CpuPaintImage {
         container: Option<&paint::paint_engine::DocumentImageContainerKey>,
     ) -> Result<Self, CpuPaintImageInputError> {
         let (catalog_index, image) = record
-            .artifact()
-            .resources
-            .as_ref()
+            .resources()
             .and_then(|r| {
                 r.images
                     .iter()

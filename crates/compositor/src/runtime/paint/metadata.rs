@@ -115,9 +115,7 @@ pub(crate) fn image_usage(
     // PaintOpBuffer metadata only marks lazy PaintImages as discardable; the
     // canvas pixels remain in the artifact's canvas catalog for raster replay.
     if record
-        .artifact()
-        .resources
-        .as_ref()
+        .resources()
         .is_some_and(|resources| {
             resources
                 .canvases

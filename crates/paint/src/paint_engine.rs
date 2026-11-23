@@ -7,7 +7,8 @@ use layout::fragment::ResidentBoxGeometry as _;
 use std::sync::Arc;
 pub mod drag_image;
 
-use paint_input_types::PaintResources;
+// Immutable resource catalog retained by compositor PaintRecord leases.
+pub use paint_input_types::PaintResources;
 pub use layout::paint::RasterEffectOutset;
 
 pub use paint_input_types::paint_input::{

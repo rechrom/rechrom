@@ -132,11 +132,24 @@ impl PaintInput {
 }
 
 /// An immutable record lease over exactly the producer's resident replay range.
-/// Retaining the artifact also retains the corresponding image/font resources;
-/// it does not clone PaintArtifact, semantic items, chunks or replay commands.
+///
+/// The lease retains only the artifact's shared replay operations, the
+/// image/font resources those operations sample and the resource-content
+/// revision sidecar, never the whole `PaintArtifact`. Blink's cc::PaintRecord
+/// likewise owns only its PaintOpBuffer (and the PaintImages inside it); the
+/// PaintChunk property-tree states that produced it stay with the main-thread
+/// PaintArtifact. Raster and impl-side owners receive these leases, so Blink
+/// paint property nodes stay on the Page document sequence.
+/// Source: cc/paint/paint_record.h (PaintRecord wraps sk_sp<PaintOpBuffer>);
+///         third_party/blink/renderer/platform/graphics/compositing/
+///         paint_chunks_to_cc_layer.cc (records receive draw ops only).
 #[derive(Clone)]
 pub struct PaintRecord {
-    artifact: Arc<PaintArtifact>,
+    items: Arc<Vec<PaintOp>>,
+    resources: Option<Arc<paint::paint_engine::PaintResources>>,
+    // Resource pixels may change without replacing `resources`; the sidecar
+    // is replaced on every such change and keeps SameSource exact.
+    content_revisions: Arc<Vec<Vec<(u64, u64)>>>,
     range: Range<usize>,
 }
 
@@ -144,7 +157,9 @@ impl PaintRecord {
     pub fn from_artifact(artifact: Arc<PaintArtifact>) -> Self {
         let end = artifact.items.len();
         Self {
-            artifact,
+            items: Arc::clone(&artifact.items),
+            resources: artifact.resources.clone(),
+            content_revisions: Arc::clone(&artifact.image_content_revisions),
             range: 0..end,
         }
     }
@@ -152,19 +167,31 @@ impl PaintRecord {
         let range = item.record_begin..item.record_end;
         artifact.items.get(range.clone())?;
         Some(Self {
-            artifact: Arc::clone(artifact),
+            items: Arc::clone(&artifact.items),
+            resources: artifact.resources.clone(),
+            content_revisions: Arc::clone(&artifact.image_content_revisions),
             range,
         })
     }
-    pub fn artifact(&self) -> &Arc<PaintArtifact> {
-        &self.artifact
+    /// The producer's immutable resource catalog sampled by these operations.
+    pub fn resources(&self) -> Option<&Arc<paint::paint_engine::PaintResources>> {
+        self.resources.as_ref()
     }
     pub fn ops(&self) -> &[PaintOp] {
-        &self.artifact.items[self.range.clone()]
+        &self.items[self.range.clone()]
     }
-    /// The same immutable replay range of the same artifact allocation.
+    /// The same immutable replay range over the same operation, resource and
+    /// resource-revision allocations. A property-only artifact replacement
+    /// retains all three, so its records replay identically.
     pub fn SameSource(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.artifact, &other.artifact) && self.range == other.range
+        Arc::ptr_eq(&self.items, &other.items)
+            && self.range == other.range
+            && Arc::ptr_eq(&self.content_revisions, &other.content_revisions)
+            && match (&self.resources, &other.resources) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
     pub fn is_empty(&self) -> bool {
         self.range.is_empty()
