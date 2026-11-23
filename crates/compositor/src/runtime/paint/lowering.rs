@@ -650,7 +650,7 @@ mod wavy_tests {
     use super::*;
     use crate::runtime::{
         paint::SkiaPaintDiagnostics,
-        paint_services::{CpuPaintFeatures, CpuPaintServices},
+        paint_services::{CpuPaintFeatures, CpuMainPaintServices},
         skia::SkRegion,
     };
 
@@ -692,7 +692,7 @@ mod wavy_tests {
 
     #[test]
     fn lowering_retains_prepaint_canonical_filter_owner() {
-        let services = CpuPaintServices::<SkRegion>::new_cpu(
+        let services = CpuMainPaintServices::<SkRegion>::new_cpu(
             CpuPaintFeatures {
                 cc_slimming: false,
                 singular_transform_fix: false,
@@ -740,7 +740,7 @@ mod wavy_tests {
 
     #[test]
     fn equal_wavy_geometry_and_color_reuse_the_cached_tile_record() {
-        let services = CpuPaintServices::<SkRegion>::new_cpu(
+        let services = CpuMainPaintServices::<SkRegion>::new_cpu(
             CpuPaintFeatures {
                 cc_slimming: false,
                 singular_transform_fix: false,

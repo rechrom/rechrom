@@ -374,8 +374,53 @@ Done:
   `LayerImplTransform`, `ConversionTransform`, through the new public
   `Transform::{FromSource, MapPoint, MapRect, FlattenedSkMatrix, GetInverse}`).
   layerize now depends on `paint_model` and `paint_skia`.
+- **Paint service split (S1a-2c part 1).** The `CpuPaintServices` struct
+  (`runtime/paint_services.rs`) is now `CpuMainPaintServices` (PAC, chunk
+  conversion, GeometryMapper, PaintRecord production, main Layer services;
+  the unrelated `paint::CpuPaintServices` trait is unchanged).
+  `CpuImplPaintServices` holds only the shared `CpuPaintValueServices` lease
+  (`CpuMainPaintServices::ImplServices()`). `engine_factory::Create` takes
+  both; the impl image-decode factory uses `impl_paint`. Nothing else in the
+  old struct was impl-side. `EngineCore` still holds the main services until
+  S1a-3.
 
-Next: S1a-2c, then S1a-3.
+**PaintRecord value types (S1a-2c part 2): not moved; analysis.**
+The impl half names `CpuPaintRecord<R>` (`engine.rs:543`,
+`runtime/images.rs:161,1005`, `runtime/picture_types.rs:40,113,162,177`,
+`runtime/software_image_decode_cache.rs:420`), so they must be commit
+vocabulary before `runtime/paint/*` moves. `runtime/paint/record.rs` depends on:
+
+- `CpuSkiaBackend` (`runtime/types.rs`): `SkRegionBackend +
+  RoundedRectTransformBackend + SkiaValueBackend<Filters = FilterOperations>`.
+  Only `SkiaValueBackend`'s extra filter facets (RenderSurface/Occlusion/
+  Damage) are impl-local.
+- `adapter::display_item_list` and `cc::paint::display_item_list`
+  (`DisplayItemList`, `RasterInducingScrollInfo`): cc/paint, used by both
+  threads in Chromium.
+- `ContentColorUsage`: already a `compositor_frame::surface_id` value.
+- `ScrollOffsetMap`: `compositor_tile::prioritized_tile_types` alias
+  (`BTreeMap<ElementId, PointF>`).
+- `RasterColorSpace` (`runtime/resources.rs:101`), via `TargetColorParams` /
+  `HostTargetColorParams` and `HostImageDecodingMode`
+  (`adapter/layer_tree_host_impl.rs:1889,2203`).
+
+S1a-3 needs this, because `runtime/paint/*` moves into layerize and the impl
+half keeps using the record types. Smallest classification proposed:
+1. `layerize::commit::PaintSkiaBackend = SkRegionBackend +
+   RoundedRectTransformBackend + MainSkiaBackend<Filters = FilterOperations>
+   + Send + Sync + 'static`; compositor's `CpuSkiaBackend` becomes
+   `PaintSkiaBackend + SkiaValueBackend` (blanket), and record code bounds on
+   `PaintSkiaBackend`.
+2. cc/paint (`DisplayItemList`, the display_item_list facets, record.rs,
+   raster.rs, image_values.rs, worklet.rs, picture.rs value parts) becomes a
+   `layerize::commit::paint` module: it is cc/paint, shared by both threads.
+3. `ScrollOffsetMap` and `ContentColorUsage` are re-exported by commit from
+   their sub-crates (like the other shared cc values).
+4. `RasterColorSpace`, `HostTargetColorParams`, `HostImageDecodingMode` are
+   plain values: move them into commit (gfx::ColorSpace / cc image decode
+   values), compositor re-exports.
+
+Next: that classification, then S1a-3.
 
 ### Plan correction: option (a) does not compile
 

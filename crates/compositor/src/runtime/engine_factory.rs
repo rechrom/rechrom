@@ -29,7 +29,7 @@ use super::{
     main_endpoint::EngineMainEndpoint,
     main_host::CpuMainLayerHost,
     metrics::{MetricsConfig, MetricsServices},
-    paint_services::CpuPaintServices,
+    paint_services::{CpuImplPaintServices, CpuMainPaintServices},
     render::{RenderConfig, RenderServices},
     resource_events::ResourceEffects,
     resource_services::{PictureReleaseServices, ResourceServices},
@@ -131,7 +131,8 @@ pub(crate) fn Create(
     config: CompositorConfig,
     executors: CompositorExecutors,
     options: FactoryOptions,
-    paint: Arc<CpuPaintServices<SkRegion>>,
+    paint: Arc<CpuMainPaintServices<SkRegion>>,
+    impl_paint: CpuImplPaintServices<SkRegion>,
 ) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
@@ -186,7 +187,7 @@ pub(crate) fn Create(
             Arc::new(super::raster_resources::EngineRasterFailure(
                 commands.clone(),
             )),
-            paint.PaintValues(),
+            impl_paint.PaintValues(),
         ),
     ));
     let images = CpuImageServices::new(caches, checker);
@@ -646,7 +647,7 @@ pub(crate) fn CreateDefault(
         });
     }
     let options = FactoryOptions::cpu_default(&config);
-    let paint = CpuPaintServices::<SkRegion>::new_cpu(
+    let paint = CpuMainPaintServices::<SkRegion>::new_cpu(
         super::paint_services::CpuPaintFeatures {
             cc_slimming: true,
             singular_transform_fix: true,
@@ -668,5 +669,8 @@ pub(crate) fn CreateDefault(
         },
     )
     .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))?;
-    Create(config, executors, options, Arc::new(paint))
+    // The main half keeps the PAC/conversion/recording owner; the impl half
+    // receives only the shared paint value capability for tiles and images.
+    let impl_paint = paint.ImplServices();
+    Create(config, executors, options, Arc::new(paint), impl_paint)
 }

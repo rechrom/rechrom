@@ -10,7 +10,7 @@ use crate::{
         prioritized_tile::ScrollOffsetMap,
     },
     runtime::{
-        paint_services::{CpuPaintFeatures, CpuPaintPlatform, CpuPaintServices},
+        paint_services::{CpuPaintFeatures, CpuPaintPlatform, CpuMainPaintServices},
         skia::SkRegion,
     },
 };
@@ -531,7 +531,7 @@ impl CpuRasterTrackingServices<SkRegion> for SkiaRasterTrackingServices {
         eprintln!("additional Paint under-invalidations suppressed");
     }
 }
-impl CpuPaintServices<SkRegion> {
+impl CpuMainPaintServices<SkRegion> {
     /// The single default CPU assembly constructor. All normal Paint services
     /// are real value/record owners; unsupported pixel diagnostics fail here.
     pub fn new_cpu(

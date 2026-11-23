@@ -57,13 +57,38 @@ pub trait CpuPaintPlatform<R: CpuSkiaBackend>: Send + Sync {
     fn CreatePictureRecorder(&self) -> paint::CpuPictureRecorder<R>;
 }
 
-pub struct CpuPaintServices<R: CpuSkiaBackend> {
+/// Main-thread (Layerize) paint services: PaintArtifactCompositor and
+/// PaintChunksToCcLayer conversion, the GeometryMapper, PaintRecord
+/// production and the main cc Layer services. Chromium reaches these from
+/// LocalFrameView::PushPaintArtifactToCompositor on the main thread
+/// (local_frame_view.cc:3348). The impl half never holds this owner; it
+/// receives [`CpuImplPaintServices`].
+pub struct CpuMainPaintServices<R: CpuSkiaBackend> {
     pub features: CpuPaintFeatures,
     values: Arc<dyn paint::CpuPaintValueServices<R>>,
     mapper: Arc<CpuGeometryMapper<R>>,
     platform: Arc<dyn CpuPaintPlatform<R>>,
 }
-impl<R: CpuSkiaBackend> CpuPaintServices<R> {
+/// Impl-thread paint value services: the immutable cc/paint value
+/// capabilities that LayerTreeHostImpl's tile, raster and image-decode owners
+/// replay committed PaintRecords with (cc/tiles/software_image_decode_cache.cc,
+/// cc/raster/raster_source.cc). It shares the value capability with the main
+/// half (cc/paint is used by both threads) and holds nothing main-owned.
+pub struct CpuImplPaintServices<R: CpuSkiaBackend> {
+    values: Arc<dyn paint::CpuPaintValueServices<R>>,
+}
+impl<R: CpuSkiaBackend> CpuImplPaintServices<R> {
+    pub(crate) fn PaintValues(&self) -> Arc<dyn paint::CpuPaintValueServices<R>> {
+        self.values.clone()
+    }
+}
+impl<R: CpuSkiaBackend> CpuMainPaintServices<R> {
+    /// The impl half's lease of the shared paint value capability.
+    pub fn ImplServices(&self) -> CpuImplPaintServices<R> {
+        CpuImplPaintServices {
+            values: self.values.clone(),
+        }
+    }
     pub fn new(
         features: CpuPaintFeatures,
         values: Arc<dyn paint::CpuPaintValueServices<R>>,
@@ -105,7 +130,7 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
 // Source: cc/layers/layer.cc:79,97-100. AtomicSequenceNumber starts at zero;
 // canonical Layer::GetNextLayerId adds one at its original source call site.
 static NEXT_LAYER_ID: AtomicI32 = AtomicI32::new(0);
-impl<R: CpuSkiaBackend> MainLayerServices for CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> MainLayerServices for CpuMainPaintServices<R> {
     fn TraceLayer(&self, event: &str, element: Option<ElementId>) {
         self.platform.TraceLayer(event, element)
     }
@@ -126,7 +151,7 @@ impl<R: CpuSkiaBackend> MainLayerServices for CpuPaintServices<R> {
     }
 }
 impl<R: CpuSkiaBackend> RecordingSourceServices<paint::CpuRecordingTypes<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn CreateRasterSource(
         &self,
@@ -138,7 +163,7 @@ impl<R: CpuSkiaBackend> RecordingSourceServices<paint::CpuRecordingTypes<R>>
         self.platform.TraceScope(category, name, count)
     }
 }
-impl<R: CpuSkiaBackend> PictureLayerServices<CpuCompositorTypes<R>> for CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> PictureLayerServices<CpuCompositorTypes<R>> for CpuMainPaintServices<R> {
     fn CreateObjectTracker(&self, id: i32) -> paint::ObjectTracker {
         self.platform.CreateObjectTracker(id)
     }
@@ -155,14 +180,14 @@ impl<R: CpuSkiaBackend> PictureLayerServices<CpuCompositorTypes<R>> for CpuPaint
         self.platform.CreatePictureRecorder()
     }
 }
-impl<R: CpuSkiaBackend> SynchronizationTrace for CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> SynchronizationTrace for CpuMainPaintServices<R> {
     fn TraceScope(&self, name: &str, count: Option<usize>) {
         self.platform.TraceScope("cc", name, count)
     }
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::paint_artifact_compositor::SynthesizedClipPaintServices<CpuCompositorTypes<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn CreateDisplayItemList(&self) -> paint::ContentDisplayItemList<R> {
         Self::CreateDisplayItemList(self)
@@ -185,14 +210,14 @@ impl<R: CpuSkiaBackend>
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_layer::SolidColorLayerServices<CpuCompositorTypes<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn CreateSolidPictureRecorder(&self) -> paint::CpuPictureRecorder<R> {
         self.platform.CreatePictureRecorder()
     }
 }
 impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingLayerServices<CpuCompositorTypes<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 where
     CpuCompositorTypes<R>: crate::adapter::pending_layer::PendingLayerTypes,
 {
@@ -218,7 +243,7 @@ use crate::third_party::blink::renderer::platform::graphics::paint::{
 type Root<R> = CpuCompositorTypes<R>;
 // Source primitive: ui/gfx/color_utils.cc:577-614. Native SkColor channels are
 // quantized before blending and ClampRound'ed afterwards, as in the source.
-impl<R: CpuSkiaBackend> PendingLayerColor for CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> PendingLayerColor for CpuMainPaintServices<R> {
     fn GetResultingPaintColor(&self, f: Color4f, b: Color4f) -> Color4f {
         let q = |v: f32| (v * 255.).round().clamp(0., 255.);
         let (fa, ba) = (q(f.alpha), q(b.alpha));
@@ -252,7 +277,7 @@ impl<R: CpuSkiaBackend> PendingLayerColor for CpuPaintServices<R> {
         }
     }
 }
-impl<R: CpuSkiaBackend> MaskGeometryMapper for CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> MaskGeometryMapper for CpuMainPaintServices<R> {
     type TransformPaintPropertyNode = paint::TransformNode<R>;
     fn SourceToDestinationRectFromRoot(&self, d: &Self::TransformPaintPropertyNode, r: &mut RectF) {
         GeometryMapper::<CpuGeometryMapper<R>>::SourceToDestinationRect(
@@ -264,7 +289,7 @@ impl<R: CpuSkiaBackend> MaskGeometryMapper for CpuPaintServices<R> {
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::content_layer_client_impl::ContentLayerClientServices<Root<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn CreateDisplayItemList(&self) -> paint::ContentDisplayItemList<R> {
         Self::CreateDisplayItemList(self)
@@ -348,7 +373,7 @@ impl<R: CpuSkiaBackend>
     }
 }
 impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksServices<Root<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn PaintRecord(
         &self,
@@ -521,7 +546,7 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksSer
     }
 }
 
-impl<R: CpuSkiaBackend> PendingLayerGeometry<Root<R>> for CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> PendingLayerGeometry<Root<R>> for CpuMainPaintServices<R> {
     fn VisibilityLimit(&self, s: &paint::PropertyTreeState<R>) -> Option<RectF> {
         GeometryMapper::<CpuGeometryMapper<R>>::VisibilityLimit(
             &self.mapper.with_trees(s.transform().trees().clone()),
@@ -627,7 +652,7 @@ impl<R: CpuSkiaBackend> PendingLayerGeometry<Root<R>> for CpuPaintServices<R> {
     }
 }
 impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::SynthesizedClipServices<Root<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn NewUniqueObjectElementId(&self) -> ElementId {
         <Root<R> as crate::adapter::property_tree_manager::PropertyTreeManagerTypes>::NewUniqueElementId()
@@ -665,7 +690,7 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::SynthesizedCl
 
 impl<R: CpuSkiaBackend>
     crate::adapter::paint_artifact_compositor::PaintArtifactCompositorServices<Root<R>>
-    for CpuPaintServices<R>
+    for CpuMainPaintServices<R>
 {
     fn VlogIsOn(&self, l: i32) -> bool {
         self.platform.VlogIsOn(l)
@@ -772,7 +797,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingLayerServices<Root
         crate::cc::layers::solid_color_layer::SolidColorLayer::Create(services)
     }
 }
-impl<R: CpuSkiaBackend> CpuPaintServices<R> {
+impl<R: CpuSkiaBackend> CpuMainPaintServices<R> {
     /// Engine-internal construction of the actual canonical PAC. The caller
     /// attaches RootLayer to CpuMainLayerHost using its live main context.
     pub(crate) fn CreateCompositor(&self,callbacks:std::rc::Weak<dyn crate::cc::trees::property_tree::ScrollCallbacks>,c:&mut LayerContext<'_,Root<R>>)->crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<Root<R>>{
@@ -1034,4 +1059,4 @@ const _: fn() = || {
     require::<Root<crate::runtime::skia::SkRegion>>();
 };
 
-impl<R:CpuSkiaBackend> crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJsonColor for CpuPaintServices<R>{fn ColorNameForLayoutTree(&self,color:Color4f)->String{self.platform.ColorNameForLayoutTree(color)}}
+impl<R:CpuSkiaBackend> crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJsonColor for CpuMainPaintServices<R>{fn ColorNameForLayoutTree(&self,color:Color4f)->String{self.platform.ColorNameForLayoutTree(color)}}
