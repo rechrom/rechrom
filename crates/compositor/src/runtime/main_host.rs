@@ -774,7 +774,7 @@ impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerHost<R> {
 impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
     fn CreateUIResource(
         &mut self,
-        bitmap: <B<R> as crate::adapter::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap,
+        bitmap: <B<R> as layerize::commit::CommitTypes>::UIResourceBitmap,
     ) -> UIResourceId {
         use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
         let id = UIResourceId(self.next_ui_resource_id);

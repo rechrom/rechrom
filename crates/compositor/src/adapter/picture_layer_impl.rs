@@ -16,7 +16,7 @@ pub trait PictureLayerImplTypes:
         PaintImageId = PaintImageId,
         Input: PicturePaintWorkletInput<Self::PropertyKey, Self::PropertyValue>,
     > + PictureLayerTilingTypes<
-        RegionBackend = <Self as LayerTreeTypes>::RegionBackend,
+        RegionBackend = <Self as layerize::commit::CommitTypes>::RegionBackend,
         OcclusionTransform = <Self as layerize::commit::CommitTypes>::Transform,
         RasterSource: PictureRasterSource<DisplayItemList: PictureDisplayItemListFor<Self>>,
         PaintWorkletRecordMap = PaintWorkletRecordMap<

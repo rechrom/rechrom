@@ -17,11 +17,11 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> HostImplLayer
 {
     type Types = B;
     type Transform = B::Transform;
-    type RegionBackend = <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend;
+    type RegionBackend = <B as layerize::commit::CommitTypes>::RegionBackend;
     // Source virtuals: cc/layers/layer_impl.h:494; picture_layer_impl.h:67.
     fn GetInvalidationRegionForDebugging(
         &self,
-    ) -> Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend> {
+    ) -> Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         match self {
             Self::Picture(layer) => layer.GetInvalidationRegionForDebugging(),
             _ => self.impl_base().GetInvalidationRegionForDebugging(),

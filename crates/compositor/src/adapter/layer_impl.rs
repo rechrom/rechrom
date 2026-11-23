@@ -37,7 +37,8 @@ pub trait LayerImplTypes:
         NodeId: LayerImplNodeId,
         Transform: LayerImplTransform,
         Layer: LayerImplOwner<Self>,
-    > + FrameDataTypes<ResourceId = ResourceId, RenderPass: LayerImplRenderPass<Self>>
+    > + super::layer_tree_impl::LayerTreeTypes
+    + FrameDataTypes<ResourceId = ResourceId, RenderPass: LayerImplRenderPass<Self>>
 {
     type SharedQuadState: LayerImplSharedQuadState<Self::Transform>;
     type DrawQuad: LayerImplDrawQuad;

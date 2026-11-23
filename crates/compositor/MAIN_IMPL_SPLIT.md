@@ -1,8 +1,7 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c implemented. S1a has started: the `layerize` crate and its
-`commit` vocabulary exist; see "S1a progress" at the end. The thread split
-(S1b/S1d) is not implemented.
+Status: S1c done. S1a-1 done (see "S1a-1 status" at the end); S1a-2/3
+and the thread split (S1b/S1d) are not implemented.
 
 ## Chromium reference
 
@@ -253,3 +252,60 @@ Resolution (one pass of its own):
    implements `CommitTypes` and the main traits) and the impl family, which
    names the main family for commit values.
 4. Move the files listed in "Main half" with `git mv`.
+
+### S1a-1 status (commits bde07277..HEAD)
+
+Done:
+
+- `layerize::commit` holds the plain commit values, `LayerTreeDebugState`, the
+  cc property trees and their service traits, `CommitState` /
+  `ThreadUnsafeCommitState` / `CommitTimestamps`, `CommitTypes` and
+  `CommitStateTypes`.
+- `CommitTypes` declares the property-tree parameters (`Transform`, `Filters`,
+  `Path`, `RenderSurface`, `CopyOutputRequest`), `RegionBackend`, `Layer` (the
+  push target), `UIResourceBitmap` and the CommitState payload types.
+  `LayerTreeTypes` (impl) builds on it and restates the impl-only bounds there.
+  `ImplTreeTransform` names the impl transform bound for facets that bind
+  `LayerTreeTypes<Transform = T>`.
+- Main layers create LayerImpls only through `main_layer::LayerImplFactory`
+  (one method per Layer::CreateLayerImpl override). The tree synchronizer
+  lends it over the pending tree with `SyncTypes::WithLayerImplFactory`.
+- `MainLayerTypes` builds on `CommitTypes`, not `LayerTreeTypes`. Its
+  remaining impl-side bounds (`DrawFilters`, `LayerTreeTransform`,
+  `SkRegionBackend`, `MainLayerImpl`, `MainLayerCopyOutputRequest`) are compositor
+  traits that have to move with the main half (S1a-2/3) or into
+  `layerize::commit`.
+- `LayerImplTypes` names `LayerTreeTypes` explicitly. It used to reach it only
+  through `MainLayerTypes`.
+
+### Compositor sub-crate items used by layerize (decide in S4)
+
+These are compositor-engine packages. In S4, each used item is either
+classified as a shared cc value root (like Layout's shared roots) or moved into
+`layerize::commit`. Nothing is changed yet.
+
+- `compositor_tree`: `geometry::*` (gfx value types); `property_types` (trace
+  vocabulary, `FilterOperations`, `MaskFilterInfo`, `BlendMode`,
+  `SubtreeCaptureId`, `ViewTransitionElementResourceId`, `InlinedVector`, the
+  `PropertyPath` base trait); `property_tree` (`PropertyTree`, `PropertyNode`,
+  `ClipTree`, `PropertyTreesState`, `PropertyTreesCachedData`,
+  `PropertyTreesOwnerId`, draw-transform/sticky/anchor data, and the transform
+  update policy functions); `transform::PropertyTreeTransform`; `effect_node`
+  (`EffectTreeFilters` and the effect policies); `effect_tree_update::
+  EffectNodeUpdateResult`; `render_surface_lifecycle::PlanRenderSurfaceLifecycle`;
+  `scroll_delta_collection::{CollectScrollDeltas, PullAllScrollDeltasForTesting}`;
+  the modules `clip_node`, `transform_node`, `target_property`, `property_ids`,
+  `viewport_property_ids`, `synced_property`, `math_util`, `commit_types`.
+- `compositor_input`: `scroll_decision::DecideScrollBy`; the modules
+  `browser_controls_params`, `compositor_commit_data`,
+  `event_listener_properties`, `input_types` (`ElementId`),
+  `layer_selection_bound`, `main_thread_scrolling_reason`,
+  `overscroll_behavior`, `page_scale_animation`, `scroll_snap_data`,
+  `scroll_source_type`.
+- `compositor_draw`: `Color4f`; the module `damage_reason`;
+  `render_surface_policy::RenderSurfacePropertyChangedFlags`.
+- `compositor_animation`: the module `property_animation_state`.
+- `compositor_scheduler`: `TimeDelta`, `TimeTicks`, which it re-exports from
+  `scroll_animation`.
+- Also `skia::SkPath`, for the `geometry::Path` impl in
+  `layerize/src/skia_path.rs`.

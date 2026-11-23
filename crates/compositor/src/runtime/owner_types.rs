@@ -29,6 +29,9 @@ use crate::{
 
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
     type Transform = Transform<R>;
+    type RegionBackend = R;
+    type Layer = CompositorLayer<Self>;
+    type UIResourceBitmap = super::host_resources::UIBitmap;
     type Filters = R::Filters;
     type Path = R::Path;
     type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
@@ -118,13 +121,10 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type CommitState = CommitState<Self>;
     type UnsafeCommitState = ThreadUnsafeCommitState<Self>;
     type Synchronizer = crate::cc::trees::tree_synchronizer::TreeSynchronizer;
-    type RegionBackend = R;
-    type Layer = CompositorLayer<Self>;
     type PictureLayer = PictureLayerImpl<Self>;
     type ScrollbarLayer = ScrollbarLayerImplBase<Self>;
     type BeginMainFrameReason = super::input::BeginMainFrameReason;
     type LayerList = OwnedLayerImplList<CompositorLayer<Self>>;
-    type UIResourceBitmap = super::host_resources::UIBitmap;
     type SelectionBound = super::metadata::SelectionBound;
     type DecodingMode = crate::adapter::picture_layer_impl::PictureImageDecodingMode;
     type Settings = crate::cc::trees::layer_tree_settings::LayerTreeSettings;
@@ -178,7 +178,7 @@ impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerType
         scrollbar: &Self::Scrollbar,
         logical_size: crate::adapter::geometry::Size,
         pixel_size: crate::adapter::geometry::Size,
-    ) -> <Self as crate::adapter::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap {
+    ) -> <Self as layerize::commit::CommitTypes>::UIResourceBitmap {
         use crate::cc::input::scrollbar::Scrollbar as _;
         let mut canvas = super::paint::ScrollbarCanvas::new(logical_size, pixel_size);
         let mut adapter = scrollbar.clone();

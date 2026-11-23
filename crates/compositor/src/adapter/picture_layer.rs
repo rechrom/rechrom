@@ -22,7 +22,7 @@ pub trait PictureLayerTypes:
 >
 {
     type Recording: RecordingSourceTypes<
-            RegionBackend = <Self as LayerTreeTypes>::RegionBackend,
+            RegionBackend = <Self as layerize::commit::CommitTypes>::RegionBackend,
             DisplayItemList: PictureDisplayItemList<Self>,
             DirectlyCompositedImageInfo: Send + Sync + 'static,
             RasterSource: Send + Sync + 'static,
@@ -78,7 +78,7 @@ pub trait PictureLayerImplTarget<B: PictureLayerTypes>: MainLayerImpl<B> {
     fn StageNewRasterSourceForCommit(
         &mut self,
         source: Arc<<B::Recording as RecordingSourceTypes>::RasterSource>,
-        invalidation: Region<<B as LayerTreeTypes>::RegionBackend>,
+        invalidation: Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
     );
     fn set_should_batch_updated_tiles(&mut self);
 }

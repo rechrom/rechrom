@@ -17194,7 +17194,7 @@ where
     fn PendingInvalidationById(
         &self,
         id: crate::adapter::picture_layer_tiling::PendingInvalidationId,
-    ) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.PictureByClient(crate::adapter::picture_layer_tiling::PictureLayerTilingClientId(id.0))
             .0
             .InvalidationForTesting()
@@ -17473,7 +17473,7 @@ where
     fn PendingInvalidationById(
         &self,
         id: crate::adapter::picture_layer_tiling::PendingInvalidationId,
-    ) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.queries.PendingInvalidationById(id)
     }
 }

@@ -19,12 +19,12 @@ pub trait LayerValue: Clone + Default + PartialEq + Send + Sync {
 pub trait MainLayerTypes:
     'static
     + super::commit_state::CommitStateTypes
-    + LayerTreeTypes<
+    + layerize::commit::CommitTypes<
         Layer: MainLayerImpl<Self>,
-        Transform: Send + Sync + 'static,
-        Filters: Send + Sync + 'static,
+        Transform: super::layer_tree_impl::LayerTreeTransform + Send + Sync + 'static,
+        Filters: super::draw_property::DrawFilters + Send + Sync + 'static,
         Path: MainLayerPath + Send + Sync + 'static,
-        RegionBackend: Send + Sync + 'static,
+        RegionBackend: super::region_backend::SkRegionBackend + Send + Sync + 'static,
         CopyOutputRequest: MainLayerCopyOutputRequest<TaskRunner = Self::TaskRunner>
                                + Send
                                + Sync
@@ -85,7 +85,7 @@ pub trait MainLayerHostRead<B: MainLayerTypes>: ProtectedSequenceSynchronizer {
 pub trait MainLayerHost<B: MainLayerTypes>: MainLayerHostRead<B> {
     fn CreateUIResource(
         &mut self,
-        bitmap: <B as LayerTreeTypes>::UIResourceBitmap,
+        bitmap: <B as layerize::commit::CommitTypes>::UIResourceBitmap,
     ) -> super::layer_tree_impl::UIResourceId;
     fn DeleteUIResource(&mut self, id: super::layer_tree_impl::UIResourceId);
     fn AddViewTransitionRequest(&mut self, request: Box<SelfViewTransitionRequest<B>>);

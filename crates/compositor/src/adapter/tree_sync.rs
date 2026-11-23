@@ -20,7 +20,7 @@ pub trait SyncTypes:
         context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, Self>,
         callback: impl FnOnce(
             &mut dyn super::main_layer::LayerImplFactory<
-                <Self as super::layer_tree_impl::LayerTreeTypes>::Layer,
+                <Self as layerize::commit::CommitTypes>::Layer,
             >,
         ) -> Output,
     ) -> Output;

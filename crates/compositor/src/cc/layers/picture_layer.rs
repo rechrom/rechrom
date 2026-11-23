@@ -64,7 +64,7 @@ pub struct PictureLayer<B: PictureLayerTypes> {
     recording_source_: ProtectedSequenceWritable<Option<Recording<B>>>,
     instrumentation_object_tracker_: ProtectedSequenceForbidden<Option<B::ObjectTracker>>,
     last_updated_invalidation_:
-        ProtectedSequenceWritable<Option<Region<<B as LayerTreeTypes>::RegionBackend>>>,
+        ProtectedSequenceWritable<Option<Region<<B as layerize::commit::CommitTypes>::RegionBackend>>>,
     update_source_frame_number_: ProtectedSequenceReadable<i32>,
 }
 impl<B: PictureLayerTypes> PictureLayer<B> {

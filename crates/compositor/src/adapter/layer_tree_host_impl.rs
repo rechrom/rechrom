@@ -158,7 +158,7 @@ pub trait HostImplTypes:
         LayerTraceValue = Self::HostTraceValue,
         Settings = crate::cc::trees::layer_tree_settings::LayerTreeSettings,
         BeginMainFrameReason = <Self as super::input_services::InputHostTypes>::BeginMainFrameReason,
-        Layer: super::render_surface_impl::RenderSurfaceLayer<Self> + HostMetadataLayer<Self> + HostImplLayer<Types=Self,Transform=<Self as layerize::commit::CommitTypes>::Transform,RegionBackend=<Self as super::layer_tree_impl::LayerTreeTypes>::RegionBackend> + HostImplHitTestLayer<Self> + super::tree_sync::SyncImplLayer<Self> + HostDrawLayer<Self> + HostTileLayer<Self>,
+        Layer: super::render_surface_impl::RenderSurfaceLayer<Self> + HostMetadataLayer<Self> + HostImplLayer<Types=Self,Transform=<Self as layerize::commit::CommitTypes>::Transform,RegionBackend=<Self as layerize::commit::CommitTypes>::RegionBackend> + HostImplHitTestLayer<Self> + super::tree_sync::SyncImplLayer<Self> + HostDrawLayer<Self> + HostTileLayer<Self>,
         LayerList: super::tree_sync::SyncLayerList<Self>,
         PictureLayer: super::tree_sync::SyncPictureLayer + HostTilePictureLayer,
         RenderSurface: HostDrawSurface<Self> + HostScrollRenderSurface<Self>,
@@ -1564,7 +1564,7 @@ pub mod host_impl_chunk_b {
     // Stronger external payload constraints belong only to HostImplTypes:
     // + LayerTreeTypes<Layer:HostDrawLayer<Self>+HostImplLayer<
     //     Transform=<Self as layerize::commit::CommitTypes>::Transform,
-    //     RegionBackend=<Self as LayerTreeTypes>::RegionBackend>,
+    //     RegionBackend=<Self as layerize::commit::CommitTypes>::RegionBackend>,
     //     RenderSurface:HostDrawSurface<Self>>
     // + FrameDataTypes<RenderPass:HostDrawPass<Self>,SurfaceId:Clone>.
     // HostImplTypes adds type RenderPassId:Copy+Ord+From<u64>;

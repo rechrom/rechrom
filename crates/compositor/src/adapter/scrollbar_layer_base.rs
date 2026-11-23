@@ -20,7 +20,7 @@ pub trait ScrollbarLayerTypes: MainLayerTypes<Layer: ScrollbarLayerImplTarget<Se
         scrollbar: &Self::Scrollbar,
         logical_size: super::geometry::Size,
         pixel_size: super::geometry::Size,
-    ) -> <Self as super::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap;
+    ) -> <Self as layerize::commit::CommitTypes>::UIResourceBitmap;
     /// Rechrom crosses Paint's package boundary with an immutable scrollbar
     /// snapshot instead of Blink's live WebScrollbar adapter.  A platform
     /// scrollbar animation therefore replaces only the animated fields on

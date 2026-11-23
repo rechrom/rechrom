@@ -163,7 +163,7 @@ where
     fn SetTouchActionRegion(
         &mut self,
         value: &crate::cc::layers::touch_action_region::TouchActionRegion<
-            <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+            <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
         impl_tree: &mut B::ImplContext<'_>,
     ) {
@@ -211,7 +211,7 @@ where
     fn SetMainThreadScrollHitTestRegion(
         &mut self,
         value: &crate::cc::base::region::Region<
-            <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+            <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
         impl_tree: &mut B::ImplContext<'_>,
     ) {
@@ -245,7 +245,7 @@ where
     fn SetWheelEventHandlerRegion(
         &mut self,
         value: &crate::cc::base::region::Region<
-            <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+            <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
         impl_tree: &mut B::ImplContext<'_>,
     ) {
@@ -653,21 +653,17 @@ where
     }
     fn GetAllTouchActionRegions(
         &self,
-    ) -> &crate::cc::base::region::Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().GetAllTouchActionRegions()
     }
     fn wheel_event_handler_region(
         &self,
-    ) -> impl std::ops::Deref<
-        Target = crate::cc::base::region::Region<<B as LayerTreeTypes>::RegionBackend>,
-    > + '_ {
+    ) -> &crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().wheel_event_handler_region()
     }
     fn main_thread_scroll_hit_test_region(
         &self,
-    ) -> impl std::ops::Deref<
-        Target = crate::cc::base::region::Region<<B as LayerTreeTypes>::RegionBackend>,
-    > + '_ {
+    ) -> &crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().main_thread_scroll_hit_test_region()
     }
     fn non_composited_scroll_hit_test_rects(
@@ -1306,6 +1302,6 @@ where
  fn set_has_non_animated_image_update_rect(&mut self){self.picture_impl_mut().expect("native Picture target").set_has_non_animated_image_update_rect()}
  fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}
  fn SetIsBackdropFilterMask(&mut self,value:bool,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").SetIsBackdropFilterMask(value,tree)}
- fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<B::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
+ fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<B::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
  fn set_should_batch_updated_tiles(&mut self){self.picture_impl_mut().expect("native Picture target").set_should_batch_updated_tiles()}
 }

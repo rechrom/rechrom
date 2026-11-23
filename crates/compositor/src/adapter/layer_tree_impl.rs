@@ -106,6 +106,8 @@ pub trait LayerTreeTypes:
     + 'static
     + CommitTypes<
         Transform: ImplTreeTransform,
+        RegionBackend: SkRegionBackend,
+        Layer: LayerTreeLayer<Self>,
         Filters: super::draw_property::DrawFilters,
         RenderSurface: LayerTreeSurfaceTransform<Transform = <Self as CommitTypes>::Transform>
                            + LayerTreeRenderSurface<Self>
@@ -210,14 +212,11 @@ pub trait LayerTreeTypes:
     type CommitState: LayerTreeCommitState<Self>;
     type UnsafeCommitState: LayerTreeUnsafeCommitState<Self>;
     type Synchronizer: LayerTreeSynchronizer<Self>;
-    type RegionBackend: SkRegionBackend;
-    type Layer: LayerTreeLayer<Self>;
     type PictureLayer: LayerTreePictureLayer<Self>;
     type ScrollbarLayer: LayerTreeScrollbar<Self>;
     type BeginMainFrameReason;
 
     type LayerList: LayerTreeLayerList<Self> + Default;
-    type UIResourceBitmap;
     type SelectionBound: LayerTreeSelectionBound + Clone + Default;
     type DecodingMode;
     type Settings: LayerTreeSettings;
@@ -332,10 +331,10 @@ pub trait LayerTreeLayer<B: LayerTreeTypes> {
     fn GetAllTouchActionRegions(&self) -> &crate::cc::base::region::Region<B::RegionBackend>;
     fn wheel_event_handler_region(
         &self,
-    ) -> impl std::ops::Deref<Target = crate::cc::base::region::Region<B::RegionBackend>> + '_;
+    ) -> &crate::cc::base::region::Region<B::RegionBackend>;
     fn main_thread_scroll_hit_test_region(
         &self,
-    ) -> impl std::ops::Deref<Target = crate::cc::base::region::Region<B::RegionBackend>> + '_;
+    ) -> &crate::cc::base::region::Region<B::RegionBackend>;
     fn non_composited_scroll_hit_test_rects(&self) -> Option<&[ScrollHitTestRect]>;
     fn visible_layer_rect(&self) -> Rect;
     fn draws_content(&self) -> bool;
