@@ -2077,7 +2077,7 @@ impl<B: MainLayerTypes> Layer<B> {
     }
 }
 // Source: cc/layers/layer.cc:956-969.
-pub fn Are2dAxisAligned<T: crate::adapter::layer_tree_impl::LayerTreeTransform>(
+pub fn Are2dAxisAligned<T: crate::adapter::property_tree::PropertyTreeTransform>(
     a: &T,
     b: &T,
 ) -> bool {

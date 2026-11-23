@@ -6,6 +6,7 @@
 
 pub mod commit_state;
 pub mod geometry;
+pub mod layer_impl_factory;
 pub mod layer_tree_debug_state;
 pub mod property_tree;
 pub mod property_tree_services;
@@ -32,7 +33,7 @@ pub use compositor_input::{
     scroll_snap_data, scroll_source_type,
 };
 pub use compositor_tree::{
-    clip_node, commit_types, effect_node, math_util, property_ids, synced_property, target_property,
+    clip_node, commit_types, effect_node, math_util, region_backend, property_ids, synced_property, target_property,
     transform_node, viewport_property_ids,
 };
 

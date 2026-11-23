@@ -309,3 +309,56 @@ classified as a shared cc value root (like Layout's shared roots) or moved into
   `scroll_animation`.
 - Also `skia::SkPath`, for the `geometry::Path` impl in
   `layerize/src/skia_path.rs`.
+
+### S1a-2 status
+
+Done: `LayerImplFactory` lives in `layerize::commit::layer_impl_factory`.
+`MainLayerTypes` no longer requires `LayerTreeTransform`, because
+`Are2dAxisAligned` needs only `PropertyTreeTransform`. `region_backend` is
+re-exported from `layerize::commit`.
+
+Still on the main family, with their impls in the compositor:
+
+- `DrawFilters`: `runtime/skia.rs:252` implements it for paint's
+  `FilterOperations`.
+- `MainLayerPath`: implemented for `SkPath` at `runtime/skia.rs:294`.
+- `MainLayerCopyOutputRequest`: implemented at `runtime/types.rs:144`.
+- `MainLayerImpl` / `MainLayerImplTree`: implemented by `CompositorLayer`
+  (`runtime/layer.rs`).
+
+Each trait has to move together with its impl; Rust's orphan rule forbids an
+impl of a layerize trait for a foreign type inside the compositor.
+
+Blocker for splitting the concrete family (S1a-2b) and the file moves (S1a-3):
+
+1. **The concrete family sits on the impl side.** `CpuCompositorTypes<R>`
+   (`runtime/types.rs:82`) implements both the main traits and the impl
+   traits, and its `CommitTypes` items name impl-owned types (`Layer =
+   CompositorLayer`, `RenderSurface = RenderSurfaceImpl`, `SwapPromise`,
+   `CompositorFrameMetadata`, `EventMetrics`, the presentation callbacks).
+   Because of the orphan rule, every trait implemented for this type outside
+   the crate that defines it must be local to that crate. Two shapes work:
+   - (a) The family type is defined in `layerize::commit` and generic over an
+     impl-provided type set, `CommitFamily<R, I: CommitImplTypes<R>>`. Main
+     trait impls live in layerize and take impl-side types from `I`; impl
+     traits stay in compositor as local-trait impls. `CpuCompositorTypes<R>`
+     becomes an alias.
+   - (b) Every main trait the family implements moves into `layerize::commit`.
+   
+   (a) keeps `commit` small. `CpuSkiaBackend` (`runtime/types.rs:61`) and
+   `SkiaValueBackend`, its R bound, have to move with it.
+2. **The main-half files mix main and impl services.** `runtime/paint/*` and
+   `runtime/paint_services.rs` implement PAC and conversion services and also
+   impl-side tile, raster and image services; they reference
+   `layer_tree_host_impl`, `picture_layer_impl`, `tile_manager`,
+   `prioritized_tile` and `image_animation`. `CpuPaintServices` is one `Arc`
+   shared by both halves (`engine_core.rs:52`). Before `git mv`,
+   `CpuPaintServices` has to be split into a main service (PAC, chunk
+   conversion, PictureLayer recording) and an impl service (raster, tiles,
+   image decode). The raster `PaintRecord` value types (S1c) belong to
+   `layerize::commit`, because the impl side replays them.
+3. Only after 1 and 2 can the PAC, Blink compositing, cc main layers,
+   `main_host`/`main_endpoint`/`pac_scroll`/`main_frame_lifecycle` and the
+   coalescing code move into layerize as `LayerizeEngine`, and the guard's
+   property-node allowance shrink to zero. The 11 allowed files are exactly
+   this main code.
