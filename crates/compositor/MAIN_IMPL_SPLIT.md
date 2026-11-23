@@ -362,3 +362,57 @@ Blocker for splitting the concrete family (S1a-2b) and the file moves (S1a-3):
    coalescing code move into layerize as `LayerizeEngine`, and the guard's
    property-node allowance shrink to zero. The 11 allowed files are exactly
    this main code.
+
+### Next: S1a-2b plan (option (a), agreed)
+
+Entry state: HEAD `d7e90ab9` compiles. The layerize guard test passed at
+`268d12b5`.
+
+1. **`CommitFamily<R, I>` in `layerize::commit`.** Add
+   `pub struct CommitFamily<R, I>(PhantomData<fn() -> (R, I)>)` and
+   `pub trait CommitImplTypes<R>` holding the impl-owned commit types (`Layer`,
+   `RenderSurface`, `CopyOutputRequest`, `SwapPromise`,
+   `CompositorFrameMetadata`, `UIResourceRequest`, `UIResourceBitmap`,
+   `PresentationCallback`, `SuccessfulPresentationCallback`, `EventMetrics`,
+   `DelegatedInkMetadata`, `ViewTransitionRequest`, `DisplayColorSpaces`,
+   `LocalSurfaceId`, `SurfaceRange`). Write
+   `impl<R, I: CommitImplTypes<R>> CommitTypes for CommitFamily<R, I>` in
+   layerize. The compositor defines `pub struct CpuImplTypes;` with
+   `impl<R> CommitImplTypes<R> for CpuImplTypes` (the current
+   `runtime/owner_types.rs` CommitTypes block) and
+   `pub type CpuCompositorTypes<R> = CommitFamily<R, CpuImplTypes>;`
+   (`runtime/types.rs:82`). The compositor's impl-trait impls for the alias
+   stay valid as local-trait impls.
+2. **The compositor's inherent and std impls on `CpuCompositorTypes`**
+   (`Default`, `new` at `runtime/types.rs:83-92`) become free functions or
+   move to layerize. Every `impl <MainTrait> for CpuCompositorTypes<R>` has to
+   move into layerize together with its trait. That covers `MainLayerTypes`,
+   `CommitStateTypes`, `PictureLayerTypes`, `ScrollbarLayerTypes`,
+   `SolidColorLayerTypes`, `SurfaceLayerTypes`, `PaintedScrollbarLayerTypes`,
+   `PendingLayerTypes`, `PaintArtifactCompositorTypes`, `PaintChunksTypes` and
+   others; grep `for CpuCompositorTypes` in `runtime/*.rs`. Until those traits
+   live in layerize, one option is to move the main-trait impl blocks into the
+   files that move in S1a-3. That makes S1a-2b and S1a-3 one step for those
+   traits.
+3. **`R` bounds.** `CpuSkiaBackend` (`runtime/types.rs:61`) =
+   `SkRegionBackend + RoundedRectTransformBackend (runtime/geometry.rs:11) +
+   SkiaValueBackend (runtime/types.rs:18)`. `SkiaValueBackend::Filters` is
+   bounded by main traits (`DrawFilters`) and impl traits
+   (`RenderSurfaceFilters`, `OcclusionFilters`, `DamageFilters`); `Path` by
+   `MainLayerPath`. Split it: the main part (`Filters: DrawFilters`,
+   `Path: MainLayerPath`, `FromPaintPath`/`Stroke*`) goes to layerize, and the
+   compositor restates the impl bounds in its own `CpuImplSkiaBackend: CpuSkiaBackend`.
+   The impls for `SkRegion` (`runtime/skia.rs:179,382`) move with their traits.
+   `SkRegion` itself, the `Transform<R>` value (`runtime/geometry.rs:15`) and the
+   `FilterOperations` impls (`runtime/skia.rs:252-291`) are values that both
+   halves use, so they go to `layerize::commit` (or a layerize skia module) together with
+   `DrawFilters` / `MainLayerPath` (`adapter/main_layer.rs`) /
+   `MainLayerCopyOutputRequest` (impl `runtime/types.rs:144`).
+4. **`MainLayerImpl` / `MainLayerImplTree`.** They are the push target, so
+   they go to `layerize::commit`. Their implementor `CompositorLayer`
+   (`runtime/layer.rs`) stays in the compositor (local type, foreign trait:
+   allowed). They are generic over `B: MainLayerTypes`, so `MainLayerTypes`
+   must be visible from `commit`. Either move `MainLayerTypes` into `commit`
+   (it is implemented only by the family, which after step 1 lives in layerize)
+   or make the push-target traits generic over `B: CommitTypes` with the few
+   main-only items they use (`ImplContext`, `NodeId`) added to `CommitTypes`.
