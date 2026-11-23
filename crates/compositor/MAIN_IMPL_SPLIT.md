@@ -1,8 +1,8 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: design. S1c (PaintRecord leases without the whole PaintArtifact) is
-implemented; the thread split itself (S1a/S1b) is not, for the blockers
-listed at the end.
+Status: S1c implemented. S1a has started: the `layerize` crate and its
+`commit` vocabulary exist; see "S1a progress" at the end. The thread split
+(S1b/S1d) is not implemented.
 
 ## Chromium reference
 
@@ -203,3 +203,53 @@ cannot give.
   `ImplPresentation` admission into Page as ProxyMain state, run Paint only
   in dispatched BMFs, verify with the trackpad fixture and the DevTools
   matrix.
+
+## S1a progress: the `layerize` crate
+
+Agreed shape: `crates/layerize` (package `layerize`, engine `LayerizeEngine`)
+is the main half; `compositor` depends on it and names only
+`layerize::commit`; `layerize` never depends on `compositor`. The guard is
+`crates/layerize/tests/layerize_boundary.rs`. Its property-node allowance
+lists the compositor files that still hold main-half code; remove each entry
+when its file moves.
+
+Done:
+
+- The crate, with `layerize::commit` containing
+  `protected_sequence_synchronizer` (moved from `cc/base`, the compositor path
+  re-exports it) and re-exports of the `synced_property`, `property_ids` and
+  `viewport_property_ids` values from `compositor_tree`.
+
+What still blocks moving the main-half files:
+
+- **The type family spans both halves.** `MainLayerTypes` has the full impl
+  family `LayerTreeTypes` as a supertrait (`src/adapter/main_layer.rs:19-32`).
+  `LayerTreeTypes` (`src/adapter/layer_tree_impl.rs:131-260`) names
+  `LayerTreeImpl`, draw/occlusion/damage contexts, `TileManager`, frame sink
+  and so on. Every main generic (`Layer<B>`, `PaintArtifactCompositor<B>`,
+  `CommitState<B>`, `PropertyTreesFor<B>`) is bounded through it.
+- **One concrete family serves both halves.** Concrete main code names
+  `CpuCompositorTypes<R>` (`src/runtime/types.rs`, the `Root<R>` alias in
+  `runtime/paint_services.rs` and `runtime/paint/*`), which implements the
+  impl traits too.
+- **The push target creates impl objects.** `MainLayerImpl::Create` takes
+  `&mut LayerTreeImpl<B>` (`src/adapter/main_layer.rs:304-310`). The other
+  `MainLayerImpl` setters, which write through `B::ImplContext`, already form
+  the push-target trait. `Create` has to become a factory method on
+  `MainLayerImplTree` (the `ImplContext` trait).
+
+Resolution (one pass of its own):
+
+1. Add `layerize::commit::CommitTypes` with the associated types the main half
+   uses: `Transform`, `Filters`, `Path`, `RegionBackend`, `CopyOutputRequest`,
+   `SurfaceRange`, `ViewTransitionRequest`, `SelectionBound`,
+   `UIResourceRequest`, `Layer: MainLayerImpl`, `ImplContext`. Move
+   `MainLayerImpl` / `MainLayerImplTree` (without `Create`), `CommitState`,
+   `ThreadUnsafeCommitState`, `PropertyTreesFor` and `cc/trees/property_tree.rs`
+   with it.
+2. Make `MainLayerTypes: CommitTypes` and `LayerTreeTypes: CommitTypes`, with
+   the impl-only bounds restated in `LayerTreeTypes`.
+3. Split `CpuCompositorTypes<R>` into a main family in `layerize` (which
+   implements `CommitTypes` and the main traits) and the impl family, which
+   names the main family for commit values.
+4. Move the files listed in "Main half" with `git mv`.

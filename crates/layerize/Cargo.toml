@@ -1,0 +1,12 @@
+[package]
+name = "layerize"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# Main-thread compositor half (Blink PaintArtifactCompositor and the cc
+# LayerTreeHost side). It must never depend on the `compositor` facade; the
+# impl half depends on `layerize::commit` only. See
+# crates/compositor/MAIN_IMPL_SPLIT.md.
+[dependencies]
+compositor_tree = { path = "../compositor/compositor_tree" }

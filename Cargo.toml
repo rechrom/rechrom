@@ -67,6 +67,7 @@ members = [
     "crates/compositor/compositor_scheduler",
     "crates/compositor/compositor_input",
     "crates/compositor/compositor_animation",
+    "crates/layerize",
     "crates/compositor",
     "crates/viz",
     "crates/renderer",
