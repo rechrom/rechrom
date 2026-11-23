@@ -531,13 +531,14 @@ impl CpuRasterTrackingServices<SkRegion> for SkiaRasterTrackingServices {
         eprintln!("additional Paint under-invalidations suppressed");
     }
 }
-impl CpuMainPaintServices<SkRegion> {
-    /// The single default CPU assembly constructor. All normal Paint services
-    /// are real value/record owners; unsupported pixel diagnostics fail here.
-    pub fn new_cpu(
-        features: CpuPaintFeatures,
-        diagnostics: SkiaPaintDiagnostics,
-    ) -> Result<Self, PaintConfigurationError> {
+/// The single default CPU assembly constructor of the main paint services
+/// (layerize CpuMainPaintServices). All normal Paint services are real
+/// value/record owners; unsupported pixel diagnostics fail here.
+pub fn NewCpuMainPaintServices(
+    features: CpuPaintFeatures,
+    diagnostics: SkiaPaintDiagnostics,
+) -> Result<CpuMainPaintServices<SkRegion>, PaintConfigurationError> {
+    {
         if features.paint_under_invalidation_checking {
             return Err(PaintConfigurationError::UnderInvalidationRasterBackendRequired);
         }
@@ -559,6 +560,6 @@ impl CpuMainPaintServices<SkRegion> {
             values: values.clone(),
             diagnostics,
         });
-        Ok(Self::new(features, values, tracking, platform))
+        Ok(CpuMainPaintServices::new(features, values, tracking, platform))
     }
 }

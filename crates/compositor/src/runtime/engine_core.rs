@@ -398,7 +398,14 @@ impl EngineCore {
                 .WithDerivedServices(self.paint.as_ref());
             self.pac.as_ref().is_some_and(|pac| {
                 self.paint
-                    .ApplyScrollbarPaintMutation(pac, mutation, &mut context)
+                    .ApplyScrollbarPaintMutation(
+                        pac,
+                        mutation.element,
+                        mutation.opacity,
+                        mutation.thumb_width,
+                        mutation.needs_repaint,
+                        &mut context,
+                    )
             })
         };
         if !applied {

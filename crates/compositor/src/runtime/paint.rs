@@ -12,6 +12,7 @@ mod artifact_record;
 mod record_bindings;
 mod services;
 pub use services::{
+    NewCpuMainPaintServices,
     PaintConfigurationError, SkiaPaintDiagnostics, SkiaPaintPlatform, SkiaPaintValueServices,
     SkiaRasterTrackingServices,
 };

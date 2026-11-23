@@ -5,6 +5,9 @@
 
 pub mod paint;
 mod main_family;
+/// Main paint services (PAC, chunk conversion, GeometryMapper, main Layer
+/// services). Until S1a-3 B3 the compositor's EngineCore still drives them.
+pub mod paint_services;
 
 // Module paths of the shared value roots under which the moved bindings name
 // them (the compositor keeps the same paths). Aliases only.

@@ -1,6 +1,6 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2 and the blanket family impls done (see "S1a-3 status" and "Plan
+Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2, the blanket family impls and B3a done (see "S1a-3 status" and "Plan
 correction" at the end); S1a-3 B3-B4 and the thread split (S1b/S1d) are not
 implemented.
 
@@ -564,10 +564,35 @@ Approved for S1a-3: option (h) as above; during S1a only,
   test stays in the compositor file of the same name (it needs the concrete
   family).
 
-Next: B3
-(`paint_services`, `pac_scroll`, `canvas_child_record`, `main_host`,
+- **B3a done (main paint services).** `runtime/paint_services.rs` is a git mv
+  to `layerize/src/runtime/paint_services.rs` (`CpuMainPaintServices`,
+  `CpuPaintFeatures`, `CpuPaintPlatform` and all PAC / PaintChunks /
+  PendingLayer / SynthesizedClip / ContentLayerClient service impls). The
+  family impls are `impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
+  Trait<F> for CpuMainPaintServices<R>`; the PAC entry points
+  (`CreateCompositor`, `UpdateCompositor`, `ApplyCompositedAnimationProperties`,
+  `ApplyScrollbarPaintMutation`, now taking the mutation's four fields instead
+  of `engine::ScrollbarPaintMutation`) are generic methods over
+  `F: LayerizeFamily<Skia = R>`. `SynthesizedClipServices::MapRect` uses
+  `ToEnclosingRect(Transform::MapRect)` (gfx::Transform::MapRect(Rect)) instead
+  of the impl `DrawTransform::MapRectInt`. The compositor file of the same name
+  keeps `CpuImplPaintServices` (now `CpuImplPaintServices::new(&main)`), the
+  impl `SynchronizationTrace` binding (through the new
+  `CpuMainPaintServices::Platform()`) and the family compile assertion, and
+  re-exports the main items (temporarily listed in
+  `MAIN_HALF_REEXPORT_ALLOWED`). `CpuMainPaintServices::new_cpu` became the
+  free `runtime::paint::NewCpuMainPaintServices` (inherent impls of a foreign
+  type are not allowed). `PROPERTY_NODE_ALLOWED` is empty.
+
+Next: B3 rest (`pac_scroll`, `canvas_child_record`, `main_host`,
 `main_endpoint`, `main_frame_lifecycle`, animation coalescing,
-`LayerizeEngine`), B4 (boundary test to zero allowance plus the
+`LayerizeEngine`). `main_host.rs` still names impl owners
+(`draw::DrawContext`, `sync::MainSynchronizationContext`,
+`host_owners::UIResourceRequest`, `host_resources::UIBitmap`,
+`cc::trees::draw_property_utils`, `engine::*`) and `main_endpoint.rs` names
+`animation_host::AnimationHostOwner`, `execution::EngineTaskQueue`,
+`services::EventSink`, `host_owners::MutatorEvents`; each needs its impl part
+split off first. Then B4 (boundary test to zero allowance plus the
 LayerizeEngine exception, layerize unit tests).
 
 ### Plan correction: option (a) does not compile

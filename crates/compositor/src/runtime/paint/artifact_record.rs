@@ -14,7 +14,7 @@ mod tests {
         },
         runtime::{
             paint::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintRecord, SkiaPaintDiagnostics},
-            paint_services::{CpuPaintFeatures, CpuMainPaintServices},
+            paint_services::CpuPaintFeatures,
             skia::SkRegion,
             types::CpuCompositorTypes,
         },
@@ -22,7 +22,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     fn values() -> Arc<dyn CpuPaintValueServices<SkRegion>> {
-        CpuMainPaintServices::new_cpu(
+        crate::runtime::paint::NewCpuMainPaintServices(
             CpuPaintFeatures {
                 cc_slimming: false,
                 singular_transform_fix: false,

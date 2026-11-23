@@ -647,7 +647,7 @@ pub(crate) fn CreateDefault(
         });
     }
     let options = FactoryOptions::cpu_default(&config);
-    let paint = CpuMainPaintServices::<SkRegion>::new_cpu(
+    let paint = super::paint::NewCpuMainPaintServices(
         super::paint_services::CpuPaintFeatures {
             cc_slimming: true,
             singular_transform_fix: true,
@@ -671,6 +671,6 @@ pub(crate) fn CreateDefault(
     .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))?;
     // The main half keeps the PAC/conversion/recording owner; the impl half
     // receives only the shared paint value capability for tiles and images.
-    let impl_paint = paint.ImplServices();
+    let impl_paint = CpuImplPaintServices::new(&paint);
     Create(config, executors, options, Arc::new(paint), impl_paint)
 }

@@ -17,9 +17,7 @@ const PAINT_PROPERTY_NODES: &[&str] = &[
 /// Compositor files that still hold main-half code naming paint property
 /// nodes. Each entry moves into `layerize` in stage S1a; remove it then.
 /// Do not add entries.
-const PROPERTY_NODE_ALLOWED: &[&str] = &[
-    "crates/compositor/src/runtime/paint_services.rs",
-];
+const PROPERTY_NODE_ALLOWED: &[&str] = &[];
 
 /// Temporary (S1a-3 B2 until B3): compositor re-export stubs of the moved
 /// main-half modules (Blink compositing/paint translations, their adapter
@@ -36,6 +34,8 @@ const MAIN_HALF_REEXPORT_ALLOWED: &[&str] = &[
     "crates/compositor/src/adapter/property_tree_manager.rs",
     "crates/compositor/src/adapter/raster_invalidator.rs",
     "crates/compositor/src/runtime/paint.rs",
+    // Re-exports the main paint services next to the impl lease (B3).
+    "crates/compositor/src/runtime/paint_services.rs",
     "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/adjust_mask_layer_geometry.rs",
     "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/chunk_to_layer_mapper.rs",
     "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.rs",
