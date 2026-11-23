@@ -349,14 +349,28 @@ Done:
   impl filter facets (`RenderSurfaceFilters`, `OcclusionFilters`,
   `DamageFilters`); `CpuSkiaBackend` is unchanged. `SkRegion` (local to the
   compositor) implements `MainSkiaBackend` in `runtime/skia.rs`.
+- **Family binding (S1a-2b part 4, option h approved).**
+  `layerize::commit::layerize_family::LayerizeFamily: PushPropertiesTypes +
+  CommitStateTypes` with `type Skia: MainSkiaBackend + SkRegionBackend`;
+  `runtime/owner_types.rs` implements it for `CpuCompositorTypes<R>` with
+  `Skia = R`. It has no users yet. Add impl-provided hooks to it only when a
+  main trait moves and its impl needs one (e.g.
+  `ScrollbarLayerTypes::RasterizeScrollbarThumb`, which builds the impl
+  `UIBitmap`).
 
-Next: `LayerizeFamily` in commit and its compositor impl (see "Plan
-correction", option h). Still in the compositor and needed by main code:
-`SkRegion` + its `SkRegionBackend` impl (`runtime/skia.rs`; concrete main code
-such as `runtime/paint/discardable_image_map.rs:453,1104` names it), the
-`Transform<R>` value with `RoundedRectTransformBackend`
-(`runtime/geometry.rs:11-17`), both used by both halves; they go to commit
-before the S1a-3 file moves.
+Next (rest of S1a-2b): move into commit, with their impls, the values both
+halves use that main code names concretely:
+
+1. `SkRegion` (`runtime/skia.rs:13`) with its `SkRegionBackend`,
+   `RoundedRectTransformBackend` and `MainSkiaBackend` impls (`runtime/skia.rs`,
+   the stroke helpers around `stroke_backend_path` go with them). Once the
+   type lives in layerize, every impl of a layerize or sub-crate trait for it
+   must also be in layerize; impls of compositor traits for it stay. Concrete
+   main users: `runtime/paint/discardable_image_map.rs:453,1104`.
+2. `Transform<R>` and `RoundedRectTransformBackend` (`runtime/geometry.rs:11-17`,
+   used by `CommitTypes::Transform`).
+
+Then S1a-2c, then S1a-3.
 
 ### Plan correction: option (a) does not compile
 

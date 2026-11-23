@@ -27,6 +27,12 @@ use crate::{
     },
 };
 
+// The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h).
+impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
+    for CpuCompositorTypes<R>
+{
+    type Skia = R;
+}
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
     type Transform = Transform<R>;
     type RegionBackend = R;

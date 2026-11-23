@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod layer_impl_factory;
 pub mod layer_tree_debug_state;
 pub mod layer_value_backend;
+pub mod layerize_family;
 pub mod property_tree;
 pub mod property_tree_services;
 pub mod property_types;
