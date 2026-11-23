@@ -17,7 +17,6 @@ use crate::{
         layers::layer::LayerRef as MainLayerRef,
         trees::{
             commit_state::CommitState,
-            layer_tree_impl::{LayerTreeContext, LayerTreeImpl},
         },
     },
 };
@@ -230,16 +229,13 @@ impl<B: PaintedScrollbarLayerTypes> LayerObject<B> for PaintedScrollbarLayer<B> 
     }
     fn CreateLayerImpl(
         &self,
-        tree: &mut LayerTreeImpl<B>,
-        context: &mut LayerTreeContext<'_, B>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
         _c: &mut LayerContext<'_, B>,
     ) -> Box<B::Layer> {
-        B::Layer::CreatePaintedScrollbar(
-            tree,
+        tree.CreatePaintedScrollbarLayer(
             self.base().id(),
             self.base_.orientation(),
             self.base_.is_left_side_vertical_scrollbar(),
-            context,
         )
     }
     fn PushDirtyPropertiesTo(

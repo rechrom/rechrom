@@ -260,19 +260,6 @@ impl<R: CpuSkiaBackend>
     crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<CpuCompositorTypes<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreatePaintedScrollbar(
-        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
-        left: bool,
-        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
-    ) -> Box<Self> {
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl::<
-                CpuCompositorTypes<R>,
-            >::Create(tree_id, id, orientation, left, c)
-        })
-    }
     fn painted_scrollbar(
         &mut self,
     ) -> Option<
@@ -292,30 +279,6 @@ impl<R: CpuSkiaBackend>
         CpuCompositorTypes<R>,
     > for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreateSolidColorScrollbar(
-        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
-        thumb_thickness: i32,
-        track_start: i32,
-        left: bool,
-        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
-    ) -> Box<Self> {
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl::<
-                CpuCompositorTypes<R>,
-            >::Create(
-                tree_id,
-                id,
-                orientation,
-                thumb_thickness,
-                track_start,
-                left,
-                c,
-            )
-        })
-    }
-
     fn scrollbar_set_color(
         &mut self,
         color: crate::adapter::layer_tree_impl::Color4f,
@@ -330,16 +293,6 @@ impl<R: CpuSkiaBackend>
 impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<CpuCompositorTypes<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreateSurface(
-        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
-    ) -> Box<Self> {
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::surface_layer_impl::SurfaceLayerImpl::Create(tree_id, id, c)
-        })
-    }
-
     fn SurfaceSetRange(
         &mut self,
         range: <CpuCompositorTypes<R> as layerize::commit::CommitTypes>::SurfaceRange,
@@ -452,6 +405,86 @@ impl<R: CpuSkiaBackend> crate::adapter::render_surface_impl::RenderSurfaceTypes
 }
 impl<R: CpuSkiaBackend> crate::adapter::tree_sync::SyncTypes for CpuCompositorTypes<R> {
     type MainLayer = LayerBorrow<Self>;
+    fn WithLayerImplFactory<Output>(
+        tree: &mut LayerTreeImpl<Self>,
+        context: &mut LayerTreeContext<'_, Self>,
+        callback: impl FnOnce(
+            &mut dyn crate::adapter::main_layer::LayerImplFactory<CompositorLayer<Self>>,
+        ) -> Output,
+    ) -> Output {
+        callback(&mut CpuLayerImplFactory { tree, context })
+    }
+}
+
+/// The pending LayerTreeImpl lent to main Layer::CreateLayerImpl. Each method
+/// runs the canonical most-derived LayerImpl::Create inside the tree's scoped
+/// impl context, exactly as the source overrides call it.
+struct CpuLayerImplFactory<'a, 'c, R: CpuSkiaBackend> {
+    tree: &'a mut LayerTreeImpl<CpuCompositorTypes<R>>,
+    context: &'a mut LayerTreeContext<'c, CpuCompositorTypes<R>>,
+}
+impl<R: CpuSkiaBackend> crate::adapter::main_layer::LayerImplFactory<CompositorLayer<CpuCompositorTypes<R>>>
+    for CpuLayerImplFactory<'_, '_, R>
+{
+    // Source: cc/layers/layer.cc:1619-1622.
+    fn CreateLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            LayerImpl::<CpuCompositorTypes<R>>::Create(tree_id, id, c)
+        })
+    }
+    // Source: cc/layers/picture_layer.cc:38-41.
+    fn CreatePictureLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CreateCpuPictureLayer(self.tree, self.context, id)
+    }
+    // Source: cc/layers/solid_color_layer.cc:14-17.
+    fn CreateSolidColorLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::solid_color_layer_impl::SolidColorLayerImpl::Create(tree_id, id, c)
+        })
+    }
+    // Source: cc/layers/surface_layer.cc SurfaceLayer::CreateLayerImpl.
+    fn CreateSurfaceLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::surface_layer_impl::SurfaceLayerImpl::Create(tree_id, id, c)
+        })
+    }
+    // Source: cc/layers/painted_scrollbar_layer.cc
+    //         PaintedScrollbarLayer::CreateLayerImpl.
+    fn CreatePaintedScrollbarLayer(
+        &mut self,
+        id: i32,
+        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
+        left: bool,
+    ) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl::<
+                CpuCompositorTypes<R>,
+            >::Create(tree_id, id, orientation, left, c)
+        })
+    }
+    // Source: cc/layers/solid_color_scrollbar_layer.cc:16-21.
+    fn CreateSolidColorScrollbarLayer(
+        &mut self,
+        id: i32,
+        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
+        thumb_thickness: i32,
+        track_start: i32,
+        left: bool,
+    ) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl::<
+                CpuCompositorTypes<R>,
+            >::Create(
+                tree_id,
+                id,
+                orientation,
+                thumb_thickness,
+                track_start,
+                left,
+                c,
+            )
+        })
+    }
 }
 
 // This non-test assertion intentionally fails if any selected native owner,

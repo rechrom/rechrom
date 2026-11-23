@@ -11,7 +11,6 @@ use crate::{
         main_layer::{LayerContext, MainLayerServices},
         solid_color_layer::*,
     },
-    cc::trees::layer_tree_impl::{LayerTreeContext, LayerTreeImpl},
 };
 use std::sync::Arc;
 // Source: cc/layers/solid_color_layer.h:18-37. Native empty derived resident owner.
@@ -40,11 +39,10 @@ impl<B: SolidColorLayerTypes> LayerObject<B> for SolidColorLayer<B> {
     // Source: cc/layers/solid_color_layer.h:25-26; cc/layers/solid_color_layer.cc:14-17.
     fn CreateLayerImpl(
         &self,
-        tree: &mut LayerTreeImpl<B>,
-        context: &mut LayerTreeContext<'_, B>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
         _c: &mut LayerContext<'_, B>,
     ) -> Box<B::Layer> {
-        B::Layer::CreateSolidColor(tree, self.base_.id(), context)
+        tree.CreateSolidColorLayer(self.base_.id())
     }
     // Source: cc/layers/solid_color_layer.h:28; cc/layers/solid_color_layer.cc:27-31.
     fn SetBackgroundColor(&self, color: Color4f, c: &mut LayerContext<'_, B>) {

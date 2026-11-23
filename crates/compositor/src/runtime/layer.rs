@@ -99,15 +99,6 @@ where
         ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
     >,
 {
-    fn Create(
-        tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
-        id: i32,
-        context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, B>,
-    ) -> Box<Self> {
-        B::WithLayerImplContext(tree, context, |tree_id, c| {
-            LayerImpl::<B>::Create(tree_id, id, c)
-        })
-    }
     fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>) {
         self.impl_base_mut().SetTransformTreeIndex(index, impl_tree);
     }
@@ -1312,11 +1303,6 @@ where
  B::Recording:crate::adapter::recording_source::RecordingSourceTypes<RasterSource=<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource>,
  for<'a>B:MainLayerTypes<ImplContext<'a>=crate::adapter::layer_impl::LayerImplContext<'a,B>>,
 {
- fn CreatePicture(tree:&mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,id:i32,context:&mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_,B>)->Box<Self>{
-  use crate::adapter::layer_tree_impl::LayerTreePictureContext;
-  let tree_id=tree.id;
-  B::WithPictureLayersContext(tree,context.host,|_,c|c.WithPicture(|c|PictureLayerImpl::<B>::Create(tree_id,id,c)))
- }
  fn set_has_non_animated_image_update_rect(&mut self){self.picture_impl_mut().expect("native Picture target").set_has_non_animated_image_update_rect()}
  fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}
  fn SetIsBackdropFilterMask(&mut self,value:bool,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").SetIsBackdropFilterMask(value,tree)}

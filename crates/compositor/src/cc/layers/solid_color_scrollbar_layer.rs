@@ -21,7 +21,6 @@ use crate::{
         input::scrollbar::{Scrollbar, ScrollbarOrientation},
         trees::{
             commit_state::CommitState,
-            layer_tree_impl::{LayerTreeContext, LayerTreeImpl},
         },
     },
 };
@@ -174,18 +173,15 @@ impl<B: SolidColorScrollbarLayerTypes> LayerObject<B> for SolidColorScrollbarLay
     // Source: cc/layers/solid_color_scrollbar_layer.h:20-21; cc/layers/solid_color_scrollbar_layer.cc:16-21.
     fn CreateLayerImpl(
         &self,
-        tree: &mut LayerTreeImpl<B>,
-        context: &mut LayerTreeContext<'_, B>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
         _c: &mut LayerContext<'_, B>,
     ) -> Box<B::Layer> {
-        B::Layer::CreateSolidColorScrollbar(
-            tree,
+        tree.CreateSolidColorScrollbarLayer(
             self.base().id(),
             self.base_.orientation(),
             self.thumb_thickness_,
             self.track_start_,
             self.base_.is_left_side_vertical_scrollbar(),
-            context,
         )
     }
     // Source: cc/layers/solid_color_scrollbar_layer.h:38; cc/layers/solid_color_scrollbar_layer.cc:77-81.

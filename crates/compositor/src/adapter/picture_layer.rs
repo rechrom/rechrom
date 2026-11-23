@@ -11,7 +11,6 @@ use super::{
 use crate::cc::{
     base::region::Region,
     layers::picture_layer::PictureLayer,
-    trees::layer_tree_impl::{LayerTreeContext, LayerTreeImpl},
 };
 use std::sync::Arc;
 pub trait PictureLayerTypes:
@@ -73,11 +72,6 @@ pub trait PictureLayerServices<B: PictureLayerTypes>:
 /// canonical PictureLayerImpl stem. Only resident setters/constructor dispatch
 /// live here; no main-layer/impl-layer algorithm is an external Paint service.
 pub trait PictureLayerImplTarget<B: PictureLayerTypes>: MainLayerImpl<B> {
-    fn CreatePicture(
-        tree: &mut LayerTreeImpl<B>,
-        id: i32,
-        context: &mut LayerTreeContext<'_, B>,
-    ) -> Box<Self>;
     fn set_has_non_animated_image_update_rect(&mut self);
     fn set_gpu_raster_max_texture_size(&mut self, size: Size, tree: &mut B::ImplContext<'_>);
     fn SetIsBackdropFilterMask(&mut self, value: bool, tree: &mut B::ImplContext<'_>);

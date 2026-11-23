@@ -58,7 +58,9 @@ impl<B: SyncTypes> SyncMainLayer<B> for LayerBorrow<B> {
         tc: &mut LayerTreeContext<'_, B>,
         c: &mut LayerContext<'_, B>,
     ) -> Box<B::Layer> {
-        self.WithSource(c, |layer, c| layer.CreateLayerImpl(tree, tc, c))
+        B::WithLayerImplFactory(tree, tc, |factory| {
+            self.WithSource(c, |layer, c| layer.CreateLayerImpl(factory, c))
+        })
     }
     fn PushPropertiesTo(
         &self,

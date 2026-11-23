@@ -4,7 +4,6 @@ use super::{
     layer_tree_impl::Color4f,
     main_layer::{MainLayerImpl, MainLayerTypes},
 };
-use crate::cc::trees::layer_tree_impl::{LayerTreeContext, LayerTreeImpl};
 use std::sync::Arc;
 pub trait SolidColorLayerTypes:
     MainLayerTypes<
@@ -22,13 +21,6 @@ pub trait SolidColorPictureRecorder<B: SolidColorLayerTypes> {
 pub trait SolidColorLayerServices<B: SolidColorLayerTypes> {
     fn CreateSolidPictureRecorder(&self) -> B::SolidPictureRecorder;
 }
-/// Pure same-package constructor/type erasure. The binding must invoke the
-/// canonical SolidColorLayerImpl::Create with the actual scoped impl context,
-/// then wrap that owned derived allocation; it contains no constructor policy.
-pub trait SolidColorLayerImplTarget<B: SolidColorLayerTypes>: MainLayerImpl<B> {
-    fn CreateSolidColor(
-        tree: &mut LayerTreeImpl<B>,
-        id: i32,
-        context: &mut LayerTreeContext<'_, B>,
-    ) -> Box<Self>;
-}
+/// Same-package type erasure of the SolidColorLayerImpl push target. Its
+/// constructor is reached through `main_layer::LayerImplFactory`.
+pub trait SolidColorLayerImplTarget<B: SolidColorLayerTypes>: MainLayerImpl<B> {}

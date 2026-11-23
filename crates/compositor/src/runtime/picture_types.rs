@@ -199,19 +199,6 @@ impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_layer::SolidColorLayerImplTarget<CpuCompositorTypes<R>>
     for super::layer::CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreateSolidColor(
-        tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<
-            '_,
-            CpuCompositorTypes<R>,
-        >,
-    ) -> Box<Self> {
-        use crate::adapter::layer_impl::LayerImplTypes;
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::solid_color_layer_impl::SolidColorLayerImpl::Create(tree_id, id, c)
-        })
-    }
 }
 impl<R: CpuSkiaBackend> crate::adapter::tile_manager::TileManagerTypes for CpuCompositorTypes<R> {
     type PaintImage = paint::CpuPaintImage;

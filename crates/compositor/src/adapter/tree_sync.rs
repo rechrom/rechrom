@@ -13,6 +13,17 @@ pub trait SyncTypes:
     CommitStateTypes + super::main_layer::MainLayerTypes + super::layer_impl::LayerImplTypes
 {
     type MainLayer: SyncMainLayer<Self>;
+    /// Lends the pending tree to main layers as the LayerImplFactory of
+    /// Layer::CreateLayerImpl (cc/trees/tree_synchronizer.cc PushLayerList).
+    fn WithLayerImplFactory<Output>(
+        tree: &mut LayerTreeImpl<Self>,
+        context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, Self>,
+        callback: impl FnOnce(
+            &mut dyn super::main_layer::LayerImplFactory<
+                <Self as super::layer_tree_impl::LayerTreeTypes>::Layer,
+            >,
+        ) -> Output,
+    ) -> Output;
 }
 pub trait SyncMainLayer<B: SyncTypes> {
     fn id(&self, c: &super::main_layer::LayerContext<'_, B>) -> i32;

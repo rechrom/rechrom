@@ -308,11 +308,10 @@ pub trait LayerObject<B: MainLayerTypes>: Send + Sync {
     }
     fn CreateLayerImpl(
         &self,
-        tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
-        tree_context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, B>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
         _c: &mut LayerContext<'_, B>,
     ) -> Box<B::Layer> {
-        self.base().CreateLayerImpl(tree, tree_context)
+        self.base().CreateLayerImpl(tree)
     }
     fn PushDirtyPropertiesTo(
         &self,
@@ -2862,10 +2861,9 @@ impl<B: MainLayerTypes> Layer<B> {
     // Source: cc/layers/layer.cc:1619-1622.
     pub fn CreateLayerImpl(
         &self,
-        tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
-        tree_context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, B>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
     ) -> Box<B::Layer> {
-        <B::Layer as MainLayerImpl<B>>::Create(tree, self.id(), tree_context)
+        tree.CreateLayer(self.id())
     }
     // Source: cc/layers/layer.cc:1755-1771.
     pub fn SetElementId(&self, id: ElementId, c: &mut LayerContext<'_, B>) {
@@ -3371,11 +3369,10 @@ impl<B: MainLayerTypes> LayerRef<B> {
     }
     pub fn CreateLayerImpl(
         &self,
-        tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
-        tree_context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, B>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
         c: &mut LayerContext<'_, B>,
     ) -> Box<B::Layer> {
-        self.0.CreateLayerImpl(tree, tree_context, c)
+        self.0.CreateLayerImpl(tree, c)
     }
     pub fn PushDirtyPropertiesTo(
         &self,
