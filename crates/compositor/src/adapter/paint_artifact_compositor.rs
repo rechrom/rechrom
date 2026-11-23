@@ -59,7 +59,7 @@ use std::{collections::BTreeMap, hash::Hash};
 
 pub trait PaintArtifactCompositorTypes:
     PropertyTreeManagerTypes<
-    DomNodeId = <Self as MainLayerTypes>::NodeId,
+    DomNodeId = <Self as layerize::commit::push_properties::PushPropertiesTypes>::NodeId,
     NodeId: Eq + Hash,
     ScrollNode: Eq + Hash + ArtifactScrollNode<Self>,
     TransformNode: ArtifactTransformNode<Self> + ArtifactDebugNode,

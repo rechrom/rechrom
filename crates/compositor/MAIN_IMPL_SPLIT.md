@@ -1,7 +1,8 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1 done (see "S1a-1 status" at the end); S1a-2/3
-and the thread split (S1b/S1d) are not implemented.
+Status: S1c done. S1a-1 done; S1a-2 in progress (see "S1a-2 status" and
+"Plan correction" at the end); S1a-3 and the thread split (S1b/S1d) are not
+implemented.
 
 ## Chromium reference
 
@@ -312,10 +313,22 @@ classified as a shared cc value root (like Layout's shared roots) or moved into
 
 ### S1a-2 status
 
-Done: `LayerImplFactory` lives in `layerize::commit::layer_impl_factory`.
-`MainLayerTypes` no longer requires `LayerTreeTransform`, because
-`Are2dAxisAligned` needs only `PropertyTreeTransform`. `region_backend` is
-re-exported from `layerize::commit`.
+Done:
+
+- `LayerImplFactory` lives in `layerize::commit::layer_impl_factory`.
+- `MainLayerTypes` no longer requires `LayerTreeTransform`, because
+  `Are2dAxisAligned` needs only `PropertyTreeTransform`. `region_backend` is
+  re-exported from `layerize::commit`.
+- **Push target (S1a-2b part 1).** `layerize::commit::push_properties` holds
+  `MainLayerImpl`, `MainLayerImplTree`, `LayerValue`, `LayerDebugInfo` /
+  `Invalidation` and the new `PushPropertiesTypes: CommitTypes<Layer:
+  MainLayerImpl<Self>, RegionBackend: SkRegionBackend>` with the pushed types
+  `NodeId`, `RegionCaptureBounds`, `TrackedElementRects`, `FilterQuality`,
+  `DynamicRangeLimit` and `ImplContext<'a>` (moved out of `MainLayerTypes`,
+  which now has `PushPropertiesTypes` as a supertrait). The compositor paths
+  `adapter::main_layer::{MainLayerImpl, ...}` and
+  `cc::layers::layer::LayerDebugInfo` re-export them. `CompositorLayer` and the
+  impl contexts implement the foreign traits for local types.
 
 Still on the main family, with their impls in the compositor:
 
@@ -323,96 +336,57 @@ Still on the main family, with their impls in the compositor:
   `FilterOperations`.
 - `MainLayerPath`: implemented for `SkPath` at `runtime/skia.rs:294`.
 - `MainLayerCopyOutputRequest`: implemented at `runtime/types.rs:144`.
-- `MainLayerImpl` / `MainLayerImplTree`: implemented by `CompositorLayer`
-  (`runtime/layer.rs`).
 
-Each trait has to move together with its impl; Rust's orphan rule forbids an
-impl of a layerize trait for a foreign type inside the compositor.
+Each trait has to move together with its impl when the implemented type is
+foreign to the compositor (`FilterOperations` from `paint`, `SkPath` from
+`skia`): those impls go to layerize (which then needs a `paint` dependency;
+the main half reads `PaintArtifact` anyway). `CopyOutputRequest` is a
+compositor type, so its impl may stay.
 
-Blocker for splitting the concrete family (S1a-2b) and the file moves (S1a-3):
+### Plan correction: option (a) does not compile
 
-1. **The concrete family sits on the impl side.** `CpuCompositorTypes<R>`
-   (`runtime/types.rs:82`) implements both the main traits and the impl
-   traits, and its `CommitTypes` items name impl-owned types (`Layer =
-   CompositorLayer`, `RenderSurface = RenderSurfaceImpl`, `SwapPromise`,
-   `CompositorFrameMetadata`, `EventMetrics`, the presentation callbacks).
-   Because of the orphan rule, every trait implemented for this type outside
-   the crate that defines it must be local to that crate. Two shapes work:
-   - (a) The family type is defined in `layerize::commit` and generic over an
-     impl-provided type set, `CommitFamily<R, I: CommitImplTypes<R>>`. Main
-     trait impls live in layerize and take impl-side types from `I`; impl
-     traits stay in compositor as local-trait impls. `CpuCompositorTypes<R>`
-     becomes an alias.
-   - (b) Every main trait the family implements moves into `layerize::commit`.
-   
-   (a) keeps `commit` small. `CpuSkiaBackend` (`runtime/types.rs:61`) and
-   `SkiaValueBackend`, its R bound, have to move with it.
-2. **The main-half files mix main and impl services.** `runtime/paint/*` and
-   `runtime/paint_services.rs` implement PAC and conversion services and also
-   impl-side tile, raster and image services; they reference
-   `layer_tree_host_impl`, `picture_layer_impl`, `tile_manager`,
-   `prioritized_tile` and `image_animation`. `CpuPaintServices` is one `Arc`
-   shared by both halves (`engine_core.rs:52`). Before `git mv`,
-   `CpuPaintServices` has to be split into a main service (PAC, chunk
-   conversion, PictureLayer recording) and an impl service (raster, tiles,
-   image decode). The raster `PaintRecord` value types (S1c) belong to
-   `layerize::commit`, because the impl side replays them.
-3. Only after 1 and 2 can the PAC, Blink compositing, cc main layers,
-   `main_host`/`main_endpoint`/`pac_scroll`/`main_frame_lifecycle` and the
-   coalescing code move into layerize as `LayerizeEngine`, and the guard's
-   property-node allowance shrink to zero. The 11 allowed files are exactly
-   this main code.
+The agreed option (a) (`CommitFamily<R, I>` defined in `layerize::commit`,
+`CpuCompositorTypes<R>` an alias of it) breaks the orphan rule for the impl
+traits that live in compositor sub-crates. The family implements these
+foreign traits, and an alias of a layerize type is not a local type in
+`compositor`:
 
-### Next: S1a-2b plan (option (a), agreed)
+- `compositor_tile`: `TileTypes`, `PictureLayerTilingTypes`
+  (`runtime/picture_types.rs:143,154`)
+- `compositor_animation`: `PaintWorkletTypes` (`picture_types.rs:166`)
+- `compositor_frame`: `FrameDataTypes` (`runtime/types.rs:184`),
+  `UnboundedTypes` (`runtime/host_types.rs:51`)
+- `compositor_resource`: `ResourcePoolTypes` (`runtime/resources.rs:550`)
 
-Entry state: HEAD `d7e90ab9` compiles. The layerize guard test passed at
-`268d12b5`.
+Making them work under (a) would need layerize to depend on those impl
+packages and forward every item through mirror traits.
 
-1. **`CommitFamily<R, I>` in `layerize::commit`.** Add
-   `pub struct CommitFamily<R, I>(PhantomData<fn() -> (R, I)>)` and
-   `pub trait CommitImplTypes<R>` holding the impl-owned commit types (`Layer`,
-   `RenderSurface`, `CopyOutputRequest`, `SwapPromise`,
-   `CompositorFrameMetadata`, `UIResourceRequest`, `UIResourceBitmap`,
-   `PresentationCallback`, `SuccessfulPresentationCallback`, `EventMetrics`,
-   `DelegatedInkMetadata`, `ViewTransitionRequest`, `DisplayColorSpaces`,
-   `LocalSurfaceId`, `SurfaceRange`). Write
-   `impl<R, I: CommitImplTypes<R>> CommitTypes for CommitFamily<R, I>` in
-   layerize. The compositor defines `pub struct CpuImplTypes;` with
-   `impl<R> CommitImplTypes<R> for CpuImplTypes` (the current
-   `runtime/owner_types.rs` CommitTypes block) and
-   `pub type CpuCompositorTypes<R> = CommitFamily<R, CpuImplTypes>;`
-   (`runtime/types.rs:82`). The compositor's impl-trait impls for the alias
-   stay valid as local-trait impls.
-2. **The compositor's inherent and std impls on `CpuCompositorTypes`**
-   (`Default`, `new` at `runtime/types.rs:83-92`) become free functions or
-   move to layerize. Every `impl <MainTrait> for CpuCompositorTypes<R>` has to
-   move into layerize together with its trait. That covers `MainLayerTypes`,
-   `CommitStateTypes`, `PictureLayerTypes`, `ScrollbarLayerTypes`,
-   `SolidColorLayerTypes`, `SurfaceLayerTypes`, `PaintedScrollbarLayerTypes`,
-   `PendingLayerTypes`, `PaintArtifactCompositorTypes`, `PaintChunksTypes` and
-   others; grep `for CpuCompositorTypes` in `runtime/*.rs`. Until those traits
-   live in layerize, one option is to move the main-trait impl blocks into the
-   files that move in S1a-3. That makes S1a-2b and S1a-3 one step for those
-   traits.
-3. **`R` bounds.** `CpuSkiaBackend` (`runtime/types.rs:61`) =
-   `SkRegionBackend + RoundedRectTransformBackend (runtime/geometry.rs:11) +
-   SkiaValueBackend (runtime/types.rs:18)`. `SkiaValueBackend::Filters` is
-   bounded by main traits (`DrawFilters`) and impl traits
-   (`RenderSurfaceFilters`, `OcclusionFilters`, `DamageFilters`); `Path` by
-   `MainLayerPath`. Split it: the main part (`Filters: DrawFilters`,
-   `Path: MainLayerPath`, `FromPaintPath`/`Stroke*`) goes to layerize, and the
-   compositor restates the impl bounds in its own `CpuImplSkiaBackend: CpuSkiaBackend`.
-   The impls for `SkRegion` (`runtime/skia.rs:179,382`) move with their traits.
-   `SkRegion` itself, the `Transform<R>` value (`runtime/geometry.rs:15`) and the
-   `FilterOperations` impls (`runtime/skia.rs:252-291`) are values that both
-   halves use, so they go to `layerize::commit` (or a layerize skia module) together with
-   `DrawFilters` / `MainLayerPath` (`adapter/main_layer.rs`) /
-   `MainLayerCopyOutputRequest` (impl `runtime/types.rs:144`).
-4. **`MainLayerImpl` / `MainLayerImplTree`.** They are the push target, so
-   they go to `layerize::commit`. Their implementor `CompositorLayer`
-   (`runtime/layer.rs`) stays in the compositor (local type, foreign trait:
-   allowed). They are generic over `B: MainLayerTypes`, so `MainLayerTypes`
-   must be visible from `commit`. Either move `MainLayerTypes` into `commit`
-   (it is implemented only by the family, which after step 1 lives in layerize)
-   or make the push-target traits generic over `B: CommitTypes` with the few
-   main-only items they use (`ImplContext`, `NodeId`) added to `CommitTypes`.
+**Replacement (option h): keep the family local to the compositor, bind the
+main half through one commit trait.**
+
+1. `CpuCompositorTypes<R>` stays a compositor struct. All impl traits
+   (compositor and sub-crate) stay implemented there, unchanged.
+2. `layerize::commit` declares `LayerizeFamily` (name open):
+   `PushPropertiesTypes + CommitStateTypes` plus `type Skia:
+   MainSkiaBackend` (the main part of `SkiaValueBackend`/`CpuSkiaBackend`,
+   see step 3 of the old plan) and the few impl-provided hooks main traits
+   need today (e.g. `ScrollbarLayerTypes::RasterizeScrollbarThumb`, which
+   builds the impl `UIBitmap`; `PaintedScrollbarConstructor`; the `MainLayerTypes`
+   `DerivedServices`/`MicroBenchmark` items). The compositor implements it for
+   `CpuCompositorTypes<R>` (foreign trait, local type: allowed).
+3. When a main trait moves to layerize (S1a-3), its impl becomes a blanket
+   `impl<F: LayerizeFamily> MainTrait for F { type Recording =
+   CpuRecordingTypes<F::Skia>; ... }` in layerize. There is exactly one family,
+   so the blanket impls do not conflict. Compositor code that names
+   `<CpuCompositorTypes<R> as PictureLayerTypes>::Recording` still normalizes
+   through the blanket impl.
+4. Main concrete code that names `CpuCompositorTypes<R>` (`Root<R>` in
+   `runtime/paint_services.rs`, `runtime/paint/*`) becomes generic over
+   `F: LayerizeFamily`, using `F::Skia` where it used `R`. This is the same
+   amount of genericization option (a) needed (it added `I` everywhere).
+
+Remaining S1a-2b work under (h): `MainSkiaBackend` in commit (with
+`DrawFilters`, `MainLayerPath`, `MainLayerCopyOutputRequest` and the
+`FilterOperations`/`SkPath` impls), then `LayerizeFamily` and its compositor
+impl. S1a-2c and S1a-3 are unchanged except that main-trait impls become
+blanket impls as in point 3.

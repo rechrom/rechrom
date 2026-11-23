@@ -25,35 +25,8 @@ use std::sync::{
     Arc, RwLock, RwLockReadGuard, Weak,
 };
 
-// Source: cc/layers/layer.h:63-80; cc/layers/layer.cc:84-86.
-#[derive(Clone)]
-pub struct LayerDebugInfo<N: Copy + Default> {
-    pub name: String,
-    pub owner_node_id: N,
-    pub paint_count: i32,
-    pub compositing_reasons: Vec<&'static str>,
-    pub compositing_reason_ids: Vec<&'static str>,
-    pub invalidations: Vec<Invalidation>,
-}
-// Source: cc/layers/layer.h:73-78.
-#[derive(Clone)]
-pub struct Invalidation {
-    pub rect: Rect,
-    pub reason: &'static str,
-    pub client: String,
-}
-impl<N: Copy + Default> Default for LayerDebugInfo<N> {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            owner_node_id: N::default(),
-            paint_count: 0,
-            compositing_reasons: Vec::new(),
-            compositing_reason_ids: Vec::new(),
-            invalidations: Vec::new(),
-        }
-    }
-}
+// Source: cc/layers/layer.h:63-80. Pushed to LayerImpl, so it is a commit value.
+pub use layerize::commit::push_properties::{Invalidation, LayerDebugInfo};
 // Source: cc/layers/layer.h:1044-1064; cc/layers/layer.cc:88-89.
 struct RareInputs<B: MainLayerTypes> {
     capture_bounds: B::RegionCaptureBounds,

@@ -1152,7 +1152,7 @@ where
         + SolidColorScrollbarLayerImplTypes
         + SurfaceLayerImplTypes
         + HostImplTypes
-        + MainLayerTypes<TrackedElementRects = TrackedElementRects>,
+        + MainLayerTypes + layerize::commit::push_properties::PushPropertiesTypes<TrackedElementRects = TrackedElementRects>,
 {
     type TrackedRectLists<'a>
         = TrackedListIter<'a>
@@ -1297,7 +1297,7 @@ impl<B> crate::adapter::picture_layer::PictureLayerImplTarget<B> for CompositorL
 where
  B:crate::adapter::picture_layer::PictureLayerTypes+PictureLayerImplTypes+SolidColorScrollbarLayerImplTypes+crate::adapter::layer_tree_impl::LayerTreeTypes<Layer=CompositorLayer<B>>,
  B::Recording:crate::adapter::recording_source::RecordingSourceTypes<RasterSource=<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource>,
- for<'a>B:MainLayerTypes<ImplContext<'a>=crate::adapter::layer_impl::LayerImplContext<'a,B>>,
+ for<'a>B:layerize::commit::push_properties::PushPropertiesTypes<ImplContext<'a>=crate::adapter::layer_impl::LayerImplContext<'a,B>>,
 {
  fn set_has_non_animated_image_update_rect(&mut self){self.picture_impl_mut().expect("native Picture target").set_has_non_animated_image_update_rect()}
  fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}

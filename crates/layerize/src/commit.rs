@@ -12,6 +12,7 @@ pub mod property_tree;
 pub mod property_tree_services;
 pub mod property_types;
 pub mod protected_sequence_synchronizer;
+pub mod push_properties;
 pub mod scroll_elasticity;
 pub mod scroll_elasticity_utils;
 pub mod scroll_node;

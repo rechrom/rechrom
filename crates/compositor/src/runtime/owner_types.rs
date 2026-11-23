@@ -154,19 +154,23 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
         super::resources::RasterColorSpace,
     >;
 }
-impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
+impl<R: CpuSkiaBackend> layerize::commit::push_properties::PushPropertiesTypes
+    for CpuCompositorTypes<R>
+{
     type NodeId = super::types::NodeId;
     type RegionCaptureBounds = super::metadata::RegionCaptureBounds;
     type TrackedElementRects = super::metadata::TrackedElementRects;
     type FilterQuality = super::paint::FilterQuality;
     type DynamicRangeLimit = super::paint::DynamicRangeLimit;
+    type ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, Self>;
+}
+impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
     type DidScrollCallback = super::types::DidScrollCallback;
     type NodeInfo = super::display_item_list::NodeInfo;
     type Picture = super::paint::Picture<R>;
     type LayerSelection = crate::cc::input::layer_selection_bound::LayerSelection;
     type MicroBenchmark = super::paint::MicroBenchmark<Self>;
     type TaskRunner = super::types::TaskRunner;
-    type ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, Self>;
     type DerivedServices = dyn super::paint::CpuPaintServices<Self>;
 }
 impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes
@@ -235,7 +239,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_SetHasFindInPageTickmarks(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
             self,
@@ -247,7 +251,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_SetScrollElementId(
         &mut self,
         value: crate::adapter::input_types::ElementId,
-        _tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        _tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
             self,
@@ -282,7 +286,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_set_color(
         &mut self,
         color: crate::adapter::layer_tree_impl::Color4f,
-        _tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        _tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::SolidColorScrollbar(layer) = self else {
             panic!("native solid-color scrollbar target subtype")
@@ -297,7 +301,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
         &mut self,
         range: <CpuCompositorTypes<R> as layerize::commit::CommitTypes>::SurfaceRange,
         deadline: Option<u32>,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -308,7 +312,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
     fn SurfaceSetStretchContentToFillBounds(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -319,7 +323,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
     fn SurfaceSetIsReflection(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")

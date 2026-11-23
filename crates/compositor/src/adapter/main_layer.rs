@@ -11,47 +11,26 @@ use crate::cc::{
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MainLayerHostId(pub u64);
-/// Default is the native empty singleton value (capture/tracked rects); it
-/// never copies a nonempty resident payload.
-pub trait LayerValue: Clone + Default + PartialEq + Send + Sync {
-    fn IsEmpty(&self) -> bool;
-}
 pub trait MainLayerTypes:
     'static
     + super::commit_state::CommitStateTypes
+    + PushPropertiesTypes
     + layerize::commit::CommitTypes<
-        Layer: MainLayerImpl<Self>,
         Transform: Send + Sync + 'static,
         Filters: super::draw_property::DrawFilters + Send + Sync + 'static,
         Path: MainLayerPath + Send + Sync + 'static,
-        RegionBackend: super::region_backend::SkRegionBackend + Send + Sync + 'static,
         CopyOutputRequest: MainLayerCopyOutputRequest<TaskRunner = Self::TaskRunner>
                                + Send
                                + Sync
                                + 'static,
     >
 {
-    /// Native cc::NodeId, with kInvalidNodeId as Default.
-    type NodeId: Copy + Default + Send + Sync + 'static;
-    type RegionCaptureBounds: LayerValue + 'static;
-    type TrackedElementRects: LayerValue + 'static;
-    /// Native PaintFlags::FilterQuality, with kLow as Default.
-    type FilterQuality: Copy + Default + PartialEq + Send + Sync + 'static;
-    /// Native DynamicRangeLimitMixture, with kHigh as Default.
-    type DynamicRangeLimit: Copy + Default + PartialEq + Send + Sync + 'static;
     type DidScrollCallback: LayerDidScrollCallback + Default + Send + Sync + 'static;
     type NodeInfo;
     type Picture;
     type LayerSelection;
     type MicroBenchmark;
     type TaskRunner: Clone;
-    /// Current impl-side tree/services borrow. Native Layer::PushDirtyProperties
-    /// receives the actual target tree; an implementation must split its layer
-    /// owner from the remaining resident tree fields before constructing this.
-    /// Never retained by either main Layer or the target LayerImpl.
-    type ImplContext<'a>: MainLayerImplTree<Self>
-    where
-        Self: 'a;
     type DerivedServices: ?Sized;
 }
 pub trait LayerDidScrollCallback: Clone {
@@ -294,90 +273,8 @@ pub fn MaskFilterInfoForLayer(
         clip_id: None,
     }
 }
-/// Exact live LayerImpl operations consumed by cc/layers/layer.cc:1510-1622.
-/// This boundary owns no LayerImpl state and makes no push decisions.
-/// Scoped owner facet for the target resident LayerImpl. The implementing
-/// borrow excludes that target layer; no whole tree/backpointer is retained.
-pub trait MainLayerImplTree<B: MainLayerTypes> {
-    fn source_frame_number(&self) -> i32;
-}
 pub use layerize::commit::layer_impl_factory::LayerImplFactory;
-pub trait MainLayerImpl<B: MainLayerTypes>: Sized {
-    fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetHasTransformNode(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetEffectTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetClipTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetScrollTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetElementId(&mut self, element: ElementId, impl_tree: &mut B::ImplContext<'_>);
-    fn SetBackgroundColor(
-        &mut self,
-        color: super::layer_tree_impl::Color4f,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetSafeOpaqueBackgroundColor(
-        &mut self,
-        color: super::layer_tree_impl::Color4f,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetBounds(&mut self, bounds: &super::geometry::Size, impl_tree: &mut B::ImplContext<'_>);
-    fn SetOffsetToTransformParent(&mut self, offset: Vector2dF, impl_tree: &mut B::ImplContext<'_>);
-    fn SetDrawsContent(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetHitTestOpaqueness(
-        &mut self,
-        value: crate::cc::input::hit_test_opaqueness::HitTestOpaqueness,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn NoteLayerPropertyChanged(&mut self, impl_tree: &mut B::ImplContext<'_>);
-    fn SetTouchActionRegion(
-        &mut self,
-        value: &crate::cc::layers::touch_action_region::TouchActionRegion<B::RegionBackend>,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetContentsOpaque(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetContentsOpaqueForText(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetShouldCheckBackfaceVisibility(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn LifecycleAllowsPropertyTreeAccess(&self, impl_tree: &mut B::ImplContext<'_>) -> bool;
-    fn UnionUpdateRect(&mut self, rect: &Rect, impl_tree: &mut B::ImplContext<'_>);
-    fn UpdateDebugInfo(
-        &mut self,
-        info: Option<&mut crate::cc::layers::layer::LayerDebugInfo<B::NodeId>>,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetFilterQuality(&mut self, value: B::FilterQuality, impl_tree: &mut B::ImplContext<'_>);
-    fn SetDynamicRangeLimit(
-        &mut self,
-        value: B::DynamicRangeLimit,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetMainThreadScrollHitTestRegion(
-        &mut self,
-        value: &crate::cc::base::region::Region<B::RegionBackend>,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetNonCompositedScrollHitTestRects(
-        &mut self,
-        value: &[crate::cc::layers::scroll_hit_test_rect::ScrollHitTestRect],
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetCaptureBounds(
-        &mut self,
-        value: &B::RegionCaptureBounds,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetTrackedElementRects(
-        &mut self,
-        value: &B::TrackedElementRects,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetWheelEventHandlerRegion(
-        &mut self,
-        value: &crate::cc::base::region::Region<B::RegionBackend>,
-        impl_tree: &mut B::ImplContext<'_>,
-    );
-    fn SetCanvasChildId(&mut self, value: ElementId, impl_tree: &mut B::ImplContext<'_>);
-    fn ResetRareProperties(&mut self, impl_tree: &mut B::ImplContext<'_>);
-    fn SetNeedsPushProperties(&mut self, value: u8, impl_tree: &mut B::ImplContext<'_>);
-}
+pub use layerize::commit::push_properties::{LayerValue, MainLayerImpl, MainLayerImplTree, PushPropertiesTypes};
 
 // External SkPath::RRect(SkRRect(gfx::RRectF)) value construction only.
 pub trait MainLayerPath: super::property_types::PropertyPath {

@@ -132,7 +132,7 @@ where
     B::Layer: crate::adapter::tree_sync::SyncImplLayer<B>,
     B::LayerList: crate::adapter::tree_sync::SyncLayerList<B>,
     for<'a> B:
-        MainLayerTypes<ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>>,
+        layerize::commit::push_properties::PushPropertiesTypes<ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>>,
 {
     type MainContext<'a, 'c>
         = MainSynchronizationContext<'a, 'c, B>
