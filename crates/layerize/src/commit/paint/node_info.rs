@@ -1,7 +1,8 @@
 //! Actual text-content metadata emitted by the CPU DisplayItemList binding.
 //! The value is the native cc::NodeInfo shape and owns no DOM or Paint object.
 
-use crate::adapter::{display_item_list::DisplayNodeInfo, geometry::Rect};
+use super::display_item_list_types::DisplayNodeInfo;
+use crate::commit::geometry::Rect;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NodeInfo {
@@ -25,15 +26,5 @@ impl DisplayNodeInfo for NodeInfo {
             node_id,
             visual_rect,
         }
-    }
-}
-
-impl crate::adapter::picture_layer::PictureLayerNodeInfo for NodeInfo {
-    fn visual_rect(&self) -> Rect {
-        self.visual_rect
-    }
-
-    fn set_visual_rect(&mut self, rect: Rect) {
-        self.visual_rect = rect;
     }
 }

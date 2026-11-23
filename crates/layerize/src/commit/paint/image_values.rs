@@ -2,7 +2,8 @@
 //! are read from the same allocation used by playback; no identity registry or
 //! animation/completion metadata projection is constructed.
 use super::{CpuPaintImage, CpuPaintImageValue, CpuPaintRecordImage, CpuWorkletInput, PaintRecord};
-use crate::adapter::{image_animation::PaintImageId, layer_tree_host_impl::ContentColorUsage};
+use super::image_metadata::PaintImageId;
+use crate::commit::ContentColorUsage;
 use std::sync::Arc;
 #[derive(Debug)]
 pub enum CpuPaintImageInputError {
@@ -40,7 +41,7 @@ struct ImageLease {
     catalog_index: usize,
     document_record: Option<CpuPaintRecordImage>,
     software_images: Vec<std::sync::OnceLock<Arc<Vec<u8>>>>,
-    animation_metadata: Option<crate::adapter::image_animation::AnimatedImageMetadata>,
+    animation_metadata: Option<super::image_metadata::AnimatedImageMetadata>,
 }
 impl ImageLease {
     fn image(&self) -> &paint::paint_engine::LayoutPaintImage {
@@ -54,7 +55,7 @@ impl ImageLease {
 impl CpuPaintImage {
     pub fn WithDecodingMode(
         mut self,
-        mode: crate::adapter::layer_tree_host_impl::HostImageDecodingMode,
+        mode: crate::commit::color_space::HostImageDecodingMode,
     ) -> Self {
         self.1 = mode;
         self
@@ -125,20 +126,20 @@ impl CpuPaintImage {
                 }
                 paint::paint_engine::PaintImageAnimationMetadata::Unavailable(_) => unreachable!(),
             };
-            Some(crate::adapter::image_animation::AnimatedImageMetadata {
+            Some(super::image_metadata::AnimatedImageMetadata {
                 paint_image_id: image.paint_image_id,
-                sync_animation_target_id: crate::adapter::image_animation::kInvalidId,
+                sync_animation_target_id: super::image_metadata::kInvalidId,
                 sync_animation_sequence_id: 0,
                 completion_state: if is_complete {
-                    crate::adapter::image_animation::CompletionState::kDone
+                    super::image_metadata::CompletionState::kDone
                 } else {
-                    crate::adapter::image_animation::CompletionState::kPartiallyDone
+                    super::image_metadata::CompletionState::kPartiallyDone
                 },
                 frames: frames
                     .iter()
-                    .map(|frame| crate::adapter::image_animation::FrameMetadata {
+                    .map(|frame| super::image_metadata::FrameMetadata {
                         complete: true,
-                        duration: crate::adapter::time::TimeDelta::Microseconds(
+                        duration: compositor_scheduler::TimeDelta::Microseconds(
                             frame.duration.as_micros().min(i64::MAX as u128) as i64,
                         ),
                     })
@@ -166,11 +167,11 @@ impl CpuPaintImage {
                 ))?;
                 Some(CpuPaintRecordImage {
                     record: PaintRecord::from_artifact(record.artifact.clone()),
-                    intrinsic_size: crate::adapter::geometry::SizeF::new(
+                    intrinsic_size: crate::commit::geometry::SizeF::new(
                         record.intrinsic_size.width as f32,
                         record.intrinsic_size.height as f32,
                     ),
-                    record_size: crate::adapter::geometry::SizeF::new(
+                    record_size: crate::commit::geometry::SizeF::new(
                         record.record_size.width as f32,
                         record.record_size.height as f32,
                     ),
@@ -189,7 +190,7 @@ impl CpuPaintImage {
                     .collect(),
                 animation_metadata,
             }),
-            crate::adapter::layer_tree_host_impl::HostImageDecodingMode::kUnspecified,
+            crate::commit::color_space::HostImageDecodingMode::kUnspecified,
         ))
     }
 }
@@ -243,12 +244,12 @@ impl CpuPaintImageValue for ImageLease {
         self.document_record.clone()
     }
 
-    fn size(&self) -> crate::adapter::geometry::Size {
-        crate::adapter::geometry::Size::new(self.image().width as i32, self.image().height as i32)
+    fn size(&self) -> crate::commit::geometry::Size {
+        crate::commit::geometry::Size::new(self.image().width as i32, self.image().height as i32)
     }
     fn animation_metadata(
         &self,
-    ) -> Option<&crate::adapter::image_animation::AnimatedImageMetadata> {
+    ) -> Option<&super::image_metadata::AnimatedImageMetadata> {
         self.animation_metadata.as_ref()
     }
     fn stable_id(&self) -> PaintImageId {

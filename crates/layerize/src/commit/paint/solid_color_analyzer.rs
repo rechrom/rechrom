@@ -1,10 +1,8 @@
 //! Thin actual Skia no-pixels/value binding for canonical Paint solid analysis.
 //! Classification remains entirely in paint::cc::paint::solid_color_analyzer.
 #![allow(non_snake_case)]
-use crate::runtime::{
-    paint::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef},
-    skia::SkRegion,
-};
+use super::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef};
+use crate::commit::skia_region::SkRegion;
 use paint::cc::paint::blend_mode::BlendMode;
 use paint::cc::paint::solid_color_analyzer::*;
 use skia::{
@@ -13,7 +11,7 @@ use skia::{
 };
 use std::sync::Arc;
 pub trait CpuPaintAnalysisTrace: Send + Sync {
-    fn Scope(&self, name: &'static str) -> crate::runtime::paint::PaintTraceScope;
+    fn Scope(&self, name: &'static str) -> super::PaintTraceScope;
 }
 pub struct CpuSolidColorBackend {
     trace: Arc<dyn CpuPaintAnalysisTrace>,
@@ -26,14 +24,14 @@ impl CpuSolidColorBackend {
 #[derive(Clone)]
 pub struct Matrix(pub(crate) SkM44);
 struct MatrixRef<'a>(&'a SkM44);
-impl crate::adapter::geometry::Matrix44 for MatrixRef<'_> {
+impl crate::commit::geometry::Matrix44 for MatrixRef<'_> {
     fn rc(&self, r: usize, c: usize) -> f32 {
         self.0.rc(r, c)
     }
 }
 impl AnalysisMatrix for Matrix {
     fn Preserves2DAxisAlignment(&self) -> bool {
-        crate::cc::base::math_util::MathUtil::SkM44Preserves2DAxisAlignment(&MatrixRef(&self.0))
+        crate::commit::math_util::MathUtil::SkM44Preserves2DAxisAlignment(&MatrixRef(&self.0))
     }
     fn invert(&self) -> Option<Self> {
         {
@@ -166,7 +164,7 @@ impl AnalysisShape for RectShape {
             && a.bottom >= r.bottom
     }
 }
-pub struct RRectShape(crate::runtime::skia::SkRoundedRect);
+pub struct RRectShape(crate::commit::skia_region::SkRoundedRect);
 impl AnalysisShape for RRectShape {
     fn contains(&self, r: AnalysisRect) -> bool {
         {
@@ -330,7 +328,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
     type Flags<'a> = Flags<'a>;
     type RectShape<'a> = RectShape;
     type RRectShape<'a> = RRectShape;
-    type TraceScope = crate::runtime::paint::PaintTraceScope;
+    type TraceScope = super::PaintTraceScope;
     fn MakeNoDrawCanvas(&self, w: i32, h: i32) -> NoDrawCanvas {
         NoDrawCanvas(SkNoDrawCanvas::new(w, h))
     }
@@ -355,7 +353,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
         }
     }
     fn RRect<'a>(&'a self, op: CpuPaintOpRef<'a, SkRegion>) -> RRectShape {
-        use crate::adapter::geometry::{RRectF, RectF, Vector2dF};
+        use crate::commit::geometry::{RRectF, RectF, Vector2dF};
         let value = match op {
             CpuPaintOpRef::PaintRecord { op, .. } => {
                 let radii = op.corner_radii;
@@ -380,7 +378,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
             ) => *value,
             _ => panic!("source rounded rect op required"),
         };
-        RRectShape(crate::runtime::skia::MakeSkRoundedRect(&value))
+        RRectShape(crate::commit::skia_region::MakeSkRoundedRect(&value))
     }
     fn DrawColor(&self, op: CpuPaintOpRef<'_, SkRegion>) -> (Color, BlendMode) {
         match op {
@@ -449,10 +447,10 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
             },
         }
     }
-    fn TraceCheckIfSolidShape(&self) -> crate::runtime::paint::PaintTraceScope {
+    fn TraceCheckIfSolidShape(&self) -> super::PaintTraceScope {
         self.trace.Scope("SolidColorAnalyzer::CheckIfSolidShape")
     }
-    fn TraceRRectClipCoversCanvas(&self) -> crate::runtime::paint::PaintTraceScope {
+    fn TraceRRectClipCoversCanvas(&self) -> super::PaintTraceScope {
         self.trace
             .Scope("SolidColorAnalyzer::CheckIfRRectClipCoversCanvas")
     }

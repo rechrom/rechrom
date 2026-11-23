@@ -1,6 +1,7 @@
 //! Native immutable Paint worklet input/value ownership. The external input
 //! supplies actual property keys and repaint semantics; cc owns the record map.
-use crate::adapter::{input_types::ElementId, layer_tree_impl::Color4f};
+use crate::commit::input_types::ElementId;
+use compositor_draw::Color4f;
 use std::sync::Arc;
 // Source: cc/paint/paint_worklet_input.h:24-28,43-63;
 // cc/paint/paint_worklet_input.cc:40-61. Rust's sum type enforces exactly one
@@ -22,7 +23,7 @@ pub struct WorkletPropertyValue {
     pub float_value: Option<f32>,
     pub color_value: Option<Color4f>,
 }
-impl crate::adapter::paint_worklet::PropertyValue for WorkletPropertyValue {
+impl compositor_animation::paint_worklet::PropertyValue for WorkletPropertyValue {
     fn has_value(&self) -> bool {
         self.float_value.is_some() || self.color_value.is_some()
     }
@@ -44,7 +45,7 @@ pub trait CpuPaintWorkletInput: Send + Sync {
 }
 #[derive(Clone)]
 pub struct CpuWorkletInput(pub Arc<dyn CpuPaintWorkletInput>);
-impl crate::adapter::paint_worklet::PaintWorkletInput<WorkletPropertyKey> for CpuWorkletInput {
+impl compositor_animation::paint_worklet::PaintWorkletInput<WorkletPropertyKey> for CpuWorkletInput {
     fn WorkletId(&self) -> u64 {
         self.0.WorkletId()
     }
@@ -52,23 +53,9 @@ impl crate::adapter::paint_worklet::PaintWorkletInput<WorkletPropertyKey> for Cp
         self.0.GetPropertyKeys()
     }
 }
-impl
-    crate::adapter::picture_layer_impl::PicturePaintWorkletInput<
-        WorkletPropertyKey,
-        WorkletPropertyValue,
-    > for CpuWorkletInput
-{
-    fn ValueChangeShouldCauseRepaint(
-        &self,
-        previous: &WorkletPropertyValue,
-        next: &WorkletPropertyValue,
-    ) -> bool {
-        self.0.ValueChangeShouldCauseRepaint(previous, next)
-    }
-}
 pub type CpuPaintWorkletInputs = Vec<(
     Arc<CpuWorkletInput>,
-    crate::adapter::image_animation::PaintImageId,
+    super::image_metadata::PaintImageId,
 )>;
 /// Source trace/object lifetime values are actual externally created RAII
 /// allocations. Their destruction is the native event endpoint, not a stored

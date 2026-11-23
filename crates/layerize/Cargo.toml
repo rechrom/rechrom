@@ -18,6 +18,8 @@ compositor_scheduler = { path = "../compositor/compositor_scheduler" }
 # prioritized_tile.h) and gfx::ContentColorUsage (viz surface values).
 compositor_tile = { path = "../compositor/compositor_tile" }
 compositor_frame = { path = "../compositor/compositor_frame" }
+# SharedImageFormat of decoded image leases (cc/paint/decoded_draw_image.h).
+compositor_resource = { path = "../compositor/compositor_resource" }
 skia = { path = "../skia" }
 # cc::FilterOperations (cc/paint) for the shared filter facets; the main half
 # also reads PaintArtifact once PAC moves here.

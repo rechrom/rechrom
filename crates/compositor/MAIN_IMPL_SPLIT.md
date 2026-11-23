@@ -1,7 +1,7 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1 done; S1a-2 in progress (see "S1a-2 status" and
-"Plan correction" at the end); S1a-3 and the thread split (S1b/S1d) are not
+Status: S1c done. S1a-1 and S1a-2 done (see "S1a-2 status" and "Plan
+correction" at the end); S1a-3 and the thread split (S1b/S1d) are not
 implemented.
 
 ## Chromium reference
@@ -384,43 +384,54 @@ Done:
   old struct was impl-side. `EngineCore` still holds the main services until
   S1a-3.
 
-**PaintRecord value types (S1a-2c part 2): not moved; analysis.**
-The impl half names `CpuPaintRecord<R>` (`engine.rs:543`,
-`runtime/images.rs:161,1005`, `runtime/picture_types.rs:40,113,162,177`,
-`runtime/software_image_decode_cache.rs:420`), so they must be commit
-vocabulary before `runtime/paint/*` moves. `runtime/paint/record.rs` depends on:
+- **cc/paint classification (S1a-2c part 2, approved).**
+  1. `layerize::commit::skia_value_backend::PaintSkiaBackend` =
+     `SkRegionBackend + RoundedRectTransformBackend +
+     MainSkiaBackend<Filters = FilterOperations> + Send + Sync + 'static`
+     (blanket). The compositor's `CpuSkiaBackend` is now `PaintSkiaBackend +
+     SkiaValueBackend` (blanket), and `LayerizeFamily::Skia: PaintSkiaBackend`.
+  2. `layerize::commit::paint` is cc/paint: `PaintRecord` (the lease struct,
+     from `runtime/paint.rs`), `display_item_list` (git mv of
+     `cc/paint/display_item_list.rs`), `display_item_list_types` (git mv of
+     `adapter/display_item_list.rs`, plus `DirectlyCompositedImageInfo` from
+     `adapter/picture_layer_impl.rs`), `node_info` (git mv of
+     `runtime/display_item_list.rs`), `record`, `lowering`, `worklet`,
+     `image_values`, `metadata`, `discardable_image_map`,
+     `solid_color_analyzer` (git mv from `runtime/paint/`), `image_provider`
+     (the ImageProvider/DecodedDrawImage values cut from
+     `runtime/paint/raster.rs`) and `image_metadata` (PaintImageId,
+     FrameMetadata, AnimatedImageMetadata, cut from `adapter/image_animation.rs`).
+     `commit::rtree` is a git mv of `cc/base/rtree.rs`. The record code bounds
+     on `PaintSkiaBackend`. The compositor paths (`cc::paint::display_item_list`,
+     `adapter::display_item_list`, `runtime::display_item_list`, `cc::base::rtree`,
+     `runtime::paint::*`, `adapter::image_animation::*`) re-export them.
+     Impls of compositor-local traits for these values (HostPaintImage,
+     HostDecodePaintImage, HostDrawImage, TileManagerPaintImage,
+     TileManagerTargetColorParams, TileManagerDrawImage,
+     PicturePaintWorkletInput, PictureLayerNodeInfo) moved to
+     `runtime/paint/record_bindings.rs`; the PictureDisplayItemList /
+     HostDisplayItemList facets of `DisplayItemList` to the end of
+     `adapter/picture_layer_impl.rs`. `CpuPaintOp::FromConversion` became the
+     free `CpuPaintOpFromConversion` in `runtime/paint/conversion.rs` (inherent
+     impls of a foreign type are not allowed). `raster.rs` and `picture.rs`
+     stay in the compositor: they are impl raster/tiling bindings plus main
+     recorder/services parts that move with S1a-3.
+  3. `commit::{ScrollOffsetMap, ContentColorUsage}` re-export
+     `compositor_tile::prioritized_tile_types` / `compositor_frame::surface_id`
+     (layerize now depends on `compositor_tile`, `compositor_frame`,
+     `compositor_resource`).
+  4. `commit::color_space` holds `RasterColorSpace` and its id enums,
+     `HostColorSpace` (+ its impl for `RasterColorSpace`, moved from
+     `runtime/host.rs`), `HostColorSpacePrimaryID`, `HostTargetColorParams`,
+     `HostImageDecodingMode`; `runtime/resources.rs` and
+     `adapter/layer_tree_host_impl.rs` re-export them.
 
-- `CpuSkiaBackend` (`runtime/types.rs`): `SkRegionBackend +
-  RoundedRectTransformBackend + SkiaValueBackend<Filters = FilterOperations>`.
-  Only `SkiaValueBackend`'s extra filter facets (RenderSurface/Occlusion/
-  Damage) are impl-local.
-- `adapter::display_item_list` and `cc::paint::display_item_list`
-  (`DisplayItemList`, `RasterInducingScrollInfo`): cc/paint, used by both
-  threads in Chromium.
-- `ContentColorUsage`: already a `compositor_frame::surface_id` value.
-- `ScrollOffsetMap`: `compositor_tile::prioritized_tile_types` alias
-  (`BTreeMap<ElementId, PointF>`).
-- `RasterColorSpace` (`runtime/resources.rs:101`), via `TargetColorParams` /
-  `HostTargetColorParams` and `HostImageDecodingMode`
-  (`adapter/layer_tree_host_impl.rs:1889,2203`).
+  Known gap: the `#[cfg(test)]` modules of the moved `lowering.rs`
+  (`CpuMainPaintServices`, a compositor type until S1a-3) and `metadata.rs`
+  (needs `canvas` / `paint_input_types` dev-dependencies) do not build as
+  layerize unit tests yet; fix them when `paint_services.rs` moves.
 
-S1a-3 needs this, because `runtime/paint/*` moves into layerize and the impl
-half keeps using the record types. Smallest classification proposed:
-1. `layerize::commit::PaintSkiaBackend = SkRegionBackend +
-   RoundedRectTransformBackend + MainSkiaBackend<Filters = FilterOperations>
-   + Send + Sync + 'static`; compositor's `CpuSkiaBackend` becomes
-   `PaintSkiaBackend + SkiaValueBackend` (blanket), and record code bounds on
-   `PaintSkiaBackend`.
-2. cc/paint (`DisplayItemList`, the display_item_list facets, record.rs,
-   raster.rs, image_values.rs, worklet.rs, picture.rs value parts) becomes a
-   `layerize::commit::paint` module: it is cc/paint, shared by both threads.
-3. `ScrollOffsetMap` and `ContentColorUsage` are re-exported by commit from
-   their sub-crates (like the other shared cc values).
-4. `RasterColorSpace`, `HostTargetColorParams`, `HostImageDecodingMode` are
-   plain values: move them into commit (gfx::ColorSpace / cc image decode
-   values), compositor re-exports.
-
-Next: that classification, then S1a-3.
+Next: S1a-3.
 
 ### Plan correction: option (a) does not compile
 

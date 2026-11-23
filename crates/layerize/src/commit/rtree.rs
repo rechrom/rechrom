@@ -2,7 +2,7 @@
 // Copyright 2015 The Chromium Authors. BSD-style license in LICENSE.
 // Source: cc/base/rtree.h:1-47. Includes/guards and the template namespace map
 // to this module; node indices replace the source's stable HeapArray pointers.
-use crate::adapter::geometry::Rect;
+use super::geometry::Rect;
 use std::collections::BTreeMap;
 
 // Source: cc/base/rtree.h:48-162.

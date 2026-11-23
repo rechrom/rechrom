@@ -2,22 +2,15 @@
 // Copyright 2014 The Chromium Authors. BSD-style license in LICENSE.
 // Source: cc/paint/display_item_list.h:1-43. Includes, declarations and the
 // class overview map to this module and its typed Paint/raster adapter.
-use crate::{
-    adapter::{
-        display_item_list::{
-            DirectlyCompositedImageInfo as MakeDirectImageInfo, DisplayCanvas,
-            DisplayItemListTypes, DisplayNodeInfo, DisplayPaintOp, DisplayPaintOpBuffer,
-            DisplayPaintOpType, DisplayPlaybackItem,
-        },
-        geometry::Rect,
-        input_types::ElementId,
-        layer_tree_host_impl::ContentColorUsage,
-        layer_tree_impl::Color4f,
-        picture_layer_impl::DirectlyCompositedImageInfo,
-        prioritized_tile::ScrollOffsetMap,
-    },
-    cc::base::rtree::RTree,
+use super::display_item_list_types::{
+    DirectlyCompositedImageInfo as MakeDirectImageInfo, DirectlyCompositedImageInfo,
+    DisplayCanvas, DisplayItemListTypes, DisplayNodeInfo, DisplayPaintOp, DisplayPaintOpBuffer,
+    DisplayPaintOpType, DisplayPlaybackItem,
 };
+use crate::commit::{
+    geometry::Rect, input_types::ElementId, rtree::RTree, ContentColorUsage, ScrollOffsetMap,
+};
+use compositor_draw::Color4f;
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
 // Source: cc/paint/display_item_list.h:44-50,215-287.
@@ -503,37 +496,11 @@ fn DirectlyCompositedImageInfoForPaintOpBuffer<B: DisplayItemListTypes>(
     }
     if let Some(info) = &mut result {
         if transpose {
-            info.default_raster_scale = crate::adapter::geometry::Vector2dF::new(
+            info.default_raster_scale = crate::commit::geometry::Vector2dF::new(
                 info.default_raster_scale.y(),
                 info.default_raster_scale.x(),
             );
         }
     }
     result
-}
-
-// Source: cc/paint/display_item_list.h:141-213. These are direct virtual-free
-// projections of the same resident list used by RecordingSource/HostImpl.
-impl<B: DisplayItemListTypes> crate::adapter::picture_layer_impl::PictureDisplayItemList
-    for DisplayItemList<B>
-{
-    fn has_draw_text_ops(&self) -> bool {
-        self.has_draw_text_ops()
-    }
-    fn content_color_usage(&self) -> ContentColorUsage {
-        self.content_color_usage()
-    }
-    fn raster_inducing_scrolls(&self) -> &BTreeMap<ElementId, RasterInducingScrollInfo> {
-        self.raster_inducing_scrolls()
-    }
-}
-impl<B: DisplayItemListTypes> crate::adapter::layer_tree_host_impl::HostDisplayItemList
-    for DisplayItemList<B>
-{
-    fn num_slow_paths_up_to_min_for_MSAA(&self) -> i32 {
-        self.num_slow_paths_up_to_min_for_MSAA()
-    }
-    fn has_non_aa_paint(&self) -> bool {
-        self.has_non_aa_paint()
-    }
 }

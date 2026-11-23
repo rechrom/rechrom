@@ -10,7 +10,7 @@ pub mod commit_types;
 pub mod cubic_bezier;
 pub mod damage_context;
 pub mod debug_rect;
-pub mod display_item_list;
+pub use layerize::commit::paint::display_item_list_types as display_item_list;
 pub mod draw_property;
 pub mod elasticity_context;
 pub mod enum_set;

@@ -10,64 +10,66 @@ use crate::adapter::{
     },
     paint_geometry::ChunkGeometryMapper,
 };
-impl<R: crate::runtime::types::CpuSkiaBackend> CpuPaintOp<R> {
-    fn FromConversion<B>(op: ConversionOp<B>) -> Self
-    where
-        B: PaintChunksTypes<
-            PaintRecord = CpuPaintRecord<R>,
-            PaintFlags = CpuPaintFlags<R>,
-            PaintFilter = CpuPaintFilter,
-            RoundedRect = crate::adapter::geometry::RRectF,
-            PaintPath = std::sync::Arc<paint::paint_clip_path::PaintClipPath>,
-        >,
-        B::ChunkMapper: ChunkGeometryMapper<Transform = crate::runtime::geometry::Transform<R>>,
-    {
-        match op {
-            ConversionOp::Save => Self::Save,
-            ConversionOp::Restore => Self::Restore,
-            ConversionOp::Translate(x, y) => Self::Translate(x, y),
-            ConversionOp::Concat(t) => Self::Concat(t),
-            ConversionOp::ClipRect {
-                rect,
-                difference,
-                antialias,
-            } => Self::ClipRect {
-                rect,
-                difference,
-                antialias,
-            },
-            ConversionOp::ClipRRect(r, a) => Self::ClipRRect(r, a),
-            ConversionOp::ClipPath {
-                path,
-                difference,
-                antialias,
-            } => Self::ClipPath {
-                path: std::sync::Arc::new(CpuClipPath::<R>::FromPaintPath(&path)),
-                difference,
-                antialias,
-            },
-            ConversionOp::SaveLayer(flags) => Self::SaveLayer {
-                bounds: None,
-                flags,
-            },
-            ConversionOp::SaveLayerAlpha(alpha) => Self::SaveLayerAlpha {
-                bounds: None,
-                alpha,
-            },
-            ConversionOp::SaveLayerFilters {
-                bounds,
-                filters,
-                backdrop_filter,
-                flags,
-            } => Self::SaveLayerFilters {
-                bounds: Some(bounds),
-                filters,
-                backdrop_filter,
-                flags,
-            },
-            ConversionOp::DrawTransparentColorSrc => Self::DrawTransparentColorSrc,
-            ConversionOp::DrawRecord(record) => Self::DrawRecord(record),
-        }
+// Moves one conversion command into the cc op storage (CpuPaintOp is cc/paint
+// commit vocabulary, so this is a free function of the conversion binding).
+fn CpuPaintOpFromConversion<R: crate::runtime::types::CpuSkiaBackend, B>(
+    op: ConversionOp<B>,
+) -> CpuPaintOp<R>
+where
+    B: PaintChunksTypes<
+        PaintRecord = CpuPaintRecord<R>,
+        PaintFlags = CpuPaintFlags<R>,
+        PaintFilter = CpuPaintFilter,
+        RoundedRect = crate::adapter::geometry::RRectF,
+        PaintPath = std::sync::Arc<paint::paint_clip_path::PaintClipPath>,
+    >,
+    B::ChunkMapper: ChunkGeometryMapper<Transform = crate::runtime::geometry::Transform<R>>,
+{
+    match op {
+        ConversionOp::Save => CpuPaintOp::Save,
+        ConversionOp::Restore => CpuPaintOp::Restore,
+        ConversionOp::Translate(x, y) => CpuPaintOp::Translate(x, y),
+        ConversionOp::Concat(t) => CpuPaintOp::Concat(t),
+        ConversionOp::ClipRect {
+            rect,
+            difference,
+            antialias,
+        } => CpuPaintOp::ClipRect {
+            rect,
+            difference,
+            antialias,
+        },
+        ConversionOp::ClipRRect(r, a) => CpuPaintOp::ClipRRect(r, a),
+        ConversionOp::ClipPath {
+            path,
+            difference,
+            antialias,
+        } => CpuPaintOp::ClipPath {
+            path: std::sync::Arc::new(CpuClipPath::<R>::FromPaintPath(&path)),
+            difference,
+            antialias,
+        },
+        ConversionOp::SaveLayer(flags) => CpuPaintOp::SaveLayer {
+            bounds: None,
+            flags,
+        },
+        ConversionOp::SaveLayerAlpha(alpha) => CpuPaintOp::SaveLayerAlpha {
+            bounds: None,
+            alpha,
+        },
+        ConversionOp::SaveLayerFilters {
+            bounds,
+            filters,
+            backdrop_filter,
+            flags,
+        } => CpuPaintOp::SaveLayerFilters {
+            bounds: Some(bounds),
+            filters,
+            backdrop_filter,
+            flags,
+        },
+        ConversionOp::DrawTransparentColorSrc => CpuPaintOp::DrawTransparentColorSrc,
+        ConversionOp::DrawRecord(record) => CpuPaintOp::DrawRecord(record),
     }
 }
 impl<R: crate::runtime::types::CpuSkiaBackend, B> ContentPaintOpBuffer<B> for CpuPaintOpBuffer<R>
@@ -141,7 +143,7 @@ where
         DisplayPaintOpBuffer::next_op_offset(self)
     }
     fn Push(&mut self, op: ConversionOp<B>) {
-        self.push(CpuPaintOp::FromConversion(op));
+        self.push(CpuPaintOpFromConversion(op));
     }
     fn UpdateSaveLayerBounds(&mut self, id: usize, rect: crate::adapter::geometry::RectF) {
         DisplayPaintOpBuffer::UpdateSaveLayerBounds(self, id, rect)
@@ -167,7 +169,7 @@ where
     CpuRecordingTypes<R>:crate::adapter::recording_source::RecordingSourceTypes<DirectlyCompositedImageInfo=crate::adapter::picture_layer_impl::DirectlyCompositedImageInfo>,
 {
     fn Push(&mut self, op: ConversionOp<B>) -> usize {
-        self.push(CpuPaintOp::FromConversion(op))
+        self.push(CpuPaintOpFromConversion(op))
     }
     fn EndPaintOfPairedBegin(&mut self) {
         Self::EndPaintOfPairedBegin(self)

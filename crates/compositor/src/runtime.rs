@@ -14,7 +14,8 @@ pub mod main_host;
 pub mod paint;
 pub mod paint_services;
 
-pub mod display_item_list;
+// cc::NodeInfo (cc/paint/display_item_list.h) is commit vocabulary.
+pub use layerize::commit::paint::node_info as display_item_list;
 
 pub mod geometry;
 

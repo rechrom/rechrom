@@ -15,7 +15,7 @@ pub mod animation {
     pub mod scroll_offset_animations_impl;
 }
 pub mod paint {
-    pub mod display_item_list;
+    pub use layerize::commit::paint::display_item_list;
 }
 pub mod benchmarks {
     pub mod micro_benchmark_controller_impl;
@@ -67,7 +67,7 @@ pub mod tiles {
 }
 pub mod base {
     pub mod rolling_time_delta_history;
-    pub mod rtree;
+    pub use layerize::commit::rtree;
     pub mod container_util;
     pub mod base_export;
     pub mod delayed_unique_notifier;

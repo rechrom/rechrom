@@ -88,11 +88,7 @@ pub trait PictureDisplayItemListFor<B: PictureLayerImplTypes>: PictureDisplayIte
     ) -> Arc<B::DiscardableImageMap>;
 }
 // Source dependency: cc/paint/directly_composited_image_info.h:14-19.
-#[derive(Clone, Copy)]
-pub struct DirectlyCompositedImageInfo {
-    pub default_raster_scale: super::geometry::Vector2dF,
-    pub nearest_neighbor: bool,
-}
+pub use layerize::commit::paint::display_item_list_types::DirectlyCompositedImageInfo;
 /// Source dependency: cc/paint/paint_worklet_input.h:101-106.
 /// The native flat_map's key is the actual scoped_refptr allocation identity.
 /// This directly owned sorted vector is the same flat storage, not a projection
@@ -462,4 +458,34 @@ pub trait PictureReleasedTileClient<B: PictureLayerImplTypes> {
     fn NotifyReleasedTile(&mut self, tile: &crate::cc::tiles::tile::Tile<B>);
     fn layer(&self) -> &dyn super::layer_tree_host_impl::PictureLayerDisplayRead;
     fn should_batch_updated_tiles(&self) -> bool;
+}
+
+// The impl-side facets of the cc/paint DisplayItemList (commit vocabulary).
+// Source: cc/paint/display_item_list.h:141-213. These are direct virtual-free
+// projections of the same resident list used by RecordingSource/HostImpl.
+impl<B: crate::adapter::display_item_list::DisplayItemListTypes> crate::adapter::picture_layer_impl::PictureDisplayItemList
+    for crate::cc::paint::display_item_list::DisplayItemList<B>
+{
+    fn has_draw_text_ops(&self) -> bool {
+        self.has_draw_text_ops()
+    }
+    fn content_color_usage(&self) -> crate::adapter::layer_tree_host_impl::ContentColorUsage {
+        self.content_color_usage()
+    }
+    fn raster_inducing_scrolls(&self) -> &std::collections::BTreeMap<
+        crate::adapter::input_types::ElementId,
+        crate::cc::paint::display_item_list::RasterInducingScrollInfo,
+    > {
+        self.raster_inducing_scrolls()
+    }
+}
+impl<B: crate::adapter::display_item_list::DisplayItemListTypes> crate::adapter::layer_tree_host_impl::HostDisplayItemList
+    for crate::cc::paint::display_item_list::DisplayItemList<B>
+{
+    fn num_slow_paths_up_to_min_for_MSAA(&self) -> i32 {
+        self.num_slow_paths_up_to_min_for_MSAA()
+    }
+    fn has_non_aa_paint(&self) -> bool {
+        self.has_non_aa_paint()
+    }
 }

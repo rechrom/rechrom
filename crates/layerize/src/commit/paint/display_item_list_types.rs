@@ -3,14 +3,19 @@
 //! cc; PaintOp storage, SkCanvas playback and solid-color analysis stay in the
 //! external Paint/raster implementation that owns those values.
 
-use super::{
+use crate::commit::{
     geometry::{Rect, Vector2dF},
     input_types::ElementId,
-    layer_tree_host_impl::ContentColorUsage,
-    layer_tree_impl::Color4f,
-    picture_layer_impl::DirectlyCompositedImageInfo,
-    prioritized_tile::ScrollOffsetMap,
+    ContentColorUsage, ScrollOffsetMap,
 };
+use compositor_draw::Color4f;
+
+// Source dependency: cc/paint/directly_composited_image_info.h:14-19.
+#[derive(Clone, Copy)]
+pub struct DirectlyCompositedImageInfo {
+    pub default_raster_scale: Vector2dF,
+    pub nearest_neighbor: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayPaintOpType {
@@ -127,7 +132,7 @@ pub trait DisplayPaintOpBuffer<B: DisplayItemListTypes> {
         all_bounds: &std::collections::BTreeMap<usize, Rect>,
         scrolls: &std::collections::BTreeMap<
             ElementId,
-            crate::cc::paint::display_item_list::RasterInducingScrollInfo,
+            super::display_item_list::RasterInducingScrollInfo,
         >,
     );
     fn ToTraceString(
@@ -136,7 +141,7 @@ pub trait DisplayPaintOpBuffer<B: DisplayItemListTypes> {
         all_bounds: &std::collections::BTreeMap<usize, Rect>,
         scrolls: &std::collections::BTreeMap<
             ElementId,
-            crate::cc::paint::display_item_list::RasterInducingScrollInfo,
+            super::display_item_list::RasterInducingScrollInfo,
         >,
     ) -> String;
     fn TraceRasterBegin(&self, total_op_count: usize) -> bool;
@@ -164,7 +169,7 @@ pub trait DisplayItemListTypes: Sized + 'static {
     fn PlaybackParams<'a>(scrolls: Option<&'a ScrollOffsetMap>) -> Self::PlaybackParams<'a>;
     fn MakeDrawScrollingContentsOp(
         scroll_element_id: ElementId,
-        list: std::sync::Arc<crate::cc::paint::display_item_list::DisplayItemList<Self>>,
+        list: std::sync::Arc<super::display_item_list::DisplayItemList<Self>>,
     ) -> Self::PaintOp;
 }
 

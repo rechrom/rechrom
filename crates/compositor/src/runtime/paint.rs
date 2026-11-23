@@ -16,6 +16,9 @@ pub use paint::paint_engine::{
     RecordedDisplayItemKind,
 };
 use paint::paint_property_tree;
+// cc/paint values (PaintRecord, PaintOpBuffer, DisplayItemList facets) are
+// commit vocabulary shared with the impl half.
+pub use layerize::commit::paint::*;
 mod artifact_nodes;
 mod conversion;
 mod conversion_nodes;
@@ -39,25 +42,13 @@ mod picture;
 mod property_state;
 mod raster;
 pub use raster::*;
-mod worklet;
-pub use worklet::*;
-mod image_values;
-pub use image_values::CpuPaintImageInputError;
-mod lowering;
-pub use lowering::{CpuPaintColorFilter, CpuPaintShader, PaintSource};
 mod services;
 pub use services::{
     PaintConfigurationError, SkiaPaintDiagnostics, SkiaPaintPlatform, SkiaPaintValueServices,
     SkiaRasterTrackingServices,
 };
-mod discardable_image_map;
-mod metadata;
-mod solid_color_analyzer;
-pub use solid_color_analyzer::{CpuPaintAnalysisTrace, CpuSolidColorBackend};
-mod record;
 pub use picture::*;
-pub use record::CpuPaintImage as PaintImage;
-pub use record::*;
+mod record_bindings;
 mod subset;
 mod validation;
 pub use paint::paint_property_tree::PaintPropertyChangeType as PaintPropertyChange;
@@ -127,76 +118,6 @@ impl PaintInput {
     pub fn record(&self, index: usize) -> Option<PaintRecord> {
         let item = self.artifact.display_items.get(index)?;
         PaintRecord::from_item(&self.artifact, item)
-    }
-}
-
-/// An immutable record lease over exactly the producer's resident replay range.
-///
-/// The lease retains only the artifact's shared replay operations, the
-/// image/font resources those operations sample and the resource-content
-/// revision sidecar, never the whole `PaintArtifact`. Blink's cc::PaintRecord
-/// likewise owns only its PaintOpBuffer (and the PaintImages inside it); the
-/// PaintChunk property-tree states that produced it stay with the main-thread
-/// PaintArtifact. Raster and impl-side owners receive these leases, so Blink
-/// paint property nodes stay on the Page document sequence.
-/// Source: cc/paint/paint_record.h (PaintRecord wraps sk_sp<PaintOpBuffer>);
-///         third_party/blink/renderer/platform/graphics/compositing/
-///         paint_chunks_to_cc_layer.cc (records receive draw ops only).
-#[derive(Clone)]
-pub struct PaintRecord {
-    items: Arc<Vec<PaintOp>>,
-    resources: Option<Arc<paint::paint_engine::PaintResources>>,
-    // Resource pixels may change without replacing `resources`; the sidecar
-    // is replaced on every such change and keeps SameSource exact.
-    content_revisions: Arc<Vec<Vec<(u64, u64)>>>,
-    range: Range<usize>,
-}
-
-impl PaintRecord {
-    pub fn from_artifact(artifact: Arc<PaintArtifact>) -> Self {
-        let end = artifact.items.len();
-        Self {
-            items: Arc::clone(&artifact.items),
-            resources: artifact.resources.clone(),
-            content_revisions: Arc::clone(&artifact.image_content_revisions),
-            range: 0..end,
-        }
-    }
-    pub fn from_item(artifact: &Arc<PaintArtifact>, item: &DisplayItem) -> Option<Self> {
-        let range = item.record_begin..item.record_end;
-        artifact.items.get(range.clone())?;
-        Some(Self {
-            items: Arc::clone(&artifact.items),
-            resources: artifact.resources.clone(),
-            content_revisions: Arc::clone(&artifact.image_content_revisions),
-            range,
-        })
-    }
-    /// The producer's immutable resource catalog sampled by these operations.
-    pub fn resources(&self) -> Option<&Arc<paint::paint_engine::PaintResources>> {
-        self.resources.as_ref()
-    }
-    pub fn ops(&self) -> &[PaintOp] {
-        &self.items[self.range.clone()]
-    }
-    /// The same immutable replay range over the same operation, resource and
-    /// resource-revision allocations. A property-only artifact replacement
-    /// retains all three, so its records replay identically.
-    pub fn SameSource(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.items, &other.items)
-            && self.range == other.range
-            && Arc::ptr_eq(&self.content_revisions, &other.content_revisions)
-            && match (&self.resources, &other.resources) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
-    }
-    pub fn is_empty(&self) -> bool {
-        self.range.is_empty()
-    }
-    pub fn len(&self) -> usize {
-        self.range.len()
     }
 }
 

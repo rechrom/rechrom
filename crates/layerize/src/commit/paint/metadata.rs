@@ -2,10 +2,7 @@
 //! No traversal summary is rebuilt when a getter is called: analysis happens
 //! once at insertion, and nested queries borrow their resident buffer metadata.
 use super::*;
-use crate::{
-    adapter::{geometry::Path as _, layer_tree_host_impl::ContentColorUsage},
-    runtime::types::CpuSkiaBackend,
-};
+use crate::commit::{geometry::Path as _, skia_value_backend::PaintSkiaBackend, ContentColorUsage};
 use paint::cc::paint::{
     paint_flags::{Cap, Style},
     paint_op::{MetadataFlags, PaintOpMetadata, PaintOpMetadataFields},
@@ -13,7 +10,7 @@ use paint::cc::paint::{
     paint_op_buffer_iterator::{PaintOpType, PaintOpView},
 };
 
-pub(crate) fn visit_shader_images(
+pub fn visit_shader_images(
     shader: &paint::paint_engine::PaintShader,
     visit: &mut dyn FnMut(u64),
 ) {
@@ -62,7 +59,7 @@ fn visit_pattern_images(
         }
     }
 }
-pub(crate) fn shader_image_id<R: CpuSkiaBackend>(
+pub fn shader_image_id<R: PaintSkiaBackend>(
     shader: &CpuPaintShader<R>,
 ) -> Option<(&PaintRecord, u64)> {
     let (source, mask) = shader.source()?;
@@ -74,7 +71,7 @@ pub(crate) fn shader_image_id<R: CpuSkiaBackend>(
         _ => None,
     }
 }
-pub(crate) fn shader_has_images<R: CpuSkiaBackend>(shader: &CpuPaintShader<R>) -> bool {
+pub fn shader_has_images<R: PaintSkiaBackend>(shader: &CpuPaintShader<R>) -> bool {
     if shader_image_id(shader).is_some() {
         return true;
     }
@@ -93,7 +90,7 @@ pub(crate) fn shader_has_images<R: CpuSkiaBackend>(shader: &CpuPaintShader<R>) -
     }
     result
 }
-pub(crate) fn flags<R: CpuSkiaBackend>(op: CpuPaintOpRef<'_, R>) -> Option<&CpuPaintFlags<R>> {
+pub fn flags<R: PaintSkiaBackend>(op: CpuPaintOpRef<'_, R>) -> Option<&CpuPaintFlags<R>> {
     match op {
         CpuPaintOpRef::Converted(
             CpuPaintOp::DrawPath { flags: f, .. }
@@ -106,7 +103,7 @@ pub(crate) fn flags<R: CpuSkiaBackend>(op: CpuPaintOpRef<'_, R>) -> Option<&CpuP
         _ => None,
     }
 }
-pub(crate) fn image_usage(
+pub fn image_usage(
     record: &PaintRecord,
     resource: u64,
     usage: &mut ContentColorUsage,
@@ -132,7 +129,7 @@ pub(crate) fn image_usage(
     // eager bitmap too; lazy generation controls decoding hints, not this bit.
     true
 }
-pub(crate) fn flag_images<R: CpuSkiaBackend>(
+pub fn flag_images<R: PaintSkiaBackend>(
     op: CpuPaintOpRef<'_, R>,
     usage: &mut ContentColorUsage,
 ) -> bool {
@@ -156,7 +153,7 @@ pub(crate) fn flag_images<R: CpuSkiaBackend>(
         false
     }
 }
-pub(crate) fn filter_has_images(
+pub fn filter_has_images(
     filter: &dyn paint::cc::paint::filter_operation::PaintFilter,
 ) -> bool {
     use paint::cc::paint::filter_operation::PaintFilterReplay::*;
@@ -182,7 +179,7 @@ pub(crate) fn filter_has_images(
             .any(|layer| layer.image.is_some()),
     }
 }
-pub(crate) struct MetadataFields<'a, R: CpuSkiaBackend> {
+pub struct MetadataFields<'a, R: PaintSkiaBackend> {
     op: CpuPaintOpRef<'a, R>,
     path: R::Path,
 }
@@ -190,7 +187,7 @@ pub(crate) struct MetadataFields<'a, R: CpuSkiaBackend> {
 #[cfg(test)]
 mod tests {
     use super::{image_usage, visit_shader_images};
-    use crate::{adapter::layer_tree_host_impl::ContentColorUsage, runtime::paint::PaintRecord};
+    use crate::commit::{paint::PaintRecord, ContentColorUsage};
     use canvas::CanvasPaintResource;
     use paint_input_types::PaintResources;
     use paint::paint_engine::{
@@ -250,8 +247,8 @@ mod tests {
         assert_eq!(usage, ContentColorUsage::kSRGB);
     }
 }
-impl<'a, R: CpuSkiaBackend> MetadataFields<'a, R> {
-    pub(crate) fn new(op: CpuPaintOpRef<'a, R>) -> Self {
+impl<'a, R: PaintSkiaBackend> MetadataFields<'a, R> {
+    pub fn new(op: CpuPaintOpRef<'a, R>) -> Self {
         let path = match op {
             CpuPaintOpRef::PaintRecord { op, .. } if !op.path.is_empty() => {
                 let authored = paint::paint_clip_path::PaintClipPath::from_authored(
@@ -274,8 +271,8 @@ impl<'a, R: CpuSkiaBackend> MetadataFields<'a, R> {
         Self { op, path }
     }
 }
-pub(crate) struct MetadataFlagView<'a, R: CpuSkiaBackend>(CpuPaintOpRef<'a, R>);
-impl<R: CpuSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<'_, R> {
+pub struct MetadataFlagView<'a, R: PaintSkiaBackend>(CpuPaintOpRef<'a, R>);
+impl<R: PaintSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<'_, R> {
     fn IsValid(&self) -> bool {
         flags(self.0).is_none_or(|f| f.IsValid())
     }
@@ -323,7 +320,7 @@ impl<R: CpuSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<'_
         flag_images(self.0, usage)
     }
 }
-impl<R: CpuSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFields<'_, R> {
+impl<R: PaintSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFields<'_, R> {
     type Flags<'a>
         = MetadataFlagView<'a, R>
     where
@@ -404,13 +401,13 @@ impl<R: CpuSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFie
         }
     }
 }
-pub(crate) fn analyze<R: CpuSkiaBackend>(
+pub fn analyze<R: PaintSkiaBackend>(
     op: CpuPaintOpRef<'_, R>,
     metadata: &mut PaintOpBufferMetadata<ContentColorUsage>,
 ) {
     metadata.AnalyzeAddedOp(&PaintOpMetadata(&MetadataFields::new(op)));
 }
-pub(crate) fn project<R: CpuSkiaBackend>(buffer: &CpuPaintOpBuffer<R>) -> CpuBufferMetadata {
+pub fn project<R: PaintSkiaBackend>(buffer: &CpuPaintOpBuffer<R>) -> CpuBufferMetadata {
     let m = buffer.canonical_metadata();
     CpuBufferMetadata {
         num_slow_paths_up_to_min_for_MSAA: m.num_slow_paths_up_to_min_for_MSAA(),

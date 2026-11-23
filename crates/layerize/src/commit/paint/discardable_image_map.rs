@@ -2,15 +2,13 @@
 //! The map owns its generated occurrences and spatial index; the backend and
 //! canvas exist only for this Generate call and never retain compositor owners.
 use super::*;
-use crate::adapter::image_animation::AnimatedImageMetadata as CpuAnimatedImageMetadata;
-use crate::{
-    adapter::{
-        geometry::{Path as _, Rect, RectF, ToEnclosingRect, Vector2dF},
-        image_animation::*,
-        prioritized_tile::ScrollOffsetMap,
-    },
-    cc::base::rtree::RTree,
-    runtime::skia::SkRegion,
+use super::image_metadata::AnimatedImageMetadata as CpuAnimatedImageMetadata;
+use super::image_metadata::*;
+use crate::commit::{
+    geometry::{Path as _, Rect, RectF, ToEnclosingRect, Vector2dF},
+    rtree::RTree,
+    skia_region::SkRegion,
+    ScrollOffsetMap,
 };
 
 fn image_decoding_mode(mode: paint::paint_engine::PaintImageDecodingMode) -> ImageDecodingMode {
@@ -39,11 +37,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ImageRectValue(Rect);
+pub struct ImageRectValue(Rect);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ImageFloatRectValue(RectF);
+pub struct ImageFloatRectValue(RectF);
 
 impl ImageRect for ImageRectValue {
     fn IsEmpty(self) -> bool {
@@ -71,7 +69,7 @@ impl ImageFloatRect for ImageFloatRectValue {
     }
 }
 #[derive(Clone)]
-pub(crate) struct ImageMapMatrix(SkM44);
+pub struct ImageMapMatrix(SkM44);
 fn matrix_col_major(values: [f32; 16]) -> SkM44 {
     SkM44::ColMajor(&values)
 }
@@ -186,7 +184,7 @@ impl ImageMatrix<ImageFloatRectValue> for ImageMapMatrix {
         Self(m)
     }
 }
-pub(crate) struct MapSpatialIndex(RTree<usize>);
+pub struct MapSpatialIndex(RTree<usize>);
 impl ImageSpatialIndex<ImageRectValue> for MapSpatialIndex {
     fn Build(n: usize, rect: impl Fn(usize) -> ImageRectValue) -> Self {
         let mut t = RTree::new();
@@ -197,7 +195,7 @@ impl ImageSpatialIndex<ImageRectValue> for MapSpatialIndex {
         self.0.Search(&rect.0, |i, _| out.push(*i));
     }
 }
-pub(crate) struct MapSequence(std::thread::ThreadId);
+pub struct MapSequence(std::thread::ThreadId);
 impl ImageMapSequenceChecker for MapSequence {
     fn Check(&self) {
         debug_assert_eq!(
@@ -207,7 +205,7 @@ impl ImageMapSequenceChecker for MapSequence {
         );
     }
 }
-pub(crate) struct CpuDiscardableBackend {
+pub struct CpuDiscardableBackend {
     pub trace: Arc<dyn CpuPaintAnalysisTrace>,
 }
 impl DiscardableImageTypes for CpuDiscardableBackend {
@@ -364,8 +362,8 @@ impl DiscardablePaintImage<CpuDiscardableBackend> for CpuPaintImage {
             .sync_animation_sequence_id
     }
 }
-pub(crate) struct MapCanvas(core::pin::Pin<Box<SkNoDrawCanvas<'static>>>);
-pub(crate) fn make_canvas(r: Rect) -> MapCanvas {
+pub struct MapCanvas(core::pin::Pin<Box<SkNoDrawCanvas<'static>>>);
+pub fn make_canvas(r: Rect) -> MapCanvas {
     {
         MapCanvas(SkNoDrawCanvas::with_bounds(&SkRegionIRect::make_ltrb(
             r.x,
@@ -376,7 +374,7 @@ pub(crate) fn make_canvas(r: Rect) -> MapCanvas {
     }
 }
 impl MapCanvas {
-    pub(crate) fn LocalClipBounds(&self) -> Option<Rect> {
+    pub fn LocalClipBounds(&self) -> Option<Rect> {
         {
             let r = self.0.as_ref().canvas_ref().getLocalClipBounds();
             (!r.isEmpty()).then(|| ToEnclosingRect(frect(r)))
@@ -450,7 +448,7 @@ impl MapCanvas {
     }
     fn clip_path(
         &mut self,
-        path: &<SkRegion as layerize::commit::skia_value_backend::MainSkiaBackend>::Path,
+        path: &<SkRegion as crate::commit::skia_value_backend::MainSkiaBackend>::Path,
         difference: bool,
         aa: bool,
     ) {
@@ -496,7 +494,7 @@ impl ImageGatheringCanvas<CpuDiscardableBackend> for MapCanvas {
     }
 }
 #[derive(Clone, Copy)]
-pub(crate) enum MapShader<'a> {
+pub enum MapShader<'a> {
     Converted(&'a CpuPaintShader),
     PaintRecord(&'a paint::paint_engine::PaintShader, &'a PaintRecord),
 }
@@ -549,12 +547,12 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
                 super::metadata::image_usage(
                     record,
                     op.resource_id,
-                    &mut crate::adapter::layer_tree_host_impl::ContentColorUsage::kSRGB,
+                    &mut crate::commit::ContentColorUsage::kSRGB,
                 )
             }
             _ => super::metadata::flag_images(
                 op,
-                &mut crate::adapter::layer_tree_host_impl::ContentColorUsage::kSRGB,
+                &mut crate::commit::ContentColorUsage::kSRGB,
             ),
         }
     }
@@ -842,7 +840,7 @@ mod tests {
         );
     }
 }
-pub(crate) struct CpuDiscardableImageMapOwner {
+pub struct CpuDiscardableImageMapOwner {
     map: DiscardableImageMap<CpuDiscardableBackend>,
     animated: BTreeMap<PaintImageId, CpuAnimatedImageMetadata>,
 }
@@ -1054,7 +1052,7 @@ impl CpuDiscardableImageMapValue for CpuDiscardableImageMapOwner {
 }
 
 /// Actual SkNoDrawCanvas state operations shared by analysis and recording.
-pub(crate) fn raster_state(
+pub fn raster_state(
     op: CpuPaintOpRef<'_, SkRegion>,
     c: &mut MapCanvas,
     _original: &ImageMapMatrix,
@@ -1101,7 +1099,7 @@ pub(crate) fn raster_state(
                     op.even_odd,
                     Default::default(),
                 );
-                let mut p = <SkRegion as layerize::commit::skia_value_backend::MainSkiaBackend>::FromPaintPath(
+                let mut p = <SkRegion as crate::commit::skia_value_backend::MainSkiaBackend>::FromPaintPath(
                     p.single_path().unwrap(),
                 );
                 if p.is_inverse_fill_type() != op.inverse_winding {
