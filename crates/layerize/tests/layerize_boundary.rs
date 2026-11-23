@@ -18,17 +18,39 @@ const PAINT_PROPERTY_NODES: &[&str] = &[
 /// nodes. Each entry moves into `layerize` in stage S1a; remove it then.
 /// Do not add entries.
 const PROPERTY_NODE_ALLOWED: &[&str] = &[
-    "crates/compositor/src/adapter/content_layer_client_impl.rs",
-    "crates/compositor/src/adapter/paint_geometry.rs",
-    "crates/compositor/src/runtime/paint.rs",
-    "crates/compositor/src/runtime/paint/geometry_mapper.rs",
-    "crates/compositor/src/runtime/paint/geometry_nodes.rs",
-    "crates/compositor/src/runtime/paint/pending_nodes.rs",
-    "crates/compositor/src/runtime/paint/scroll_nodes.rs",
-    "crates/compositor/src/runtime/paint/validation.rs",
     "crates/compositor/src/runtime/paint_services.rs",
+];
+
+/// Temporary (S1a-3 B2 until B3): compositor re-export stubs of the moved
+/// main-half modules (Blink compositing/paint translations, their adapter
+/// families and the Paint-value bindings), which EngineCore and
+/// paint_services still name at their old paths. Each file is a single
+/// `pub use layerize::...` line; delete it when its last user moves.
+/// Do not add entries.
+const MAIN_HALF_REEXPORT_ALLOWED: &[&str] = &[
+    "crates/compositor/src/adapter/content_layer_client_impl.rs",
+    "crates/compositor/src/adapter/paint_artifact_compositor.rs",
+    "crates/compositor/src/adapter/paint_chunks_to_cc_layer.rs",
+    "crates/compositor/src/adapter/paint_geometry.rs",
+    "crates/compositor/src/adapter/pending_layer.rs",
+    "crates/compositor/src/adapter/property_tree_manager.rs",
+    "crates/compositor/src/adapter/raster_invalidator.rs",
+    "crates/compositor/src/runtime/paint.rs",
     "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/adjust_mask_layer_geometry.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/chunk_to_layer_mapper.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/layers_as_json.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/pending_layer.rs",
     "crates/compositor/src/third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/float_clip_rect.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/geometry_mapper.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/raster_invalidation_tracking.rs",
+    "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/raster_invalidator.rs",
 ];
 
 fn root() -> PathBuf {
@@ -99,7 +121,10 @@ fn compositor_names_only_the_commit_vocabulary() {
                     .chars()
                     .next_back()
                     .is_some_and(|c| c.is_alphanumeric() || c == '_');
-                if !preceded && !line[index..].starts_with("layerize::commit") {
+                if !preceded
+                    && !line[index..].starts_with("layerize::commit")
+                    && !MAIN_HALF_REEXPORT_ALLOWED.contains(&relative.as_str())
+                {
                     violations.push(format!("{relative}:{}: {}", number + 1, line.trim()));
                 }
             }
@@ -127,6 +152,21 @@ fn property_node_allowance_has_no_stale_entries() {
         assert!(
             PAINT_PROPERTY_NODES.iter().any(|node| text.contains(node)),
             "{entry} no longer names a paint property node; remove it from the allowance"
+        );
+    }
+}
+
+#[test]
+fn main_half_reexport_allowance_has_no_stale_entries() {
+    for entry in MAIN_HALF_REEXPORT_ALLOWED {
+        let text = std::fs::read_to_string(root().join(entry)).unwrap_or_default();
+        let names_main_half = text.lines().map(code).any(|line| {
+            line.match_indices("layerize::")
+                .any(|(index, _)| !line[index..].starts_with("layerize::commit"))
+        });
+        assert!(
+            names_main_half,
+            "{entry} no longer names the layerize main half; remove it from the allowance"
         );
     }
 }

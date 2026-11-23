@@ -11,6 +11,11 @@ use crate::adapter::{
     layer_tree_impl::{Color4f, LayerTreeTypes, OverlayTransform, UnguessableToken},
     time::{TimeDelta, TimeTicks},
 };
+// The viz values a main Layer carries into the commit.
+pub use layerize::commit::viz_metadata::{
+    FrameToken, RegionCaptureBounds, RegionCaptureCropId, TrackedElementFeature,
+    TrackedElementRect, TrackedElementRects,
+};
 
 /// External components/viz/common/quads/trees_in_viz_timing.h value. No clock
 /// is read here; canonical owner calls write the injected timestamps.
@@ -451,31 +456,6 @@ impl crate::adapter::layer_tree_impl::LayerTreeSelectionBound for SelectionBound
         self.visible = visible;
     }
 }
-// Source dependency: components/viz/common/surfaces/tracked_element_rects.h:22-34.
-// Browser-maintained feature numbers intentionally remain accepted values.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TrackedElementFeature(pub i32);
-impl TrackedElementFeature {
-    pub const kIframeTracking: Self = Self(0);
-    pub const kPasswordTracking: Self = Self(1);
-    pub const kTrackedElementFeatureEnd: Self = Self(2);
-    pub const kTrackedElementFeatureMax: Self = Self(4);
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameToken {
-    Local([u64; 2]),
-    Remote([u64; 2]),
-}
-// Source dependency: components/viz/common/surfaces/tracked_element_rects.h:37-85.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TrackedElementRect {
-    pub id: [u64; 2],
-    pub visible_bounds: crate::adapter::geometry::Rect,
-    pub should_add_to_compositor_frame_metadata: bool,
-    pub should_exclude_fixed_and_sticky_occlusions: bool,
-    pub frame_token: Option<FrameToken>,
-    pub parent_frame_token: Option<[u64; 2]>,
-}
 impl crate::adapter::layer_tree_host_impl::HostImplTrackedElementRect for TrackedElementRect {
     fn visible_bounds(&self) -> crate::adapter::geometry::Rect {
         self.visible_bounds
@@ -492,10 +472,6 @@ impl crate::adapter::layer_tree_host_impl::HostMetadataTrackedElementRect for Tr
         self.visible_bounds = bounds;
     }
 }
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TrackedElementRects(
-    pub std::collections::BTreeMap<TrackedElementFeature, Vec<TrackedElementRect>>,
-);
 impl<
         B: HostImplDTypes<
             TrackedElementFeature = TrackedElementFeature,
@@ -523,13 +499,6 @@ impl<
         self.0.entry(feature).or_default().push(rect);
     }
 }
-// Source dependency: components/viz/common/surfaces/region_capture_bounds.h:20-62.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RegionCaptureCropId(pub [u64; 2]);
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct RegionCaptureBounds(
-    pub std::collections::BTreeMap<RegionCaptureCropId, crate::adapter::geometry::Rect>,
-);
 impl<B: HostImplDTypes<RegionCaptureId = RegionCaptureCropId>>
     crate::adapter::layer_tree_host_impl::HostRegionCaptureBounds<B> for RegionCaptureBounds
 {
@@ -589,16 +558,6 @@ impl crate::adapter::layer_tree_host_impl::HostFrameTimingDetails for FrameTimin
     }
 }
 
-impl crate::adapter::main_layer::LayerValue for TrackedElementRects {
-    fn IsEmpty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-impl crate::adapter::main_layer::LayerValue for RegionCaptureBounds {
-    fn IsEmpty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
 impl<R: super::types::CpuSkiaBackend> crate::adapter::render_metadata::RenderFrameMetadataTypes
     for super::types::CpuCompositorTypes<R>
 {

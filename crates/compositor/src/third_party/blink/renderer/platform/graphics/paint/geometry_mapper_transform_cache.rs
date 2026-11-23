@@ -1,2 +1,2 @@
-// Compatibility re-export of the one PaintModel source implementation.
-pub use paint_model::geometry_mapper_source::geometry_mapper_transform_cache::*;
+// The main-thread translation lives in layerize (MAIN_IMPL_SPLIT.md S1a-3).
+pub use layerize::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::*;

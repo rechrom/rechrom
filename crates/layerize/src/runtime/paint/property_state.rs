@@ -18,7 +18,7 @@ use crate::{
         property_types::BlendMode,
     },
     cc::trees::sticky_position_constraint::CanMergeResult,
-    runtime::types::CpuSkiaBackend,
+    runtime::types::PaintSkiaBackend,
     third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache,
 };
 use paint::paint_property_tree;
@@ -31,13 +31,13 @@ enum TransformCompositingBoundaryType {
     ThroughMergeableCompositedScrollRangeDependent,
 }
 
-fn nearest_directly_composited_ancestor<R: CpuSkiaBackend>(
+fn nearest_directly_composited_ancestor<R: PaintSkiaBackend>(
     node: &TransformNode<R>,
 ) -> Option<TransformNode<R>> {
     WithTransformCache(node, |cache| cache.nearest_directly_composited_ancestor())
 }
 
-fn nearest_composited_scroll_translation<R: CpuSkiaBackend>(
+fn nearest_composited_scroll_translation<R: PaintSkiaBackend>(
     scroll_translation: &TransformNode<R>,
     is_composited_scroll: &mut dyn FnMut(&TransformNode<R>) -> bool,
 ) -> Option<TransformNode<R>> {
@@ -59,7 +59,7 @@ fn requires_compositing_for_sticky_position_only<R>(node: &TransformNode<R>) -> 
     node.node().RequiresCompositingForStickyPositionOnly()
 }
 
-fn can_merge_for_fixed_position<R: CpuSkiaBackend>(
+fn can_merge_for_fixed_position<R: PaintSkiaBackend>(
     first: &TransformNode<R>,
     second: &TransformNode<R>,
 ) -> bool {
@@ -75,7 +75,7 @@ fn source_rect(value: paint::paint_engine::PaintRect) -> Rect {
     ))
 }
 
-fn can_merge_for_sticky_position<R: CpuSkiaBackend>(
+fn can_merge_for_sticky_position<R: PaintSkiaBackend>(
     first: &TransformNode<R>,
     second: &TransformNode<R>,
 ) -> CanMergeResult {
@@ -148,7 +148,7 @@ fn can_merge_for_sticky_position<R: CpuSkiaBackend>(
     first_constraint.CanMerge(&second_constraint, scroll_range)
 }
 
-fn in_same_transform_compositing_boundary<R: CpuSkiaBackend>(
+fn in_same_transform_compositing_boundary<R: PaintSkiaBackend>(
     first: &TransformNode<R>,
     second: &TransformNode<R>,
     merge_fixed_layers: bool,
@@ -195,7 +195,7 @@ fn in_same_transform_compositing_boundary<R: CpuSkiaBackend>(
     }
 }
 
-fn clip_chain_in_transform_compositing_boundary<R: CpuSkiaBackend>(
+fn clip_chain_in_transform_compositing_boundary<R: PaintSkiaBackend>(
     node: &ClipNode<R>,
     ancestor: &ClipNode<R>,
     transform: &TransformNode<R>,
@@ -224,7 +224,7 @@ fn clip_chain_in_transform_compositing_boundary<R: CpuSkiaBackend>(
     true
 }
 
-impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
+impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
     type PaintPropertyChange = paint_property_tree::PaintPropertyChangeType;
     type TransformNode = TransformNode<R>;
     type ClipNode = ClipNode<R>;

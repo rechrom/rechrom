@@ -4,7 +4,10 @@
 //! protected sequence of LayerTreeHostImpl::FinishCommit.
 
 pub mod input {
-    pub(crate) use compositor_input::hit_test_opaqueness;
+    pub(crate) use compositor_input::{
+        hit_test_opaqueness, layer_selection_bound, main_thread_scrolling_reason,
+        overscroll_behavior, scroll_snap_data, touch_action,
+    };
     pub mod scrollbar;
 }
 pub mod layers {
@@ -34,6 +37,7 @@ pub(crate) mod debug {
 pub(crate) mod trees {
     pub use crate::commit::{
         commit_state, damage_reason, draw_property_utils, effect_node, layer_tree_settings,
-        property_ids, viewport_property_ids,
+        property_ids, property_tree, scroll_node, viewport_property_ids,
     };
+    pub use compositor_tree::{clip_node, sticky_position_constraint, transform_node};
 }

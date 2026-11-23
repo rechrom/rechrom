@@ -5,7 +5,7 @@ use crate::{
         geometry::{Rect, RectF, ToEnclosingRect, Vector2dF},
         paint_geometry::{GeometryMapperNode, GeometryMapperState, TransformCacheNode},
     },
-    runtime::{geometry::Transform, types::CpuSkiaBackend},
+    runtime::{geometry::Transform, types::PaintSkiaBackend},
 };
 use paint::paint_property_tree;
 use std::sync::{Arc, Weak};
@@ -17,7 +17,7 @@ fn rect(value: paint::paint_engine::PaintRect) -> Rect {
         value.height as f32,
     ))
 }
-impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
+impl<R: PaintSkiaBackend> TransformCacheNode for TransformNode<R> {
     type Matrix = Transform<R>;
     fn Downgrade(&self) -> Weak<paint_property_tree::TransformPaintPropertyNode> {
         Arc::downgrade(self.as_arc())
@@ -91,7 +91,7 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
         self.node().FlattensInheritedTransform()
     }
 }
-impl<R: CpuSkiaBackend> GeometryMapperNode for TransformNode<R> {
+impl<R: PaintSkiaBackend> GeometryMapperNode for TransformNode<R> {
     fn RawNode(&self) -> &Arc<paint_property_tree::TransformPaintPropertyNode> {
         self.as_arc()
     }
@@ -135,7 +135,7 @@ impl<R: CpuSkiaBackend> GeometryMapperNode for TransformNode<R> {
             .cloned()
     }
 }
-impl<R: CpuSkiaBackend> GeometryMapperState for PropertyTreeState<R> {
+impl<R: PaintSkiaBackend> GeometryMapperState for PropertyTreeState<R> {
     type Node = TransformNode<R>;
     type Effect = super::EffectNode<R>;
     fn Transform(&self) -> &Self::Node {

@@ -12,7 +12,7 @@ use crate::adapter::{
 };
 // Moves one conversion command into the cc op storage (CpuPaintOp is cc/paint
 // commit vocabulary, so this is a free function of the conversion binding).
-fn CpuPaintOpFromConversion<R: crate::runtime::types::CpuSkiaBackend, B>(
+fn CpuPaintOpFromConversion<R: crate::runtime::types::PaintSkiaBackend, B>(
     op: ConversionOp<B>,
 ) -> CpuPaintOp<R>
 where
@@ -72,7 +72,7 @@ where
         ConversionOp::DrawRecord(record) => CpuPaintOp::DrawRecord(record),
     }
 }
-impl<R: crate::runtime::types::CpuSkiaBackend, B> ContentPaintOpBuffer<B> for CpuPaintOpBuffer<R>
+impl<R: crate::runtime::types::PaintSkiaBackend, B> ContentPaintOpBuffer<B> for CpuPaintOpBuffer<R>
 where
     B: crate::adapter::content_layer_client_impl::ContentLayerClientTypes<
         PaintRecord = CpuPaintRecord<R>,
@@ -89,7 +89,7 @@ where
         DisplayPaintOpBuffer::ReleaseAsRecord(&mut self)
     }
 }
-impl<R: crate::runtime::types::CpuSkiaBackend, B> ContentDisplayItemList<B>
+impl<R: crate::runtime::types::PaintSkiaBackend, B> ContentDisplayItemList<B>
     for super::ContentDisplayItemList<R>
 where
     B: crate::adapter::content_layer_client_impl::ContentLayerClientTypes<
@@ -128,7 +128,7 @@ where
         Self::Raster(self, canvas, Some(offsets))
     }
 }
-impl<R: crate::runtime::types::CpuSkiaBackend, B> ConversionPaintOpBuffer<B> for CpuPaintOpBuffer<R>
+impl<R: crate::runtime::types::PaintSkiaBackend, B> ConversionPaintOpBuffer<B> for CpuPaintOpBuffer<R>
 where
     B: PaintChunksTypes<
         PaintRecord = CpuPaintRecord<R>,
@@ -149,7 +149,7 @@ where
         DisplayPaintOpBuffer::UpdateSaveLayerBounds(self, id, rect)
     }
 }
-impl<R: crate::runtime::types::CpuSkiaBackend, B> ConversionDisplayItemList<B>
+impl<R: crate::runtime::types::PaintSkiaBackend, B> ConversionDisplayItemList<B>
     for super::ContentDisplayItemList<R>
 where
     B: PaintChunksTypes<

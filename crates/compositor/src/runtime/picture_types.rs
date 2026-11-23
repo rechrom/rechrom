@@ -14,7 +14,7 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::PaintArtifact
 {
     type CanvasSnapshotCallback = std::sync::Arc<dyn paint::CpuCanvasSnapshot<R>>;
     type CompositingReasons = paint::CpuCompositingReasons;
-    type LayersAsJson = paint::CpuLayersAsJson<R>;
+    type LayersAsJson = paint::CpuLayersAsJson<Self>;
     type CrashKeyScope = paint::PaintTraceScope;
     type UpdateTraceScope = paint::PaintTraceScope;
 }

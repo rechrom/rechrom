@@ -31,6 +31,7 @@ pub mod skia_value_backend;
 pub mod surface_range;
 pub mod transform;
 pub mod values;
+pub mod viz_metadata;
 
 // cc value modules translated in the shared model packages. Both halves name
 // them through this vocabulary.

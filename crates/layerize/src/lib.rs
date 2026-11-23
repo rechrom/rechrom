@@ -9,6 +9,19 @@
 //! ProxyMain -> ProxyImpl commit. See crates/compositor/MAIN_IMPL_SPLIT.md.
 
 mod adapter;
+pub mod third_party;
 mod cc;
 pub mod commit;
 mod skia_path;
+/// Paint-value bindings of the main half. Until S1a-3 B3 the compositor's
+/// EngineCore still drives them directly.
+pub mod runtime;
+
+/// Main-half type families of the Blink compositing translations. Until
+/// S1a-3 B3 the compositor's EngineCore still drives them directly.
+pub mod main_types {
+    pub use crate::adapter::{
+        content_layer_client_impl, paint_artifact_compositor, paint_chunks_to_cc_layer,
+        paint_geometry, pending_layer, property_tree_manager, raster_invalidator,
+    };
+}

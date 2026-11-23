@@ -2,9 +2,8 @@ use crate::{
     adapter::{
         geometry::{Rect, Size},
         layer_tree_impl::Color4f,
-        scrollbar::Insets,
     },
-    cc::input::scrollbar::{Scrollbar as ScrollbarContract, ScrollbarOrientation},
+    cc::input::scrollbar::{Insets, Scrollbar as ScrollbarContract, ScrollbarOrientation},
 };
 
 /// The retained Blink ScrollbarDisplayItem inputs consumed by cc's native

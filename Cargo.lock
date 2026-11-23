@@ -2286,6 +2286,7 @@ dependencies = [
 name = "layerize"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "compositor_animation",
  "compositor_draw",
  "compositor_frame",
@@ -2299,6 +2300,7 @@ dependencies = [
  "paint",
  "paint_model",
  "paint_skia",
+ "serde_json",
  "skia",
 ]
 

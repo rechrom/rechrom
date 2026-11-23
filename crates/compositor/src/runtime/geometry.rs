@@ -69,20 +69,3 @@ impl<R: RoundedRectTransformBackend> crate::adapter::layer_impl::LayerImplTransf
         self.as_source().IsIdentity()
     }
 }
-impl<R: RoundedRectTransformBackend> crate::adapter::paint_chunks_to_cc_layer::ConversionTransform
-    for Transform<R>
-{
-    fn IsIdentity(&self) -> bool {
-        self.as_source().IsIdentity()
-    }
-    fn IsIdentityOr2dTranslation(&self) -> bool {
-        self.as_source().IsIdentityOrTranslation() && self.as_source().rc(2, 3) == 0.
-    }
-    fn To2dTranslation(&self) -> Vector2dF {
-        let p = self.as_source().To2dTranslation();
-        Vector2dF::new(p.x(), p.y())
-    }
-    fn MapPoint(&self, point: PointF) -> PointF {
-        self.MapPoint(point)
-    }
-}

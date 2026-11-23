@@ -8,7 +8,7 @@ use crate::{
         },
         property_tree::PropertyTreeTransform,
     },
-    runtime::{geometry::Transform, types::CpuSkiaBackend},
+    runtime::{geometry::Transform, types::PaintSkiaBackend},
     third_party::blink::renderer::platform::graphics::paint::{
         float_clip_rect::{FloatClipRect, InfiniteLooseFloatClipRect},
         geometry_mapper::GeometryMapper,
@@ -17,7 +17,7 @@ use crate::{
 };
 use paint::paint_property_tree;
 use std::{marker::PhantomData, sync::Arc};
-pub struct CpuGeometryMapper<R: CpuSkiaBackend> {
+pub struct CpuGeometryMapper<R: PaintSkiaBackend> {
     pub(super) tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
     singular_transform_fix: bool,
     /// The published property trees of the states this context maps; bare
@@ -26,7 +26,7 @@ pub struct CpuGeometryMapper<R: CpuSkiaBackend> {
     trees: super::HandleTrees,
     marker: PhantomData<fn() -> R>,
 }
-impl<R: CpuSkiaBackend> CpuGeometryMapper<R> {
+impl<R: PaintSkiaBackend> CpuGeometryMapper<R> {
     pub fn IsTracingRasterInvalidations(&self) -> bool {
         self.tracking.IsTracingRasterInvalidations()
     }
@@ -73,7 +73,7 @@ fn clip_rect(r: paint_property_tree::ClipLayoutRect) -> FloatClipRect {
     }
     value
 }
-impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
+impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
     type State = PropertyTreeState<R>;
     fn SingularTransformFixEnabled(&self) -> bool {
         self.singular_transform_fix
@@ -182,7 +182,7 @@ impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         e.node().self_or_ancestor_participates_in_view_transition
     }
 }
-impl<R: CpuSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
+impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
     type PropertyTreeState = PropertyTreeState<R>;
     type Transform = Transform<R>;
     type FloatClipRect = FloatClipRect;

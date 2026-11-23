@@ -31,3 +31,5 @@ paint = { path = "../paint" }
 paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
 foundation = { path = "../foundation" }
+browser_tracing = { path = "../tracing" }
+serde_json = "1"

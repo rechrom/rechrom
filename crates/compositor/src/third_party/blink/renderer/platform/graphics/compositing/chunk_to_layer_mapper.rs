@@ -1,1 +1,2 @@
-pub use compositor_layerize::chunk_to_layer_mapper::*;
+// The main-thread translation lives in layerize (MAIN_IMPL_SPLIT.md S1a-3).
+pub use layerize::third_party::blink::renderer::platform::graphics::compositing::chunk_to_layer_mapper::*;

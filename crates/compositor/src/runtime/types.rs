@@ -175,9 +175,7 @@ impl<R: CpuSkiaBackend> frame::ViewTransitionGeometry for CpuCompositorTypes<R> 
     }
 }
 
-/// Source dependency cc/paint/node_id.h:17-20. Native invalid NodeId is zero.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct NodeId(pub i32);
+pub use layerize::commit::paint::NodeId;
 impl crate::adapter::layer_impl::LayerImplNodeId for NodeId {
     fn IsNonzero(&self) -> bool {
         self.0 != 0

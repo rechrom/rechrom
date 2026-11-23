@@ -22,6 +22,8 @@ mod lowering;
 pub use lowering::{CpuPaintColorFilter, CpuPaintShader, PaintSource};
 pub mod metadata;
 pub mod node_info;
+mod node_id;
+pub use node_id::NodeId;
 mod picture;
 pub use picture::*;
 mod record;

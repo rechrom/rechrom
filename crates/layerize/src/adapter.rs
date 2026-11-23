@@ -1,7 +1,14 @@
 //! Typed template-parameter families of the main cc layers (the Rechrom
 //! projection of cc::Layer's virtuals and its LayerImpl push targets).
 
+pub mod content_layer_client_impl;
 pub mod main_layer;
+pub mod paint_artifact_compositor;
+pub mod paint_chunks_to_cc_layer;
+pub mod paint_geometry;
+pub mod pending_layer;
+pub mod property_tree_manager;
+pub mod raster_invalidator;
 pub mod painted_scrollbar_layer;
 pub mod picture_layer;
 pub mod recording_source;
@@ -26,6 +33,7 @@ pub(crate) mod layer_tree_host_impl {
 }
 pub(crate) mod layer_tree_impl {
     pub use crate::commit::{values::UIResourceId, PropertyTreesFor};
+    pub use compositor_input::layer_selection_bound::SelectionBoundType;
     pub use compositor_animation::ElementListType;
     pub use compositor_draw::Color4f;
 }
@@ -46,4 +54,10 @@ pub(crate) mod region_backend {
 }
 pub(crate) mod commit_state {
     pub use crate::commit::commit_state::*;
+}
+pub(crate) mod display_item_list {
+    pub use crate::commit::paint::display_item_list_types::*;
+}
+pub(crate) mod picture_layer_impl {
+    pub use crate::commit::paint::display_item_list_types::DirectlyCompositedImageInfo;
 }

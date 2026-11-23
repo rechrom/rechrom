@@ -7,7 +7,7 @@ use crate::{
         layer_tree_impl::Color4f,
         pending_layer::*,
     },
-    runtime::types::{CpuCompositorTypes, CpuSkiaBackend},
+    runtime::types::PaintSkiaBackend,
 };
 fn rect(r: paint::paint_engine::PaintRect) -> RectF {
     RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
@@ -22,16 +22,23 @@ fn metadata(chunk: &PaintChunk) -> &paint::paint_engine::PaintChunkCompositorDat
 /// Concrete resident cc layer owner carried through Paint's type-erased
 /// `scoped_refptr` boundary. Bounds are captured from the same layer at record
 /// time, exactly when Blink's ForeignLayerDisplayItem constructor reads them.
-#[derive(Clone)]
-pub struct CpuForeignLayer<R: CpuSkiaBackend> {
-    layer: crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>,
+pub struct CpuForeignLayer<B: crate::adapter::main_layer::MainLayerTypes> {
+    layer: crate::cc::layers::layer::LayerRef<B>,
     bounds: Arc<std::sync::RwLock<paint::paint_engine::ForeignLayerSize>>,
 }
+impl<B: crate::adapter::main_layer::MainLayerTypes> Clone for CpuForeignLayer<B> {
+    fn clone(&self) -> Self {
+        Self {
+            layer: self.layer.clone(),
+            bounds: self.bounds.clone(),
+        }
+    }
+}
 
-impl<R: CpuSkiaBackend> CpuForeignLayer<R> {
+impl<B: crate::adapter::main_layer::MainLayerTypes> CpuForeignLayer<B> {
     pub fn new(
-        layer: crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>,
-        c: &crate::adapter::main_layer::LayerContext<'_, CpuCompositorTypes<R>>,
+        layer: crate::cc::layers::layer::LayerRef<B>,
+        c: &crate::adapter::main_layer::LayerContext<'_, B>,
     ) -> Self {
         let bounds = *layer.bounds(c);
         Self {
@@ -45,12 +52,12 @@ impl<R: CpuSkiaBackend> CpuForeignLayer<R> {
         }
     }
 
-    pub fn Layer(&self) -> &crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
+    pub fn Layer(&self) -> &crate::cc::layers::layer::LayerRef<B> {
         &self.layer
     }
 }
 
-impl<R: CpuSkiaBackend> paint::paint_engine::ForeignLayer for CpuForeignLayer<R> {
+impl<B: crate::adapter::main_layer::MainLayerTypes + 'static> paint::paint_engine::ForeignLayer for CpuForeignLayer<B> {
     fn LayerId(&self) -> i32 {
         self.layer.id()
     }
@@ -80,16 +87,16 @@ impl<R: CpuSkiaBackend> paint::paint_engine::ForeignLayer for CpuForeignLayer<R>
         self
     }
 }
-pub trait CpuLoggingCanvasValue<R: CpuSkiaBackend>: CpuPaintCanvas<R> {
+pub trait CpuLoggingCanvasValue<R: PaintSkiaBackend>: CpuPaintCanvas<R> {
     fn IntoLog(self: Box<Self>) -> serde_json::Value;
 }
-pub struct CpuLoggingCanvas<R: CpuSkiaBackend>(pub Box<dyn CpuLoggingCanvasValue<R>>);
-impl<R: CpuSkiaBackend> crate::adapter::display_item_list::DisplayCanvas for CpuLoggingCanvas<R> {
+pub struct CpuLoggingCanvas<R: PaintSkiaBackend>(pub Box<dyn CpuLoggingCanvasValue<R>>);
+impl<R: PaintSkiaBackend> crate::adapter::display_item_list::DisplayCanvas for CpuLoggingCanvas<R> {
     fn LocalClipBounds(&self) -> Option<Rect> {
         self.0.LocalClipBounds()
     }
 }
-impl<R: CpuSkiaBackend> CpuPaintCanvas<R> for CpuLoggingCanvas<R> {
+impl<R: PaintSkiaBackend> CpuPaintCanvas<R> for CpuLoggingCanvas<R> {
     fn Playback(
         &mut self,
         b: &CpuPaintOpBuffer<R>,
@@ -103,13 +110,13 @@ impl<R: CpuSkiaBackend> CpuPaintCanvas<R> for CpuLoggingCanvas<R> {
 impl<R, B> crate::adapter::content_layer_client_impl::ContentLoggingCanvas<B>
     for CpuLoggingCanvas<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PendingLayerTypes<LoggingCanvas = Self>,
 {
 }
 impl<R, B> crate::adapter::content_layer_client_impl::ContentJson<B> for serde_json::Value
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PendingLayerTypes<JsonArray = Vec<serde_json::Value>, LoggingCanvas = CpuLoggingCanvas<R>>,
 {
     fn SetArray(&mut self, key: &str, array: Vec<Self>) {
@@ -120,7 +127,7 @@ where
     }
 }
 #[derive(Clone)]
-pub struct CpuCanvasChildPaintRecord<R: CpuSkiaBackend> {
+pub struct CpuCanvasChildPaintRecord<R: PaintSkiaBackend> {
     pub state: Arc<paint_property_tree::PaintCanvasChildState>,
     pub record: CpuPaintRecord<R>,
 }
@@ -136,7 +143,7 @@ impl crate::adapter::content_layer_client_impl::CanvasChildPaintState
 }
 impl<R, B> PendingPaintChunk<B> for PaintChunk
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PendingLayerTypes<
         PropertyTreeState = PropertyTreeState<R>,
         TransformNode = TransformNode<R>,
@@ -236,14 +243,24 @@ where
         self.chunks.len()
     }
 }
-impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayItem {
+impl<R, B> PendingDisplayItem<B> for DisplayItem
+where
+    R: PaintSkiaBackend,
+    B: PendingLayerTypes<
+            TransformNode = TransformNode<R>,
+            FilterQuality = FilterQuality,
+            DynamicRangeLimit = DynamicRangeLimit,
+        > + crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes<
+            Scrollbar = super::Scrollbar,
+        > + 'static,
+{
     fn ForeignLayerVisualRect(&self) -> RectF {
         rect(self.visual_rect)
     }
-    fn ForeignLayer(&self) -> crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
+    fn ForeignLayer(&self) -> crate::cc::layers::layer::LayerRef<B> {
         self.GetForeignLayer()
             .AsAny()
-            .downcast_ref::<CpuForeignLayer<R>>()
+            .downcast_ref::<CpuForeignLayer<B>>()
             .expect("ForeignLayerDisplayItem owner must match the active compositor backend")
             .Layer()
             .clone()
@@ -267,10 +284,10 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
     }
     fn CreateOrReuseScrollbarLayer(
         &self,
-        old: Option<crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>>,
+        old: Option<crate::cc::layers::layer::LayerRef<B>>,
         offset: Vector2dF,
-        c: &mut crate::adapter::main_layer::LayerContext<'_, CpuCompositorTypes<R>>,
-    ) -> crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>> {
+        c: &mut crate::adapter::main_layer::LayerContext<'_, B>,
+    ) -> crate::cc::layers::layer::LayerRef<B> {
         use crate::{
             adapter::{geometry::Size, input_types::ElementId},
             cc::layers::scrollbar_layer_base::ScrollbarLayerBase,
@@ -281,7 +298,7 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
             .expect("ScrollbarDisplayItem retains its cc scrollbar inputs");
         let scrollbar = super::Scrollbar::from_paint(data);
         let needs_display = self.NeedsUpdateDisplay();
-        let layer = ScrollbarLayerBase::<CpuCompositorTypes<R>>::CreateOrReuse(
+        let layer = ScrollbarLayerBase::<B>::CreateOrReuse(
             Arc::new(scrollbar),
             old.as_ref().map(|layer| layer.borrow()),
             c,

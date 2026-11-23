@@ -1,7 +1,7 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2 and S1a-3 B1 done (see "S1a-3 status" and "Plan
-correction" at the end); S1a-3 B2-B4 and the thread split (S1b/S1d) are not
+Status: S1c done. S1a-1, S1a-2 and S1a-3 B1-B2 done (see "S1a-3 status" and "Plan
+correction" at the end); S1a-3 B3-B4 and the thread split (S1b/S1d) are not
 implemented.
 
 ## Chromium reference
@@ -480,37 +480,66 @@ Approved for S1a-3: option (h) as above; during S1a only,
   `LayerizeFamily` for impl-provided items (`RasterizeScrollbarThumb` builds
   the impl `UIBitmap`; `SurfaceRangeTypes` is already a commit trait).
 
-- **B2 trial (not committed).** Moving only the Blink translations
-  (`third_party/blink/renderer/platform/graphics/{compositing,paint}/*`,
-  `third_party.rs`) and the adapters `paint_artifact_compositor`,
-  `paint_chunks_to_cc_layer`, `content_layer_client_impl`, `pending_layer`,
-  `property_tree_manager`, `paint_geometry`, `raster_invalidator` compiles as
-  `cargo check -p layerize` with these fixes: drop the unused
-  `layer_tree_impl::LayerTreeTypes` imports (PAC, PropertyTreeManager and
-  their adapters); layerize dependencies `browser_tracing` and `serde_json`;
-  aliases `layer_tree_impl::SelectionBoundType`, `cc::input::{
-  layer_selection_bound, main_thread_scrolling_reason, overscroll_behavior,
-  scroll_snap_data, touch_action}`, `cc::trees::{property_tree, scroll_node,
-  clip_node, transform_node, sticky_position_constraint}`; move the
-  `ConversionTransform for Transform<R>` impl from `runtime/geometry.rs` to
-  `adapter/paint_chunks_to_cc_layer.rs`; compositor stubs re-export
-  `layerize::third_party::...` and a temporary `layerize::main_types`
-  module. The app check then fails only with orphan errors (E0210/E0117),
-  because `runtime/paint.rs:405,424,439`, `runtime/paint/{conversion,
-  conversion_values, invalidation, pending_values}.rs` implement the moved
-  main traits for layerize values. So the Blink move and the `runtime/paint`
-  main parts must land in one commit (B2 is one compile unit). Those files
-  name `CpuCompositorTypes` (artifact_nodes 15x, pending_values 11x,
-  paint_services 8x, raster 6x, picture 4x) and `CpuSkiaBackend`; they
-  become generic over `F: LayerizeFamily` / `F::Skia: PaintSkiaBackend`
-  as planned. Impl-only pieces stay: `raster.rs` (tile raster bindings),
-  `record_bindings.rs`, the impl facets in `picture.rs`, and the impl
-  family's `RasterInvalidationTracking` (`runtime/picture_types.rs:112`
-  names Blink `RasterInvalidationTracking`; B4 must route it through
-  `commit` or move that associated type).
+- **B2 done (Blink compositing + Paint-value bindings).** Copied into
+  layerize with one-line compositor re-export stubs (as in B1):
+  `third_party/blink/renderer/platform/graphics/{compositing,paint}/*` and
+  the adapters `paint_artifact_compositor`, `paint_chunks_to_cc_layer`,
+  `content_layer_client_impl`, `pending_layer`, `property_tree_manager`,
+  `paint_geometry`, `raster_invalidator` (exported for EngineCore through the
+  temporary `layerize::main_types`). git mv into `layerize/src/runtime/`:
+  `runtime/paint.rs` (PaintInput, the property-node handles,
+  PropertyTreeState, the PaintChunk/PaintArtifact facets) and
+  `runtime/paint/{artifact_nodes, conversion, conversion_nodes,
+  conversion_values, geometry_mapper, geometry_nodes, invalidation,
+  pending_nodes, pending_values, property_state, reasons, scroll_nodes,
+  scrollbar, subset, validation}.rs`; `CpuPaintServices` and `MicroBenchmark`
+  moved from `runtime/paint/picture.rs` to `layerize/src/runtime/paint/
+  layer_services.rs`. The compositor's `runtime/paint.rs` re-exports
+  `layerize::runtime::paint::*` and keeps `picture.rs` (impl facets,
+  RasterTransform), `raster.rs`, `record_bindings.rs`, `services.rs`
+  (Skia platform services) and the new `artifact_record.rs`. Shared values
+  moved to commit: `viz_metadata` (TrackedElementFeature/Rect/Rects,
+  FrameToken, RegionCaptureCropId/Bounds and their `LayerValue` impls) and
+  `paint::NodeId`; their impls of compositor traits stay in
+  `runtime/{metadata,types}.rs`. The `ConversionTransform for Transform<R>`
+  impl moved to layerize `adapter/paint_chunks_to_cc_layer.rs`.
+  Genericization: the bindings that named `CpuCompositorTypes<R>` are now
+  `impl<R, B> Trait<B> for Value<R> where B: FamilyTrait<Node = Node<R>, ..>`
+  (ArtifactEffectNode, ArtifactDisplayItem, PendingDisplayItem); the family
+  owners are generic over `B` (`CpuForeignLayer<B: MainLayerTypes>`,
+  `CpuLayersAsJson<B>`); `PaintInput::ViewportProperties::<R, B>()`.
+  Deviation: `ArtifactPaintRecord for CpuPaintRecord<R>` stays in the
+  compositor (`runtime/paint/artifact_record.rs`, with its unit test). A
+  family-generic impl needs `B: PaintArtifactCompositorTypes<PaintRecord =
+  Self>`, and that where clause supplies a param-env candidate for the same
+  impl, so the trait's opaque `ops` iterator cannot be normalized (E0053);
+  boxing would add an allocation per record walk. It moves once the family
+  impls are blanket impls (then no where clause is needed).
+  Boundary test: the moved files left the property-node allowance (only
+  `runtime/paint_services.rs` remains); a temporary
+  `MAIN_HALF_REEXPORT_ALLOWED` lists the re-export stubs until B3.
+- **Still in the compositor after B2.** `runtime/paint_services.rs`
+  (CpuMainPaintServices, the PAC/PendingLayer/PaintChunks/SynthesizedClip
+  service impls, `Root<R> = CpuCompositorTypes<R>`; it also names impl traits
+  `TileManagerTypes`, `PictureLayerImplTypes`, `PictureLayerTilingTypes`,
+  `DrawTransform` and `engine::ScrollbarPaintMutation`, which must be split
+  off first), `pac_scroll.rs` (`engine::CompositorScrollState`) and
+  `canvas_child_record.rs`; they move with B3 (main_host). The main family
+  impls (`picture_types.rs`: PAC, PaintChunks, SynthesizedClip,
+  PropertyTreeManager, PendingLayer, PictureLayer, SolidColorLayer;
+  `owner_types.rs`: MainLayerTypes, ...) are still compositor impls for
+  `CpuCompositorTypes<R>`; their associated types now name layerize values,
+  so the blanket conversion is unblocked except for the impl-provided items
+  (`TaskRunner`, `DidScrollCallback`, `RasterizeScrollbarThumb` and the
+  other compositor-defined associated types of the main traits) need
+  `LayerizeFamily` hooks. The layerize unit tests are not
+  built yet: `lowering.rs` and `metadata.rs` still need compositor types or
+  dev-dependencies; the moved `invalidation`, `scroll_nodes`, `scrollbar` and
+  `subset` tests name only layerize paths but were not run (B4).
 
-Next: B2 as one commit (above), then the blanket family impls, B3
-(`main_host`, `main_endpoint`, `main_frame_lifecycle`, animation coalescing,
+Next: blanket family impls (with `ArtifactPaintRecord`), B3
+(`paint_services`, `pac_scroll`, `canvas_child_record`, `main_host`,
+`main_endpoint`, `main_frame_lifecycle`, animation coalescing,
 `LayerizeEngine`), B4 (boundary test to zero allowance plus the
 LayerizeEngine exception, layerize unit tests).
 

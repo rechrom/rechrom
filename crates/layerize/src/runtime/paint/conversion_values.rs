@@ -7,7 +7,7 @@ use crate::{
         input_types::ElementId,
         paint_chunks_to_cc_layer::*,
     },
-    runtime::types::CpuSkiaBackend,
+    runtime::types::PaintSkiaBackend,
 };
 fn rect(p: paint::paint_engine::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
@@ -103,7 +103,7 @@ impl<B: PaintChunksTypes<PaintArtifact = PaintArtifact, DisplayItem = DisplayIte
 }
 impl<R, B> ConversionHitTestData<B> for paint::paint_engine::PaintHitTestData
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PaintChunksTypes<TransformNode = TransformNode<R>>,
 {
     fn touch_action_rects(
@@ -258,12 +258,12 @@ where
             });
     }
 }
-pub struct CpuConversionRecorder<R: CpuSkiaBackend> {
+pub struct CpuConversionRecorder<R: PaintSkiaBackend> {
     pub buffer: CpuPaintOpBuffer<R>,
 }
 impl<R, B> ConversionPaintRecorder<B> for CpuConversionRecorder<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PaintChunksTypes<
         PaintRecord = CpuPaintRecord<R>,
         UnderInvalidationPicture = CpuPaintRecord<R>,

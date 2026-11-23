@@ -755,7 +755,7 @@ impl<R: CpuSkiaBackend>
     fn NewLayersAsJson(
         &self,
         f:crate::third_party::blink::renderer::platform::graphics::compositing::content_layer_client_impl::LayerTreeFlags,
-    ) -> paint::CpuLayersAsJson<R> {
+    ) -> paint::CpuLayersAsJson<Root<R>> {
         paint::CpuLayersAsJson(crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJSON::new(f))
     }
     fn Descriptions(&self, r: &paint::CpuCompositingReasons) -> Vec<&'static str> {
@@ -885,7 +885,7 @@ impl<R: CpuSkiaBackend> CpuMainPaintServices<R> {
         c: &mut LayerContext<'_, Root<R>>,
         sequence: &mut i32,
     ) -> Result<(), paint::PaintInputError> {
-        let viewport = input.ViewportProperties::<R>();
+        let viewport = input.ViewportProperties::<R, Root<R>>();
         let mut pending = CpuPendingLayerServices(std::marker::PhantomData);
         let mut context =
             crate::adapter::paint_artifact_compositor::PaintArtifactCompositorContext {

@@ -13,7 +13,7 @@ use crate::{
         overscroll_behavior::{OverscrollBehavior, Type},
         scroll_snap_data::{ScrollSnapType, SnapAxis, SnapContainerData, SnapStrictness},
     },
-    runtime::types::CpuSkiaBackend,
+    runtime::types::PaintSkiaBackend,
 };
 fn scroll_snap_type(value: paint::paint_property_tree::PaintScrollSnapType) -> ScrollSnapType {
     use paint::paint_property_tree::{PaintScrollSnapAxis as Axis, PaintScrollSnapStrictness as S};
@@ -39,7 +39,7 @@ fn rect(p: paint::paint_engine::PaintRect) -> Rect {
         p.height as f32,
     ))
 }
-impl<R: CpuSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
+impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
     fn CcNodeId(&self, s: i32) -> i32 {
         self.node().lifecycle.cc_node_id(s)
     }

@@ -1,7 +1,7 @@
 //! Borrowed native node projections for PaintChunksToCcLayer. No converted
 //! property graph is retained here; each handle reads its actual Paint owner.
 use super::*;
-use crate::{adapter::{paint_chunks_to_cc_layer::*,pending_layer::PendingClipNode,geometry::{Rect,RectF,RRectF,Vector2dF},input_types::ElementId},runtime::types::CpuSkiaBackend};
+use crate::{adapter::{paint_chunks_to_cc_layer::*,pending_layer::PendingClipNode,geometry::{Rect,RectF,RRectF,Vector2dF},input_types::ElementId},runtime::types::PaintSkiaBackend};
 use crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache;
 fn rect(p: paint::paint_engine::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
@@ -20,7 +20,7 @@ fn element(id: foundation::CompositorElementId) -> ElementId {
 }
 impl<R, B> ConversionTransformNode<B> for TransformNode<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PaintChunksTypes<TransformNode = Self, ScrollNode = ScrollNode<R>>,
 {
     fn ScrollNode(&self) -> Option<ScrollNode<R>> {
@@ -49,7 +49,7 @@ where
 }
 impl<R, B> ConversionClipNode<B> for ClipNode<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PaintChunksTypes<
         ClipNode = Self,
         RoundedRect = RRectF,
@@ -76,7 +76,7 @@ where
 }
 impl<R, B> ConversionEffectNode<B> for EffectNode<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PaintChunksTypes<
         EffectNode = Self,
         FilterOperations = paint::cc::paint::filter_operations::FilterOperations,
@@ -146,7 +146,7 @@ where
 }
 impl<R, B> ConversionScrollNode<B> for ScrollNode<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: PaintChunksTypes<ScrollNode = Self, ClipNode = ClipNode<R>>,
 {
     fn Parent(&self) -> Option<Self> {

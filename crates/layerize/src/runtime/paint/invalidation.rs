@@ -6,7 +6,7 @@ use crate::{
         paint_geometry::GeometryMapperContext,
         raster_invalidator::*,
     },
-    runtime::types::CpuSkiaBackend,
+    runtime::types::PaintSkiaBackend,
     third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::{
         RasterInvalidationBitmap, RasterInvalidationTracking, RasterInvalidationTrackingRuntime,
         RasterInvalidationTrackingTypes,
@@ -34,7 +34,7 @@ impl RasterInvalidationBitmap for CpuTrackingBitmap {
         self.0.RowMut(y)[x as usize] = color;
     }
 }
-pub trait CpuRasterTrackingServices<R: CpuSkiaBackend>: Send + Sync {
+pub trait CpuRasterTrackingServices<R: PaintSkiaBackend>: Send + Sync {
     fn PaintUnderInvalidationCheckingEnabled(&self) -> bool;
     fn IsTracingRasterInvalidations(&self) -> bool;
     fn Rasterize(&self, record: &CpuPaintRecord<R>, rect: Rect) -> Option<CpuTrackingBitmap>;
@@ -47,14 +47,14 @@ pub trait CpuRasterTrackingServices<R: CpuSkiaBackend>: Send + Sync {
     fn LogUnderInvalidation(&self, name: &str, x: i32, y: i32, old: u32, new: u32);
     fn LogMoreUnderInvalidations(&self);
 }
-pub struct CpuRasterTrackingTypes<R: CpuSkiaBackend>(PhantomData<fn() -> R>);
-impl<R: CpuSkiaBackend> RasterInvalidationTrackingTypes for CpuRasterTrackingTypes<R> {
+pub struct CpuRasterTrackingTypes<R: PaintSkiaBackend>(PhantomData<fn() -> R>);
+impl<R: PaintSkiaBackend> RasterInvalidationTrackingTypes for CpuRasterTrackingTypes<R> {
     type RegionBackend = R;
     type PaintRecord = CpuPaintRecord<R>;
     type Bitmap = CpuTrackingBitmap;
     type Runtime = Arc<dyn CpuRasterTrackingServices<R>>;
 }
-impl<R: CpuSkiaBackend> RasterInvalidationTrackingRuntime<CpuRasterTrackingTypes<R>>
+impl<R: PaintSkiaBackend> RasterInvalidationTrackingRuntime<CpuRasterTrackingTypes<R>>
     for Arc<dyn CpuRasterTrackingServices<R>>
 {
     fn PaintUnderInvalidationCheckingEnabled(&self) -> bool {
@@ -82,7 +82,7 @@ impl<R: CpuSkiaBackend> RasterInvalidationTrackingRuntime<CpuRasterTrackingTypes
         self.as_ref().LogMoreUnderInvalidations()
     }
 }
-impl<R: CpuSkiaBackend> RasterInvalidationTrackingValue
+impl<R: PaintSkiaBackend> RasterInvalidationTrackingValue
     for RasterInvalidationTracking<CpuRasterTrackingTypes<R>>
 {
     fn ClearInvalidations(&mut self) {
@@ -144,7 +144,7 @@ impl RasterInvalidationItem for DisplayItem {
             .expect("validated native DisplayItem reason")
     }
 }
-impl<R: CpuSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintChunk {
+impl<R: PaintSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintChunk {
     type Id = paint::display_item_id::DisplayItemId;
     fn id(&self) -> Self::Id {
         self.id
@@ -178,7 +178,7 @@ impl<R: CpuSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintC
             && self.id.r#type.0 <= paint::display_item_id::DisplayItemIdType::kForeignLayerLast.0
     }
 }
-impl<R: CpuSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for PaintArtifact {
+impl<R: PaintSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for PaintArtifact {
     fn Chunk(&self, index: usize) -> &PaintChunk {
         &self.chunks[index]
     }
@@ -196,7 +196,7 @@ impl<R: CpuSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for Pai
         self.ClientDebugName(id)
     }
 }
-impl<R: CpuSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for PaintChunkSubset {
+impl<R: PaintSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for PaintChunkSubset {
     fn artifact(&self) -> &Arc<PaintArtifact> {
         self.artifact()
     }
@@ -207,7 +207,7 @@ impl<R: CpuSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for Paint
         self.indices().iter().copied()
     }
 }
-impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
+impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
     type Chunk = PaintChunk;
     type Item = DisplayItem;
     type Artifact = PaintArtifact;
@@ -303,13 +303,13 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
     }
 }
 
-pub struct CpuRasterInvalidator<R: CpuSkiaBackend> {
+pub struct CpuRasterInvalidator<R: PaintSkiaBackend> {
     source: crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidator::RasterInvalidator<
         CpuGeometryMapper<R>,
     >,
     mapper: Arc<CpuGeometryMapper<R>>,
 }
-impl<R: CpuSkiaBackend> CpuRasterInvalidator<R> {
+impl<R: PaintSkiaBackend> CpuRasterInvalidator<R> {
     pub fn new(mapper: Arc<CpuGeometryMapper<R>>) -> Self {
         Self {
             source: crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidator::RasterInvalidator::new(
@@ -322,7 +322,7 @@ impl<R: CpuSkiaBackend> CpuRasterInvalidator<R> {
 impl<R, B> crate::adapter::content_layer_client_impl::RasterInvalidator<B>
     for CpuRasterInvalidator<R>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: crate::adapter::pending_layer::PendingLayerTypes<
         PaintArtifact = PaintArtifact,
         PaintChunkSubset = PaintChunkSubset,
@@ -376,7 +376,7 @@ where
 impl<R, B> crate::adapter::content_layer_client_impl::RasterInvalidationTracking<B>
     for RasterInvalidationTracking<CpuRasterTrackingTypes<R>>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: crate::adapter::pending_layer::PendingLayerTypes<Json = serde_json::Value>,
 {
     fn AsJSON(&self, json: &mut serde_json::Value, detailed: bool) {
@@ -386,7 +386,7 @@ where
 impl<R, B> crate::adapter::paint_chunks_to_cc_layer::ConversionInvalidationTracking<B>
     for RasterInvalidationTracking<CpuRasterTrackingTypes<R>>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: crate::adapter::paint_chunks_to_cc_layer::PaintChunksTypes<
         PaintRecord = CpuPaintRecord<R>,
         UnderInvalidationPicture = CpuPaintRecord<R>,
@@ -402,7 +402,7 @@ where
 impl<R, B> crate::adapter::paint_artifact_compositor::ArtifactInvalidationTracking<B>
     for RasterInvalidationTracking<CpuRasterTrackingTypes<R>>
 where
-    R: CpuSkiaBackend,
+    R: PaintSkiaBackend,
     B: crate::adapter::paint_artifact_compositor::PaintArtifactCompositorTypes,
 {
     fn AddToLayerDebugInfo(&self, info: &mut crate::cc::layers::layer::LayerDebugInfo<B::NodeId>) {

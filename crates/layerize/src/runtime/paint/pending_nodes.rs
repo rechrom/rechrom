@@ -11,7 +11,7 @@ use crate::{
         geometry::{RRectF, RectF, Vector2dF},
         pending_layer::PendingClipNode,
     },
-    runtime::types::CpuSkiaBackend,
+    runtime::types::PaintSkiaBackend,
 };
 fn element(id: foundation::CompositorElementId) -> ElementId {
     let id = id.GetInternalValue();
@@ -49,7 +49,7 @@ fn blend(n: &paint_property_tree::EffectPaintPropertyNode) -> BlendMode {
 // Source: third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h:185-435.
 // Every field is projected from its actual Paint owner. Transform-cache queries
 // enter the canonical cache rather than materializing an ancestry snapshot.
-impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<PaintPropertyChange>
+impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<PaintPropertyChange>
     for TransformNode<R>
 {
     type Matrix = crate::runtime::geometry::Transform<R>;
@@ -231,7 +231,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
         crate::adapter::paint_geometry::GeometryMapperNode::ScrollContainerRect(self)
     }
 }
-impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNode<R> {
+impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNode<R> {
     type Filters = paint::cc::paint::filter_operations::FilterOperations;
     type Path = R::Path;
     type PaintPropertyChange = paint_property_tree::PaintPropertyChangeType;
@@ -358,7 +358,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         }
     }
 }
-impl<R: CpuSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R> {
+impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R> {
     type EffectNode = EffectNode<R>;
     fn CcNodeId(&self, sequence: i32) -> i32 {
         self.node().lifecycle.cc_node_id(sequence)

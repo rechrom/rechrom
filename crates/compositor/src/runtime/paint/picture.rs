@@ -1,7 +1,7 @@
 //! Impl-side facets of the cc recording values (PictureRasterSource,
-//! TileManagerRasterSource, discardable-image facets), the CPU family's
-//! external micro-benchmark and derived Layer services, and gfx
-//! AxisTransform2d. The values themselves live in layerize::commit::paint.
+//! TileManagerRasterSource, discardable-image facets) and gfx AxisTransform2d.
+//! The values live in layerize::commit::paint; the micro-benchmark and the
+//! main Layer service bundle in layerize::runtime::paint.
 use super::{ContentDisplayItemList, RasterDebugName, RasterSourceStorage};
 use crate::{
     adapter::{
@@ -125,49 +125,6 @@ impl<R: CpuSkiaBackend>
         self.0.GetDiscardableImagesInRect(rect)
     }
 }
-/// Actual external micro-benchmark implementation; current resident receivers
-/// are lent on each source virtual call, never retained as owner references.
-pub trait CpuPictureMicroBenchmark<B: crate::adapter::picture_layer::PictureLayerTypes> {
-    fn RunOnPictureLayer(&mut self, layer: &crate::cc::layers::picture_layer::PictureLayer<B>);
-}
-pub struct MicroBenchmark<B: crate::adapter::picture_layer::PictureLayerTypes>(
-    pub Box<dyn CpuPictureMicroBenchmark<B>>,
-);
-impl<B: crate::adapter::picture_layer::PictureLayerTypes>
-    crate::adapter::picture_layer::PictureLayerMicroBenchmark<B> for MicroBenchmark<B>
-{
-    fn RunOnPictureLayer(&mut self, layer: &crate::cc::layers::picture_layer::PictureLayer<B>) {
-        self.0.RunOnPictureLayer(layer)
-    }
-}
-/// Derived Layer services remain external/call-scoped; RecordingSource and all
-/// Picture/Tile policy is canonical. Implementors provide real recorder values.
-pub trait CpuPaintServices<B: crate::adapter::picture_layer::PictureLayerTypes>:
-    crate::adapter::picture_layer::PictureLayerServices<B>
-    + crate::adapter::solid_color_layer::SolidColorLayerServices<B>
-    + crate::adapter::paint_artifact_compositor::SynthesizedClipPaintServices<B>
-    + crate::adapter::content_layer_client_impl::ContentLayerClientServices<B>
-    + crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJsonColor
-where
-    B: crate::adapter::solid_color_layer::SolidColorLayerTypes
-        + crate::adapter::paint_artifact_compositor::SynthesizedClipTypes,
-{
-}
-impl<
-        B: crate::adapter::picture_layer::PictureLayerTypes
-            + crate::adapter::solid_color_layer::SolidColorLayerTypes
-            + crate::adapter::paint_artifact_compositor::SynthesizedClipTypes,
-        T: crate::adapter::picture_layer::PictureLayerServices<B>
-            + crate::adapter::solid_color_layer::SolidColorLayerServices<B>
-            + crate::adapter::paint_artifact_compositor::SynthesizedClipPaintServices<B>
-        + crate::adapter::content_layer_client_impl::ContentLayerClientServices<B>
-        + crate::third_party::blink::renderer::platform::graphics::compositing::layers_as_json::LayersAsJsonColor
-            + ?Sized,
-    > CpuPaintServices<B> for T
-{
-}
-
-
 /// Source: ui/gfx/geometry/axis_transform2d.h:38-55,97-113,132-156.
 /// Pure native gfx value subset consumed by Tile/coverage. Float clamping is
 /// performed by the existing Foundation geometry owner, including NaN rules.
