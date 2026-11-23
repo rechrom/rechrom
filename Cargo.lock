@@ -2289,6 +2289,7 @@ dependencies = [
  "compositor_animation",
  "compositor_draw",
  "compositor_input",
+ "compositor_scheduler",
  "compositor_tree",
  "skia",
 ]

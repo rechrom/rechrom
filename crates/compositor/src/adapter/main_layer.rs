@@ -58,7 +58,7 @@ pub trait LayerDidScrollCallback: Clone {
     fn is_null(&self) -> bool;
     fn Run(&self, offset: PointF, element: ElementId);
 }
-type SelfViewTransitionRequest<B> = <B as LayerTreeTypes>::ViewTransitionRequest;
+type SelfViewTransitionRequest<B> = <B as layerize::commit::CommitTypes>::ViewTransitionRequest;
 pub trait MainLayerHostRead<B: MainLayerTypes>: ProtectedSequenceSynchronizer {
     fn device_scale_factor(&self) -> f32;
     fn device_viewport_rect(&self) -> Rect;

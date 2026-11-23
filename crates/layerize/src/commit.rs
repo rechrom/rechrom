@@ -4,6 +4,7 @@
 //! under which LayerTreeHostImpl::FinishCommit reads main-thread state.
 //! Nothing here names Blink paint types.
 
+pub mod commit_state;
 pub mod geometry;
 pub mod layer_tree_debug_state;
 pub mod property_tree;
@@ -26,10 +27,13 @@ pub mod values;
 pub use compositor_animation::property_animation_state;
 pub use compositor_draw::damage_reason;
 pub use compositor_input::{
-    compositor_commit_data, input_types, main_thread_scrolling_reason, overscroll_behavior,
+    browser_controls_params, compositor_commit_data, event_listener_properties, input_types,
+    layer_selection_bound, main_thread_scrolling_reason, overscroll_behavior, page_scale_animation,
     scroll_snap_data, scroll_source_type,
 };
 pub use compositor_tree::{
-    clip_node, effect_node, math_util, property_ids, synced_property, target_property,
+    clip_node, commit_types, effect_node, math_util, property_ids, synced_property, target_property,
     transform_node, viewport_property_ids,
 };
+
+pub use commit_state::{CommitStateTypes, CommitTypes, PropertyTreesFor};

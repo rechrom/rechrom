@@ -500,7 +500,7 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
                 .transform_tree_with_context();
             transform_tree.clear();
             let id = transform_tree.Insert(
-                &TransformNode::<<B as LayerTreeTypes>::Transform>::default(),
+                &TransformNode::<<B as layerize::commit::CommitTypes>::Transform>::default(),
                 kRootPropertyNodeId,
             );
             debug_assert_eq!(id, kSecondaryRootPropertyNodeId);
@@ -548,7 +548,7 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
                 .effect_tree_mutable();
             effect_tree.clear();
             let id = effect_tree.Insert(
-                &EffectNode::<<B as LayerTreeTypes>::Filters, <B as LayerTreeTypes>::Path>::default(
+                &EffectNode::<<B as layerize::commit::CommitTypes>::Filters, <B as layerize::commit::CommitTypes>::Path>::default(
                 ),
                 kInvalidPropertyNodeId,
             );
@@ -1893,11 +1893,11 @@ impl<'manager, 'context, B: PropertyTreeManagerTypes, C: PropertyTreeManagerClie
 
 // Source: third_party/blink/renderer/platform/graphics/compositing/property_tree_manager.cc:82-109.
 fn UpdateCcTransformLocalMatrix<B: PropertyTreeManagerTypes>(
-    compositor_node: &mut TransformNode<<B as LayerTreeTypes>::Transform>,
+    compositor_node: &mut TransformNode<<B as layerize::commit::CommitTypes>::Transform>,
     transform_node: &B::TransformNode,
 ) {
     if transform_node.HasStickyConstraint() || transform_node.HasAnchorPositionScrollData() {
-        debug_assert!(compositor_node.local == <B as LayerTreeTypes>::Transform::default());
+        debug_assert!(compositor_node.local == <B as layerize::commit::CommitTypes>::Transform::default());
         debug_assert!(compositor_node.origin == Default::default());
     } else if transform_node.HasScrollNode() {
         debug_assert!(transform_node.IsIdentityOr2dTranslation());
@@ -1906,7 +1906,7 @@ fn UpdateCcTransformLocalMatrix<B: PropertyTreeManagerTypes>(
             &PointF::new(-translation.x(), -translation.y()),
             DamageReason::kUntracked,
         );
-        debug_assert!(compositor_node.local == <B as LayerTreeTypes>::Transform::default());
+        debug_assert!(compositor_node.local == <B as layerize::commit::CommitTypes>::Transform::default());
         debug_assert!(compositor_node.origin == Default::default());
     } else {
         compositor_node.local = transform_node.Matrix();

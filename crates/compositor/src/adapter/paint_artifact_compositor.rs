@@ -12,7 +12,7 @@ use super::{
 pub trait SynthesizedClipTypes:
     PaintChunksTypes<
     Transform: super::paint_chunks_to_cc_layer::ConversionTransform,
-    ChunkMapper: ChunkGeometryMapper<Transform = <Self as LayerTreeTypes>::Transform>,
+    ChunkMapper: ChunkGeometryMapper<Transform = <Self as layerize::commit::CommitTypes>::Transform>,
     PaintPath: Send + Sync,
     DerivedServices: SynthesizedClipPaintServices<Self>,
 >
@@ -40,12 +40,12 @@ pub trait SynthesizedClipServices<B: SynthesizedClipTypes>:
         &self,
         source: &B::TransformNode,
         destination: &B::TransformNode,
-    ) -> <B as LayerTreeTypes>::Transform;
+    ) -> <B as layerize::commit::CommitTypes>::Transform;
     fn ToSkRoundedRect(&self, rect: &B::RoundedRect) -> B::SkRoundedRect;
     fn OffsetSkRoundedRect(&self, rect: &mut B::SkRoundedRect, offset: Vector2dF);
-    fn MapRect(&self, transform: &<B as LayerTreeTypes>::Transform, rect: Rect) -> Rect;
-    fn PostTranslate(&self, transform: &mut <B as LayerTreeTypes>::Transform, offset: Vector2dF);
-    fn MakeIdentity(&self, transform: &mut <B as LayerTreeTypes>::Transform);
+    fn MapRect(&self, transform: &<B as layerize::commit::CommitTypes>::Transform, rect: Rect) -> Rect;
+    fn PostTranslate(&self, transform: &mut <B as layerize::commit::CommitTypes>::Transform, offset: Vector2dF);
+    fn MakeIdentity(&self, transform: &mut <B as layerize::commit::CommitTypes>::Transform);
     fn ClipPathEquals(&self, clip: &B::ClipNode, previous: &Option<B::PaintPath>) -> bool;
 }
 

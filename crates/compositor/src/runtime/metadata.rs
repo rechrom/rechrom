@@ -118,10 +118,10 @@ impl<SR, SID, FD: Default, INK, TD, CB: Default, TR: Default, LI, ACK: Default>
 /// Bind the root family to exactly the same native values as the output frame.
 pub trait MetadataTypes:
     HostImplDTypes<TreesInVizTiming=TreesInVizTiming> + FrameMetadataValueTypes<
-        MetadataSurfaceRange=<Self as LayerTreeTypes>::SurfaceRange,
+        MetadataSurfaceRange=<Self as layerize::commit::CommitTypes>::SurfaceRange,
         MetadataSurfaceId=<Self as crate::adapter::frame_data::FrameDataTypes>::SurfaceId,
         MetadataDeadline=<Self as HostImplDTypes>::FrameDeadline,
-        MetadataDelegatedInk=<Self as LayerTreeTypes>::DelegatedInkMetadata,
+        MetadataDelegatedInk=<Self as layerize::commit::CommitTypes>::DelegatedInkMetadata,
         MetadataTransition=<Self as HostImplDTypes>::TransitionDirective,
         MetadataCaptureBounds=<Self as HostImplDTypes>::RegionCaptureBounds,
         MetadataTrackedRects=<Self as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects,

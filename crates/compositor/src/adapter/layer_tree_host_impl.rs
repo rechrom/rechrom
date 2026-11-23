@@ -52,7 +52,7 @@ pub trait HostImplLayer {
         Transform = Self::Transform,
         RegionBackend = Self::RegionBackend,
     >;
-    type Transform: PropertyTreeTransform;
+    type Transform: super::layer_tree_impl::ImplTreeTransform;
     type RegionBackend: SkRegionBackend;
     fn GetInvalidationRegionForDebugging(&self) -> Region<Self::RegionBackend>;
     fn draws_content(&self) -> bool;
@@ -158,7 +158,7 @@ pub trait HostImplTypes:
         LayerTraceValue = Self::HostTraceValue,
         Settings = crate::cc::trees::layer_tree_settings::LayerTreeSettings,
         BeginMainFrameReason = <Self as super::input_services::InputHostTypes>::BeginMainFrameReason,
-        Layer: super::render_surface_impl::RenderSurfaceLayer<Self> + HostMetadataLayer<Self> + HostImplLayer<Types=Self,Transform=<Self as super::layer_tree_impl::LayerTreeTypes>::Transform,RegionBackend=<Self as super::layer_tree_impl::LayerTreeTypes>::RegionBackend> + HostImplHitTestLayer<Self> + super::tree_sync::SyncImplLayer<Self> + HostDrawLayer<Self> + HostTileLayer<Self>,
+        Layer: super::render_surface_impl::RenderSurfaceLayer<Self> + HostMetadataLayer<Self> + HostImplLayer<Types=Self,Transform=<Self as layerize::commit::CommitTypes>::Transform,RegionBackend=<Self as super::layer_tree_impl::LayerTreeTypes>::RegionBackend> + HostImplHitTestLayer<Self> + super::tree_sync::SyncImplLayer<Self> + HostDrawLayer<Self> + HostTileLayer<Self>,
         LayerList: super::tree_sync::SyncLayerList<Self>,
         PictureLayer: super::tree_sync::SyncPictureLayer + HostTilePictureLayer,
         RenderSurface: HostDrawSurface<Self> + HostScrollRenderSurface<Self>,
@@ -184,13 +184,13 @@ pub trait HostImplTypes:
     > + super::render_surface_impl::RenderSurfaceTypes
     + super::input_handler::InputHandlerTypes<
         Elasticity=Box<crate::cc::input::scroll_elasticity_helper::ScrollElasticityHelperImpl>,
-        Transform=<Self as super::layer_tree_impl::LayerTreeTypes>::Transform,
+        Transform=<Self as layerize::commit::CommitTypes>::Transform,
         LayerTreeSettings = crate::cc::trees::layer_tree_settings::LayerTreeSettings,
         InputHandler:HostImplInputHandler,
     > + super::paint_worklet::PaintWorkletTypes
     + super::tree_sync::SyncTypes
     + super::render_metadata::RenderFrameMetadataTypes
-    + super::unbounded::UnboundedTypes<LocalSurfaceId=<Self as super::layer_tree_impl::LayerTreeTypes>::LocalSurfaceId,Transform=<Self as super::layer_tree_impl::LayerTreeTypes>::Transform>
+    + super::unbounded::UnboundedTypes<LocalSurfaceId=<Self as layerize::commit::CommitTypes>::LocalSurfaceId,Transform=<Self as layerize::commit::CommitTypes>::Transform>
     + super::frame_data::FrameDataTypes<
         ResourceId=<Self as HostImplResourceTypes>::ResourceId,
         SurfaceId: Clone,
@@ -279,7 +279,7 @@ pub trait HostImplTypes:
     type ColorSpace: HostColorSpace;
     type ColorSpaceCache: HostColorSpaceCache<Self::ColorSpace>;
     type ThrottleTypes: super::throttle::ThrottleTypes<
-        Transform=<Self as super::layer_tree_impl::LayerTreeTypes>::Transform,
+        Transform=<Self as layerize::commit::CommitTypes>::Transform,
         PassId=Self::RenderPassId,
         PassHandle=HostRenderPassLocation,
         Pass=<Self as super::frame_data::FrameDataTypes>::RenderPass,
@@ -507,7 +507,7 @@ pub trait HostImplServices<B: HostImplTypes>:
     fn ChildLocalSurfaceIdAllocatorCurrent<'a>(
         &self,
         allocator: &'a B::ChildLocalSurfaceIdAllocator,
-    ) -> &'a <B as super::layer_tree_impl::LayerTreeTypes>::LocalSurfaceId;
+    ) -> &'a <B as layerize::commit::CommitTypes>::LocalSurfaceId;
     fn FrameSequenceTrackerActiveTypes(
         &mut self,
         trackers: &mut B::FrameSequenceTrackerCollection,
@@ -1103,7 +1103,7 @@ pub trait HostImplLayerServices<B: HostImplTypes> {
         &mut self,
         tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
         layer: &InputLayerId,
-    ) -> <B as super::layer_tree_impl::LayerTreeTypes>::Transform;
+    ) -> <B as layerize::commit::CommitTypes>::Transform;
     fn Layer_Scrollbar_IdentifyScrollbarPart(
         &mut self,
         tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
@@ -1198,10 +1198,10 @@ pub trait HostUnboundedLayerContext<B: HostImplTypes> {
     fn SetUnboundedFrameSinkId(
         &mut self,
         frame_sink: &<B::ThrottleTypes as crate::adapter::throttle::ThrottleTypes>::FrameSinkId,
-        local: &<B as LayerTreeTypes>::LocalSurfaceId,
+        local: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     );
     fn DismissUnboundedFrameSink(&mut self);
-    fn SetUnboundedLocalSurfaceId(&mut self, local: &<B as LayerTreeTypes>::LocalSurfaceId);
+    fn SetUnboundedLocalSurfaceId(&mut self, local: &<B as layerize::commit::CommitTypes>::LocalSurfaceId);
 }
 // Direct delegate/platform forwarding only; all branching, native flash state,
 // scroll mutation and callback arithmetic are in translated chunk J.
@@ -1274,7 +1274,7 @@ pub struct HostHitTestRegion<B: HostImplTypes> {
     pub async_hit_test_reasons: u32,
     pub frame_sink_id: B::HitTestFrameSinkId,
     pub rect: RRectF,
-    pub transform: <B as LayerTreeTypes>::Transform,
+    pub transform: <B as layerize::commit::CommitTypes>::Transform,
 }
 impl<B: HostImplTypes> Default for HostHitTestRegion<B> {
     fn default() -> Self {
@@ -1292,7 +1292,7 @@ pub struct HostHitTestRegionList<B: HostImplTypes> {
     pub flags: u32,
     pub async_hit_test_reasons: u32,
     pub bounds: Rect,
-    pub transform: <B as LayerTreeTypes>::Transform,
+    pub transform: <B as layerize::commit::CommitTypes>::Transform,
     pub regions: Vec<HostHitTestRegion<B>>,
 }
 impl<B: HostImplTypes> Default for HostHitTestRegionList<B> {
@@ -1394,8 +1394,8 @@ pub trait HostImplEServices<B: HostImplTypes> {
     );
     fn LocalSurfaceIdIsNewerThan(
         &self,
-        target: &<B as LayerTreeTypes>::LocalSurfaceId,
-        upcoming: &<B as LayerTreeTypes>::LocalSurfaceId,
+        target: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
+        upcoming: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) -> bool;
     fn TrackersNotifyFrameEnd(
         &mut self,
@@ -1448,7 +1448,7 @@ pub trait HostImplFServices<B: HostImplTypes> {
     fn TracePendingTreeActivated(
         &self,
         tree: LayerTreeId,
-        local: &<B as LayerTreeTypes>::LocalSurfaceId,
+        local: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     );
     fn TraceTreeSynchronization(&self, name: &str, count: Option<usize>);
     fn PromoteScrollTimelinesPendingToActive(
@@ -1563,14 +1563,14 @@ pub mod host_impl_chunk_b {
     // B external typed boundary proposals. No cc management algorithm lives here.
     // Stronger external payload constraints belong only to HostImplTypes:
     // + LayerTreeTypes<Layer:HostDrawLayer<Self>+HostImplLayer<
-    //     Transform=<Self as LayerTreeTypes>::Transform,
+    //     Transform=<Self as layerize::commit::CommitTypes>::Transform,
     //     RegionBackend=<Self as LayerTreeTypes>::RegionBackend>,
     //     RenderSurface:HostDrawSurface<Self>>
     // + FrameDataTypes<RenderPass:HostDrawPass<Self>,SurfaceId:Clone>.
     // HostImplTypes adds type RenderPassId:Copy+Ord+From<u64>;
     // type SharedQuadStateHandle:Copy; type DrawQuadHandle:Copy;
     // Existing ThrottleContext adds exact associated equality constraints:
-    // Transform=<Self as LayerTreeTypes>::Transform, PassId=Self::RenderPassId,
+    // Transform=<Self as layerize::commit::CommitTypes>::Transform, PassId=Self::RenderPassId,
     // PassHandle=HostRenderPassLocation, Pass=Self::RenderPass.
     // HostImplServices extends HostImplBServices<B>.
     use crate::adapter::{
@@ -1638,7 +1638,7 @@ pub mod host_impl_chunk_b {
     }
     pub trait HostDrawPass<B: HostImplTypes>:
         crate::adapter::throttle::ThrottlePass<
-        <B as LayerTreeTypes>::Transform,
+        <B as layerize::commit::CommitTypes>::Transform,
         B::RenderPassId,
         <B::ThrottleTypes as crate::adapter::throttle::ThrottleTypes>::FrameSinkId,
     >
@@ -1649,7 +1649,7 @@ pub mod host_impl_chunk_b {
             id: B::RenderPassId,
             output: Rect,
             damage: Rect,
-            transform: <B as LayerTreeTypes>::Transform,
+            transform: <B as layerize::commit::CommitTypes>::Transform,
         );
         fn set_damage_rect(&mut self, rect: Rect);
         fn set_has_transparent_background(&mut self, value: bool);
@@ -1669,7 +1669,7 @@ pub mod host_impl_chunk_b {
         fn SetSharedQuadStateAll(
             &mut self,
             state: B::SharedQuadStateHandle,
-            transform: <B as LayerTreeTypes>::Transform,
+            transform: <B as layerize::commit::CommitTypes>::Transform,
             quad_layer_rect: Rect,
             visible_quad_layer_rect: Rect,
             mask_filter_info: crate::adapter::property_types::MaskFilterInfo,
@@ -1719,7 +1719,7 @@ pub mod host_impl_chunk_b {
             data: &mut AppendQuadsData<B::SurfaceId>,
             surface_context: &dyn crate::adapter::render_surface_impl::RenderSurfaceContext<B>,
         );
-        fn draw_transform(&self) -> &<B as LayerTreeTypes>::Transform;
+        fn draw_transform(&self) -> &<B as layerize::commit::CommitTypes>::Transform;
     }
     pub trait HostDrawLayer<B: HostImplTypes>:
         crate::adapter::throttle::ThrottleLayer<
@@ -1825,7 +1825,7 @@ pub mod host_impl_chunk_b {
         }
     }
     impl<B: HostImplTypes> crate::adapter::throttle::ThrottleTypes for BorrowedFrameThrottle<'_, B> {
-        type Transform = <B as LayerTreeTypes>::Transform;
+        type Transform = <B as layerize::commit::CommitTypes>::Transform;
         type PassId = B::RenderPassId;
         type FrameSinkId =
             <B::ThrottleTypes as crate::adapter::throttle::ThrottleTypes>::FrameSinkId;
@@ -2029,7 +2029,7 @@ pub mod host_impl_chunk_c {
         fn LayerContextSetTargetLocalSurfaceId(
             &mut self,
             context: &mut <B as HostImplTypes>::LayerContext,
-            id: &<B as LayerTreeTypes>::LocalSurfaceId,
+            id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         );
         fn DelegateNotifyReadyToActivate(&mut self, delegate: HostImplDelegateId);
         fn DelegateNotifyReadyToDraw(&mut self, delegate: HostImplDelegateId);
@@ -2093,8 +2093,8 @@ pub mod host_impl_chunk_c {
         );
         fn LocalSurfaceIdIsNewerThanOrEmbeddingChanged(
             &self,
-            current: &<B as LayerTreeTypes>::LocalSurfaceId,
-            other: &<B as LayerTreeTypes>::LocalSurfaceId,
+            current: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
+            other: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         ) -> bool;
         fn ResourceProviderSetEvicted(
             &mut self,
@@ -2396,7 +2396,7 @@ pub mod host_impl_chunk_g {
         fn ChildLocalSurfaceIdAllocatorUpdateFromParent(
             &mut self,
             allocator: &mut B::ChildLocalSurfaceIdAllocator,
-            id: &<B as LayerTreeTypes>::LocalSurfaceId,
+            id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         );
         fn DelegateReturnResource(
             &mut self,
@@ -2535,7 +2535,7 @@ pub mod host_impl_chunk_d {
             Selection = crate::adapter::layer_tree_impl::Selection<
                 <Self as LayerTreeTypes>::SelectionBound,
             >,
-            LocalSurfaceId = <Self as LayerTreeTypes>::LocalSurfaceId,
+            LocalSurfaceId = <Self as layerize::commit::CommitTypes>::LocalSurfaceId,
         >
     {
         type TrackedElementFeature: Copy;
@@ -2548,7 +2548,7 @@ pub mod host_impl_chunk_d {
         type FrameDeadline;
         type DebugDrawContext<'a>: crate::adapter::debug_rect::DebugRectContext<
             Types = Self,
-            Transform = <Self as LayerTreeTypes>::Transform,
+            Transform = <Self as layerize::commit::CommitTypes>::Transform,
             Filters = Self::Filters,
             Path = Self::Path,
             Surface = Self::RenderSurface,
@@ -2788,7 +2788,7 @@ pub mod host_impl_chunk_d {
         fn FrameSinkSetCurrentLocalSurfaceId(
             &mut self,
             sink: HostImplFrameSinkId,
-            id: &<B as LayerTreeTypes>::LocalSurfaceId,
+            id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         );
         fn IncrementFrameToken(&self, token: &mut B::FrameTokenGenerator) -> u32;
         fn HasMainThreadAnimation(&self, types: &B::ActiveFrameSequenceTrackers) -> bool;

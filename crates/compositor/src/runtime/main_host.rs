@@ -137,7 +137,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         &mut self,
         services: &dyn MainLayerServices,
         derived: &(dyn CpuPaintServices<B<R>> + 'static),
-        range: <B<R> as crate::adapter::layer_tree_impl::LayerTreeTypes>::SurfaceRange,
+        range: <B<R> as layerize::commit::CommitTypes>::SurfaceRange,
     ) -> Arc<dyn paint::ForeignLayer> {
         let layer = crate::runtime::owner_types::CreateCpuSurfaceLayer::<R>(services);
         self.with_layer_context(services, derived, |c| {

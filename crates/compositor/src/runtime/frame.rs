@@ -63,12 +63,12 @@ impl<T: Clone + Default, F: Clone + Default, P: Clone, Q, S, Timing: Clone, L> F
 /// exact owned pass/state/quad storage and the existing unique native IDs.
 pub trait FrameTypes:
     FrameValueTypes<
-        FrameTransform = <Self as LayerTreeTypes>::Transform,
-        FrameFilters = <Self as LayerTreeTypes>::Filters,
-        FramePath = <Self as LayerTreeTypes>::Path,
-        FrameCopyRequest = <Self as LayerTreeTypes>::CopyOutputRequest,
+        FrameTransform = <Self as layerize::commit::CommitTypes>::Transform,
+        FrameFilters = <Self as layerize::commit::CommitTypes>::Filters,
+        FramePath = <Self as layerize::commit::CommitTypes>::Path,
+        FrameCopyRequest = <Self as layerize::commit::CommitTypes>::CopyOutputRequest,
     > + LayerImplTypes<
-        SharedQuadState = SharedQuadState<<Self as LayerTreeTypes>::Transform>,
+        SharedQuadState = SharedQuadState<<Self as layerize::commit::CommitTypes>::Transform>,
         DrawQuad = DrawQuad<<Self as FrameValueTypes>::PictureDisplayItemList>,
     > + FrameDataTypes<
         RenderPassId = RenderPassId,

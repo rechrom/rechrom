@@ -72,7 +72,7 @@ pub trait PendingLayerTypes:
     /// A retained identity/handle to Paint's resident transform node.
     type TransformNode: PendingTransformNode<
             Self::PaintPropertyChange,
-            Matrix = <Self as super::layer_tree_impl::LayerTreeTypes>::Transform,
+            Matrix = <Self as layerize::commit::CommitTypes>::Transform,
         > + Clone
         + Eq
         + Hash;
@@ -85,8 +85,8 @@ pub trait PendingLayerTypes:
     type EffectNode: PendingEffectNode<
             Self::TransformNode,
             Self::PropertyNodeIdentity,
-            Filters = <Self as super::layer_tree_impl::LayerTreeTypes>::Filters,
-            Path = <Self as super::layer_tree_impl::LayerTreeTypes>::Path,
+            Filters = <Self as layerize::commit::CommitTypes>::Filters,
+            Path = <Self as layerize::commit::CommitTypes>::Path,
             PaintPropertyChange = Self::PaintPropertyChange,
             ClipNode = Self::ClipNode,
         > + Clone

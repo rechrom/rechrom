@@ -27,6 +27,28 @@ use crate::{
     },
 };
 
+impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
+    type Transform = Transform<R>;
+    type Filters = R::Filters;
+    type Path = R::Path;
+    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
+    type CopyOutputRequest = super::types::CopyOutputRequest;
+    type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
+    type LocalSurfaceId = super::types::LocalSurfaceId;
+    type SurfaceRange = super::types::SurfaceRange;
+    type SwapPromise = super::host_owners::SwapPromise<R>;
+    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<Self>;
+    type UIResourceRequest = super::host_owners::UIResourceRequest;
+    type PresentationCallback =
+        crate::adapter::presentation::Callback<super::metadata::PresentationFeedback>;
+    type SuccessfulPresentationCallback =
+        crate::adapter::presentation::SuccessfulCallbackWithDetails<
+            super::metadata::FrameTimingDetails,
+        >;
+    type EventMetrics = super::input::EventMetrics;
+    type DelegatedInkMetadata = super::metadata::DelegatedInkMetadata;
+    type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
+}
 impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type LayerTraceValue = super::host::TraceValue;
     type LayerStorage<'a> = LayerStorage<'a, CompositorLayer<Self>>;
@@ -96,33 +118,13 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type CommitState = CommitState<Self>;
     type UnsafeCommitState = ThreadUnsafeCommitState<Self>;
     type Synchronizer = crate::cc::trees::tree_synchronizer::TreeSynchronizer;
-    type Transform = Transform<R>;
-    type Filters = R::Filters;
-    type Path = R::Path;
-    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
-    type CopyOutputRequest = super::types::CopyOutputRequest;
     type RegionBackend = R;
     type Layer = CompositorLayer<Self>;
     type PictureLayer = PictureLayerImpl<Self>;
     type ScrollbarLayer = ScrollbarLayerImplBase<Self>;
     type BeginMainFrameReason = super::input::BeginMainFrameReason;
     type LayerList = OwnedLayerImplList<CompositorLayer<Self>>;
-    type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
-    type LocalSurfaceId = super::types::LocalSurfaceId;
-    type SurfaceRange = super::types::SurfaceRange;
-    type SwapPromise = super::host_owners::SwapPromise<R>;
-    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<Self>;
-    type UIResourceRequest = super::host_owners::UIResourceRequest;
     type UIResourceBitmap = super::host_resources::UIBitmap;
-    type PresentationCallback =
-        crate::adapter::presentation::Callback<super::metadata::PresentationFeedback>;
-    type SuccessfulPresentationCallback =
-        crate::adapter::presentation::SuccessfulCallbackWithDetails<
-            super::metadata::FrameTimingDetails,
-        >;
-    type EventMetrics = super::input::EventMetrics;
-    type DelegatedInkMetadata = super::metadata::DelegatedInkMetadata;
-    type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
     type SelectionBound = super::metadata::SelectionBound;
     type DecodingMode = crate::adapter::picture_layer_impl::PictureImageDecodingMode;
     type Settings = crate::cc::trees::layer_tree_settings::LayerTreeSettings;
@@ -340,7 +342,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
 
     fn SurfaceSetRange(
         &mut self,
-        range: <CpuCompositorTypes<R> as LayerTreeTypes>::SurfaceRange,
+        range: <CpuCompositorTypes<R> as layerize::commit::CommitTypes>::SurfaceRange,
         deadline: Option<u32>,
         tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
     ) {

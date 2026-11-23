@@ -24,11 +24,11 @@ pub trait PropertyTreeManagerTypes:
 
     /// Exact gfx representation primitive used by SetupRootTransformNode.
     /// It constructs a 2d uniform scale and contains no compositor policy.
-    fn UniformScaleTransform(scale: f32) -> <Self as LayerTreeTypes>::Transform;
+    fn UniformScaleTransform(scale: f32) -> <Self as layerize::commit::CommitTypes>::Transform;
     fn SourceToDestinationProjection(
         source: &Self::TransformNode,
         destination: &Self::TransformNode,
-    ) -> <Self as LayerTreeTypes>::Transform;
+    ) -> <Self as layerize::commit::CommitTypes>::Transform;
     fn EffectMaskElementId(effect: ElementId) -> ElementId;
     fn NewUniqueElementId() -> ElementId;
 }

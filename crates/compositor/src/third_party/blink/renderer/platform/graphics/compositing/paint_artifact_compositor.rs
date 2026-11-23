@@ -58,7 +58,7 @@ pub struct SynthesizedClip<B: SynthesizedClipTypes> {
     mask_isolation_id_: ElementId,
     layer_: Option<PictureLayerRef<B>>,
     rrect_: B::SkRoundedRect,
-    projection_: <B as LayerTreeTypes>::Transform,
+    projection_: <B as layerize::commit::CommitTypes>::Transform,
     identity_: PictureLayerClientWeak<B>,
     destroyed_: bool,
 }

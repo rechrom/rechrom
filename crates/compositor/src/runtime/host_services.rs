@@ -223,7 +223,7 @@ pub trait CpuHostCoreServices<B: HostImplTypes> {
     fn ChildLocalSurfaceIdAllocatorCurrent<'a>(
         &self,
         allocator: &'a B::ChildLocalSurfaceIdAllocator,
-    ) -> &'a <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::LocalSurfaceId;
+    ) -> &'a <B as layerize::commit::CommitTypes>::LocalSurfaceId;
 
     fn FrameSequenceTrackerActiveTypes(
         &mut self,
@@ -719,7 +719,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplServices<B> for CpuHostSe
     fn ChildLocalSurfaceIdAllocatorCurrent<'a>(
         &self,
         allocator: &'a B::ChildLocalSurfaceIdAllocator,
-    ) -> &'a <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::LocalSurfaceId {
+    ) -> &'a <B as layerize::commit::CommitTypes>::LocalSurfaceId {
         self.core.ChildLocalSurfaceIdAllocatorCurrent(allocator)
     }
 
@@ -1367,7 +1367,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplLayerServices<B> for CpuH
         &mut self,
         tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
         layer: &InputLayerId,
-    ) -> <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::Transform {
+    ) -> <B as layerize::commit::CommitTypes>::Transform {
         self.scrollbar_layer
             .Layer_Scrollbar_ScreenSpaceTransform(tree, layer)
     }
@@ -1550,8 +1550,8 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplEServices<B> for CpuHostS
 
     fn LocalSurfaceIdIsNewerThan(
         &self,
-        target: &<B as LayerTreeTypes>::LocalSurfaceId,
-        upcoming: &<B as LayerTreeTypes>::LocalSurfaceId,
+        target: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
+        upcoming: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) -> bool {
         self.begin_frame.LocalSurfaceIdIsNewerThan(target, upcoming)
     }
@@ -1629,7 +1629,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplFServices<B> for CpuHostS
     fn TracePendingTreeActivated(
         &self,
         tree: LayerTreeId,
-        local: &<B as LayerTreeTypes>::LocalSurfaceId,
+        local: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) {
         self.activation.TracePendingTreeActivated(tree, local)
     }
@@ -1974,7 +1974,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplCServices<B> for CpuHostS
     fn LayerContextSetTargetLocalSurfaceId(
         &mut self,
         context: &mut <B as HostImplTypes>::LayerContext,
-        id: &<B as LayerTreeTypes>::LocalSurfaceId,
+        id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) {
         self.resources
             .LayerContextSetTargetLocalSurfaceId(context, id)
@@ -2092,8 +2092,8 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplCServices<B> for CpuHostS
 
     fn LocalSurfaceIdIsNewerThanOrEmbeddingChanged(
         &self,
-        current: &<B as LayerTreeTypes>::LocalSurfaceId,
-        other: &<B as LayerTreeTypes>::LocalSurfaceId,
+        current: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
+        other: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) -> bool {
         self.resources
             .LocalSurfaceIdIsNewerThanOrEmbeddingChanged(current, other)
@@ -2389,7 +2389,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplGServices<B> for CpuHostS
     fn ChildLocalSurfaceIdAllocatorUpdateFromParent(
         &mut self,
         allocator: &mut B::ChildLocalSurfaceIdAllocator,
-        id: &<B as LayerTreeTypes>::LocalSurfaceId,
+        id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) {
         self.frame_sink
             .ChildLocalSurfaceIdAllocatorUpdateFromParent(allocator, id)
@@ -2691,7 +2691,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplDServices<B> for CpuHostS
     fn FrameSinkSetCurrentLocalSurfaceId(
         &mut self,
         sink: HostImplFrameSinkId,
-        id: &<B as LayerTreeTypes>::LocalSurfaceId,
+        id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) {
         self.metadata.FrameSinkSetCurrentLocalSurfaceId(sink, id)
     }
@@ -2929,7 +2929,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes>
     fn TracePendingTreeWaiting(
         &self,
         pending: LayerTreeId,
-        active_lsid: &<B as LayerTreeTypes>::LocalSurfaceId,
+        active_lsid: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     ) {
         self.client
             .as_ref()

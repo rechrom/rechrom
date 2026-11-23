@@ -25,7 +25,7 @@ pub trait DrawFilters: PropertyTreeFilters {
     fn ExpandRect(&self, rect: Rect, scale: Vector2dF) -> Rect;
     fn HasBlurFilter(&self) -> bool;
 }
-pub trait DrawLayer<T: DrawTransform> {
+pub trait DrawLayer<T: super::layer_tree_impl::ImplTreeTransform> {
     type Types: LayerTreeTypes<Transform = T>;
     fn transform_tree_index(&self) -> i32;
     fn effect_tree_index(&self) -> i32;
@@ -50,7 +50,7 @@ pub trait DrawLayer<T: DrawTransform> {
 /// `DrawContext::layer`. The source mutates these fields directly; keeping the
 /// setters on `&mut self` avoids an interior-mutability owner or copied draw
 /// properties while preserving the source algorithm in draw_property_utils.
-pub trait DrawLayerMut<T: DrawTransform>: DrawLayer<T> {
+pub trait DrawLayerMut<T: super::layer_tree_impl::ImplTreeTransform>: DrawLayer<T> {
     fn SetScreenSpaceTransform(&mut self, transform: T);
     fn SetTargetSpaceTransform(&mut self, transform: T);
     fn SetScreenSpaceTransformIsAnimating(&mut self, value: bool);
@@ -72,7 +72,7 @@ pub trait DrawLayerMut<T: DrawTransform>: DrawLayer<T> {
 pub trait ViewTransitionContentDrawLayer {
     fn SetOriginatingSurfaceContentRect(&mut self, rect: Rect);
 }
-pub trait DrawSurface<T: DrawTransform>: PropertyTreeRenderSurface {
+pub trait DrawSurface<T: super::layer_tree_impl::ImplTreeTransform>: PropertyTreeRenderSurface {
     type Types: LayerTreeTypes<Transform = T>;
     fn EffectTreeIndex(&self) -> i32;
     fn TransformTreeIndex(&self, trees: &PropertyTreesFor<Self::Types>) -> i32;
@@ -115,10 +115,12 @@ pub trait DrawContext: Sized + PropertyTreeFeatures {
         RenderSurface = Self::Surface,
         CopyOutputRequest = Self::CopyRequest,
     >;
-    type Transform: DrawTransform;
+    type Transform: super::layer_tree_impl::ImplTreeTransform;
     type Filters: DrawFilters;
     type Path: PropertyPath;
-    type Surface: DrawSurface<Self::Transform, Types = Self::Types>;
+    type Surface: DrawSurface<Self::Transform, Types = Self::Types>
+        + super::layer_tree_impl::LayerTreeSurfaceTransform<Transform = Self::Transform>
+        + super::layer_tree_impl::LayerTreeRenderSurface<Self::Types>;
     type CopyRequest: PropertyTreeCopyOutputRequest;
     type Layer: Copy + Eq;
     type Layers<'a>: Iterator<Item = Self::Layer>
@@ -201,14 +203,14 @@ pub fn MatchesToken(
 /// Narrow live geometry consumed by source LayerVisibleRect (cc:1648-1725).
 /// Splitting this read-only facet avoids manufacturing DrawLayer's unrelated
 /// mutation capabilities when a resident LayerImpl is queried during hit-test.
-pub trait LayerVisibleRectLayer<T: DrawTransform> {
+pub trait LayerVisibleRectLayer<T: super::layer_tree_impl::ImplTreeTransform> {
     type Types: LayerTreeTypes<Transform = T>;
     fn effect_tree_index(&self) -> i32;
     fn clip_tree_index(&self) -> i32;
     fn transform_tree_index(&self) -> i32;
     fn offset_to_transform_parent(&self) -> Vector2dF;
 }
-impl<T: DrawTransform, B: LayerTreeTypes<Transform = T>> LayerVisibleRectLayer<T>
+impl<T: super::layer_tree_impl::ImplTreeTransform, B: LayerTreeTypes<Transform = T>> LayerVisibleRectLayer<T>
     for dyn DrawLayer<T, Types = B> + '_
 {
     type Types = B;

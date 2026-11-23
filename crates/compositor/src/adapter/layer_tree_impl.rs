@@ -41,13 +41,7 @@ pub trait LayerTreeSelectionBound {
 pub use crate::cc::layers::picture_layer_impl::ImageInvalidationResult;
 pub use crate::cc::trees::swap_promise::{DidNotSwapAction, DidNotSwapReason, SwapPromise};
 
-pub type PropertyTreesFor<B> = PropertyTrees<
-    <B as LayerTreeTypes>::Transform,
-    <B as LayerTreeTypes>::Filters,
-    <B as LayerTreeTypes>::Path,
-    <B as LayerTreeTypes>::RenderSurface,
-    <B as LayerTreeTypes>::CopyOutputRequest,
->;
+pub use layerize::commit::{CommitTypes, PropertyTreesFor};
 pub trait LayerTreePictureContext<B: LayerTreeTypes>:
     super::picture_layer_impl::PictureLayerReadContext
 {
@@ -104,7 +98,26 @@ pub trait LayerTreeSourceContext<B: LayerTreeTypes> {
     where
         B: super::picture_layer_impl::PictureLayerImplTypes;
 }
-pub trait LayerTreeTypes: Sized + 'static {
+/// The impl-side cc type family. Commit values are declared by the shared
+/// `CommitTypes`; this trait adds the impl-only types and restates the
+/// impl-side bounds on the shared ones.
+pub trait LayerTreeTypes:
+    Sized
+    + 'static
+    + CommitTypes<
+        Transform: ImplTreeTransform,
+        Filters: super::draw_property::DrawFilters,
+        RenderSurface: LayerTreeSurfaceTransform<Transform = <Self as CommitTypes>::Transform>
+                           + LayerTreeRenderSurface<Self>
+                           + super::draw_property::DrawSurface<
+            <Self as CommitTypes>::Transform,
+            Types = Self,
+        >,
+        SwapPromise: SwapPromise<<Self as CommitTypes>::CompositorFrameMetadata>,
+        UIResourceRequest: LayerTreeUIResourceRequest<Self>,
+        ViewTransitionRequest: LayerTreeViewTransitionRequest,
+    >
+{
     type LayerSourceContext<'a>: LayerTreeSourceContext<Self>
     where
         Self: 'a;
@@ -197,13 +210,6 @@ pub trait LayerTreeTypes: Sized + 'static {
     type CommitState: LayerTreeCommitState<Self>;
     type UnsafeCommitState: LayerTreeUnsafeCommitState<Self>;
     type Synchronizer: LayerTreeSynchronizer<Self>;
-    type Transform: LayerTreeTransform + super::scrollbar::ScrollbarTransform;
-    type Filters: super::draw_property::DrawFilters;
-    type Path: PropertyPath;
-    type RenderSurface: LayerTreeSurfaceTransform<Transform = Self::Transform>
-        + LayerTreeRenderSurface<Self>
-        + super::draw_property::DrawSurface<Self::Transform, Types = Self>;
-    type CopyOutputRequest: PropertyTreeCopyOutputRequest;
     type RegionBackend: SkRegionBackend;
     type Layer: LayerTreeLayer<Self>;
     type PictureLayer: LayerTreePictureLayer<Self>;
@@ -211,18 +217,7 @@ pub trait LayerTreeTypes: Sized + 'static {
     type BeginMainFrameReason;
 
     type LayerList: LayerTreeLayerList<Self> + Default;
-    type DisplayColorSpaces: Clone + Default + PartialEq;
-    type LocalSurfaceId: Clone + Default + PartialEq;
-    type SurfaceRange: Clone + Ord + Send + Sync + 'static;
-    type SwapPromise: SwapPromise<Self::CompositorFrameMetadata>;
-    type CompositorFrameMetadata;
-    type UIResourceRequest: LayerTreeUIResourceRequest<Self>;
     type UIResourceBitmap;
-    type PresentationCallback;
-    type SuccessfulPresentationCallback;
-    type EventMetrics;
-    type DelegatedInkMetadata;
-    type ViewTransitionRequest: LayerTreeViewTransitionRequest;
     type SelectionBound: LayerTreeSelectionBound + Clone + Default;
     type DecodingMode;
     type Settings: LayerTreeSettings;
@@ -928,6 +923,11 @@ pub trait LayerTreeTransform:
 {
     fn MapPoint3D(&self, point: super::geometry::Point3F) -> super::geometry::Point3F;
 }
+/// The impl-side bounds on the shared commit `CommitTypes::Transform`. Facets
+/// that bind `LayerTreeTypes<Transform = T>` name this one bound so `T`
+/// satisfies the impl family's supertrait requirement.
+pub trait ImplTreeTransform: LayerTreeTransform + super::scrollbar::ScrollbarTransform {}
+impl<T: LayerTreeTransform + super::scrollbar::ScrollbarTransform> ImplTreeTransform for T {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ScrollbarLayerHandle {
     pub object_identity: usize,
@@ -965,7 +965,7 @@ pub fn MakeDictIntoImplicitSnapshot(
 
 // Rust borrowed field access to the canonical source CommitState. This facet
 // never owns/copies the aggregate; take() corresponds to each native std::move.
-impl<B: super::commit_state::CommitStateTypes> LayerTreeCommitState<B>
+impl<B: super::commit_state::CommitStateTypes + LayerTreeTypes> LayerTreeCommitState<B>
     for crate::cc::trees::commit_state::CommitState<B>
 {
     fn property_trees(&self) -> &PropertyTreesFor<B> {
@@ -1108,7 +1108,7 @@ impl<B: super::commit_state::CommitStateTypes> LayerTreeCommitState<B>
         &mut self.view_transition_requests
     }
 }
-impl<B: super::commit_state::CommitStateTypes> LayerTreeUnsafeCommitState<B>
+impl<B: super::commit_state::CommitStateTypes + LayerTreeTypes> LayerTreeUnsafeCommitState<B>
     for crate::cc::trees::commit_state::ThreadUnsafeCommitState<B>
 {
     fn HasRootLayer(&self) -> bool {
