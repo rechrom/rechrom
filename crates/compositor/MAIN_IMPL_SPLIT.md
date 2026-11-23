@@ -340,10 +340,23 @@ Done:
   binding from there), `MainLayerPath for SkPath` to `layerize/src/skia_path.rs`.
   `CopyOutputRequest` is a compositor type, so its impl stays in
   `runtime/types.rs`. layerize now depends on `paint` and `foundation`.
+- **Main Skia value backend (S1a-2b part 3).**
+  `layerize::commit::skia_value_backend::MainSkiaBackend` holds the backend's
+  `Filters: DrawFilters` and `Path: MainLayerPath` value types and the path
+  operations (`FromPaintPath`, `StrokeBounds`, `StrokePath`,
+  `StrokeBackendPath`). The compositor's `SkiaValueBackend`
+  (`runtime/types.rs`) is now a blanket-implemented extension adding only the
+  impl filter facets (`RenderSurfaceFilters`, `OcclusionFilters`,
+  `DamageFilters`); `CpuSkiaBackend` is unchanged. `SkRegion` (local to the
+  compositor) implements `MainSkiaBackend` in `runtime/skia.rs`.
 
-Next (S1a-2b part 3): the main part of `SkiaValueBackend` / `CpuSkiaBackend`
-(`runtime/types.rs:18,61`) as `MainSkiaBackend` in commit, then
-`LayerizeFamily` (see "Plan correction").
+Next: `LayerizeFamily` in commit and its compositor impl (see "Plan
+correction", option h). Still in the compositor and needed by main code:
+`SkRegion` + its `SkRegionBackend` impl (`runtime/skia.rs`; concrete main code
+such as `runtime/paint/discardable_image_map.rs:453,1104` names it), the
+`Transform<R>` value with `RoundedRectTransformBackend`
+(`runtime/geometry.rs:11-17`), both used by both halves; they go to commit
+before the S1a-3 file moves.
 
 ### Plan correction: option (a) does not compile
 

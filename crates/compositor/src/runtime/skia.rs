@@ -307,7 +307,7 @@ fn stroke_backend_path(
         .then(|| outline.detach(None))
 }
 
-impl crate::runtime::types::SkiaValueBackend for SkRegion {
+impl layerize::commit::skia_value_backend::MainSkiaBackend for SkRegion {
     type Filters = FilterOperations;
     type Path = SkPath;
     fn FromPaintPath(path: &paint::paint_clip_path::PaintPath) -> Self::Path {

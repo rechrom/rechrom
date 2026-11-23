@@ -7,56 +7,30 @@ use super::{
 };
 use crate::adapter::{
     frame_data::FrameDataTypes,
-    main_layer::{MainLayerCopyOutputRequest, MainLayerPath},
+    main_layer::MainLayerCopyOutputRequest,
     property_tree::PropertyTreeCopyOutputRequest,
     region_backend::SkRegionBackend,
 };
 use std::{marker::PhantomData, sync::Arc};
 
-/// Pure Skia-owned value types only. Policy/owner algorithms are forbidden in
-/// this capability; the backend implements native filter/path operations.
-pub trait SkiaValueBackend {
-    type Filters: crate::adapter::render_surface_impl::RenderSurfaceFilters
-        + crate::adapter::draw_property::DrawFilters
+pub use layerize::commit::skia_value_backend::MainSkiaBackend;
+/// The impl-side filter facets of the Skia value backend. The value types and
+/// the path operations are the main half's `MainSkiaBackend`.
+pub trait SkiaValueBackend:
+    MainSkiaBackend<
+    Filters: crate::adapter::render_surface_impl::RenderSurfaceFilters
+                 + crate::adapter::occlusion::OcclusionFilters
+                 + crate::adapter::damage_context::DamageFilters,
+>
+{
+}
+impl<T> SkiaValueBackend for T
+where
+    T: MainSkiaBackend,
+    T::Filters: crate::adapter::render_surface_impl::RenderSurfaceFilters
         + crate::adapter::occlusion::OcclusionFilters
-        + crate::adapter::damage_context::DamageFilters
-        + Send
-        + Sync
-        + 'static;
-    type Path: MainLayerPath + Default + Send + Sync + 'static;
-    /// Compile one immutable Paint-owned path into the selected backend value.
-    /// No concrete Skia path crosses Paint's package boundary.
-    fn FromPaintPath(path: &paint::paint_clip_path::PaintPath) -> Self::Path;
-    /// Blink Path::StrokeBoundingRect delegates this geometry to Skia. Keeping
-    /// it beside path compilation avoids introducing a second stroker in Paint.
-    fn StrokeBounds(
-        path: &paint::paint_clip_path::PaintPath,
-        width: f32,
-        resolution_scale: f32,
-    ) -> Option<crate::adapter::geometry::RectF>;
-    /// Path::StrokePath is a Skia geometry operation.  Paint retains the
-    /// backend-neutral path and stroke inputs; the selected value backend
-    /// materializes the filled outline only at the compositor boundary.
-    fn StrokePath(
-        path: &paint::paint_clip_path::PaintPath,
-        width: f32,
-        cap: paint::cc::paint::paint_flags::Cap,
-        join: paint::cc::paint::paint_flags::Join,
-        miter_limit: f32,
-        dash_intervals: &[f32],
-        dash_phase: f32,
-        resolution_scale: f32,
-    ) -> Option<Self::Path>;
-    fn StrokeBackendPath(
-        path: &Self::Path,
-        width: f32,
-        cap: paint::cc::paint::paint_flags::Cap,
-        join: paint::cc::paint::paint_flags::Join,
-        miter_limit: f32,
-        dash_intervals: &[f32],
-        dash_phase: f32,
-        resolution_scale: f32,
-    ) -> Option<Self::Path>;
+        + crate::adapter::damage_context::DamageFilters,
+{
 }
 pub trait CpuSkiaBackend:
     SkRegionBackend

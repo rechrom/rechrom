@@ -450,7 +450,7 @@ impl MapCanvas {
     }
     fn clip_path(
         &mut self,
-        path: &<SkRegion as crate::runtime::types::SkiaValueBackend>::Path,
+        path: &<SkRegion as layerize::commit::skia_value_backend::MainSkiaBackend>::Path,
         difference: bool,
         aa: bool,
     ) {
@@ -1101,7 +1101,7 @@ pub(crate) fn raster_state(
                     op.even_odd,
                     Default::default(),
                 );
-                let mut p = <SkRegion as crate::runtime::types::SkiaValueBackend>::FromPaintPath(
+                let mut p = <SkRegion as layerize::commit::skia_value_backend::MainSkiaBackend>::FromPaintPath(
                     p.single_path().unwrap(),
                 );
                 if p.is_inverse_fill_type() != op.inverse_winding {

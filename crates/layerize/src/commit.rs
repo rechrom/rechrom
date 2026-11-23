@@ -18,6 +18,7 @@ pub mod scroll_elasticity;
 pub mod scroll_elasticity_utils;
 pub mod scroll_node;
 pub mod skia_filters;
+pub mod skia_value_backend;
 pub mod values;
 
 // cc value modules translated in the shared model packages. Both halves name
