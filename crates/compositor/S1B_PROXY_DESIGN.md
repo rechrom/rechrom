@@ -1,6 +1,6 @@
 # S1b design: ProxyMain / ProxyImpl across the document and compositor threads
 
-Status: S1b-1..S1b-3 implemented (see "S1b status" at the end); designed
+Status: S1b-1..S1b-4 implemented (see "S1b status" at the end); designed
 2026-11-23 at b084f58d. Originally nothing here was
 implemented. Prerequisite: S1a (`layerize::LayerizeEngine<F>` holds the main
 half, see `MAIN_IMPL_SPLIT.md`). The S1a leftovers (Send + Sync endpoint, real
@@ -584,13 +584,45 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   `ProtectedCommitLease::PaintServices` (FinishCommit's trace) and the
   Rechrom-only bridge task `MainToImpl::ReadyCommitAwaitsBeginMainFrame`
   (B1, deleted in S1b-7).
-- **S1b-4 part 2 (ProxyMain/ProxyImpl wiring) not started.** Original notes: implement `ProxyTypes` for
-  `CpuCompositorTypes<R>` (`MutatorEvents` = `host_owners::MutatorEvents`,
-  whose `MutatorEventsBackend` still needs a `Send` bound;
-  `ProxySwapPromise` = the boxed `SwapPromise`; `ImplInit` = the new
-  ProxyImplInit). ProxyImpl's `DataForCommit` replaces EngineCore's
-  `ready_commit: (CommitState, ProtectedCommitLease)` tuple and
-  `ready_commit_notified`; its `ScopedCommitCompletionEvent` takes the
-  completion with `ProtectedCommitLease::TakeCompletion`. Keep
-  `impl_on_owner_sequence = true` until S1b-7: the pipelined BMF applies
-  deltas to the main tree while a ready commit is outstanding.
+- **S1b-4 part 2 done (in-process ProxyMain / ProxyImpl, one thread).**
+  `layerize::runtime::proxy_main::ProxyMain<F: ProxyTypes>` holds the main
+  side of a main frame: the open BeginMainFrame (start time, whether
+  ApplyCompositorChanges ran), the prepared commit (PAC updated; whether
+  UpdateLayers follows) and a commit finished outside a BeginMainFrame
+  (B1). Its `ProxyMainClient` carries the LayerTreeHost(Client) calls whose
+  owners are still outside layerize (deferral/viewport/BMF/DidCommit
+  effects, main AnimationHost events until S1b-5).
+  `compositor::runtime::proxy_impl` holds `ProxyImpl` (DataForCommit,
+  activation completion, main/impl BMF deferral wishes) and
+  `ScopedCommitCompletionEvent` (signals on drop, abandoned if FinishCommit
+  never ran, posts `DidCompleteCommit`); as in Chromium the SchedulerClient
+  (`EngineCore`) is ProxyImpl and its callbacks touch only impl state.
+  `EngineCore::RunProxyTasks` is the in-process transport: it drains both
+  `ProxyTaskQueue`s at the posting call site, so the order of the former
+  single-thread code is kept. Removed from EngineCore: `ready_commit`,
+  `ready_commit_notified`, `prepared_paint_commit`, `prepared_update_layers`,
+  `awaiting_main`, `main_frame_applied_deltas`, `Commit`,
+  `NotifyReadyToCommit`, `ApplySourceAnimationEvents`; `MainFrameLifecycle`
+  lost the impl defer bit (ProxyImpl::SetDeferBeginMainFrameFrom{Main,Impl}).
+  Rechrom splits ProxyMain::BeginMainFrame at the Page lifecycle
+  (`BeginMainFrame` task, then `FinalizePreparedCommit` /
+  `FinishMainFrameWithoutUpdates` / `AbortDeferredMainFrame`) until S1b-7.
+  Deviations kept for no behaviour change, each removed in S1b-7:
+  NotifyBeginMainFrameStarted stays in the SEND_BEGIN_MAIN_FRAME callback;
+  NotifyReadyToCommitOnImpl does not request a BMF for an unsynced commit
+  (only the B1 commit is unsynced); the B1 bridges
+  `ApplyCompositorDeltasOutsideMainFrame` and
+  `ReadyCommitAwaitsBeginMainFrame` (pipelined delta slot); commit requests
+  are posted without max_requested_pipeline_stage de-duplication; the
+  prepared commit keeps Rechrom's update_layers flag instead of pipeline
+  stages (a property-only commit skips UpdateLayers); the in-BMF commit is
+  posted as synced, as before. Chromium-aligned changes: ProxyImpl always
+  pulls the compositor deltas for a BeginMainFrame, also while main defers
+  commits (paint holding); main then skips ApplyCompositorChanges and the
+  abort returns the sent deltas (SyncedProperty::AbortCommit with
+  applied = false) instead of never pulling them; Scheduler::
+  SetDeferBeginMainFrame is called only when the combined main/impl wish
+  changes; the MainFrameCommitCompleted time is the FinishCommit finish
+  time. Checks: `cargo check -p layerize`, `-p compositor`, `-p
+  rechrom_app` pass. Not run: the Matrix and Scroll set (no builds on this
+  machine). Keep `impl_on_owner_sequence = true` until S1b-7.

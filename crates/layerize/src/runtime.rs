@@ -12,6 +12,8 @@ pub(crate) mod main_endpoint;
 pub(crate) mod main_frame_lifecycle;
 pub(crate) mod main_host;
 pub(crate) mod pac_scroll;
+/// ProxyMain (cc/trees/proxy_main.cc), the main half of the commit protocol.
+pub mod proxy_main;
 
 // Module paths of the shared value roots under which the moved bindings name
 // them (the compositor keeps the same paths). Aliases only.

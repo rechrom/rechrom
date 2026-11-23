@@ -7,16 +7,9 @@ use std::time::Duration;
 #[derive(Default)]
 pub struct MainFrameLifecycle {
     defer_main_frame_updates: bool,
-    defer_from_impl: bool,
     holding: Option<(PaintHoldingReason, TimeTicks)>,
 }
 impl MainFrameLifecycle {
-    pub fn DeferBeginMainFrame(&self) -> bool {
-        self.defer_main_frame_updates || self.defer_from_impl
-    }
-    pub fn SetDeferFromImpl(&mut self, value: bool) {
-        self.defer_from_impl = value;
-    }
     pub fn DeferMainFrameUpdates(&self) -> bool {
         self.defer_main_frame_updates
     }

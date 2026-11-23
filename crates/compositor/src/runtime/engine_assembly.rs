@@ -183,7 +183,7 @@ impl EngineAssembly {
                 .AbortDeferredMainFrame(&mut self.scheduler, reason);
             return self.Poll();
         }
-        if !self.core.awaiting_main {
+        if !self.core.proxy_main.IsInBeginMainFrame() {
             // The embedding can finish Page's artifact before Scheduler has
             // dispatched the BeginMainFrame which will own it.  Synchronize
             // impl-side deltas before snapshotting the main tree in that
@@ -195,7 +195,7 @@ impl EngineAssembly {
             // single-sequence embedding receives the produced artifact at
             // the Commit boundary: ApplyCompositorDeltas precedes the main
             // tree commit it belongs to.
-            self.core.ApplyCompositorDeltas();
+            self.core.ApplyCompositorDeltasOutsideMainFrame();
         }
         {
             let _query = self
@@ -217,9 +217,8 @@ impl EngineAssembly {
             self.core
                 .effects
                 .push(CompositorMainThreadEffect::ScrollAnimationCommitPrepared { token, areas });
-            if !self.core.awaiting_main {
-                self.scheduler
-                    .SetNeedsBeginMainFrame(false, false, &mut self.core);
+            if !self.core.proxy_main.IsInBeginMainFrame() {
+                self.core.RequestMainFrame(&mut self.scheduler);
             }
             return self.Poll();
         }
@@ -248,20 +247,11 @@ impl EngineAssembly {
         self.ScheduleFinalizedMainCommit();
         self.Poll()
     }
+    /// Runs what ProxyMain posted for the finalized commit: ProxyImpl's
+    /// NotifyReadyToCommitOnImpl inside an open BeginMainFrame, otherwise the
+    /// B1 request for the BeginMainFrame that will carry the held commit.
     fn ScheduleFinalizedMainCommit(&mut self) {
-        if self.core.awaiting_main
-            && self.core.HasReadyCommit()
-            && !self.core.ReadyCommitWasNotified()
-        {
-            self.core
-                .NotifyReadyToCommit(&mut self.scheduler, true, true);
-        } else if self.core.HasReadyCommit()
-            && !self.core.awaiting_main
-            && !self.core.ReadyCommitWasNotified()
-        {
-            self.scheduler
-                .SetNeedsBeginMainFrame(false, false, &mut self.core);
-        }
+        self.core.RunProxyTasks(&mut self.scheduler);
     }
 
     /// Establishes the widget state before the first main-frame request.
@@ -279,15 +269,14 @@ impl EngineAssembly {
     /// Source: cc/trees/proxy_main.cc:741-756;
     ///         cc/trees/proxy_impl.cc:567-573.
     pub(crate) fn RequestMainFrame(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.scheduler
-            .SetNeedsBeginMainFrame(false, false, &mut self.core);
+        self.core.RequestMainFrame(&mut self.scheduler);
         self.Poll()
     }
 
     pub(crate) fn FinishMainFrameWithoutUpdates(
         &mut self,
     ) -> Result<CompositorOutput, CompositorError> {
-        if !self.core.awaiting_main {
+        if !self.core.proxy_main.IsInBeginMainFrame() {
             return Err(CompositorError::NotReady {
                 stage: "no BeginMainFrame awaits a no-update response",
             });
@@ -367,7 +356,7 @@ impl EngineAssembly {
         &mut self,
         update: paint::CompositedAnimationPropertyUpdate,
     ) -> Result<(), CompositorError> {
-        let awaiting_main = self.core.awaiting_main;
+        let awaiting_main = self.core.proxy_main.IsInBeginMainFrame();
         self.core.PrepareCompositedAnimationCommit(&update)?;
         // A style/animation task can execute Blink's pending property updates
         // before Scheduler has opened a BeginMainFrame. In that case there is
@@ -391,19 +380,16 @@ impl EngineAssembly {
         use crate::engine::{CompositorMainThreadEffect, FrameLifecycleMutation};
         match mutation {
             FrameLifecycleMutation::SetDeferMainFrameUpdates(deferred) => {
-                if self
-                    .core
-                    .layerize
-                    .MainFrameLifecycleMut()
-                    .SetDeferMainFrameUpdates(deferred)
+                let core = &mut self.core;
+                if core
+                    .proxy_main
+                    .SetDeferMainFrameUpdate(deferred, &mut core.layerize)
                 {
-                    self.core.effects.push(
+                    core.effects.push(
                         CompositorMainThreadEffect::MainFrameUpdatesDeferralChanged { deferred },
                     );
-                    self.scheduler.SetDeferBeginMainFrame(
-                        self.core.layerize.MainFrameLifecycle().DeferBeginMainFrame(),
-                        &mut self.core,
-                    );
+                    // ProxyImpl::SetDeferBeginMainFrameFromMain.
+                    core.RunProxyTasks(&mut self.scheduler);
                 }
             }
             FrameLifecycleMutation::StartDeferringCommits { timeout, reason } => {
@@ -1464,13 +1450,9 @@ impl EngineAssembly {
             E::SetWaitingForScrollEvent { waiting, .. } => {
                 self.scheduler.SetWaitingForScrollEvent(waiting)
             }
-            E::SetDeferBeginMainFrameFromImpl { defer, .. } => {
-                self.core.layerize.MainFrameLifecycleMut().SetDeferFromImpl(defer);
-                self.scheduler.SetDeferBeginMainFrame(
-                    self.core.layerize.MainFrameLifecycle().DeferBeginMainFrame(),
-                    &mut self.core,
-                )
-            }
+            E::SetDeferBeginMainFrameFromImpl { defer, .. } => self
+                .core
+                .SetDeferBeginMainFrameFromImpl(defer, &mut self.scheduler),
             E::SetNeedsOneBeginImplFrame { .. } => {
                 self.scheduler.SetNeedsOneBeginImplFrame(&mut self.core)
             }
