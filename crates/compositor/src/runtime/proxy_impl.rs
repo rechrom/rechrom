@@ -11,8 +11,7 @@
 //! transport and drains both queues at the posting call site, so every task
 //! runs where the single-thread engine ran the same work.
 use super::{
-    engine_core::EngineCore, execution::EngineMainHostEffects, skia::SkRegion,
-    types::CpuCompositorTypes,
+    engine_core::EngineCore, skia::SkRegion, types::CpuCompositorTypes,
 };
 use crate::{
     adapter::{
@@ -137,11 +136,9 @@ impl ProxyImpl {
 }
 
 /// The in-process LayerTreeHost client side of ProxyMain: the Page-bound
-/// compositor main-thread effects and the main AnimationHost, which stays a
-/// compositor owner until S1b-5.
+/// compositor main-thread effects.
 pub(crate) struct InProcessMainClient<'a> {
     pub(crate) effects: &'a mut Vec<CompositorMainThreadEffect>,
-    pub(crate) main_effects: &'a EngineMainHostEffects,
 }
 impl ProxyMainClient<Root> for InProcessMainClient<'_> {
     fn CommitDeferralChanged(&mut self, deferred: bool, reason: PaintHoldingReason) {
@@ -157,13 +154,13 @@ impl ProxyMainClient<Root> for InProcessMainClient<'_> {
                 inner_scroll_delta: data.inner_viewport_scroll.scroll_delta,
             });
     }
-    // ProxyMain.cc:351-352 -> AnimationHost.cc:795-822.
-    fn ApplyMutatorEvents(&mut self, events: Option<Box<super::host_owners::MutatorEvents>>) {
-        let animations = self.main_effects.Animations();
-        if let Some(events) = events {
-            animations.ApplySourceAnimationEvents(events);
-        }
-        for completion in animations.TakeSourceScrollCompletions() {
+    // ProxyMain.cc:351-352 -> AnimationHost.cc:795-822: the delegate
+    // notifications of the events LayerizeEngine applied.
+    fn NotifyScrollAnimationsFinished(
+        &mut self,
+        completions: Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion>,
+    ) {
+        for completion in completions {
             self.effects
                 .push(CompositorMainThreadEffect::ScrollAnimationCompleted(
                     completion,
@@ -193,7 +190,6 @@ impl EngineCore {
                 let now = self.services.core.MonotonicTimeNow();
                 let mut client = InProcessMainClient {
                     effects: &mut self.effects,
-                    main_effects: &self.main_effects,
                 };
                 self.proxy_main
                     .RunImplTask(task, now, &mut self.layerize, &mut client);

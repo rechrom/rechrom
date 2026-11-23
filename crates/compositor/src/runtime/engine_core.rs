@@ -64,8 +64,8 @@ pub(crate) struct EngineCore {
     pub(crate) layerize: layerize::LayerizeEngine<Root>,
     pub(crate) host: Option<ClientLayerTreeHostImpl<Root>>,
     pub(crate) services: CpuHostServices<Root>,
-    // The impl side of the main host's Proxy endpoint and the main
-    // AnimationHost it mutates for source animation input.
+    // The impl side of the main host's Proxy endpoint (the main AnimationHost
+    // is owned by `layerize` since S1b-5).
     pub(crate) main_effects: Arc<EngineMainHostEffects>,
     lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
     pub(crate) scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
@@ -169,7 +169,6 @@ impl EngineCore {
             use layerize::runtime::proxy_main::ProxyMainClient;
             super::proxy_impl::InProcessMainClient {
                 effects: &mut self.effects,
-                main_effects: &self.main_effects,
             }
             .ViewportScaleChanged(scale, &data);
         }
@@ -566,29 +565,6 @@ impl EngineCore {
         let matches_latest_commit = frame.is_some()
             && self.last_committed_source_frame_number == Some(sink.source_frame_number());
         (frame, matches_latest_commit)
-    }
-    pub(crate) fn ApplySourceScrollAnimation(
-        &mut self,
-        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
-    ) {
-        let animations = self.main_effects.Animations();
-        let drop_delta = animations.ApplySourceScrollAnimation(mutation);
-        if animations.TakeNeedsCommit() {
-            self.layerize.SetNeedsCommitFromMutatorHost();
-        }
-        if let Some(element) = drop_delta {
-            self.layerize.DropCompositorScrollDeltaNextCommit(element);
-        }
-    }
-    pub(crate) fn ApplySourcePropertyAnimation(
-        &mut self,
-        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
-    ) {
-        let animations = self.main_effects.Animations();
-        animations.ApplySourcePropertyAnimation(mutation);
-        if animations.TakeNeedsCommit() {
-            self.layerize.SetNeedsCommitFromMutatorHost();
-        }
     }
     pub(crate) fn DrainScrollEffects(&self, output: &mut Vec<CompositorMainThreadEffect>) {
         while let Some(effect) = self.layerize.PopScrollEffect() {

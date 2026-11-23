@@ -53,9 +53,8 @@ pub enum MainHostEffect {
 }
 
 /// The embedding side of the main host's Proxy endpoint: the sequence the
-/// main half runs on, the posted Proxy effects, the main task runner and the
-/// main AnimationHost query LayerTreeHost forwards (layer_tree_host.cc
-/// IsElementAnimating -> mutator_host_). No Host, Layer or Page reference can
+/// main half runs on, the posted Proxy effects and the main task runner (the
+/// main AnimationHost is `MainHostInit::mutator`, S1b-5). No Host, Layer or Page reference can
 /// be recovered from it. `Send + Sync`: the endpoint that holds it is read
 /// from the impl thread inside the protected sequence (S1B_PROXY_DESIGN.md
 /// B4).
@@ -63,7 +62,6 @@ pub trait MainHostEffectSink: Send + Sync {
     fn RunsTasksInCurrentSequence(&self) -> bool;
     fn PostEffect(&self, effect: MainHostEffect);
     fn TraceCommitRequest(&self, urgent: bool);
-    fn IsElementAnimating(&self, id: ElementId) -> bool;
     fn MainThreadTaskRunner(&self) -> super::main_callbacks::TaskRunner;
 }
 

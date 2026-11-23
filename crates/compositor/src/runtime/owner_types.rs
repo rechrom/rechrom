@@ -32,8 +32,6 @@ use crate::{
 // presentation feedback and the queued DrawImage are not posted before the
 // thread move (S1b-7) and stay unit values until then.
 impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
-    // LayerTreeHostImpl::TakeMutatorEvents (cc/trees/proxy_impl.cc:820).
-    type MutatorEvents = Box<super::host_owners::MutatorEvents>;
     // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
     type ProxySwapPromise = Box<super::host_owners::SwapPromise<R>>;
     // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
@@ -551,7 +549,9 @@ impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCo
     type MicroBenchmarkImpl = super::host_owners::MicroBenchmark<R>;
     type MainRootLayer = LayerRef<Self>;
     type MainLayerRef = LayerBorrow<Self>;
-    type MutatorHostHandle = super::types::MainMutatorHostIdentity;
+    // The main AnimationHost itself (commit_state.h:205 raw_ptr<MutatorHost>);
+    // its MutatorEvents are LayerTreeHostImpl::TakeMutatorEvents' value.
+    type MutatorHostHandle = super::animation_host::AnimationHostOwner;
 }
 
 /// Assembly entry to the canonical most-derived PictureLayerImpl constructor.

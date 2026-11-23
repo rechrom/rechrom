@@ -1,6 +1,6 @@
 # S1b design: ProxyMain / ProxyImpl across the document and compositor threads
 
-Status: S1b-1..S1b-4 implemented (see "S1b status" at the end); designed
+Status: S1b-1..S1b-5 implemented (see "S1b status" at the end); designed
 2026-11-23 at b084f58d. Originally nothing here was
 implemented. Prerequisite: S1a (`layerize::LayerizeEngine<F>` holds the main
 half, see `MAIN_IMPL_SPLIT.md`). The S1a leftovers (Send + Sync endpoint, real
@@ -576,7 +576,8 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   translated.
 - **S1b-4 part 1 done (payload types).** `ProxyTypes` for
   `CpuCompositorTypes<R>` (`runtime/owner_types.rs`): `MutatorEvents =
-  Box<host_owners::MutatorEvents>` (`MutatorEventsBackend: Send` now),
+  Box<host_owners::MutatorEvents>` (`MutatorEventsBackend: Send` now; moved
+  to `MainMutatorHost::Events` in S1b-5),
   `ProxySwapPromise = Box<host_owners::SwapPromise<R>>`, `LayerTreeMutator
   = host_owners::LayerTreeMutator`; `ImplInit`, `PresentationFeedback` and
   `ProxyDrawImage` are `()` until S1b-7 posts them. `commit::proxy` gained
@@ -626,3 +627,42 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   time. Checks: `cargo check -p layerize`, `-p compositor`, `-p
   rechrom_app` pass. Not run: the Matrix and Scroll set (no builds on this
   machine). Keep `impl_on_owner_sequence = true` until S1b-7.
+- **S1b-5 done (main AnimationHost on the main side, one thread).**
+  `commit::main_mutator::MainMutatorHost` (Send + Sync + Clone; `type
+  Events` = cc::MutatorEvents; ApplySourceScrollAnimation,
+  ApplySourcePropertyAnimation, SetAnimationEvents,
+  TakeSourceScrollCompletions, TakeNeedsCommit, IsElementAnimating) is the
+  main cc::AnimationHost as layerize names it; the compositor implements it
+  for `AnimationHostOwner`. `CommitStateTypes::MutatorHostHandle` is now that
+  host itself (commit_state.h:205 `raw_ptr<MutatorHost>`; was the copyable
+  `MainMutatorHostIdentity`), so `LayerizeEngine` owns the main instance
+  (`mutator_host`, Blink LayerTreeView's `animation_host_`) and the main
+  LayerTreeHost keeps the same instance in `ThreadUnsafeCommitState`. The
+  factory still creates both instances (`CreateMainInstance` /
+  `CreateImplInstance`) and moves the main one into `MainHostInit::mutator`;
+  `FactoryCapabilities::main_animations` is gone. The impl side's
+  MutatorHost::PushPropertiesTo (`tree_environment.rs`) reads the main host
+  only through the leased `ThreadUnsafeCommitState::mutator_host`
+  (layer_tree_impl.cc:814-817). `LayerizeEngine::{MutatorHost (waiting
+  accessor, D2), ApplySourceScrollAnimation, ApplySourcePropertyAnimation,
+  ApplyMutatorEvents}` replace `EngineCore::ApplySource*` and the client's
+  ApplyMutatorEvents; ProxyMain::BeginMainFrame calls
+  `layerize.ApplyMutatorEvents` at proxy_main.cc:351-352 and passes the
+  finished source scroll animations to the new
+  `ProxyMainClient::NotifyScrollAnimationsFinished` (the AnimationDelegate
+  notifications, still Page effects). `ProxyTypes::MutatorEvents` is
+  replaced by `commit::proxy::MutatorEvents<F>` (=
+  `MainMutatorHost::Events`). LayerTreeHost::IsElementAnimating reads
+  `unsafe_state.mutator_host`; `MainHostEffectSink` /
+  `CpuMainHostEndpoint::IsElementAnimating` are gone. layerize depends on
+  `scroll_animation` (shared root). Deviations from the S1b-5 row:
+  `EngineMainHostEffects` is not deleted, only stripped of the AnimationHost
+  (it still carries the posted MainHostEffect queue, trace and task runner;
+  ProxyMain takes the sink over in S1b-7, because moving PostEffect into
+  ProxyMain changes when the effects run relative to `Poll`); no
+  `compositor::CreateMainAnimationHost` facade yet (Page creates the main
+  half in S1b-7). Intentional behaviour differences: none. The identity
+  assert in PushMutatorPropertiesTo became a debug assert that the source is
+  the main instance; the new waits return immediately on the shared
+  sequence. Checks: `cargo check -p layerize`, `-p compositor`, `-p
+  rechrom_app` pass; Matrix / Scroll set not run (no builds on this machine).

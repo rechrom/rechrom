@@ -15,7 +15,6 @@
 use super::main_host::CpuMainHostEndpoint;
 use crate::commit::{
     completion_event::CompletionEvent,
-    input_types::ElementId,
     main_callbacks::TaskRunner,
     main_effects::{LocalSurfaceId, MainHostEffect, MainHostEffectSink},
     protected_sequence_synchronizer::ProtectedSequenceSynchronizer,
@@ -203,9 +202,6 @@ impl CpuMainHostEndpoint for EngineMainEndpoint {
     }
     fn UpdateDeferMainFrameUpdate(&self) {
         self.Post(MainHostEffect::UpdateDeferMainFrameUpdate)
-    }
-    fn IsElementAnimating(&self, id: ElementId) -> bool {
-        self.sink.IsElementAnimating(id)
     }
     fn MainThreadTaskRunner(&self) -> TaskRunner {
         self.tasks.clone()

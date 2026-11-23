@@ -92,7 +92,6 @@ pub(crate) struct FactoryCapabilities {
     pub resources: RasterClientResources,
     pub frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
     pub tile_execution: Arc<Mutex<TileExecution<SkRegion>>>,
-    pub main_animations: AnimationHostOwner,
     pub animations: AnimationHostOwner,
     pub latency_monitors: LatencyMonitorRegistry,
     pub runners: Arc<TaskRunnerServices>,
@@ -156,6 +155,9 @@ pub(crate) fn Create(
     let runners = Arc::new(TaskRunnerServices::new_threaded_on_single_executor(
         executors.compositor.clone(),
     ));
+    // Source: cc/animation/animation_host.cc:55-57,74-79. The main instance
+    // is owned by the main half (LayerizeEngine, Blink's LayerTreeView
+    // role); the impl instance by LayerTreeHostImpl.
     let main_animations = AnimationHostOwner::CreateMainInstance();
     let impl_animations = main_animations.CreateImplInstance();
     // The main half (LayerizeEngine): main paint services, the main
@@ -166,7 +168,6 @@ pub(crate) fn Create(
     let main_effects = Arc::new(super::execution::EngineMainHostEffects::new(
         executors.compositor.clone(),
         commands.clone(),
-        main_animations.clone(),
         options.events.clone(),
     ));
     let layerize = EngineCore::CreateLayerize(
@@ -175,7 +176,8 @@ pub(crate) fn Create(
         layerize::commit::main_effects::MainHostInit {
             id: owner,
             owner: PropertyTreesOwnerId::FromOwnerValue(owner),
-            mutator: main_animations.identity(),
+            // The main AnimationHost moves into LayerizeEngine (S1b-5).
+            mutator: main_animations,
             settings: options.settings.clone(),
             threaded: config.thread,
             background_color: config.transparent_background.then_some(Color4f {
@@ -234,7 +236,6 @@ pub(crate) fn Create(
     )));
     let stats = Arc::new(RenderingStats::new(HostImplRenderingStatsId(owner)));
     let capabilities = Arc::new(FactoryCapabilities {
-        main_animations: main_animations.clone(),
         tree_environment: options.tree_environment,
         rendering_stats: stats.clone(),
         ui_raster: executors.ui_raster,

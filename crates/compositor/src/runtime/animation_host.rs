@@ -107,7 +107,7 @@ pub(crate) enum ThreadInstance {
 }
 
 #[derive(Clone)]
-pub(crate) struct AnimationHostOwner {
+pub struct AnimationHostOwner {
     identity: super::types::MainMutatorHostIdentity,
     thread_instance: ThreadInstance,
     host: AnimationHostId,
@@ -956,15 +956,18 @@ impl AnimationHostOwner {
     // The main and impl owners are separate resident graphs. Only translated
     // timeline/animation methods cross this call; no parallel animation cache
     // or snapshot is constructed here.
+    // `self` is the main instance read through ThreadUnsafeCommitState::
+    // mutator_host inside the protected commit sequence
+    // (layer_tree_impl.cc:814-817, S1b-5).
     pub(crate) fn PushMutatorPropertiesTo(
         &self,
-        source_identity: super::types::MainMutatorHostIdentity,
         target: &mut MutatorHost,
         property_trees: &PropertyTreesFor<CompositorTypes>,
     ) {
-        assert_eq!(
-            source_identity, self.identity,
-            "resident main mutator owner"
+        debug_assert_eq!(
+            self.thread_instance,
+            ThreadInstance::kMain,
+            "PushPropertiesTo reads the main AnimationHost"
         );
         let target_queries = target
             .0
@@ -2007,6 +2010,38 @@ impl PropertyTreeMutatorHost for AnimationQueries {
             })
     }
 }
+// The main AnimationHost as the main half (layerize) calls it (S1b-5). Only
+// the main instance is handed to LayerizeEngine.
+impl layerize::commit::main_mutator::MainMutatorHost for AnimationHostOwner {
+    type Events = Box<MutatorEvents>;
+    fn ApplySourceScrollAnimation(
+        &self,
+        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+    ) -> Option<ElementId> {
+        AnimationHostOwner::ApplySourceScrollAnimation(self, mutation)
+    }
+    fn ApplySourcePropertyAnimation(
+        &self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) {
+        AnimationHostOwner::ApplySourcePropertyAnimation(self, mutation)
+    }
+    fn SetAnimationEvents(&self, events: Box<MutatorEvents>) {
+        self.ApplySourceAnimationEvents(events)
+    }
+    fn TakeSourceScrollCompletions(
+        &self,
+    ) -> Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion> {
+        AnimationHostOwner::TakeSourceScrollCompletions(self)
+    }
+    fn TakeNeedsCommit(&self) -> bool {
+        AnimationHostOwner::TakeNeedsCommit(self)
+    }
+    fn IsElementAnimating(&self, id: ElementId) -> bool {
+        AnimationHostOwner::IsElementAnimating(self, id)
+    }
+}
+
 impl super::input::MutatorHostBackend for AnimationQueries {
     fn AsAnyMut(&mut self) -> &mut dyn std::any::Any {
         self

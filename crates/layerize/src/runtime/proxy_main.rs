@@ -32,9 +32,10 @@ use crate::{
 };
 use compositor_scheduler::TimeTicks;
 
-/// The LayerTreeHost / LayerTreeHostClient calls ProxyMain makes whose
-/// owners are still outside layerize (the main AnimationHost until S1b-5,
-/// and the Page, which receives them as compositor main-thread effects).
+/// The LayerTreeHostClient (and AnimationDelegate) calls ProxyMain makes
+/// into the embedder: the Page, which receives them as compositor
+/// main-thread effects. The main AnimationHost is owned by LayerizeEngine
+/// since S1b-5.
 pub trait ProxyMainClient<F: ProxyTypes> {
     /// ProxyMain::StopDeferringCommits after the commit timeout
     /// (proxy_main.cc:331-335, 867-879).
@@ -43,9 +44,13 @@ pub trait ProxyMainClient<F: ProxyTypes> {
     /// LayerTreeHost::ApplyCompositorChanges changed the page scale or the
     /// inner viewport scroll (layer_tree_host.cc:1207-1244).
     fn ViewportScaleChanged(&mut self, page_scale_factor: f32, data: &CompositorCommitData);
-    /// LayerTreeHost::ApplyMutatorEvents (layer_tree_host.cc:1254) into the
-    /// main AnimationHost.
-    fn ApplyMutatorEvents(&mut self, events: Option<F::MutatorEvents>);
+    /// The cc::AnimationDelegate notifications of the source scroll
+    /// animations that LayerTreeHost::ApplyMutatorEvents finished
+    /// (layer_tree_host.cc:1254; animation_host.cc:795-822).
+    fn NotifyScrollAnimationsFinished(
+        &mut self,
+        completions: Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion>,
+    );
     /// LayerTreeHost::BeginMainFrame: the embedder lifecycle
     /// (proxy_main.cc:357-360).
     fn BeginMainFrame(&mut self);
@@ -154,7 +159,8 @@ impl<F: ProxyTypes> ProxyMain<F> {
             scroll_and_viewport_changes_synced = true;
         }
         // proxy_main.cc:351-352.
-        client.ApplyMutatorEvents(state.mutator_events.take());
+        let finished = layerize.ApplyMutatorEvents(state.mutator_events.take());
+        client.NotifyScrollAnimationsFinished(finished);
         let frame = OpenMainFrame {
             main_thread_start_time: now,
             scroll_and_viewport_changes_synced,

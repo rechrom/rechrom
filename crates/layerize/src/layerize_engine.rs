@@ -19,6 +19,7 @@ use crate::{
         layerize_error::{LayerizeError, LayerizeErrorKind},
         layerize_family::LayerizeFamily,
         main_effects::{MainHostInit, PacScrollEffect},
+        main_mutator::MainMutatorHost,
         main_paint_config::{CpuPaintFeatures, SkiaPaintDiagnostics},
         paint::canvas_child_record::CanvasChildRecordReplay,
         proxy::ProtectedCommitLease,
@@ -117,6 +118,12 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
     // commit lease (S1B_PROXY_DESIGN.md B4) points at it.
     main: MainHostOwner<F>,
     endpoint: Arc<EngineMainEndpoint>,
+    // The main cc::AnimationHost (AnimationHost::CreateMainInstance), owned
+    // here as Blink's LayerTreeView owns animation_host_; the main host holds
+    // the same instance as ThreadUnsafeCommitState::mutator_host, which the
+    // impl side reads inside the protected sequence (MutatorHost::
+    // PushPropertiesTo, layer_tree_impl.cc:814-817). S1b-5.
+    mutator_host: F::MutatorHostHandle,
 }
 
 impl<F: LayerizeFamily> LayerizeEngine<F> {
@@ -128,10 +135,11 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         init: MainHostInit<F::MutatorHostHandle>,
     ) -> Self {
         let endpoint = Arc::new(EngineMainEndpoint::new(init.sink, init.impl_on_owner_sequence));
+        let mutator_host = init.mutator;
         let mut main = Box::new(CpuMainLayerHost::new(
             MainLayerHostId(init.id),
             init.owner,
-            init.mutator,
+            mutator_host.clone(),
             init.settings,
             init.threaded,
             endpoint.clone() as Arc<dyn CpuMainHostEndpoint>,
@@ -158,6 +166,7 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
             pending_composited_animation: None,
             main: MainHostOwner::new(main),
             endpoint,
+            mutator_host,
         }
     }
     pub fn Paint(&self) -> &Arc<CpuMainPaintServices<F::Skia>> {
@@ -329,6 +338,63 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         if let Some(pac) = self.pac.as_ref() {
             pac.DropCompositorScrollDeltaNextCommit(element, &mut context);
         }
+    }
+
+    /// The main AnimationHost. It is read by the impl side's
+    /// MutatorHost::PushPropertiesTo inside the protected sequence, so this
+    /// is a waiting accessor like `Main()` (decision D2; cc::AnimationHost
+    /// waits through MutatorHostClient::WaitForProtectedSequenceCompletion).
+    pub fn MutatorHost(&self) -> &F::MutatorHostHandle {
+        MainHostOwner::<F>::Wait(&self.endpoint);
+        &self.mutator_host
+    }
+
+    /// Blink's scroll-offset animation update of the main AnimationHost,
+    /// then MutatorHostClient::SetMutatorsNeedCommit -> LayerTreeHost::
+    /// SetNeedsCommit and PAC's DropCompositorScrollDeltaNextCommit for an
+    /// animation that replaces the compositor's delta.
+    pub fn ApplySourceScrollAnimation(
+        &mut self,
+        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+    ) {
+        let animations = self.MutatorHost();
+        let drop_delta = animations.ApplySourceScrollAnimation(mutation);
+        if animations.TakeNeedsCommit() {
+            self.SetNeedsCommitFromMutatorHost();
+        }
+        if let Some(element) = drop_delta {
+            self.DropCompositorScrollDeltaNextCommit(element);
+        }
+    }
+
+    /// Blink CompositorAnimation updates of the main AnimationHost, then
+    /// MutatorHostClient::SetMutatorsNeedCommit -> LayerTreeHost::
+    /// SetNeedsCommit.
+    pub fn ApplySourcePropertyAnimation(
+        &mut self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) {
+        let animations = self.MutatorHost();
+        animations.ApplySourcePropertyAnimation(mutation);
+        if animations.TakeNeedsCommit() {
+            self.SetNeedsCommitFromMutatorHost();
+        }
+    }
+
+    /// Source: cc/trees/layer_tree_host.cc:1254-1266
+    /// (LayerTreeHost::ApplyMutatorEvents -> AnimationHost::
+    /// SetAnimationEvents), called by ProxyMain::BeginMainFrame
+    /// (proxy_main.cc:351-352). Returns the AnimationDelegate notifications
+    /// of finished source scroll animations for the embedder.
+    pub fn ApplyMutatorEvents(
+        &mut self,
+        events: Option<crate::commit::proxy::MutatorEvents<F>>,
+    ) -> Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion> {
+        let animations = self.MutatorHost();
+        if let Some(events) = events {
+            animations.SetAnimationEvents(events);
+        }
+        animations.TakeSourceScrollCompletions()
     }
 
     pub fn PopScrollEffect(&self) -> Option<PacScrollEffect> {

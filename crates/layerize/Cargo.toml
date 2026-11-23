@@ -13,6 +13,9 @@ compositor_tree = { path = "../compositor/compositor_tree" }
 compositor_input = { path = "../compositor/compositor_input" }
 compositor_draw = { path = "../compositor/compositor_draw" }
 compositor_animation = { path = "../compositor/compositor_animation" }
+# The main AnimationHost mutations (ScrollAnimationMutation and its
+# completions) the main half applies (commit::main_mutator).
+scroll_animation = { path = "../compositor/scroll_animation" }
 compositor_scheduler = { path = "../compositor/compositor_scheduler" }
 # cc value roots shared with the impl half: ScrollOffsetMap (cc/tiles/
 # prioritized_tile.h) and gfx::ContentColorUsage (viz surface values).

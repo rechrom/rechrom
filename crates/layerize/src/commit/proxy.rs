@@ -128,10 +128,9 @@ use compositor_scheduler::{begin_frame::BeginFrameArgs, TimeTicks};
 
 /// The impl-provided payload types of the Proxy messages. Main code treats
 /// them as opaque values (it moves them, never inspects them), except where
-/// a later step translates the main consumer (MutatorEvents in S1b-5).
+/// a later step translates the main consumer. cc::MutatorEvents moved to the
+/// main AnimationHost it is applied to (`MainMutatorHost::Events`, S1b-5).
 pub trait ProxyTypes: LayerizeFamily {
-    /// cc::MutatorEvents (animation events for the main AnimationHost).
-    type MutatorEvents: Send;
     /// std::unique_ptr<cc::SwapPromise> returned by an aborted main frame.
     type ProxySwapPromise: Send;
     /// std::unique_ptr<cc::LayerTreeMutator> (ProxyMain::SetMutator).
@@ -146,6 +145,10 @@ pub trait ProxyTypes: LayerizeFamily {
     type ProxyDrawImage: Send;
 }
 
+/// cc::MutatorEvents: the animation events of the impl AnimationHost for the
+/// main instance (LayerTreeHost::ApplyMutatorEvents).
+pub type MutatorEvents<F> = <<F as crate::commit::CommitStateTypes>::MutatorHostHandle as crate::commit::main_mutator::MainMutatorHost>::Events;
+
 /// Source: cc/trees/proxy_common.h:20-39 (BeginMainFrameAndCommitState),
 /// filled by ProxyImpl::ScheduledActionSendBeginMainFrame
 /// (proxy_impl.cc:808-830). `reason` (BeginMainFrameReasons, metrics only)
@@ -154,7 +157,7 @@ pub struct BeginMainFrameAndCommitState<F: ProxyTypes> {
     pub begin_frame_args: BeginFrameArgs,
     pub commit_data: Box<CompositorCommitData>,
     pub completed_image_decode_requests: Vec<(i32, bool)>,
-    pub mutator_events: Option<F::MutatorEvents>,
+    pub mutator_events: Option<MutatorEvents<F>>,
     /// Bit encoding of the FrameSequenceTrackerType for active trackers.
     pub active_sequence_trackers: u64,
     pub evicted_ui_resources: bool,

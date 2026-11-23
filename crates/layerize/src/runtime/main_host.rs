@@ -63,7 +63,6 @@ pub trait CpuMainHostEndpoint: ProtectedSequenceSynchronizer + Send + Sync {
     fn IsRenderingPaused(&self) -> bool;
     fn NotifyNewLocalSurfaceIdExpectedWhilePaused(&self);
     fn UpdateDeferMainFrameUpdate(&self);
-    fn IsElementAnimating(&self, id: ElementId) -> bool;
     fn MainThreadTaskRunner(&self) -> TaskRunner;
 }
 pub struct CpuMainLayerHost<F: LayerizeFamily> {
@@ -738,8 +737,11 @@ impl<F: LayerizeFamily> MainLayerHostRead<F> for CpuMainLayerHost<F> {
     fn property_trees(&self) -> &PropertyTreesFor<F> {
         &self.property_trees
     }
+    // Source: cc/trees/layer_tree_host.cc IsElementAnimating ->
+    // mutator_host_->IsElementAnimating (the main AnimationHost, S1b-5).
     fn IsElementAnimating(&self, id: ElementId) -> bool {
-        self.endpoint.IsElementAnimating(id)
+        use crate::commit::main_mutator::MainMutatorHost;
+        self.unsafe_state.mutator_host.IsElementAnimating(id)
     }
 }
 impl<F: LayerizeFamily> MainLayerHost<F> for CpuMainLayerHost<F> {
@@ -1008,8 +1010,11 @@ impl<F: LayerizeFamily> MainLayerHostRead<F> for CpuMainLayerReadHost<'_, F> {
     fn property_trees(&self) -> &PropertyTreesFor<F> {
         self.property_trees
     }
+    // Source: cc/trees/layer_tree_host.cc IsElementAnimating ->
+    // mutator_host_->IsElementAnimating (the main AnimationHost, S1b-5).
     fn IsElementAnimating(&self, id: ElementId) -> bool {
-        self.endpoint.IsElementAnimating(id)
+        use crate::commit::main_mutator::MainMutatorHost;
+        self.unsafe_state.mutator_host.IsElementAnimating(id)
     }
 }
 struct CpuMainLayerReadHosts<'a, F: LayerizeFamily> {

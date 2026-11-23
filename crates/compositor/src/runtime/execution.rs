@@ -236,13 +236,12 @@ impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
 /// The impl half's side of the main LayerTreeHost Proxy endpoint
 /// (`layerize::commit::main_effects::MainHostEffectSink`): the Page
 /// compositor sequence, the command queue that carries the posted
-/// LayerTreeHost -> Proxy effects in source order, the main task runner and
-/// the main AnimationHost. Moved from the former main_endpoint.rs; the
-/// endpoint state itself lives in layerize.
+/// LayerTreeHost -> Proxy effects in source order and the main task runner.
+/// Moved from the former main_endpoint.rs; the endpoint state itself lives in
+/// layerize, and the main AnimationHost moved to LayerizeEngine (S1b-5).
 pub(crate) struct EngineMainHostEffects {
     executor: Arc<dyn crate::engine::CompositorExecutor>,
     commands: EngineTaskQueue,
-    animations: super::animation_host::AnimationHostOwner,
     events: Arc<dyn super::services::EventSink>,
 }
 struct MainTaskRunner {
@@ -257,18 +256,13 @@ impl EngineMainHostEffects {
     pub(crate) fn new(
         executor: Arc<dyn crate::engine::CompositorExecutor>,
         commands: EngineTaskQueue,
-        animations: super::animation_host::AnimationHostOwner,
         events: Arc<dyn super::services::EventSink>,
     ) -> Self {
         Self {
             executor,
             commands,
-            animations,
             events,
         }
-    }
-    pub(crate) fn Animations(&self) -> &super::animation_host::AnimationHostOwner {
-        &self.animations
     }
     pub(crate) fn Clock(&self) -> Arc<dyn crate::engine::CompositorExecutor> {
         self.executor.clone()
@@ -284,9 +278,6 @@ impl layerize::commit::main_effects::MainHostEffectSink for EngineMainHostEffect
     fn TraceCommitRequest(&self, urgent: bool) {
         self.events
             .Emit("compositor.main", format!("SetNeedsCommit urgent={urgent}"));
-    }
-    fn IsElementAnimating(&self, id: crate::adapter::input_types::ElementId) -> bool {
-        self.animations.IsElementAnimating(id)
     }
     fn MainThreadTaskRunner(&self) -> super::types::TaskRunner {
         Arc::new(MainTaskRunner {

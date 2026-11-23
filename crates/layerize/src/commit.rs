@@ -19,6 +19,7 @@ pub mod layerize_error;
 pub mod layerize_family;
 pub mod main_callbacks;
 pub mod main_effects;
+pub mod main_mutator;
 pub mod main_paint_config;
 pub mod paint_holding;
 pub mod property_tree;

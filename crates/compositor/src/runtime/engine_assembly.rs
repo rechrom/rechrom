@@ -237,7 +237,7 @@ impl EngineAssembly {
             });
         }
         for command in commands {
-            self.core.ApplySourceScrollAnimation(command);
+            self.core.layerize.ApplySourceScrollAnimation(command);
         }
         self.core.FinalizePreparedCommit(&self.main_features)?;
         self.scroll_animation_commit = None;
@@ -306,14 +306,14 @@ impl EngineAssembly {
         &mut self,
         mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.core.ApplySourceScrollAnimation(mutation);
+        self.core.layerize.ApplySourceScrollAnimation(mutation);
         self.Poll()
     }
     pub(crate) fn ApplySourcePropertyAnimation(
         &mut self,
         mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.core.ApplySourcePropertyAnimation(mutation);
+        self.core.layerize.ApplySourcePropertyAnimation(mutation);
         self.Poll()
     }
 

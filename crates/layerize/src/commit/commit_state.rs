@@ -84,10 +84,12 @@ pub trait CommitStateTypes: CommitTypes {
     type DrawImage;
     type MicroBenchmarkImpl;
     // `MainRootLayer` is the owner's scoped_refptr-equivalent strong handle.
-    // The map and mutator fields are non-owning typed identities, like raw_ptr.
+    // The map field holds non-owning typed identities, like raw_ptr.
     type MainRootLayer: Clone;
     type MainLayerRef: Clone + Eq;
-    type MutatorHostHandle: Copy;
+    // raw_ptr<MutatorHost> mutator_host (commit_state.h:205): a shared
+    // handle of the main AnimationHost that LayerizeEngine owns (S1b-5).
+    type MutatorHostHandle: super::main_mutator::MainMutatorHost;
 }
 pub trait MainLayerListContext<B: CommitStateTypes> {
     type Iterator<'a>
@@ -374,7 +376,7 @@ pub struct ThreadUnsafeCommitState<B: CommitStateTypes> {
 impl<B: CommitStateTypes> Clone for ThreadUnsafeCommitState<B> {
     fn clone(&self) -> Self {
         Self {
-            mutator_host: self.mutator_host,
+            mutator_host: self.mutator_host.clone(),
             root_layer: self.root_layer.clone(),
             layer_id_map: self.layer_id_map.clone(),
         }

@@ -2303,6 +2303,7 @@ dependencies = [
  "paint_input_types",
  "paint_model",
  "paint_skia",
+ "scroll_animation",
  "serde_json",
  "skia",
 ]
