@@ -36,7 +36,8 @@ URL / input
   -> Style       style_*
   -> Layout      layout (facade) over layout_base, layout_*
   -> Paint       prepaint, paint_*
-  -> Compositor  compositor_*        (layerization, layers, tiles, raster scheduling)
+  -> Layerize    layerize            (cc main side: PaintArtifactCompositor, LayerTreeHost, commit)
+  -> Compositor  compositor_*        (cc impl side: layers, tiles, raster scheduling, draw)
   -> Viz         viz                 (surface aggregation, display scheduling)
   -> Renderer    renderer, renderer_skia
   -> host render target / display
@@ -52,9 +53,16 @@ presentation.
 
 ### 1.2 Boundary interfaces
 
-Boundaries 1–4 run on one Page document sequence and pass **borrowed live
-owners**: no copied trees. Boundaries 5–8 can cross threads and pass
-**immutable shared values**.
+Boundaries 1–5 run on one Page document sequence and pass **borrowed live
+owners**: no copied trees. Boundary 6 is the only document → compositor
+thread crossing and follows cc's ProxyMain/ProxyImpl commit. Boundaries 7–9
+can cross threads and pass **immutable shared values**.
+
+Migration note (live-property-tree plan, `crates/compositor/MAIN_IMPL_SPLIT.md`
+and `S1B_PROXY_DESIGN.md`): until stage S1b-7 the Page still hands
+`Arc<PaintArtifact>` to the compositor thread, which runs `LayerizeEngine`
+there; boundary 5 becomes a same-sequence borrow when S1b-7 moves the main
+half to the document thread.
 
 | # | Boundary | Interface | How data crosses |
 |---|---|---|---|
@@ -62,12 +70,13 @@ owners**: no copied trees. Boundaries 5–8 can cross threads and pass
 | 2 | DOM → Style | `DocumentStyleEngine::Update(owner: &mut impl StyleDocument, &MediaValuesCachedData, UserAgentStyleSheetInput) -> StyleUpdateImpact` | Style reads the live DOM through `StyleDocument` and stores each `ComputedStyle` owner on its element. |
 | 3 | Style → Layout | `layout::LayoutEngine::ApplyMutation(LayoutMutation<'_>)` then `Layout()`; the `LayoutMutation::TreeUpdate(&mut dyn FnMut(&mut LayoutTreeUpdate))` variant lends Layout's tree builder for one synchronous attach transaction. Side commands (form controls, selection, scroll, pointer, event registry) are `LayoutMutation` family variants; engine queries are borrowed `layout::views::*` views. | DOM's `LayoutTreeBuilder` attaches layout objects in place, sharing the same `ComputedStyle` owner. |
 | 4 | Layout → Paint | `PaintEngine::Paint(&LayoutPaintOutput, EditingPaintState)`; `LayoutPaintOutput` wraps a `LayoutResultHandle`, walked with `PaintFragmentCursor`; resources arrive as `PaintMutation` / `PaintResourceUpdate`. | Paint walks the resident fragments and their attached Paint sidecars in place. |
-| 5 | Paint → Compositor | `CompositorEngine::Commit(Arc<PaintArtifact>, CompositorViewportState) -> CompositorOutput`; other changes arrive as `CompositorMutation`. | Immutable, revisioned `PaintArtifact` behind an `Arc`. |
-| 6 | Compositor → Viz | `CompositorFrame { metadata, render_pass_list, resource_list }`, plus frame-scoped raster read leases; Viz returns `FrameSubmission` with returned resources. | Immutable value per frame. |
-| 7 | Viz → Renderer | `Aggregate(DeviceRect, &[SurfacePlacement]) -> VizOutput` (an `AggregatedFrame` of `AggregatedRenderPass`es). | Immutable aggregate per frame. |
-| 8 | Renderer → display | `HostOutput::Render(&mut VizOutput, B::Target) -> (RenderUpdate, B::Target)`; backend injected through `DirectRendererBackend`. | Borrowed host render target; the host presents. |
+| 5 | Paint → Layerize | `LayerizeEngine` runs Blink's `PaintArtifactCompositor::Update` over the `PaintArtifact`, viewport and scroll translations (Blink `LocalFrameView::PushPaintArtifactToCompositor`), then cc's `UpdateLayers` / `WillCommit`. | Borrowed artifact on the document sequence (after S1b-7). |
+| 6 | Layerize → Compositor | `layerize::commit`: impl → main `BeginMainFrame` with impl deltas as values; main → impl `ReadyToCommit(CommitState)` or `BeginMainFrameAborted`; impl `FinishCommit` pushes dirty main-layer and animation properties through the push-target traits. | `CommitState` moved (cc property trees as a value inside it); main layers stay on main and are borrowed through `ThreadUnsafeCommitState` while main is parked (`ProtectedCommitLease`, `CompletionEvent`); display lists and paint records `Arc`-shared and immutable. `compositor` may use only `layerize::commit`; `layerize` never depends on `compositor`. |
+| 7 | Compositor → Viz | `CompositorFrame { metadata, render_pass_list, resource_list }`, plus frame-scoped raster read leases; Viz returns `FrameSubmission` with returned resources. | Immutable value per frame. |
+| 8 | Viz → Renderer | `Aggregate(DeviceRect, &[SurfacePlacement]) -> VizOutput` (an `AggregatedFrame` of `AggregatedRenderPass`es). | Immutable aggregate per frame. |
+| 9 | Renderer → display | `HostOutput::Render(&mut VizOutput, B::Target) -> (RenderUpdate, B::Target)`; backend injected through `DirectRendererBackend`. | Borrowed host render target; the host presents. |
 
-Borrowing across boundaries 1–4 is deliberate: it is how Chromium's in-process
+Borrowing across boundaries 1–5 is deliberate: it is how Chromium's in-process
 data flow keeps its performance. A boundary violation is code that goes
 **around** an interface (reaching into another engine's private state, OS
 calls inside an engine, copying an engine's tree), not code that borrows
@@ -181,12 +190,24 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
   ObjectPaintProperties, PaintLayer, invalidation and cache state. It must
   never become another copy of Layout's geometry or fragment payload.
 
-**Compositor**: two loops driven by `compositor_scheduler` (BeginFrame state
-machine; commit, activation and draw action selection).
+**Layerize** (`layerize`): cc's main side, `LayerizeEngine`. Blink
+`PaintArtifactCompositor`, `PropertyTreeManager`, `PaintChunksToCcLayer`,
+`ContentLayerClientImpl`, `PendingLayer` (with `compositor_layerize`), cc main
+layers, the main `LayerTreeHost`, the main `AnimationHost`, scroll callbacks
+and `ProxyMain`. Its public `layerize::commit` module is the commit vocabulary
+shared with the impl side (`CommitState`, `ThreadUnsafeCommitState`, cc
+property trees, cc paint records and display lists, proxy messages,
+`CompletionEvent`, push-target traits, `LayerizeFamily`). Main code is generic
+over `F: LayerizeFamily` only. Blink paint property nodes are read only here.
+Guard: `crates/layerize/tests/layerize_boundary.rs`.
 
-- Main-frame commit, when a `PaintArtifact` arrives: `compositor_layerize`
-  (Blink `PaintArtifactCompositor` / `PendingLayer`, Paint → cc properties) →
-  `compositor_tree` (commit into the pending tree).
+**Compositor**: cc's impl side, two loops driven by `compositor_scheduler`
+(BeginFrame state machine; commit, activation and draw action selection),
+with `ProxyImpl` receiving the commit.
+
+- Main-frame commit: `ProxyImpl` takes the moved `CommitState` and runs
+  `FinishCommit` into the pending tree (`compositor_tree`) while main is
+  parked.
 - Impl frame, each BeginFrame: `compositor_input` (impl scroll/pinch) and
   `compositor_animation` tick → `compositor_tile` (tilings, priority,
   PrepareTiles) → `compositor_raster` (raster task graph and completion
@@ -199,7 +220,7 @@ machine; commit, activation and draw action selection).
   lifecycle. Trace categories are `compositor.<package>`; packages report
   their own work counts.
 - Each instance belongs to exactly one Page and consumes only that Page's
-  `Arc<PaintArtifact>`, viewport, input, BeginFrame and resource completions.
+  commits, viewport, input, BeginFrame and resource completions.
   It has no toolbar/content roles, tab collection or other Page recordings.
   There is no separate `LayerTileEngine` or `FramePlan` lifecycle between
   Paint and Compositor.
