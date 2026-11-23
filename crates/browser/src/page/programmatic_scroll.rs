@@ -109,7 +109,7 @@ impl PageState {
         }
     }
     pub(super) fn TickProgrammaticScroll(&self, frame_time: std::time::Instant) {
-        let now = self.rendering.borrow().executor.TimeTicks(frame_time);
+        let now = self.rendering.borrow().impl_half.executor.TimeTicks(frame_time);
         if self.ProgrammaticAnimations().TickAnimations(now) {
             self.animation_begin_frame_requested.set(true);
         }

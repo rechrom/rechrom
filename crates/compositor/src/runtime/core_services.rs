@@ -484,7 +484,7 @@ impl CpuHostCoreServices<B> for CoreServices {
     fn ChildLocalSurfaceIdAllocatorCurrent<'a>(
         &self,
         allocator: &'a <B as HostImplTypes>::ChildLocalSurfaceIdAllocator,
-    ) -> &'a <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::LocalSurfaceId {
+    ) -> &'a <B as layerize::commit::CommitTypes>::LocalSurfaceId {
         allocator.0.CurrentLocalSurfaceId()
     }
     fn FrameSequenceTrackerActiveTypes(

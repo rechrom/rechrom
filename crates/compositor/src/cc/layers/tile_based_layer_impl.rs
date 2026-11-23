@@ -34,7 +34,7 @@ use std::marker::PhantomData;
 type Coverage<'a, B, T> = TilingSetCoverageIterator<
     'a,
     T,
-    <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+    <B as layerize::commit::CommitTypes>::RegionBackend,
 >;
 // Source: cc/layers/tile_based_layer_impl.h:38-42.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

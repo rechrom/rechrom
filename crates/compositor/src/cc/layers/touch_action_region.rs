@@ -1,3 +1,2 @@
-use crate::{adapter::region_backend::SkRegionBackend, cc::base::region::Region};
-
-pub type TouchActionRegion<B> = compositor_input::touch_action_region::TouchActionRegion<Region<B>>;
+// The main-thread translation lives in layerize (MAIN_IMPL_SPLIT.md S1a-3).
+pub use layerize::commit::layers::touch_action_region::*;

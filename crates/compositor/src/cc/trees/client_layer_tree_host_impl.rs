@@ -362,7 +362,7 @@ use std::{
 };
 impl<B> ClientLayerTreeHostImpl<B>
 where
-    B: HostImplTypes<EventMetricsList = Vec<<B as LayerTreeTypes>::EventMetrics>>
+    B: HostImplTypes<EventMetricsList = Vec<<B as layerize::commit::CommitTypes>::EventMetrics>>
         + PictureLayerImplTypes
         + crate::adapter::tile_manager::TileManagerTypes<PaintImageId = PaintImageId>
         + LayerTreeTypes<
@@ -502,7 +502,7 @@ where
 
 impl<B> ClientLayerTreeHostImpl<B>
 where
-    B: HostImplTypes<EventMetricsList = Vec<<B as LayerTreeTypes>::EventMetrics>>
+    B: HostImplTypes<EventMetricsList = Vec<<B as layerize::commit::CommitTypes>::EventMetrics>>
         + PictureLayerImplTypes
         + crate::adapter::tile_manager::TileManagerTypes<PaintImageId = PaintImageId>
         + LayerTreeTypes<
@@ -658,7 +658,7 @@ where
 }
 impl<B> ClientLayerTreeHostImpl<B>
 where
-    B: HostImplTypes<EventMetricsList = Vec<<B as LayerTreeTypes>::EventMetrics>>
+    B: HostImplTypes<EventMetricsList = Vec<<B as layerize::commit::CommitTypes>::EventMetrics>>
         + PictureLayerImplTypes
         + crate::adapter::tile_manager::TileManagerTypes<PaintImageId = PaintImageId>
         + LayerTreeTypes<

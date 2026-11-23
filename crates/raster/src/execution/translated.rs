@@ -8,7 +8,7 @@ use super::{backend::*, *};
 mod drag_image;
 pub use drag_image::{ResizeAndOrientDragImage, ResizeDragImageBitmap, ScaleCachedDragImage};
 mod canvas_2d;
-use crate::convert::{resources, ToSkia};
+use crate::convert::{record_resources, resources, ToSkia};
 use crate::raster_commands::commands::{
     self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
     ImageOrientation, MaskLayer, PaintBlendMode, PaintMaskComposite, PaintMaskMode,
@@ -6580,7 +6580,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                     }
                     self.execute_display_item(
                         op,
-                        &resources(record.artifact()),
+                        &record_resources(record.resources().map(|r| &**r)),
                         item.alpha,
                         Some(record),
                         Some(&mut *params),
@@ -6590,7 +6590,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                     CpuPaintOp::Atom(source) => {
                         self.execute_display_item(
                             source.op(),
-                            &resources(source.record().artifact()),
+                            &record_resources(source.record().resources().map(|r| &**r)),
                             item.alpha,
                             Some(source.record()),
                             Some(&mut *params),
@@ -6686,7 +6686,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                                 }
                                 if let Err(error) = self.draw_tiled_image(
                                     &command,
-                                    &resources(source.record().artifact()),
+                                    &record_resources(source.record().resources().map(|r| &**r)),
                                     sk_blend_mode(flags.getBlendMode()),
                                     flags.isAntiAlias(),
                                 ) {

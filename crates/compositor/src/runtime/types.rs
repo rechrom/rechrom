@@ -7,75 +7,36 @@ use super::{
 };
 use crate::adapter::{
     frame_data::FrameDataTypes,
-    main_layer::{MainLayerCopyOutputRequest, MainLayerPath},
+    main_layer::MainLayerCopyOutputRequest,
     property_tree::PropertyTreeCopyOutputRequest,
     region_backend::SkRegionBackend,
 };
 use std::{marker::PhantomData, sync::Arc};
 
-/// Pure Skia-owned value types only. Policy/owner algorithms are forbidden in
-/// this capability; the backend implements native filter/path operations.
-pub trait SkiaValueBackend {
-    type Filters: crate::adapter::render_surface_impl::RenderSurfaceFilters
-        + crate::adapter::draw_property::DrawFilters
+pub use layerize::commit::skia_value_backend::MainSkiaBackend;
+/// The impl-side filter facets of the Skia value backend. The value types and
+/// the path operations are the main half's `MainSkiaBackend`.
+pub trait SkiaValueBackend:
+    MainSkiaBackend<
+    Filters: crate::adapter::render_surface_impl::RenderSurfaceFilters
+                 + crate::adapter::occlusion::OcclusionFilters
+                 + crate::adapter::damage_context::DamageFilters,
+>
+{
+}
+impl<T> SkiaValueBackend for T
+where
+    T: MainSkiaBackend,
+    T::Filters: crate::adapter::render_surface_impl::RenderSurfaceFilters
         + crate::adapter::occlusion::OcclusionFilters
-        + crate::adapter::damage_context::DamageFilters
-        + Send
-        + Sync
-        + 'static;
-    type Path: MainLayerPath + Default + Send + Sync + 'static;
-    /// Compile one immutable Paint-owned path into the selected backend value.
-    /// No concrete Skia path crosses Paint's package boundary.
-    fn FromPaintPath(path: &paint::paint_clip_path::PaintPath) -> Self::Path;
-    /// Blink Path::StrokeBoundingRect delegates this geometry to Skia. Keeping
-    /// it beside path compilation avoids introducing a second stroker in Paint.
-    fn StrokeBounds(
-        path: &paint::paint_clip_path::PaintPath,
-        width: f32,
-        resolution_scale: f32,
-    ) -> Option<crate::adapter::geometry::RectF>;
-    /// Path::StrokePath is a Skia geometry operation.  Paint retains the
-    /// backend-neutral path and stroke inputs; the selected value backend
-    /// materializes the filled outline only at the compositor boundary.
-    fn StrokePath(
-        path: &paint::paint_clip_path::PaintPath,
-        width: f32,
-        cap: paint::cc::paint::paint_flags::Cap,
-        join: paint::cc::paint::paint_flags::Join,
-        miter_limit: f32,
-        dash_intervals: &[f32],
-        dash_phase: f32,
-        resolution_scale: f32,
-    ) -> Option<Self::Path>;
-    fn StrokeBackendPath(
-        path: &Self::Path,
-        width: f32,
-        cap: paint::cc::paint::paint_flags::Cap,
-        join: paint::cc::paint::paint_flags::Join,
-        miter_limit: f32,
-        dash_intervals: &[f32],
-        dash_phase: f32,
-        resolution_scale: f32,
-    ) -> Option<Self::Path>;
-}
-pub trait CpuSkiaBackend:
-    SkRegionBackend
-    + RoundedRectTransformBackend
-    + SkiaValueBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
-    + Send
-    + Sync
-    + 'static
+        + crate::adapter::damage_context::DamageFilters,
 {
 }
-impl<R> CpuSkiaBackend for R where
-    R: SkRegionBackend
-        + RoundedRectTransformBackend
-        + SkiaValueBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
-        + Send
-        + Sync
-        + 'static
-{
-}
+pub use layerize::commit::skia_value_backend::PaintSkiaBackend;
+/// cc/paint's backend (`PaintSkiaBackend`, commit vocabulary) plus the impl
+/// filter facets.
+pub trait CpuSkiaBackend: PaintSkiaBackend + SkiaValueBackend {}
+impl<R> CpuSkiaBackend for R where R: PaintSkiaBackend + SkiaValueBackend {}
 
 /// This marker has no resident service/host/tree. All owner constructors receive
 /// actual owned native components and all runtime services remain call-scoped.
@@ -91,12 +52,7 @@ impl<R: CpuSkiaBackend> CpuCompositorTypes<R> {
     }
 }
 
-/// Strong native sequenced-task-runner capability, supplied by the embedding.
-/// No worker/thread/clock implementation is created by the compositor family.
-pub trait ResultTaskRunner: Send + Sync {
-    fn PostTask(&self, task: Box<dyn FnOnce() + Send>);
-}
-pub type TaskRunner = Arc<dyn ResultTaskRunner>;
+pub use layerize::commit::main_callbacks::{ResultTaskRunner, TaskRunner};
 /// Native Viz request ownership and abort-on-drop behavior are implemented by
 /// the external Viz request owner. This wrapper forwards only native fields.
 pub trait CopyOutputRequestBackend:
@@ -214,9 +170,7 @@ impl<R: CpuSkiaBackend> frame::ViewTransitionGeometry for CpuCompositorTypes<R> 
     }
 }
 
-/// Source dependency cc/paint/node_id.h:17-20. Native invalid NodeId is zero.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct NodeId(pub i32);
+pub use layerize::commit::paint::NodeId;
 impl crate::adapter::layer_impl::LayerImplNodeId for NodeId {
     fn IsNonzero(&self) -> bool {
         self.0 != 0
@@ -225,30 +179,7 @@ impl crate::adapter::layer_impl::LayerImplNodeId for NodeId {
         self.0
     }
 }
-/// Native base::RepeatingCallback void(PointF,ElementId). Cloning shares only
-/// the callback allocation, not any compositor tree or Layer state.
-#[derive(Clone, Default)]
-pub struct DidScrollCallback(
-    pub  Option<
-        Arc<
-            dyn Fn(crate::adapter::geometry::PointF, crate::adapter::input_types::ElementId)
-                + Send
-                + Sync,
-        >,
-    >,
-);
-impl crate::adapter::main_layer::LayerDidScrollCallback for DidScrollCallback {
-    fn is_null(&self) -> bool {
-        self.0.is_none()
-    }
-    fn Run(
-        &self,
-        offset: crate::adapter::geometry::PointF,
-        element: crate::adapter::input_types::ElementId,
-    ) {
-        (self.0.as_ref().expect("native null callback invocation"))(offset, element)
-    }
-}
+pub use layerize::commit::main_callbacks::DidScrollCallback;
 /// Only the native global trace effect survives until LayerImpl's destructor.
 /// The injected sink is forbidden from retaining a Layer, tree, host or Page.
 pub struct DeletionTrace(

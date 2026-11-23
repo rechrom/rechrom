@@ -488,6 +488,7 @@ dependencies = [
  "compositor_tree",
  "foundation",
  "getrandom 0.4.3",
+ "layerize",
  "paint",
  "paint_input_types",
  "paint_model",
@@ -2279,6 +2280,32 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "layerize"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "canvas",
+ "compositor_animation",
+ "compositor_draw",
+ "compositor_frame",
+ "compositor_input",
+ "compositor_layerize",
+ "compositor_resource",
+ "compositor_scheduler",
+ "compositor_tile",
+ "compositor_tree",
+ "foundation",
+ "getrandom 0.4.3",
+ "paint",
+ "paint_input_types",
+ "paint_model",
+ "paint_skia",
+ "scroll_animation",
+ "serde_json",
+ "skia",
 ]
 
 [[package]]

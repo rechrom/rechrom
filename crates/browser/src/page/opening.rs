@@ -21,7 +21,7 @@ pub(super) fn ResetRootDocumentInputForCommit(state: &Rc<PageState>) {
         let mut pending = state.pending_compositor_mutations.borrow_mut();
         pending.retain(|input| matches!(input, super::PageBrowserInput::Compositor(_)));
         if let Some(generation) =
-            input_generation.filter(|_| state.rendering.borrow().external_presentation)
+            input_generation.filter(|_| state.rendering.borrow().impl_half.external_presentation)
         {
             pending.push(super::PageBrowserInput::DocumentDetached { generation });
         }

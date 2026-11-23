@@ -27,6 +27,103 @@ use crate::{
     },
 };
 
+// The impl-built payloads of the ProxyMain/ProxyImpl messages
+// (layerize::commit::proxy, S1B_PROXY_DESIGN.md 1.1). ProxyImplInit, the
+// presentation feedback and the queued DrawImage are not posted before the
+// thread move (S1b-7) and stay unit values until then.
+impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
+    // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
+    type ProxySwapPromise = Box<super::host_owners::SwapPromise<R>>;
+    // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
+    type LayerTreeMutator = super::host_owners::LayerTreeMutator;
+    type ImplInit = ();
+    type PresentationFeedback = ();
+    type ProxyDrawImage = ();
+}
+
+// The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h). The
+// main traits (MainLayerTypes, ScrollbarLayerTypes, ...) are blanket impls
+// over LayerizeFamily in layerize (runtime/main_family.rs).
+impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
+    for CpuCompositorTypes<R>
+{
+    type Skia = R;
+    // Source: cc/resources/ui_resource_bitmap.cc UIResourceBitmap(SkBitmap).
+    fn CreateUIResourceBitmap(
+        pixel_size: crate::adapter::geometry::Size,
+        pixels: Vec<u8>,
+        row_bytes: usize,
+        opaque: bool,
+    ) -> super::host_resources::UIBitmap {
+        super::host_resources::UIBitmap(std::sync::Arc::new(
+            super::host_resources::RawUIBitmap::new(pixel_size, pixels, row_bytes, opaque),
+        ))
+    }
+    // Source: cc/resources/ui_resource_request.h:17-56.
+    fn CreateUIResourceRequest(
+        kind: crate::adapter::layer_tree_impl::UIResourceRequestType,
+        id: crate::adapter::layer_tree_impl::UIResourceId,
+        bitmap: super::host_resources::UIBitmap,
+    ) -> super::host_owners::UIResourceRequest {
+        super::host_owners::UIResourceRequest { kind, id, bitmap }
+    }
+    fn UIResourceBitmapSize(bitmap: &super::host_resources::UIBitmap) -> crate::adapter::geometry::Size {
+        use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
+        bitmap.GetSize()
+    }
+    // Source draw_property_utils.cc:1590-1605. The runtime DrawContext type
+    // is used only as the canonical CPU type family for ComputeClips; no
+    // impl-side tree, layer, or host object is constructed or queried.
+    // Moved from the main host's UpdateLayers (layerize runtime/main_host.rs).
+    fn UpdateMainPropertyTrees(
+        trees: &mut PropertyTreesFor<Self>,
+        ids: &crate::cc::trees::viewport_property_ids::ViewportPropertyIds,
+        features: &dyn crate::adapter::property_tree::PropertyTreeFeatures,
+    ) {
+        if trees.transform_tree().needs_update() {
+            trees.clip_tree_mutable().set_needs_update(true);
+            trees.effect_tree_mutable().set_needs_update(true);
+        }
+        {
+            let (tree, mut context) = trees.transform_tree_with_context();
+            crate::cc::trees::draw_property_utils::ComputeTransforms(tree, ids, &mut context);
+        }
+        {
+            let (tree, mut context) = trees.effect_tree_with_context(features);
+            crate::cc::trees::draw_property_utils::ComputeEffects::<
+                super::draw::DrawContext<'_, Self>,
+            >(tree, &mut context);
+        }
+        crate::cc::trees::draw_property_utils::ComputeClips::<super::draw::DrawContext<'_, Self>>(
+            trees,
+        );
+    }
+}
+impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
+    type Transform = Transform<R>;
+    type RegionBackend = R;
+    type Layer = CompositorLayer<Self>;
+    type UIResourceBitmap = super::host_resources::UIBitmap;
+    type Filters = R::Filters;
+    type Path = R::Path;
+    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
+    type CopyOutputRequest = super::types::CopyOutputRequest;
+    type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
+    type LocalSurfaceId = super::types::LocalSurfaceId;
+    type SurfaceRange = super::types::SurfaceRange;
+    type SwapPromise = super::host_owners::SwapPromise<R>;
+    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<Self>;
+    type UIResourceRequest = super::host_owners::UIResourceRequest;
+    type PresentationCallback =
+        crate::adapter::presentation::Callback<super::metadata::PresentationFeedback>;
+    type SuccessfulPresentationCallback =
+        crate::adapter::presentation::SuccessfulCallbackWithDetails<
+            super::metadata::FrameTimingDetails,
+        >;
+    type EventMetrics = super::input::EventMetrics;
+    type DelegatedInkMetadata = super::metadata::DelegatedInkMetadata;
+    type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
+}
 impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type LayerTraceValue = super::host::TraceValue;
     type LayerStorage<'a> = LayerStorage<'a, CompositorLayer<Self>>;
@@ -96,33 +193,10 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type CommitState = CommitState<Self>;
     type UnsafeCommitState = ThreadUnsafeCommitState<Self>;
     type Synchronizer = crate::cc::trees::tree_synchronizer::TreeSynchronizer;
-    type Transform = Transform<R>;
-    type Filters = R::Filters;
-    type Path = R::Path;
-    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
-    type CopyOutputRequest = super::types::CopyOutputRequest;
-    type RegionBackend = R;
-    type Layer = CompositorLayer<Self>;
     type PictureLayer = PictureLayerImpl<Self>;
     type ScrollbarLayer = ScrollbarLayerImplBase<Self>;
     type BeginMainFrameReason = super::input::BeginMainFrameReason;
     type LayerList = OwnedLayerImplList<CompositorLayer<Self>>;
-    type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
-    type LocalSurfaceId = super::types::LocalSurfaceId;
-    type SurfaceRange = super::types::SurfaceRange;
-    type SwapPromise = super::host_owners::SwapPromise<R>;
-    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<Self>;
-    type UIResourceRequest = super::host_owners::UIResourceRequest;
-    type UIResourceBitmap = super::host_resources::UIBitmap;
-    type PresentationCallback =
-        crate::adapter::presentation::Callback<super::metadata::PresentationFeedback>;
-    type SuccessfulPresentationCallback =
-        crate::adapter::presentation::SuccessfulCallbackWithDetails<
-            super::metadata::FrameTimingDetails,
-        >;
-    type EventMetrics = super::input::EventMetrics;
-    type DelegatedInkMetadata = super::metadata::DelegatedInkMetadata;
-    type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
     type SelectionBound = super::metadata::SelectionBound;
     type DecodingMode = crate::adapter::picture_layer_impl::PictureImageDecodingMode;
     type Settings = crate::cc::trees::layer_tree_settings::LayerTreeSettings;
@@ -152,67 +226,15 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
         super::resources::RasterColorSpace,
     >;
 }
-impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
+impl<R: CpuSkiaBackend> layerize::commit::push_properties::PushPropertiesTypes
+    for CpuCompositorTypes<R>
+{
     type NodeId = super::types::NodeId;
     type RegionCaptureBounds = super::metadata::RegionCaptureBounds;
     type TrackedElementRects = super::metadata::TrackedElementRects;
     type FilterQuality = super::paint::FilterQuality;
     type DynamicRangeLimit = super::paint::DynamicRangeLimit;
-    type DidScrollCallback = super::types::DidScrollCallback;
-    type NodeInfo = super::display_item_list::NodeInfo;
-    type Picture = super::paint::Picture<R>;
-    type LayerSelection = crate::cc::input::layer_selection_bound::LayerSelection;
-    type MicroBenchmark = super::paint::MicroBenchmark<Self>;
-    type TaskRunner = super::types::TaskRunner;
     type ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, Self>;
-    type DerivedServices = dyn super::paint::CpuPaintServices<Self>;
-}
-impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes
-    for CpuCompositorTypes<R>
-{
-    type ScrollbarCanvas = super::paint::ScrollbarCanvas;
-    type Scrollbar = super::paint::Scrollbar;
-    fn RasterizeScrollbarThumb(
-        scrollbar: &Self::Scrollbar,
-        logical_size: crate::adapter::geometry::Size,
-        pixel_size: crate::adapter::geometry::Size,
-    ) -> <Self as crate::adapter::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap {
-        use crate::cc::input::scrollbar::Scrollbar as _;
-        let mut canvas = super::paint::ScrollbarCanvas::new(logical_size, pixel_size);
-        let mut adapter = scrollbar.clone();
-        adapter.PaintThumb(
-            &mut canvas,
-            &crate::adapter::geometry::Rect::new(0, 0, logical_size.width(), logical_size.height()),
-        );
-        super::host_resources::UIBitmap(std::sync::Arc::new(
-            super::host_resources::RawUIBitmap::new(
-                canvas.pixel_size(),
-                canvas.pixels().to_vec(),
-                canvas.row_bytes(),
-                false,
-            ),
-        ))
-    }
-    fn WithPaintedScrollbarAnimation(
-        scrollbar: &Self::Scrollbar,
-        opacity: f32,
-        thumb_width: i32,
-        needs_repaint: bool,
-    ) -> std::sync::Arc<Self::Scrollbar> {
-        std::sync::Arc::new(scrollbar.WithPaintedAnimation(opacity, thumb_width, needs_repaint))
-    }
-    fn PaintedScrollbarConstructor(
-    ) -> Option<crate::adapter::scrollbar_layer_base::ScrollbarConstructor<Self>> {
-        Some(crate::cc::layers::painted_scrollbar_layer::PaintedScrollbarLayer::<Self>::Constructor)
-    }
-}
-impl<R: CpuSkiaBackend> crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
-    for CpuCompositorTypes<R>
-{
-}
-impl<R: CpuSkiaBackend> crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerTypes
-    for CpuCompositorTypes<R>
-{
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<CpuCompositorTypes<R>>
@@ -233,7 +255,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_SetHasFindInPageTickmarks(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
             self,
@@ -245,7 +267,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_SetScrollElementId(
         &mut self,
         value: crate::adapter::input_types::ElementId,
-        _tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        _tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
             self,
@@ -258,66 +280,54 @@ impl<R: CpuSkiaBackend>
     crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<CpuCompositorTypes<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreatePaintedScrollbar(
-        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
-        left: bool,
-        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
-    ) -> Box<Self> {
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl::<
-                CpuCompositorTypes<R>,
-            >::Create(tree_id, id, orientation, left, c)
-        })
-    }
-    fn painted_scrollbar(
+    fn painted_SetInternalContentsScaleAndBounds(
         &mut self,
-    ) -> Option<
-        &mut crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl<
-            CpuCompositorTypes<R>,
-        >,
-    > {
-        if let CompositorLayer::PaintedScrollbar(layer) = self {
-            Some(layer)
-        } else {
-            None
-        }
+        scale: f32,
+        bounds: crate::adapter::geometry::Size,
+    ) {
+        painted_scrollbar(self).SetInternalContentsScaleAndBounds(scale, bounds);
     }
+    fn painted_SetThumbUIResourceId(&mut self, id: crate::adapter::layer_tree_impl::UIResourceId) {
+        painted_scrollbar(self).SetThumbUIResourceId(id);
+    }
+    fn painted_SetScrollbarPaintedOpacity(&mut self, opacity: f32) {
+        painted_scrollbar(self).SetScrollbarPaintedOpacity(opacity);
+    }
+    fn painted_SetTrackRect(&mut self, rect: crate::adapter::geometry::Rect) {
+        painted_scrollbar(self).SetTrackRect(rect);
+    }
+    fn painted_SetMinimumThumbLength(&mut self, length: i32) {
+        painted_scrollbar(self).SetMinimumThumbLength(length);
+    }
+    fn painted_SetThumbThickness(&mut self, thickness: i32) {
+        painted_scrollbar(self).SetThumbThickness(thickness);
+    }
+    fn painted_set_is_overlay_scrollbar(&mut self, is_overlay: bool) {
+        painted_scrollbar(self)
+            .scrollbar_base_mut()
+            .set_is_overlay_scrollbar(is_overlay);
+    }
+}
+/// Native static_cast to the PaintedScrollbarLayerImpl push target.
+fn painted_scrollbar<R: CpuSkiaBackend>(
+    layer: &mut CompositorLayer<CpuCompositorTypes<R>>,
+) -> &mut crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl<
+    CpuCompositorTypes<R>,
+> {
+    let CompositorLayer::PaintedScrollbar(layer) = layer else {
+        panic!("native PaintedScrollbarLayerImpl target subtype")
+    };
+    layer
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<
         CpuCompositorTypes<R>,
     > for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreateSolidColorScrollbar(
-        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
-        thumb_thickness: i32,
-        track_start: i32,
-        left: bool,
-        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
-    ) -> Box<Self> {
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl::<
-                CpuCompositorTypes<R>,
-            >::Create(
-                tree_id,
-                id,
-                orientation,
-                thumb_thickness,
-                track_start,
-                left,
-                c,
-            )
-        })
-    }
-
     fn scrollbar_set_color(
         &mut self,
         color: crate::adapter::layer_tree_impl::Color4f,
-        _tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        _tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::SolidColorScrollbar(layer) = self else {
             panic!("native solid-color scrollbar target subtype")
@@ -328,21 +338,11 @@ impl<R: CpuSkiaBackend>
 impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<CpuCompositorTypes<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn CreateSurface(
-        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
-        id: i32,
-        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
-    ) -> Box<Self> {
-        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
-            crate::cc::layers::surface_layer_impl::SurfaceLayerImpl::Create(tree_id, id, c)
-        })
-    }
-
     fn SurfaceSetRange(
         &mut self,
-        range: <CpuCompositorTypes<R> as LayerTreeTypes>::SurfaceRange,
+        range: <CpuCompositorTypes<R> as layerize::commit::CommitTypes>::SurfaceRange,
         deadline: Option<u32>,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -353,7 +353,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
     fn SurfaceSetStretchContentToFillBounds(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -364,7 +364,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
     fn SurfaceSetIsReflection(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -407,6 +407,13 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer_impl::SurfaceLayerImplType
     ) -> Self::Layer {
         CompositorLayer::Surface(layer)
     }
+    fn SurfaceRangeEnd(range: &Self::SurfaceRange) -> Self::SurfaceId {
+        range.end
+    }
+}
+impl<R: CpuSkiaBackend> layerize::commit::surface_range::SurfaceRangeTypes
+    for CpuCompositorTypes<R>
+{
     fn DefaultSurfaceRange() -> Self::SurfaceRange {
         Default::default()
     }
@@ -422,9 +429,6 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer_impl::SurfaceLayerImplType
                 && id.local_surface_id.embed_token != [0, 0]
         };
         valid(&range.end) && range.start.as_ref().is_none_or(valid)
-    }
-    fn SurfaceRangeEnd(range: &Self::SurfaceRange) -> Self::SurfaceId {
-        range.end
     }
 }
 impl<R: CpuSkiaBackend>
@@ -450,6 +454,86 @@ impl<R: CpuSkiaBackend> crate::adapter::render_surface_impl::RenderSurfaceTypes
 }
 impl<R: CpuSkiaBackend> crate::adapter::tree_sync::SyncTypes for CpuCompositorTypes<R> {
     type MainLayer = LayerBorrow<Self>;
+    fn WithLayerImplFactory<Output>(
+        tree: &mut LayerTreeImpl<Self>,
+        context: &mut LayerTreeContext<'_, Self>,
+        callback: impl FnOnce(
+            &mut dyn crate::adapter::main_layer::LayerImplFactory<CompositorLayer<Self>>,
+        ) -> Output,
+    ) -> Output {
+        callback(&mut CpuLayerImplFactory { tree, context })
+    }
+}
+
+/// The pending LayerTreeImpl lent to main Layer::CreateLayerImpl. Each method
+/// runs the canonical most-derived LayerImpl::Create inside the tree's scoped
+/// impl context, exactly as the source overrides call it.
+struct CpuLayerImplFactory<'a, 'c, R: CpuSkiaBackend> {
+    tree: &'a mut LayerTreeImpl<CpuCompositorTypes<R>>,
+    context: &'a mut LayerTreeContext<'c, CpuCompositorTypes<R>>,
+}
+impl<R: CpuSkiaBackend> crate::adapter::main_layer::LayerImplFactory<CompositorLayer<CpuCompositorTypes<R>>>
+    for CpuLayerImplFactory<'_, '_, R>
+{
+    // Source: cc/layers/layer.cc:1619-1622.
+    fn CreateLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            LayerImpl::<CpuCompositorTypes<R>>::Create(tree_id, id, c)
+        })
+    }
+    // Source: cc/layers/picture_layer.cc:38-41.
+    fn CreatePictureLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CreateCpuPictureLayer(self.tree, self.context, id)
+    }
+    // Source: cc/layers/solid_color_layer.cc:14-17.
+    fn CreateSolidColorLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::solid_color_layer_impl::SolidColorLayerImpl::Create(tree_id, id, c)
+        })
+    }
+    // Source: cc/layers/surface_layer.cc SurfaceLayer::CreateLayerImpl.
+    fn CreateSurfaceLayer(&mut self, id: i32) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::surface_layer_impl::SurfaceLayerImpl::Create(tree_id, id, c)
+        })
+    }
+    // Source: cc/layers/painted_scrollbar_layer.cc
+    //         PaintedScrollbarLayer::CreateLayerImpl.
+    fn CreatePaintedScrollbarLayer(
+        &mut self,
+        id: i32,
+        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
+        left: bool,
+    ) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl::<
+                CpuCompositorTypes<R>,
+            >::Create(tree_id, id, orientation, left, c)
+        })
+    }
+    // Source: cc/layers/solid_color_scrollbar_layer.cc:16-21.
+    fn CreateSolidColorScrollbarLayer(
+        &mut self,
+        id: i32,
+        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
+        thumb_thickness: i32,
+        track_start: i32,
+        left: bool,
+    ) -> Box<CompositorLayer<CpuCompositorTypes<R>>> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(self.tree, self.context, |tree_id, c| {
+            crate::cc::layers::solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl::<
+                CpuCompositorTypes<R>,
+            >::Create(
+                tree_id,
+                id,
+                orientation,
+                thumb_thickness,
+                track_start,
+                left,
+                c,
+            )
+        })
+    }
 }
 
 // This non-test assertion intentionally fails if any selected native owner,
@@ -465,7 +549,9 @@ impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCo
     type MicroBenchmarkImpl = super::host_owners::MicroBenchmark<R>;
     type MainRootLayer = LayerRef<Self>;
     type MainLayerRef = LayerBorrow<Self>;
-    type MutatorHostHandle = super::types::MainMutatorHostIdentity;
+    // The main AnimationHost itself (commit_state.h:205 raw_ptr<MutatorHost>);
+    // its MutatorEvents are LayerTreeHostImpl::TakeMutatorEvents' value.
+    type MutatorHostHandle = super::animation_host::AnimationHostOwner;
 }
 
 /// Assembly entry to the canonical most-derived PictureLayerImpl constructor.

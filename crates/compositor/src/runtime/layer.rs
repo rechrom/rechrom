@@ -99,15 +99,6 @@ where
         ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
     >,
 {
-    fn Create(
-        tree: &mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,
-        id: i32,
-        context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, B>,
-    ) -> Box<Self> {
-        B::WithLayerImplContext(tree, context, |tree_id, c| {
-            LayerImpl::<B>::Create(tree_id, id, c)
-        })
-    }
     fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>) {
         self.impl_base_mut().SetTransformTreeIndex(index, impl_tree);
     }
@@ -172,7 +163,7 @@ where
     fn SetTouchActionRegion(
         &mut self,
         value: &crate::cc::layers::touch_action_region::TouchActionRegion<
-            <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+            <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
         impl_tree: &mut B::ImplContext<'_>,
     ) {
@@ -220,7 +211,7 @@ where
     fn SetMainThreadScrollHitTestRegion(
         &mut self,
         value: &crate::cc::base::region::Region<
-            <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+            <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
         impl_tree: &mut B::ImplContext<'_>,
     ) {
@@ -254,7 +245,7 @@ where
     fn SetWheelEventHandlerRegion(
         &mut self,
         value: &crate::cc::base::region::Region<
-            <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+            <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
         impl_tree: &mut B::ImplContext<'_>,
     ) {
@@ -662,21 +653,17 @@ where
     }
     fn GetAllTouchActionRegions(
         &self,
-    ) -> &crate::cc::base::region::Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().GetAllTouchActionRegions()
     }
     fn wheel_event_handler_region(
         &self,
-    ) -> impl std::ops::Deref<
-        Target = crate::cc::base::region::Region<<B as LayerTreeTypes>::RegionBackend>,
-    > + '_ {
+    ) -> &crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().wheel_event_handler_region()
     }
     fn main_thread_scroll_hit_test_region(
         &self,
-    ) -> impl std::ops::Deref<
-        Target = crate::cc::base::region::Region<<B as LayerTreeTypes>::RegionBackend>,
-    > + '_ {
+    ) -> &crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().main_thread_scroll_hit_test_region()
     }
     fn non_composited_scroll_hit_test_rects(
@@ -1165,7 +1152,7 @@ where
         + SolidColorScrollbarLayerImplTypes
         + SurfaceLayerImplTypes
         + HostImplTypes
-        + MainLayerTypes<TrackedElementRects = TrackedElementRects>,
+        + MainLayerTypes + layerize::commit::push_properties::PushPropertiesTypes<TrackedElementRects = TrackedElementRects>,
 {
     type TrackedRectLists<'a>
         = TrackedListIter<'a>
@@ -1310,16 +1297,11 @@ impl<B> crate::adapter::picture_layer::PictureLayerImplTarget<B> for CompositorL
 where
  B:crate::adapter::picture_layer::PictureLayerTypes+PictureLayerImplTypes+SolidColorScrollbarLayerImplTypes+crate::adapter::layer_tree_impl::LayerTreeTypes<Layer=CompositorLayer<B>>,
  B::Recording:crate::adapter::recording_source::RecordingSourceTypes<RasterSource=<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource>,
- for<'a>B:MainLayerTypes<ImplContext<'a>=crate::adapter::layer_impl::LayerImplContext<'a,B>>,
+ for<'a>B:layerize::commit::push_properties::PushPropertiesTypes<ImplContext<'a>=crate::adapter::layer_impl::LayerImplContext<'a,B>>,
 {
- fn CreatePicture(tree:&mut crate::cc::trees::layer_tree_impl::LayerTreeImpl<B>,id:i32,context:&mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_,B>)->Box<Self>{
-  use crate::adapter::layer_tree_impl::LayerTreePictureContext;
-  let tree_id=tree.id;
-  B::WithPictureLayersContext(tree,context.host,|_,c|c.WithPicture(|c|PictureLayerImpl::<B>::Create(tree_id,id,c)))
- }
  fn set_has_non_animated_image_update_rect(&mut self){self.picture_impl_mut().expect("native Picture target").set_has_non_animated_image_update_rect()}
  fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}
  fn SetIsBackdropFilterMask(&mut self,value:bool,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").SetIsBackdropFilterMask(value,tree)}
- fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<B::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
+ fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<B::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
  fn set_should_batch_updated_tiles(&mut self){self.picture_impl_mut().expect("native Picture target").set_should_batch_updated_tiles()}
 }

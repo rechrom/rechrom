@@ -26,10 +26,8 @@ use super::{
     images::{CheckerImageClient, CpuImageServices, ImageDecodeCacheRegistry},
     latency_info_swap_promise_monitor::LatencyMonitorRegistry,
     layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
-    main_endpoint::EngineMainEndpoint,
-    main_host::CpuMainLayerHost,
     metrics::{MetricsConfig, MetricsServices},
-    paint_services::CpuPaintServices,
+    paint_services::CpuImplPaintServices,
     render::{RenderConfig, RenderServices},
     resource_events::ResourceEffects,
     resource_services::{PictureReleaseServices, ResourceServices},
@@ -50,7 +48,6 @@ use crate::{
     adapter::{
         layer_tree_host_impl::*,
         layer_tree_impl::{Color4f, LayerTreeHostId},
-        main_layer::MainLayerHostId,
         property_tree::PropertyTreesOwnerId,
     },
     cc::{
@@ -95,7 +92,6 @@ pub(crate) struct FactoryCapabilities {
     pub resources: RasterClientResources,
     pub frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
     pub tile_execution: Arc<Mutex<TileExecution<SkRegion>>>,
-    pub main_animations: AnimationHostOwner,
     pub animations: AnimationHostOwner,
     pub latency_monitors: LatencyMonitorRegistry,
     pub runners: Arc<TaskRunnerServices>,
@@ -131,8 +127,9 @@ pub(crate) fn Create(
     config: CompositorConfig,
     executors: CompositorExecutors,
     options: FactoryOptions,
-    paint: Arc<CpuPaintServices<SkRegion>>,
-) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
+    paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
+    paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
+) -> Result<(crate::engine::CompositorMainEngine, super::engine_assembly::EngineAssembly), CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
             reason: "separate main/impl Proxy transport is not yet constructed",
@@ -158,8 +155,46 @@ pub(crate) fn Create(
     let runners = Arc::new(TaskRunnerServices::new_threaded_on_single_executor(
         executors.compositor.clone(),
     ));
-    let main_animations = AnimationHostOwner::default();
-    let impl_animations = AnimationHostOwner::default();
+    // Source: cc/animation/animation_host.cc:55-57,74-79. The main instance
+    // is owned by the main half (LayerizeEngine, Blink's LayerTreeView
+    // role); the impl instance by LayerTreeHostImpl.
+    let main_animations = AnimationHostOwner::CreateMainInstance();
+    let impl_animations = main_animations.CreateImplInstance();
+    // The main half (LayerizeEngine): main paint services, the main
+    // LayerTreeHost and its Proxy endpoint. Chromium's WebLayerTreeView
+    // forwards the embedder background color to LayerTreeHost. An alpha-zero
+    // root keeps popup Pages compositable over the document instead of
+    // producing an opaque white fill quad.
+    let main_effects = Arc::new(super::execution::EngineMainHostEffects::new(
+        executors.compositor.clone(),
+        commands.clone(),
+        options.events.clone(),
+    ));
+    let layerize = EngineCore::CreateLayerize(
+        paint_features,
+        paint_diagnostics,
+        layerize::commit::main_effects::MainHostInit {
+            id: owner,
+            owner: PropertyTreesOwnerId::FromOwnerValue(owner),
+            // The main AnimationHost moves into LayerizeEngine (S1b-5).
+            mutator: main_animations,
+            settings: options.settings.clone(),
+            threaded: config.thread,
+            background_color: config.transparent_background.then_some(Color4f {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            }),
+            // Both halves still run on this compositor sequence (S1b-2..S1b-6).
+            impl_on_owner_sequence: true,
+            sink: main_effects.clone()
+                as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
+        },
+    )?;
+    // The impl half receives only the shared paint value capability for
+    // tiles and images.
+    let impl_paint = CpuImplPaintServices::new(layerize.PaintValues());
     let latency_monitors = LatencyMonitorRegistry::default();
     let scheduler_effects = SchedulerEffects::default();
     let scheduler_host = Arc::new(EngineSchedulerHost::new(
@@ -186,7 +221,7 @@ pub(crate) fn Create(
             Arc::new(super::raster_resources::EngineRasterFailure(
                 commands.clone(),
             )),
-            paint.PaintValues(),
+            impl_paint.PaintValues(),
         ),
     ));
     let images = CpuImageServices::new(caches, checker);
@@ -201,7 +236,6 @@ pub(crate) fn Create(
     )));
     let stats = Arc::new(RenderingStats::new(HostImplRenderingStatsId(owner)));
     let capabilities = Arc::new(FactoryCapabilities {
-        main_animations: main_animations.clone(),
         tree_environment: options.tree_environment,
         rendering_stats: stats.clone(),
         ui_raster: executors.ui_raster,
@@ -340,33 +374,8 @@ pub(crate) fn Create(
         draw: Box::new(capabilities.render.clone()),
         surface: Box::new(capabilities.render.clone()),
     };
-    let endpoint = Arc::new(EngineMainEndpoint::new(
-        executors.compositor.clone(),
-        commands.clone(),
-        main_animations.clone(),
-        options.events,
-    ));
     let settings = options.settings;
     let scheduler_settings = settings.ToSchedulerSettings(options.picture.as_ref());
-    let mut main = CpuMainLayerHost::new(
-        MainLayerHostId(owner),
-        PropertyTreesOwnerId::FromOwnerValue(owner),
-        main_animations.identity(),
-        settings.clone(),
-        config.thread,
-        endpoint.clone(),
-    );
-    if config.transparent_background {
-        // Chromium's WebLayerTreeView forwards the embedder background color
-        // to LayerTreeHost. An alpha-zero root keeps popup Pages compositable
-        // over the document instead of producing an opaque white fill quad.
-        main.pending_commit_state_mut().background_color = Color4f {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        };
-    }
     let image_worker_task_runner: <CompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
         Arc::new(super::execution::EngineSequencedTaskRunner::new(
             executors.compositor.clone(),
@@ -400,9 +409,8 @@ pub(crate) fn Create(
     let core = EngineCore::new(
         services,
         init,
-        main,
-        paint,
-        endpoint,
+        Box::new(layerize),
+        main_effects,
         lifecycle,
         queries,
         sink,
@@ -410,7 +418,7 @@ pub(crate) fn Create(
         owner + 1,
         input_client.clone(),
     )?;
-    super::engine_assembly::EngineAssembly::new(
+    let mut assembly = super::engine_assembly::EngineAssembly::new(
         core,
         scheduler_settings,
         scheduler_host,
@@ -422,7 +430,14 @@ pub(crate) fn Create(
         capabilities.resource_effects.clone(),
         capabilities.latency_monitors.clone(),
         input_client,
-    )
+    )?;
+    // The main half leaves the impl half once both are constructed: the
+    // Page owns it and lends it to every CompositorEngine call (S1b-6).
+    let (proxy_main, layerize) = assembly.ReturnMain();
+    Ok((
+        crate::engine::CompositorMainEngine::new(proxy_main, layerize),
+        assembly,
+    ))
 }
 
 /// Default capability construction is admitted only after the capabilities Paint
@@ -639,34 +654,33 @@ impl FactoryOptions {
 pub(crate) fn CreateDefault(
     config: CompositorConfig,
     executors: CompositorExecutors,
-) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
+) -> Result<(crate::engine::CompositorMainEngine, super::engine_assembly::EngineAssembly), CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
             reason: "separate main/impl Proxy transport is not yet constructed",
         });
     }
     let options = FactoryOptions::cpu_default(&config);
-    let paint = CpuPaintServices::<SkRegion>::new_cpu(
-        super::paint_services::CpuPaintFeatures {
-            cc_slimming: true,
-            singular_transform_fix: true,
-            merge_fixed_layers: true,
-            merge_sticky_layers: true,
-            raster_inducing_scroll: cfg!(any(target_os = "linux", target_os = "windows")),
-            scrolling_contents_cull_rect: true,
-            remove_scroll_node_workaround: true,
-            selection_edge_visibility_uses_full_edge: true,
-            canvas_draw_element: false,
-            expensive_dchecks: cfg!(debug_assertions),
-            paint_under_invalidation_checking: false,
-            layer_merge_distance_limit: 0x10000000,
-        },
-        super::paint::SkiaPaintDiagnostics {
-            trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
-            verbose_level: 0,
-            histogram: false,
-        },
-    )
-    .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))?;
-    Create(config, executors, options, Arc::new(paint))
+    // The main half (LayerizeEngine, created in Create) keeps the
+    // PAC/conversion/recording owner built from these values.
+    let features = layerize::commit::main_paint_config::CpuPaintFeatures {
+        cc_slimming: true,
+        singular_transform_fix: true,
+        merge_fixed_layers: true,
+        merge_sticky_layers: true,
+        raster_inducing_scroll: cfg!(any(target_os = "linux", target_os = "windows")),
+        scrolling_contents_cull_rect: true,
+        remove_scroll_node_workaround: true,
+        selection_edge_visibility_uses_full_edge: true,
+        canvas_draw_element: false,
+        expensive_dchecks: cfg!(debug_assertions),
+        paint_under_invalidation_checking: false,
+        layer_merge_distance_limit: 0x10000000,
+    };
+    let diagnostics = layerize::commit::main_paint_config::SkiaPaintDiagnostics {
+        trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
+        verbose_level: 0,
+        histogram: false,
+    };
+    Create(config, executors, options, features, diagnostics)
 }

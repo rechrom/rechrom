@@ -13,6 +13,17 @@ pub trait SyncTypes:
     CommitStateTypes + super::main_layer::MainLayerTypes + super::layer_impl::LayerImplTypes
 {
     type MainLayer: SyncMainLayer<Self>;
+    /// Lends the pending tree to main layers as the LayerImplFactory of
+    /// Layer::CreateLayerImpl (cc/trees/tree_synchronizer.cc PushLayerList).
+    fn WithLayerImplFactory<Output>(
+        tree: &mut LayerTreeImpl<Self>,
+        context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, Self>,
+        callback: impl FnOnce(
+            &mut dyn super::main_layer::LayerImplFactory<
+                <Self as layerize::commit::CommitTypes>::Layer,
+            >,
+        ) -> Output,
+    ) -> Output;
 }
 pub trait SyncMainLayer<B: SyncTypes> {
     fn id(&self, c: &super::main_layer::LayerContext<'_, B>) -> i32;
@@ -70,9 +81,7 @@ pub trait SyncPictureLayer {
 pub trait SyncLayerList<B: SyncTypes>: LayerTreeLayerList<B> {
     fn ReleaseLayer(&mut self, id: i32) -> Option<Box<B::Layer>>;
 }
-pub trait SynchronizationTrace {
-    fn TraceScope(&self, name: &str, count: Option<usize>);
-}
+pub use layerize::commit::main_callbacks::SynchronizationTrace;
 pub trait SynchronizationContext<B: SyncTypes>: SynchronizationTrace {
     /// Scoped native LayerListConstIterator walk. Each callback gets the actual
     /// owner and current main context; neither reference may escape the call.

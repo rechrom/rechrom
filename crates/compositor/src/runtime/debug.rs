@@ -20,13 +20,13 @@ use crate::{
 impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes>
     DebugRectLayer<
         B::Transform,
-        <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend,
+        <B as layerize::commit::CommitTypes>::RegionBackend,
     > for CompositorLayer<B>
 {
     type Types = B;
     fn GetInvalidationRegionForDebugging(
         &self,
-    ) -> Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend> {
+    ) -> Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         crate::adapter::layer_tree_host_impl::HostImplLayer::GetInvalidationRegionForDebugging(self)
     }
     fn draws_content(&self) -> bool {
@@ -46,7 +46,7 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes>
     ) -> impl Iterator<
         Item = (
             TouchAction,
-            &Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend>,
+            &Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
         ),
     > {
         self.impl_base()
@@ -56,12 +56,12 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes>
     }
     fn wheel_event_handler_region(
         &self,
-    ) -> &Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().wheel_event_handler_region()
     }
     fn main_thread_scroll_hit_test_region(
         &self,
-    ) -> &Region<<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.impl_base().main_thread_scroll_hit_test_region()
     }
 }

@@ -6,10 +6,7 @@
 use super::{
     host_services::{CpuHostServices, HostInit},
     layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
-    main_endpoint::EngineMainEndpoint,
-    main_host::{CpuMainLayerHost, CpuMainLayerHosts},
-    pac_scroll::{PacScrollCallbacks, PacScrollEffects},
-    paint_services::CpuPaintServices,
+    execution::EngineMainHostEffects,
     resources::RasterReturnedResource,
     skia::SkRegion,
     types::{CpuCompositorTypes, LocalSurfaceId},
@@ -19,8 +16,7 @@ use crate::{
         begin_frame::BeginFrameArgs,
         client_layer_tree_host_impl::ClientHostContext,
         geometry::Rect,
-        layer_tree_host_impl::{HostImplContext, HostImplServices},
-        main_layer::LayerContext,
+        layer_tree_host_impl::HostImplContext,
         property_tree::{PropertyTreeFeatures, PropertyTreesOwnerId},
     },
     cc::{
@@ -32,58 +28,57 @@ use crate::{
     },
     engine::{CompositorError, CompositorMainThreadEffect, CompositorViewportState},
     performance::{CompositorPackage, Span},
-    third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor,
     CompositorFrameSubmission,
 };
 use paint::PaintArtifact;
-use std::{
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 type Root = CpuCompositorTypes<SkRegion>;
+
+// Compile-time thread-safety of the main-half values that cross to, or are
+// read by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the
+// main LayerTreeHost (lent inside the protected sequence), its
+// ThreadUnsafeCommitState (read by FinishCommit) and the moved CommitState.
+#[allow(dead_code)]
+const _: () = {
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_send_ref<T: Send + ?Sized>(_: &T) {}
+    fn assertions(engine: &layerize::LayerizeEngine<Root>) {
+        assert_send_ref(engine.Main());
+        assert_sync::<layerize::commit::commit_state::ThreadUnsafeCommitState<Root>>();
+        assert_send::<CommitState<Root>>();
+    }
+};
 
 /// All constructor inputs are actual owners/capabilities, never test stand-ins.
 /// This is private to compositor: Page only provides executors/pixel primitives.
 pub(crate) struct EngineCore {
-    pub(crate) main_frame_lifecycle: super::main_frame_lifecycle::MainFrameLifecycle,
+    // The two Proxy halves (S1B_PROXY_DESIGN.md S1b-4): ProxyMain holds the
+    // main side of the open main frame and its prepared or ready commit,
+    // ProxyImpl the posted DataForCommit. Declared before `layerize` so that
+    // the commit leases they may hold are released before the main host.
+    // Since S1b-6 the Page owns ProxyMain and `layerize` (the main half,
+    // `crate::engine::CompositorMainEngine`); they are lent here for the
+    // duration of one CompositorEngine call (`lent_main`).
+    pub(crate) proxy_main: super::lent_main::LentMain<layerize::runtime::proxy_main::ProxyMain<Root>>,
+    pub(crate) proxy_impl: super::proxy_impl::ProxyImpl,
+    // The main half: PAC, previous artifact, scroll callbacks, main paint
+    // services and the main-frame deferral state (MAIN_IMPL_SPLIT.md B3).
+    pub(crate) layerize: super::lent_main::LentMain<layerize::LayerizeEngine<Root>>,
     pub(crate) host: Option<ClientLayerTreeHostImpl<Root>>,
     pub(crate) services: CpuHostServices<Root>,
-    pub(crate) main: CpuMainLayerHost<SkRegion>,
-    pub(crate) paint: Arc<CpuPaintServices<SkRegion>>,
-    pac: Option<PaintArtifactCompositor<Root>>,
-    // Blink classifies each producer replacement against the artifact that
-    // populated the resident PAC. This is the immutable engine input itself,
-    // not a copied snapshot.
-    previous_artifact: Option<Arc<PaintArtifact>>,
-    pub(crate) endpoint: Arc<EngineMainEndpoint>,
+    // The impl side of the main host's Proxy endpoint (the main AnimationHost
+    // is owned by `layerize` since S1b-5).
+    pub(crate) main_effects: Arc<EngineMainHostEffects>,
     lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
     pub(crate) scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
-    // PAC stores only Weak. Retaining this exact strong owner is required for
-    // source scroll/snap/scrollbar-hidden delivery throughout PAC's lifetime.
-    _scroll_callbacks: Rc<PacScrollCallbacks>,
-    scroll_effects: PacScrollEffects,
     pub(crate) frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
-    ready_commit: Option<CommitState<Root>>,
     // Source frame identity of the last commit consumed by
     // ProxyImpl::ScheduledActionCommit.  The FrameSink separately records the
     // source frame used by DrawLayers, so the output boundary can distinguish
     // an old-active-tree frame drawn immediately before pending-tree
     // activation from the frame produced by the commit that Page submitted.
-    last_committed_source_frame_number: Option<i32>,
-    prepared_paint_commit: bool,
-    // ProxyMain advances only as far as the highest requested pipeline stage.
-    // A new PaintArtifact requests UPDATE_LAYERS, while Blink's direct
-    // transform/opacity path calls only SetNeedsCommit and must retain the
-    // existing PictureLayer recording/raster source.
-    prepared_update_layers: bool,
-    // `ready_commit` is built on the Page sequence before the Scheduler may
-    // open the BeginMainFrame that owns it. Keep the source distinction
-    // between a prepared commit and ProxyImpl's already-notified
-    // `data_for_commit_`; otherwise a re-entrant SEND_BEGIN_MAIN_FRAME can
-    // notify the same commit twice.
-    ready_commit_notified: bool,
-    pub(crate) awaiting_main: bool,
-    main_frame_applied_deltas: bool,
+    pub(crate) last_committed_source_frame_number: Option<i32>,
     pub(crate) effects: Vec<CompositorMainThreadEffect>,
     pub(crate) failure: Option<CompositorError>,
     sequence: i32,
@@ -99,27 +94,6 @@ pub(crate) struct EngineCore {
     surface_parameters: Option<(crate::adapter::geometry::Size, u32)>,
 }
 impl EngineCore {
-    pub(crate) fn ConvertPaintArtifactSubsetToRecord(
-        &self,
-        artifact: Arc<PaintArtifact>,
-        state: &paint::paint_property_tree::PropertyTreeState,
-    ) -> crate::engine::ImmutablePaintRecord {
-        let trees = artifact.property_trees.clone();
-        let chunks = super::paint::PaintChunkSubset::from_artifact(artifact);
-        let state = super::paint::PropertyTreeState::<SkRegion>::from_source_in(state, trees);
-        crate::third_party::blink::renderer::platform::graphics::compositing::paint_chunks_to_cc_layer::Convert::<Root>(
-            &chunks, &state, None, self.paint.as_ref(),
-        )
-    }
-
-    pub(crate) fn CreateVideoSurfaceForeignLayer(
-        &mut self,
-        range: crate::runtime::types::SurfaceRange,
-    ) -> Arc<dyn paint::ForeignLayer> {
-        self.main
-            .CreateVideoSurfaceForeignLayer(self.paint.as_ref(), self.paint.as_ref(), range)
-    }
-
     pub(crate) fn SetViewportState(
         &mut self,
         viewport: CompositorViewportState,
@@ -139,12 +113,12 @@ impl EngineCore {
                 .expect("parent LocalSurfaceId sequence exhausted");
         }
         self.surface_parameters = Some(surface_parameters);
-        self.main.SetViewportRectAndScale(
+        self.layerize.MainMut().SetViewportRectAndScale(
             Rect::new(0, 0, viewport.size.width(), viewport.size.height()),
             viewport.device_scale_factor,
             self.local_surface_id,
         );
-        self.main.SetPageScaleFactorAndLimits(
+        self.layerize.MainMut().SetPageScaleFactorAndLimits(
             viewport.page_scale_factor,
             viewport.min_page_scale_factor,
             viewport.max_page_scale_factor,
@@ -158,15 +132,15 @@ impl EngineCore {
         Ok(())
     }
 
-    // Source: cc/trees/single_thread_proxy.cc:1175-1190. This CPU runtime has
-    // one sequenced Page executor, so the source single-thread Proxy ordering
-    // is exact: pull impl deltas, then apply them to the resident main host
-    // before asking the embedder to run its BeginMainFrame work.
-    pub(crate) fn ApplyCompositorDeltas(&mut self) {
-        // Source: cc/trees/proxy_impl.cc:801-814. A resident ready commit is
-        // ProxyImpl's `data_for_commit_`: deltas pulled for the pipelined BMF
-        // belong in SyncedProperty's next reflected slot.
-        let next_bmf = self.ready_commit.is_some();
+    // Rechrom-only bridge for blocker B1 (S1B_PROXY_DESIGN.md 3), deleted in
+    // S1b-7: the Page finished an artifact before the Scheduler dispatched the
+    // BeginMainFrame that will own it. The impl deltas are pulled
+    // (proxy_impl.cc:801-814; a ready commit puts them in the pipelined
+    // slot) and applied to the main host (LayerTreeHost::
+    // ApplyCompositorChanges) before PAC snapshots the main tree, as
+    // single_thread_proxy.cc:1175-1190 orders them.
+    pub(crate) fn ApplyCompositorDeltasOutsideMainFrame(&mut self) {
+        let next_bmf = self.HasReadyCommit();
         let mut data = self
             .host
             .as_mut()
@@ -178,28 +152,35 @@ impl EngineCore {
                     services: &mut self.services,
                 },
             );
-        let scroll_state = self.main.ApplyCompositorChanges(&mut data);
-        if data.page_scale_delta != 1.0 || !data.inner_viewport_scroll.scroll_delta.IsZero() {
-            self.effects
-                .push(CompositorMainThreadEffect::ViewportScaleChanged {
-                    scale: self.main.PageScaleFactor(),
-                    delta: data.page_scale_delta,
-                    pinch_active: data.is_pinch_gesture_active,
-                    inner_scroll_delta: data.inner_viewport_scroll.scroll_delta,
-                });
+        if let Some(scale) = self.layerize.ApplyCompositorChanges(&mut data) {
+            use layerize::runtime::proxy_main::ProxyMainClient;
+            super::proxy_impl::InProcessMainClient {
+                effects: &mut self.effects,
+            }
+            .ViewportScaleChanged(scale, &data);
         }
-        // Same FIFO as PAC's offset callbacks: source client state/finished
-        // notification cannot overtake the final scroll delta.
-        self.scroll_effects
-            .Push(super::pac_scroll::PacScrollEffect::DidUpdateCompositorScrollState(scroll_state));
+    }
+
+    /// Creates the main half: the CPU main paint services, the main
+    /// LayerTreeHost with its Proxy endpoint and the PAC, whose root it
+    /// attaches before any producer commit (native PAC::Update returns while
+    /// the root has no host).
+    pub(crate) fn CreateLayerize(
+        features: layerize::commit::main_paint_config::CpuPaintFeatures,
+        diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
+        init: layerize::commit::main_effects::MainHostInit<
+            <Root as layerize::commit::CommitStateTypes>::MutatorHostHandle,
+        >,
+    ) -> Result<layerize::LayerizeEngine<Root>, CompositorError> {
+        layerize::LayerizeEngine::<Root>::new(features, diagnostics, init)
+            .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))
     }
 
     pub(crate) fn new(
         mut services: CpuHostServices<Root>,
         init: HostInit<Root>,
-        mut main: CpuMainLayerHost<SkRegion>,
-        paint: Arc<CpuPaintServices<SkRegion>>,
-        endpoint: Arc<EngineMainEndpoint>,
+        layerize: Box<layerize::LayerizeEngine<Root>>,
+        main_effects: Arc<EngineMainHostEffects>,
         lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
         scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
         frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
@@ -207,17 +188,6 @@ impl EngineCore {
         next_property_owner: u64,
         input_client: std::sync::Arc<super::input_client::QueuedInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
-        let scroll_effects = PacScrollEffects::default();
-        let callbacks = PacScrollCallbacks::new(scroll_effects.clone());
-        let pac = {
-            let mut hosts = CpuMainLayerHosts { host: &mut main };
-            let mut context =
-                LayerContext::new(&mut hosts, paint.as_ref()).WithDerivedServices(paint.as_ref());
-            paint.CreateCompositor(PacScrollCallbacks::Downgrade(&callbacks), &mut context)
-        };
-        // Native PAC::Update intentionally returns when the root has no host.
-        // Attach the actual PAC root before admitting any producer commit.
-        main.SetRootLayer(pac.RootLayer().cloned(), paint.as_ref(), paint.as_ref());
         let mut host = services.CreateClientHost(init);
         host.BaseMutable().CreateInputHandler(&mut HostImplContext {
             services: &mut services,
@@ -237,26 +207,18 @@ impl EngineCore {
             },
         );
         let result = Self {
-            main_frame_lifecycle: Default::default(),
+            proxy_main: super::lent_main::LentMain::new(Box::new(
+                layerize::runtime::proxy_main::ProxyMain::new(Default::default()),
+            )),
+            proxy_impl: super::proxy_impl::ProxyImpl::new(),
             host: Some(host),
             services,
-            main,
-            paint,
-            pac: Some(pac),
-            previous_artifact: None,
-            endpoint,
+            main_effects,
             lifecycle,
             scheduler_queries,
-            _scroll_callbacks: callbacks,
-            scroll_effects,
+            layerize: super::lent_main::LentMain::new(layerize),
             frame_sink,
-            ready_commit: None,
             last_committed_source_frame_number: None,
-            prepared_paint_commit: false,
-            prepared_update_layers: false,
-            ready_commit_notified: false,
-            awaiting_main: false,
-            main_frame_applied_deltas: false,
             effects: Vec::new(),
             failure: None,
             sequence: 0,
@@ -278,7 +240,7 @@ impl EngineCore {
         viewport: CompositorViewportState,
     ) -> Result<(), CompositorError> {
         viewport.Validate()?;
-        if self.ready_commit.is_some() || self.prepared_paint_commit {
+        if self.HasReadyCommit() || self.proxy_main.HasPreparedCommit() {
             return Err(CompositorError::NotReady {
                 stage: "previous main commit awaits scheduler",
             });
@@ -297,110 +259,45 @@ impl EngineCore {
         // Validate all producer metadata once, before changing resident owner
         // state, and carry that same live input through PAC update. Rebuilding
         // PaintInput below would repeat the complete artifact/property walk.
-        let paint_input = self.paint.PrepareInput(artifact.clone())?;
+        let paint_input = self.layerize.PrepareInput(artifact.clone())?;
         self.SetViewportState(viewport)?;
-        let had_canvas_children = self.pac.as_ref().unwrap().CanvasChildIds().next().is_some();
-        let source_frame = u64::try_from(self.main.pending_commit_state().source_frame_number)
-            .expect("source main-frame number is nonnegative");
-        let publication = {
-            let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            self.paint.UpdateCompositor(
-                self.pac.as_mut().unwrap(),
-                paint_input,
-                self.previous_artifact.as_ref(),
-                Vec::new(),
-                &mut context,
-                &mut self.sequence,
-            )?;
-            let pac = self.pac.as_ref().unwrap();
-            match artifact.canvas_document {
-                Some(_) if !had_canvas_children && pac.CanvasChildIds().next().is_none() => None,
-                Some(document) => {
-                    let mut records = Vec::new();
-                    for child in pac.CanvasChildIds() {
-                        // Source getter may have no cached recording. It does
-                        // not turn that case into an empty PaintRecord.
-                        let Some(record) = pac.GetCanvasChildPaintRecordReadLease(child, &context)
-                        else {
-                            continue;
-                        };
-                        let canvas_id = u64::try_from(record.state.paint_state.canvas_node_id)
-                            .map_err(|_| CompositorError::PaintInput {
-                                kind: crate::engine::CompositorPaintInputKind::InvalidDomNodeId,
-                                detail: "canvas child record has a negative canvas identity".into(),
-                            })?;
-                        let child_id =
-                            u64::try_from(child.0).map_err(|_| CompositorError::PaintInput {
-                                kind: crate::engine::CompositorPaintInputKind::InvalidDomNodeId,
-                                detail: "canvas child record has a negative element identity"
-                                    .into(),
-                            })?;
-                        records.push(canvas::draw_element_image::CanvasChildPaintRecord {
-                            paint_state: record.state.paint_state.clone(),
-                            record: Arc::new(super::canvas_child_record::CanvasChildRecordReplay {
-                                list: record.list,
-                                offset: record.offset,
-                            }) as canvas::CanvasRecord,
-                            canvas: document.Element(canvas_id),
-                            element: document.Element(child_id),
-                        });
-                    }
-                    Some(Arc::new(canvas::CanvasChildRecordPublication::new(
-                        document,
-                        source_frame,
-                        records,
-                    )))
-                }
-                None => {
-                    if pac.CanvasChildIds().next().is_some() {
-                        return Err(CompositorError::PaintInput {kind:crate::engine::CompositorPaintInputKind::UnsupportedCanvasChild,detail:"canvas child record publication requires its canonical document identity".into()});
-                    }
-                    None
-                }
-            }
-        };
+        // PAC::Update plus the canvas-child recording publication of this
+        // source frame (main half, LayerizeEngine).
+        let publication =
+            self.layerize
+                .UpdatePaintArtifact(&artifact, paint_input, &mut self.sequence)?;
         if let Some(publication) = publication {
             self.effects
                 .push(CompositorMainThreadEffect::CanvasChildPaintRecords(
                     publication,
                 ));
         }
-        self.previous_artifact = Some(artifact.clone());
         drop(layerize_trace);
 
-        self.prepared_paint_commit = true;
-        self.prepared_update_layers = true;
+        // A new PaintArtifact requests UPDATE_LAYERS.
+        self.proxy_main.PrepareCommit(true);
         Ok(())
     }
     pub(crate) fn HasPreparedPaintCommit(&self) -> bool {
-        self.prepared_paint_commit
+        self.proxy_main.HasPreparedCommit()
     }
 
     pub(crate) fn CanPrepareCompositedAnimationCommit(&self) -> bool {
-        self.previous_artifact.is_some()
-            && self.ready_commit.is_none()
-            && !self.prepared_paint_commit
+        self.layerize.HasResidentPaintArtifact()
+            && !self.HasReadyCommit()
+            && !self.proxy_main.HasPreparedCommit()
     }
 
     pub(crate) fn ApplyScrollbarPaintMutation(
         &mut self,
         mutation: &crate::engine::ScrollbarPaintMutation,
     ) {
-        let applied = {
-            let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            self.pac.as_ref().is_some_and(|pac| {
-                self.paint
-                    .ApplyScrollbarPaintMutation(pac, mutation, &mut context)
-            })
-        };
+        let applied = self.layerize.ApplyScrollbarPaintMutation(
+            mutation.element,
+            mutation.opacity,
+            mutation.thumb_width,
+            mutation.needs_repaint,
+        );
         if !applied {
             self.effects
                 .push(CompositorMainThreadEffect::ScrollbarPaintFallback {
@@ -410,7 +307,7 @@ impl EngineCore {
     }
 
     pub(crate) fn HasResidentPaintArtifact(&self) -> bool {
-        self.previous_artifact.is_some()
+        self.layerize.HasResidentPaintArtifact()
     }
 
     /// Apply Blink's deferred animated property values to the resident PAC
@@ -421,38 +318,30 @@ impl EngineCore {
         &mut self,
         update: &paint::CompositedAnimationPropertyUpdate,
     ) -> Result<(), CompositorError> {
-        if self.previous_artifact.is_none() {
+        if !self.layerize.HasResidentPaintArtifact() {
             return Err(CompositorError::NotReady {
                 stage: "composited animation requires a resident paint artifact",
             });
         }
-        if self.ready_commit.is_some() || self.prepared_paint_commit {
+        if self.HasReadyCommit() || self.proxy_main.HasPreparedCommit() {
             return Err(CompositorError::NotReady {
                 stage: "previous main commit awaits scheduler",
             });
         }
-        let mut hosts = CpuMainLayerHosts {
-            host: &mut self.main,
-        };
-        let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-            .WithDerivedServices(self.paint.as_ref());
-        if !self.paint.ApplyCompositedAnimationProperties(
-            self.pac.as_ref().unwrap(),
-            update,
-            &mut context,
-        ) {
+        if !self.layerize.ApplyCompositedAnimationProperties(update) {
             return Err(CompositorError::NotReady {
                 stage: "resident compositor property mapping is unavailable",
             });
         }
-        self.prepared_paint_commit = true;
-        self.prepared_update_layers = false;
+        // Blink's direct transform/opacity path calls only SetNeedsCommit and
+        // must retain the existing PictureLayer recording/raster source.
+        self.proxy_main.PrepareCommit(false);
         // Direct PAC updates call LayerTreeHost::SetNeedsCommit. When this
         // mutation belongs to the currently open BMF, that request is already
         // being fulfilled by its property-only commit; suppress a redundant
         // BMF request while retaining the request for out-of-frame callers.
-        if self.awaiting_main {
-            self.endpoint.DidBeginCommit();
+        if self.proxy_main.IsInBeginMainFrame() {
+            self.layerize.DidBeginCommit();
         }
         Ok(())
     }
@@ -465,7 +354,7 @@ impl EngineCore {
         use crate::cc::input::main_thread_scrolling_reason::{
             MainThreadRepaintReason, MainThreadRepaintReasons,
         };
-        let tree = self.main.property_trees().scroll_tree();
+        let tree = self.layerize.Main().property_trees().scroll_tree();
         areas
             .iter()
             .map(|element| {
@@ -490,79 +379,41 @@ impl EngineCore {
         features: &dyn PropertyTreeFeatures,
     ) -> Result<(), CompositorError> {
         assert!(
-            self.prepared_paint_commit,
+            self.proxy_main.HasPreparedCommit(),
             "same PAC preparation before finalizing native animation commit"
         );
-        self.prepared_paint_commit = false;
-        let update_layers = std::mem::take(&mut self.prepared_update_layers);
+        let update_layers = self.proxy_main.PreparedCommitUpdatesLayers();
         let mut tree_trace = Span(CompositorPackage::Tree, "Compositor.Tree.BuildCommit");
         tree_trace.set(
             "property_owner_sequence",
             self.property_owner_sequence as f64,
         );
         tree_trace.set("update_layers", update_layers as u8 as f64);
-        if update_layers {
-            self.main
-                .UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
-        }
-        self.main
-            .WillCommit(self.paint.as_ref(), self.paint.as_ref());
         let property_owner = PropertyTreesOwnerId::FromOwnerValue(self.property_owner_sequence);
         self.property_owner_sequence = self
             .property_owner_sequence
             .checked_add(1)
             .expect("native property-tree identity exhausted");
-        self.ready_commit = Some(self.main.ActivateCommitState(property_owner));
-        self.ready_commit_notified = false;
+        // UpdateLayers (when requested), WillCommit, ActivateCommitState and
+        // the source frame advance run on the main half; ProxyMain posts the
+        // commit (or holds it for the next BeginMainFrame). The caller runs
+        // the posted tasks.
+        self.proxy_main
+            .FinalizePreparedCommit(&mut self.layerize, features, property_owner);
         drop(tree_trace);
-        // Source: cc/trees/layer_tree_host.cc:487. Persistent source frame
-        // numbering advances after the activated commit has taken its value.
-        self.main.pending_commit_state_mut().source_frame_number += 1;
-        self.endpoint.DidBeginCommit();
         Ok(())
     }
 
-    /// Called only for Scheduler's COMMIT action. The live main synchronization
-    /// context borrows the very same resident ThreadUnsafeCommitState.
-    pub(crate) fn Commit(&mut self) {
-        let _trace = Span(CompositorPackage::Tree, "Compositor.Tree.Commit");
-        assert!(self.ready_commit_notified);
-        let mut state = self
-            .ready_commit
-            .take()
-            .expect("source ready-to-commit state");
-        let committed_source_frame_number = state.source_frame_number;
-        self.ready_commit_notified = false;
-        let host = self.host.as_mut().unwrap();
-        let mut context = ClientHostContext {
-            services: &mut self.services,
-        };
-        host.BeginCommit(state.source_frame_number, state.trace_id, &mut context);
-        {
-            let _protected = self.endpoint.EnterProtectedSequence();
-            self.main.WithCommitContext(
-                self.paint.as_ref(),
-                self.paint.as_ref(),
-                self.paint.as_ref(),
-                |unsafe_state, main_context| {
-                    host.FinishCommit(&mut state, unsafe_state, main_context, &mut context);
-                },
-            );
-        }
-        // Source: cc/trees/proxy_impl.cc::ScheduledActionCommit. The finish
-        // timestamp belongs to FinishCommit, before the potentially expensive
-        // ScheduledActionPostCommit and independently scheduled frame draw.
-        self.effects
-            .push(CompositorMainThreadEffect::MainFrameCommitCompleted {
-                commit_finish_time: self.services.MonotonicTimeNow(),
-            });
-        self.last_committed_source_frame_number = Some(committed_source_frame_number);
-    }
+    /// A finished main commit exists: held by ProxyMain for the next
+    /// BeginMainFrame, or posted to ProxyImpl and not yet committed.
     pub(crate) fn HasReadyCommit(&self) -> bool {
-        self.ready_commit.is_some()
+        self.proxy_main.HasReadyCommit() || self.proxy_impl.HasDataForCommit()
     }
-    pub(crate) fn ReadyCommitWasNotified(&self) -> bool {
-        self.ready_commit_notified
+
+    /// ProxyMain::SetNeedsCommit (Page main-frame demand).
+    pub(crate) fn RequestMainFrame(&mut self, scheduler: &mut Scheduler) {
+        self.proxy_main.SetNeedsCommit();
+        self.RunProxyTasks(scheduler);
     }
     pub(crate) fn PostCommit(&mut self) {
         self.host
@@ -704,49 +555,8 @@ impl EngineCore {
             && self.last_committed_source_frame_number == Some(sink.source_frame_number());
         (frame, matches_latest_commit)
     }
-    pub(crate) fn ApplySourceScrollAnimation(
-        &mut self,
-        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
-    ) {
-        if let Some(element) = self.endpoint.ApplySourceScrollAnimation(mutation) {
-            let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            if let Some(pac) = self.pac.as_ref() {
-                pac.DropCompositorScrollDeltaNextCommit(element, &mut context);
-            }
-        }
-    }
-    pub(crate) fn ApplySourcePropertyAnimation(
-        &mut self,
-        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
-    ) {
-        self.endpoint.ApplySourcePropertyAnimation(mutation);
-    }
-    fn ApplySourceAnimationEvents(&mut self) {
-        // ProxyImpl.cc:820 -> ProxyMain.cc:351-352 -> AnimationHost.cc:795-822.
-        let events = self
-            .host
-            .as_mut()
-            .expect("resident Host")
-            .BaseMutable()
-            .TakeMutatorEvents(&mut HostImplContext {
-                services: &mut self.services,
-            });
-        if let Some(events) = events {
-            self.endpoint.ApplySourceAnimationEvents(events);
-        }
-        for completion in self.endpoint.TakeSourceScrollCompletions() {
-            self.effects
-                .push(CompositorMainThreadEffect::ScrollAnimationCompleted(
-                    completion,
-                ));
-        }
-    }
     pub(crate) fn DrainScrollEffects(&self, output: &mut Vec<CompositorMainThreadEffect>) {
-        while let Some(effect) = self.scroll_effects.Pop() {
+        while let Some(effect) = self.layerize.PopScrollEffect() {
             output.push(effect.into());
         }
     }
@@ -755,16 +565,11 @@ impl EngineCore {
     pub(crate) fn Shutdown(&mut self) {
         // Native child client finalization needs the current actual main tree;
         // clear clients before detaching/dropping the main root allocation.
-        if let Some(pac) = self.pac.take() {
-            let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            pac.Destroy(&mut context);
+        // The main half is lent only when the Page shuts the engine down
+        // (CompositorEngine::Shutdown); a later drop finds it returned.
+        if self.layerize.IsLent() {
+            self.layerize.Shutdown();
         }
-        self.main
-            .SetRootLayer(None, self.paint.as_ref(), self.paint.as_ref());
         if let Some(mut host) = self.host.take() {
             host.BaseMutable()
                 .ReleaseLayerTreeFrameSink(&mut HostImplContext {
@@ -817,33 +622,17 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
     }
     fn ScheduledActionSendBeginMainFrame(
         &mut self,
-        _args: &BeginFrameArgs,
+        args: &BeginFrameArgs,
         scheduler: &mut Scheduler,
     ) {
-        // A Page artifact may already be in ready-to-commit state when the
-        // Scheduler opens the next BeginMainFrame. Chromium keeps both
-        // DataForCommit owners: the ready commit consumes the primary slot,
-        // while deltas pulled below belong to the pipelined next BMF.
-        let had_unnotified_commit = self.HasReadyCommit() && !self.ReadyCommitWasNotified();
-        self.awaiting_main = true;
+        // Impl state only: ProxyImpl pulls the compositor deltas and mutator
+        // events and posts ProxyMain::BeginMainFrame, which the in-process
+        // transport runs right here (it applies them to the main host, then
+        // answers with the held commit or asks the Page for its lifecycle).
         self.lifecycle.DidBeginMainFrame();
         scheduler.NotifyBeginMainFrameStarted(self.services.core.MonotonicTimeNow());
-        self.ExpireCommitDeferral();
-        self.main_frame_applied_deltas = false;
-        if !self.main_frame_lifecycle.IsDeferringCommits() {
-            self.ApplyCompositorDeltas();
-            self.main_frame_applied_deltas = true;
-        }
-        self.ApplySourceAnimationEvents();
-        if self.prepared_paint_commit {
-            // The source Page is between PAC and scroll-animation update in
-            // this very main commit; finalize will notify readiness once.
-        } else if had_unnotified_commit {
-            self.NotifyReadyToCommit(scheduler, false, true);
-        } else {
-            self.effects
-                .push(CompositorMainThreadEffect::BeginMainFrame);
-        }
+        self.SendBeginMainFrame(args);
+        self.RunProxyTasks(scheduler);
     }
     fn ScheduledActionDrawIfPossible(&mut self, scheduler: &mut Scheduler) -> DrawResult {
         let result = {
@@ -872,9 +661,13 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
         }
         result
     }
-    fn ScheduledActionCommit(&mut self, _scheduler: &mut Scheduler) {
-        let _query = self.scheduler_queries.Enter(_scheduler.IsReadyToActivate());
-        self.Commit();
+    fn ScheduledActionCommit(&mut self, scheduler: &mut Scheduler) {
+        {
+            let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
+            self.ScheduledActionCommitOnImpl();
+        }
+        // ProxyMain::DidCompleteCommit (posted by the completion event).
+        self.RunProxyTasks(scheduler);
     }
     fn ScheduledActionPostCommit(&mut self, _scheduler: &mut Scheduler) {
         let _query = self.scheduler_queries.Enter(_scheduler.IsReadyToActivate());
@@ -883,6 +676,9 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
     fn ScheduledActionActivateSyncTree(&mut self, _scheduler: &mut Scheduler) {
         let _query = self.scheduler_queries.Enter(_scheduler.IsReadyToActivate());
         self.Activate();
+        // LayerTreeHostImpl -> ProxyImpl::DidActivateSyncTree releases a
+        // commit held for activation.
+        self.DidActivateSyncTreeOnImpl();
         // Source: cc/trees/proxy_impl.cc:521-525,909-917. The source
         // OnCanDrawStateChanged delegate updates Scheduler synchronously inside
         // activation. Refresh from the same resident Host before its current
@@ -898,6 +694,7 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
             });
         drop(_query);
         _scheduler.SetCanDraw(can_draw, self);
+        self.RunProxyTasks(_scheduler);
     }
     fn ScheduledActionBeginLayerTreeFrameSinkCreation(&mut self, scheduler: &mut Scheduler) {
         let _query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
@@ -1006,52 +803,13 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
 }
 use crate::cc::scheduler::scheduler::Scheduler;
 impl EngineCore {
-    pub(crate) fn NotifyReadyToCommit(
-        &mut self,
-        scheduler: &mut Scheduler,
-        scroll_and_viewport_changes_synced: bool,
-        completes_awaiting_main: bool,
-    ) {
-        assert!(self.awaiting_main && self.HasReadyCommit() && !self.ready_commit_notified);
-        if completes_awaiting_main {
-            self.awaiting_main = false;
-        }
-        self.ready_commit_notified = true;
-        let query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
-        self.host.as_mut().unwrap().ReadyToCommit(
-            scroll_and_viewport_changes_synced,
-            None,
-            false,
-            &mut ClientHostContext {
-                services: &mut self.services,
-            },
-        );
-        drop(query);
-        scheduler.NotifyReadyToCommit(None, self);
-    }
-
-    // Source: cc/trees/proxy_impl.cc:309-326. A main frame which applied
-    // compositor deltas but produced no new PaintArtifact still has to finish
-    // its Proxy transaction so SyncedProperty can retire the reflected slot.
+    // Source: cc/trees/proxy_main.cc:482-521 -> proxy_impl.cc:306-323. A main
+    // frame which applied compositor deltas but produced no new PaintArtifact
+    // still has to finish its Proxy transaction so SyncedProperty can retire
+    // the reflected slot.
     pub(crate) fn FinishMainFrameWithoutUpdates(&mut self, scheduler: &mut Scheduler) {
-        assert!(self.awaiting_main);
-        let next_bmf = self.HasReadyCommit();
-        let args = scheduler.last_dispatched_begin_main_frame_args().clone();
-        self.host.as_mut().unwrap().BeginMainFrameAborted(
-            crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason::kFinishedNoUpdates,
-            Vec::new(),
-            &args,
-            next_bmf,
-            true,
-            &mut ClientHostContext {
-                services: &mut self.services,
-            },
-        );
-        self.awaiting_main = false;
-        scheduler.BeginMainFrameAborted(
-            crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason::kFinishedNoUpdates,
-            self,
-        );
+        self.proxy_main.FinishMainFrameWithoutUpdates();
+        self.RunProxyTasks(scheduler);
     }
 }
 
@@ -1064,7 +822,8 @@ impl Drop for EngineCore {
 impl EngineCore {
     pub(crate) fn ExpireCommitDeferral(&mut self) {
         if let Some(reason) = self
-            .main_frame_lifecycle
+            .layerize
+            .MainFrameLifecycleMut()
             .Expire(self.services.core.MonotonicTimeNow())
         {
             self.effects
@@ -1074,37 +833,16 @@ impl EngineCore {
                 });
         }
     }
+    /// ProxyMain's deferred-update early-outs (proxy_main.cc:281-310,
+    /// 380-427), posted to ProxyImpl::BeginMainFrameAbortedOnImpl, or a
+    /// retained commit request outside a BeginMainFrame.
     pub(crate) fn AbortDeferredMainFrame(
         &mut self,
         scheduler: &mut Scheduler,
         reason: crate::engine::CommitDeferralReason,
     ) {
-        if self.awaiting_main {
-            use crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason;
-            let early_out = match reason {
-                crate::engine::CommitDeferralReason::MainFrameUpdates => {
-                    CommitEarlyOutReason::kAbortedDeferredMainFrameUpdate
-                }
-                crate::engine::CommitDeferralReason::PaintHolding(_) => {
-                    CommitEarlyOutReason::kAbortedDeferredCommit
-                }
-            };
-            let args = scheduler.last_dispatched_begin_main_frame_args().clone();
-            self.host.as_mut().unwrap().BeginMainFrameAborted(
-                early_out,
-                Vec::new(),
-                &args,
-                false,
-                self.main_frame_applied_deltas,
-                &mut ClientHostContext {
-                    services: &mut self.services,
-                },
-            );
-            self.awaiting_main = false;
-            scheduler.BeginMainFrameAborted(early_out, self);
-        } else {
-            scheduler.SetNeedsBeginMainFrame(false, false, self);
-        }
+        self.proxy_main.AbortDeferredMainFrame(reason);
+        self.RunProxyTasks(scheduler);
         self.effects
             .push(CompositorMainThreadEffect::MainFrameCommitDeferred { reason });
     }

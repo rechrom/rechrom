@@ -1,48 +1,11 @@
 //! Host-owned external value/capability bindings. No tree, layer, pool or Page
 //! is captured in these service objects; canonical owners consume them live.
-use super::resources::{ColorPrimaryId, RasterColorSpace};
 use crate::adapter::{
     geometry::TracedValue,
     input_types::ElementId,
     layer_impl::LayerImplTraceValue,
-    layer_tree_host_impl::{HostColorSpace, HostColorSpacePrimaryID, HostTraceValue},
+    layer_tree_host_impl::HostTraceValue,
 };
-impl HostColorSpace for RasterColorSpace {
-    fn CreateSRGB() -> Self {
-        RasterColorSpace::CreateSRGB()
-    }
-    fn IsValid(&self) -> bool {
-        RasterColorSpace::IsValid(self)
-    }
-    fn IsHDR(&self) -> bool {
-        RasterColorSpace::IsHDR(self)
-    }
-    fn GetPrimaryID(&self) -> HostColorSpacePrimaryID {
-        match self.primaries {
-            ColorPrimaryId::Invalid => HostColorSpacePrimaryID::INVALID,
-            ColorPrimaryId::Bt709 => HostColorSpacePrimaryID::BT709,
-            ColorPrimaryId::Bt470M => HostColorSpacePrimaryID::BT470M,
-            ColorPrimaryId::Bt470Bg => HostColorSpacePrimaryID::BT470BG,
-            ColorPrimaryId::Smpte170M => HostColorSpacePrimaryID::SMPTE170M,
-            ColorPrimaryId::Smpte240M => HostColorSpacePrimaryID::SMPTE240M,
-            ColorPrimaryId::Film => HostColorSpacePrimaryID::FILM,
-            ColorPrimaryId::Bt2020 => HostColorSpacePrimaryID::BT2020,
-            ColorPrimaryId::SmpteSt428_1 => HostColorSpacePrimaryID::SMPTEST428_1,
-            ColorPrimaryId::SmpteSt431_2 => HostColorSpacePrimaryID::SMPTEST431_2,
-            ColorPrimaryId::P3 => HostColorSpacePrimaryID::P3,
-            ColorPrimaryId::XyzD50 => HostColorSpacePrimaryID::XYZ_D50,
-            ColorPrimaryId::AdobeRgb => HostColorSpacePrimaryID::ADOBE_RGB,
-            ColorPrimaryId::AppleGenericRgb => HostColorSpacePrimaryID::APPLE_GENERIC_RGB,
-            ColorPrimaryId::WideGamutColorSpin => HostColorSpacePrimaryID::WIDE_GAMUT_COLOR_SPIN,
-            ColorPrimaryId::Custom => HostColorSpacePrimaryID::CUSTOM,
-            ColorPrimaryId::Ebu3213E => HostColorSpacePrimaryID::EBU_3213_E,
-        }
-    }
-    fn ContainsSRGB(&self) -> bool {
-        RasterColorSpace::ContainsSRGB(self)
-    }
-}
-
 /// The actual external trace allocation supplies its own implicit-snapshot JSON
 /// metadata operation. It cannot query or retain any compositor owner.
 pub trait TraceValueBackend: HostTraceValue + LayerImplTraceValue {}

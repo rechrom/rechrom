@@ -393,7 +393,7 @@ pub struct LayerTreeHostImpl<B: HostImplTypes> {
     // Source: cc/trees/layer_tree_host_impl.h:1412.
     weak_factory_: Arc<()>,
     // Source: cc/trees/layer_tree_host_impl.h:1408.
-    unbounded_local_surface_id_: <B as LayerTreeTypes>::LocalSurfaceId,
+    unbounded_local_surface_id_: <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     // Source: cc/trees/layer_tree_host_impl.h:1407.
     unbounded_frame_sink_id_:
         <B::ThrottleTypes as crate::adapter::throttle::ThrottleTypes>::FrameSinkId,
@@ -472,19 +472,19 @@ pub struct LayerTreeHostImpl<B: HostImplTypes> {
     // Source: cc/trees/layer_tree_host_impl.h:1299.
     last_vertical_scroll_direction_: VerticalScrollDirection,
     // Source: cc/trees/layer_tree_host_impl.h:1294.
-    current_local_surface_id_from_client_: <B as LayerTreeTypes>::LocalSurfaceId,
+    current_local_surface_id_from_client_: <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     // Source: cc/trees/layer_tree_host_impl.h:1293.
     child_local_surface_id_allocator_: B::ChildLocalSurfaceIdAllocator,
     // Source: cc/trees/layer_tree_host_impl.h:1292.
-    evicted_local_surface_id_: <B as LayerTreeTypes>::LocalSurfaceId,
+    evicted_local_surface_id_: <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     // Source: cc/trees/layer_tree_host_impl.h:1291.
-    target_local_surface_id_: <B as LayerTreeTypes>::LocalSurfaceId,
+    target_local_surface_id_: <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     // Source: cc/trees/layer_tree_host_impl.h:1289.
     last_draw_render_frame_metadata_: Option<RenderFrameMetadata<B>>,
     // Source: cc/trees/layer_tree_host_impl.h:1288.
     last_draw_referenced_surfaces_: BTreeSet<B::SurfaceRange>,
     // Source: cc/trees/layer_tree_host_impl.h:1287.
-    last_draw_local_surface_id_: <B as LayerTreeTypes>::LocalSurfaceId,
+    last_draw_local_surface_id_: <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     // Source: cc/trees/layer_tree_host_impl.h:1285.
     next_frame_token_from_client_: u32,
     // Source: cc/trees/layer_tree_host_impl.h:1284.
@@ -556,7 +556,7 @@ pub struct LayerTreeHostImpl<B: HostImplTypes> {
     // Source: cc/trees/layer_tree_host_impl.h:1200.
     external_viewport_: Rect,
     // Source: cc/trees/layer_tree_host_impl.h:1199.
-    external_transform_: <B as LayerTreeTypes>::Transform,
+    external_transform_: <B as layerize::commit::CommitTypes>::Transform,
     // Source: cc/trees/layer_tree_host_impl.h:1191.
     max_memory_needed_bytes_: usize,
     // Source: cc/trees/layer_tree_host_impl.h:1187.
@@ -1641,14 +1641,14 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         &self.tracked_element_rects_from_client_
     }
     // Source: cc/trees/layer_tree_host_impl.h:636-638.
-    pub fn last_draw_local_surface_id(&self) -> &<B as LayerTreeTypes>::LocalSurfaceId {
+    pub fn last_draw_local_surface_id(&self) -> &<B as layerize::commit::CommitTypes>::LocalSurfaceId {
         &self.last_draw_local_surface_id_
     }
     // Source: cc/trees/layer_tree_host_impl.h:640-645.
     pub fn GetCurrentLocalSurfaceId<'a>(
         &'a self,
         context: &HostImplContext<'_, B>,
-    ) -> &'a <B as LayerTreeTypes>::LocalSurfaceId {
+    ) -> &'a <B as layerize::commit::CommitTypes>::LocalSurfaceId {
         if self.settings().trees_in_viz_in_viz_process {
             return &self.current_local_surface_id_from_client_;
         }
@@ -1657,7 +1657,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             .ChildLocalSurfaceIdAllocatorCurrent(&self.child_local_surface_id_allocator_)
     }
     // Source: cc/trees/layer_tree_host_impl.h:646-648.
-    pub fn target_local_surface_id(&self) -> &<B as LayerTreeTypes>::LocalSurfaceId {
+    pub fn target_local_surface_id(&self) -> &<B as layerize::commit::CommitTypes>::LocalSurfaceId {
         &self.target_local_surface_id_
     }
     // Source: cc/trees/layer_tree_host_impl.h:650-655.
@@ -2628,7 +2628,7 @@ impl<B: HostImplTypes> HostImplScrollbarClient<'_, '_, B> {
     }
 }
 impl<B: HostImplTypes> ScrollbarLayerAccess for HostImplScrollbarClient<'_, '_, B> {
-    type Transform = <B as LayerTreeTypes>::Transform;
+    type Transform = <B as layerize::commit::CommitTypes>::Transform;
     fn Scrollbar_orientation(&mut self, layer: &InputLayerId) -> ScrollbarOrientation {
         self.Validate(layer);
         self.context
@@ -2879,7 +2879,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         callback: impl FnOnce(
             &LayerTreeSettings,
             &mut dyn ScrollbarAnimationControllerClient<
-                Transform = <B as LayerTreeTypes>::Transform,
+                Transform = <B as layerize::commit::CommitTypes>::Transform,
             >,
         ) -> R,
     ) -> R {
@@ -2899,7 +2899,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         callback: impl FnOnce(
             &mut HashMap<ElementId, Option<Box<ScrollbarAnimationController>>>,
             &mut dyn ScrollbarAnimationControllerClient<
-                Transform = <B as LayerTreeTypes>::Transform,
+                Transform = <B as layerize::commit::CommitTypes>::Transform,
             >,
         ) -> R,
     ) -> R {
@@ -2920,7 +2920,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         callback: impl FnOnce(
             Option<&mut ScrollbarAnimationController>,
             &mut dyn ScrollbarAnimationControllerClient<
-                Transform = <B as LayerTreeTypes>::Transform,
+                Transform = <B as layerize::commit::CommitTypes>::Transform,
             >,
         ) -> R,
     ) -> R {
@@ -2946,7 +2946,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             &mut HashSet<ElementId>,
             &mut BTreeSet<ElementId>,
             &mut dyn ScrollbarAnimationControllerClient<
-                Transform = <B as LayerTreeTypes>::Transform,
+                Transform = <B as layerize::commit::CommitTypes>::Transform,
             >,
         ) -> R,
     ) -> R {
@@ -3101,7 +3101,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         &mut self,
         element_id: ElementId,
         list_type: ElementListType,
-        filters: &<B as LayerTreeTypes>::Filters,
+        filters: &<B as layerize::commit::CommitTypes>::Filters,
         context: &mut HostImplContext<'_, B>,
     ) {
         if list_type == ElementListType::ACTIVE {
@@ -3140,7 +3140,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         &mut self,
         element_id: ElementId,
         list_type: ElementListType,
-        filters: &<B as LayerTreeTypes>::Filters,
+        filters: &<B as layerize::commit::CommitTypes>::Filters,
         context: &mut HostImplContext<'_, B>,
     ) {
         if list_type == ElementListType::ACTIVE {
@@ -3190,7 +3190,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
         &mut self,
         element_id: ElementId,
         list_type: ElementListType,
-        transform: &<B as LayerTreeTypes>::Transform,
+        transform: &<B as layerize::commit::CommitTypes>::Transform,
         context: &mut HostImplContext<'_, B>,
     ) {
         if list_type == ElementListType::ACTIVE {
@@ -3567,7 +3567,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     pub fn SetUnboundedFrameSink(
         &mut self,
         sink: Option<Box<<B as crate::adapter::unbounded::UnboundedTypes>::FrameSink>>,
-        local_id: &<B as LayerTreeTypes>::LocalSurfaceId,
+        local_id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         context: &mut HostImplContext<'_, B>,
     ) {
         debug_assert!(context.services.IsImplThread(self.task_runner_provider_));
@@ -3588,7 +3588,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     pub fn SetUnboundedFrameSinkId(
         &mut self,
         frame_sink_id: &<B::ThrottleTypes as crate::adapter::throttle::ThrottleTypes>::FrameSinkId,
-        local_id: &<B as LayerTreeTypes>::LocalSurfaceId,
+        local_id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         context: &mut HostImplContext<'_, B>,
     ) {
         debug_assert!(context.services.IsImplThread(self.task_runner_provider_));
@@ -3626,7 +3626,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     // Source: cc/trees/layer_tree_host_impl.cc:6481-6494.
     pub fn SetUnboundedLocalSurfaceId(
         &mut self,
-        local_id: &<B as LayerTreeTypes>::LocalSurfaceId,
+        local_id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
         context: &mut HostImplContext<'_, B>,
     ) {
         debug_assert!(context.services.IsImplThread(self.task_runner_provider_));
@@ -4252,7 +4252,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
 }
 /// Narrow live view required by source PushScrollbarOpacitiesFromActiveToPending.
 pub trait HostImplScrollbarOpacityClient<B: HostImplTypes>:
-    ScrollbarAnimationControllerClient<Transform = <B as LayerTreeTypes>::Transform>
+    ScrollbarAnimationControllerClient<Transform = <B as layerize::commit::CommitTypes>::Transform>
 {
     fn ActivePropertyTrees(&self) -> &crate::adapter::layer_tree_impl::PropertyTreesFor<B>;
     fn Scrollbar_element_id(
@@ -4372,7 +4372,7 @@ mod source_chunk_b {
         if fill_region.IsEmpty() {
             return;
         }
-        let root_target_rect = DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root);
+        let root_target_rect = DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::content_rect(root);
         let shared_quad_state = target_render_pass.CreateAndAppendSharedQuadState();
         target_render_pass.SetSharedQuadStateAll(
             shared_quad_state,
@@ -4445,12 +4445,12 @@ mod source_chunk_b {
             let tree = self.host.active_tree_.as_ref().unwrap();
             let effect_id = self.frame.RenderSurfaceList(tree.as_ref()).unwrap()[index];
             let surface = tree.GetRenderSurface(effect_id).unwrap();
-            let is_root = DrawSurface::<<B as LayerTreeTypes>::Transform>::EffectTreeIndex(surface)
+            let is_root = DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::EffectTreeIndex(surface)
                 == kContentsRootPropertyNodeId;
             let should_draw = is_root
                 || HostDrawSurface::<B>::contributes_to_drawn_surface(surface)
                 || surface.CopyOfOutputRequired(tree.property_trees());
-            let unbounded = DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
+            let unbounded = DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::IsUnbounded(
                 surface,
                 tree.property_trees(),
                 self.host.settings_.enable_unbounded_element,
@@ -4652,7 +4652,7 @@ mod source_chunk_b {
                 .GetRenderSurface(surface)
                 .unwrap();
             HostDrawSurface::<B>::contributes_to_drawn_surface(surface)
-                && !DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
+                && !DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::IsUnbounded(
                     surface,
                     tree.property_trees(),
                     self.host.settings_.enable_unbounded_element,
@@ -5140,12 +5140,12 @@ mod source_chunk_b {
             let tree = self.host.active_tree_.as_ref().unwrap();
             let effect_id = tree.GetRenderSurfaceList()[index];
             let surface = tree.GetRenderSurface(effect_id).unwrap();
-            DrawSurface::<<B as LayerTreeTypes>::Transform>::IsUnbounded(
+            DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::IsUnbounded(
                 surface,
                 tree.property_trees(),
                 self.host.settings_.enable_unbounded_element,
             ) && HostDrawSurface::<B>::GetDamageRect(surface).Intersects(DrawSurface::<
-                <B as LayerTreeTypes>::Transform,
+                <B as layerize::commit::CommitTypes>::Transform,
             >::content_rect(
                 surface
             ))
@@ -5155,7 +5155,7 @@ mod source_chunk_b {
             let tree = self.host.active_tree_.as_ref().unwrap();
             let root = tree.RootRenderSurface().unwrap();
             HostDrawSurface::<B>::GetDamageRect(root)
-                .Intersects(DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root))
+                .Intersects(DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::content_rect(root))
         }
 
         fn has_copy_requests(&mut self) -> bool {
@@ -5292,7 +5292,7 @@ mod source_chunk_b {
                     let _viz_content = self.context.services.CrashKey(
                         "viz_content",
                         HostCrashKeyValue::String64(
-                            DrawSurface::<<B as LayerTreeTypes>::Transform>::content_rect(root)
+                            DrawSurface::<<B as layerize::commit::CommitTypes>::Transform>::content_rect(root)
                                 .ToString(),
                         ),
                     );
@@ -5620,7 +5620,7 @@ mod source_chunk_b {
                         let mut fill_region = tree.UnoccludedScreenSpaceRegion().clone();
                         if num_missing_tiles > 0 {
                             fill_region = Region::new(DrawSurface::<
-                                <B as LayerTreeTypes>::Transform,
+                                <B as layerize::commit::CommitTypes>::Transform,
                             >::content_rect(
                                 root
                             ));
@@ -5992,7 +5992,7 @@ mod source_chunk_c {
         // Source: cc/trees/layer_tree_host_impl.cc:1879-1885.
         pub fn SetTargetLocalSurfaceId(
             &mut self,
-            id: &<B as LayerTreeTypes>::LocalSurfaceId,
+            id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
             context: &mut HostImplContext<'_, B>,
         ) {
             use crate::adapter::unbounded::LocalSurfaceId;
@@ -6335,7 +6335,7 @@ mod source_chunk_c {
         pub fn SetExternalTilePriorityConstraints(
             &mut self,
             viewport_rect: &Rect,
-            _transform: &<B as LayerTreeTypes>::Transform,
+            _transform: &<B as layerize::commit::CommitTypes>::Transform,
             context: &mut HostImplContext<'_, B>,
         ) {
             let tile_priority_params_changed =
@@ -6453,7 +6453,7 @@ mod source_chunk_c {
         // Source: cc/trees/layer_tree_host_impl.cc:2279-2333.
         pub fn OnDraw(
             &mut self,
-            transform: &<B as LayerTreeTypes>::Transform,
+            transform: &<B as layerize::commit::CommitTypes>::Transform,
             viewport: &Rect,
             resourceless_software_draw: bool,
             skip_draw: bool,
@@ -6561,7 +6561,7 @@ mod source_chunk_c {
         // Source: cc/trees/layer_tree_host_impl.cc:2361-2372.
         pub fn OnSurfaceEvicted(
             &mut self,
-            id: &<B as LayerTreeTypes>::LocalSurfaceId,
+            id: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
             context: &mut HostImplContext<'_, B>,
         ) {
             if context
@@ -7123,7 +7123,7 @@ mod source_chunk_g {
             SetBeginFrameSourceForLiveDelegate::<B>(self.delegate_, source, context.services);
         }
         // Source: cc/trees/layer_tree_host_impl.cc:4704-4706.
-        pub fn DrawTransform(&self) -> &<B as LayerTreeTypes>::Transform {
+        pub fn DrawTransform(&self) -> &<B as layerize::commit::CommitTypes>::Transform {
             &self.external_transform_
         }
         // Source: cc/trees/layer_tree_host_impl.cc:4708-4716.
@@ -7655,7 +7655,7 @@ mod source_chunk_g {
 // state snapshot. The eight separately borrowed children are held by Parts.
 pub(crate) struct HostImplRuntimeCore<'a, B: HostImplTypes> {
     pub(crate) weak_factory_: &'a mut Arc<()>,
-    pub(crate) unbounded_local_surface_id_: &'a mut <B as LayerTreeTypes>::LocalSurfaceId,
+    pub(crate) unbounded_local_surface_id_: &'a mut <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     pub(crate) unbounded_frame_sink_id_:
         &'a mut <B::ThrottleTypes as crate::adapter::throttle::ThrottleTypes>::FrameSinkId,
     pub(crate) unbounded_frame_sink_handler_: &'a mut Option<Box<UnboundedFrameSinkHandler<B>>>,
@@ -7700,13 +7700,13 @@ pub(crate) struct HostImplRuntimeCore<'a, B: HostImplTypes> {
         B::SequenceChecker,
     >,
     pub(crate) last_vertical_scroll_direction_: &'a mut VerticalScrollDirection,
-    pub(crate) current_local_surface_id_from_client_: &'a mut <B as LayerTreeTypes>::LocalSurfaceId,
+    pub(crate) current_local_surface_id_from_client_: &'a mut <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     pub(crate) child_local_surface_id_allocator_: &'a mut B::ChildLocalSurfaceIdAllocator,
-    pub(crate) evicted_local_surface_id_: &'a mut <B as LayerTreeTypes>::LocalSurfaceId,
-    pub(crate) target_local_surface_id_: &'a mut <B as LayerTreeTypes>::LocalSurfaceId,
+    pub(crate) evicted_local_surface_id_: &'a mut <B as layerize::commit::CommitTypes>::LocalSurfaceId,
+    pub(crate) target_local_surface_id_: &'a mut <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     pub(crate) last_draw_render_frame_metadata_: &'a mut Option<RenderFrameMetadata<B>>,
     pub(crate) last_draw_referenced_surfaces_: &'a mut BTreeSet<B::SurfaceRange>,
-    pub(crate) last_draw_local_surface_id_: &'a mut <B as LayerTreeTypes>::LocalSurfaceId,
+    pub(crate) last_draw_local_surface_id_: &'a mut <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     pub(crate) next_frame_token_from_client_: &'a mut u32,
     pub(crate) next_frame_token_: &'a mut B::FrameTokenGenerator,
     pub(crate) render_frame_metadata_observer_: &'a mut Option<Box<B::RenderFrameMetadataObserver>>,
@@ -7741,7 +7741,7 @@ pub(crate) struct HostImplRuntimeCore<'a, B: HostImplTypes> {
     pub(crate) resourceless_software_draw_: &'a mut bool,
     pub(crate) viewport_rect_for_tile_priority_: &'a mut Rect,
     pub(crate) external_viewport_: &'a mut Rect,
-    pub(crate) external_transform_: &'a mut <B as LayerTreeTypes>::Transform,
+    pub(crate) external_transform_: &'a mut <B as layerize::commit::CommitTypes>::Transform,
     pub(crate) max_memory_needed_bytes_: &'a mut usize,
     pub(crate) debug_rect_history_: &'a mut Option<Box<DebugRectHistory>>,
     pub(crate) memory_history_: &'a mut Option<Box<MemoryHistory>>,
@@ -10057,7 +10057,7 @@ struct HostImplUIResourceState<'a, B: HostImplTypes> {
         &'a mut HashMap<crate::adapter::layer_tree_impl::UIResourceId, UIResourceData<B>>,
     active_tree_: Option<&'a LayerTreeImpl<B>>,
     external_viewport_: &'a Rect,
-    evicted_local_surface_id_: &'a <B as LayerTreeTypes>::LocalSurfaceId,
+    evicted_local_surface_id_: &'a <B as layerize::commit::CommitTypes>::LocalSurfaceId,
     resourceless_software_draw_: &'a bool,
 }
 impl<'a, B: HostImplTypes> HostImplUIResourceState<'a, B> {
@@ -10350,7 +10350,7 @@ fn CanDrawForHost<B: HostImplTypes>(
     sink: &Option<HostImplFrameSinkId>,
     resourceless: &bool,
     active: Option<&LayerTreeImpl<B>>,
-    evicted_surface: &<B as LayerTreeTypes>::LocalSurfaceId,
+    evicted_surface: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     external: &Rect,
     evicted_ui: &BTreeSet<crate::adapter::layer_tree_impl::UIResourceId>,
     services: &dyn HostImplServices<B>,
@@ -10702,7 +10702,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::LayerTreeHost<B>
         self.core.paint_worklet_tracker_
     }
     // Source: cc/trees/layer_tree_host_impl.cc:4704-4706.
-    fn DrawTransform(&self) -> &<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::Transform {
+    fn DrawTransform(&self) -> &<B as layerize::commit::CommitTypes>::Transform {
         self.core.external_transform_
     }
     // Source: cc/trees/layer_tree_host_impl.cc:6237-6239.
@@ -11130,7 +11130,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::LayerTreeHost<B>
         callback: &mut dyn FnMut(
             Option<&mut ScrollbarAnimationController>,
             &mut dyn ScrollbarAnimationControllerClient<
-                Transform = <B as LayerTreeTypes>::Transform,
+                Transform = <B as layerize::commit::CommitTypes>::Transform,
             >,
         ),
     ) {
@@ -11937,7 +11937,7 @@ mod source_input_forwarding {
             callback: impl FnOnce(
                 Option<&mut ScrollbarAnimationController>,
                 &mut dyn ScrollbarAnimationControllerClient<
-                    Transform = <B as LayerTreeTypes>::Transform,
+                    Transform = <B as layerize::commit::CommitTypes>::Transform,
                 >,
             ) -> R,
         ) -> R {
@@ -12058,7 +12058,7 @@ mod source_input_forwarding {
             callback: &mut dyn FnMut(
                 Option<&mut ScrollbarAnimationController>,
                 &mut dyn ScrollbarAnimationControllerClient<
-                    Transform = <B as LayerTreeTypes>::Transform,
+                    Transform = <B as layerize::commit::CommitTypes>::Transform,
                 >,
             ),
         ) {
@@ -12210,7 +12210,7 @@ mod source_input_host {
                 &mut HashSet<ElementId>,
                 &mut BTreeSet<ElementId>,
                 &mut dyn ScrollbarAnimationControllerClient<
-                    Transform = <B as LayerTreeTypes>::Transform,
+                    Transform = <B as layerize::commit::CommitTypes>::Transform,
                 >,
             ) -> R,
         ) -> R {
@@ -12420,7 +12420,7 @@ mod source_input_host {
             callback: impl FnOnce(
                 Option<&mut ScrollbarAnimationController>,
                 &mut dyn ScrollbarAnimationControllerClient<
-                    Transform = <B as LayerTreeTypes>::Transform,
+                    Transform = <B as layerize::commit::CommitTypes>::Transform,
                 >,
             ) -> R,
         ) -> R {
@@ -12431,7 +12431,7 @@ mod source_input_host {
             callback: impl FnOnce(
                 &mut HashMap<ElementId, Option<Box<ScrollbarAnimationController>>>,
                 &mut dyn ScrollbarAnimationControllerClient<
-                    Transform = <B as LayerTreeTypes>::Transform,
+                    Transform = <B as layerize::commit::CommitTypes>::Transform,
                 >,
             ) -> R,
         ) -> R {
@@ -13633,7 +13633,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::draw_host::LayerTreeDraw
     fn IsCCSlimmingEnabled(&self) -> bool {
         self.host.context.services.IsCCSlimmingEnabled()
     }
-    fn DrawTransform(&self) -> &<B as LayerTreeTypes>::Transform {
+    fn DrawTransform(&self) -> &<B as layerize::commit::CommitTypes>::Transform {
         self.host.core.external_transform_
     }
     fn external_viewport(&self) -> Rect {
@@ -13808,7 +13808,7 @@ mod source_input_scrollbar {
         }
     }
     impl<B: HostImplTypes> ScrollbarLayerAccess for HostImplInputScrollbarHost<'_, '_, B> {
-        type Transform = <B as LayerTreeTypes>::Transform;
+        type Transform = <B as layerize::commit::CommitTypes>::Transform;
         fn Scrollbar_orientation(&mut self, layer: &InputLayerId) -> ScrollbarOrientation {
             self.WithLayerClient(|client| {
                 ScrollbarLayerAccess::Scrollbar_orientation(client, layer)
@@ -14404,7 +14404,7 @@ mod source_elasticity_runtime {
     queries!(ReadContext);
     queries!(Context);
     impl<B: HostImplTypes> ElasticityContext for Context<'_, '_, B> {
-        type Transform = <B as LayerTreeTypes>::Transform;
+        type Transform = <B as layerize::commit::CommitTypes>::Transform;
         fn WithActiveTreeMutation<R>(
             &mut self,
             visit: impl FnOnce(ElasticityTreeMutation<'_, Self::Transform>) -> R,
@@ -17065,7 +17065,7 @@ impl<B: HostImplTypes + crate::adapter::picture_layer_impl::PictureLayerImplType
     }
     fn PageScaleTransformNode(
         &self,
-    ) -> Option<&crate::cc::trees::transform_node::TransformNode<<B as LayerTreeTypes>::Transform>>
+    ) -> Option<&crate::cc::trees::transform_node::TransformNode<<B as layerize::commit::CommitTypes>::Transform>>
     {
         self.tree.PageScaleTransformNode()
     }
@@ -17194,7 +17194,7 @@ where
     fn PendingInvalidationById(
         &self,
         id: crate::adapter::picture_layer_tiling::PendingInvalidationId,
-    ) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.PictureByClient(crate::adapter::picture_layer_tiling::PictureLayerTilingClientId(id.0))
             .0
             .InvalidationForTesting()
@@ -17473,7 +17473,7 @@ where
     fn PendingInvalidationById(
         &self,
         id: crate::adapter::picture_layer_tiling::PendingInvalidationId,
-    ) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         self.queries.PendingInvalidationById(id)
     }
 }
@@ -20373,7 +20373,7 @@ impl<B: HostImplTypes> crate::adapter::animation_host::AnimationMutationTarget
         matrix: &[f64; 16],
     ) {
         use crate::adapter::geometry::Transform as _;
-        let transform = <B as LayerTreeTypes>::Transform::FromColMajor(matrix);
+        let transform = <B as layerize::commit::CommitTypes>::Transform::FromColMajor(matrix);
         self.host
             .SetElementTransformMutated(id, list, &transform, &mut self.context);
     }

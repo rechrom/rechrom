@@ -18,38 +18,6 @@ use crate::{
     },
 };
 use std::{io, sync::Arc};
-pub trait CpuDecodedImageLease: Send {
-    fn size(&self) -> Size;
-    fn format(&self) -> &SharedImageFormat;
-    fn row_bytes(&self) -> usize;
-    fn pixels(&self) -> &[u8];
-    // Source: cc/paint/decoded_draw_image.h:75-87. These belong to the actual
-    // decoded allocation, not guesses from requested size or cache identity.
-    fn scale_adjustment(&self) -> crate::adapter::geometry::SizeF;
-    // Source SkSize is signed: subrect cache entries use (-src.x, -src.y).
-    // Vector2dF preserves that contract; gfx::SizeF clamps negatives to zero.
-    fn src_rect_offset(&self) -> crate::adapter::geometry::Vector2dF;
-    fn filter_quality(&self) -> super::CpuFilterQuality;
-}
-pub enum CpuScopedRasterResult<R: CpuSkiaBackend> {
-    Decoded(Box<dyn CpuDecodedImageLease>),
-    Record(CpuPaintRecord<R>),
-    Unavailable,
-}
-pub trait CpuImageProvider<R: CpuSkiaBackend> {
-    fn GetRasterContent(&mut self, image: &CpuDrawImage) -> CpuScopedRasterResult<R>;
-}
-pub trait CpuWorkletImageProvider<R: CpuSkiaBackend> {
-    fn GetPaintRecordResult(&mut self, input: &CpuWorkletInput) -> CpuScopedRasterResult<R>;
-}
-pub struct CpuPlaybackImageProvider<R: CpuSkiaBackend>(pub Box<dyn CpuImageProvider<R> + Send>);
-pub struct CpuWorkletProvider<R: CpuSkiaBackend>(pub Box<dyn CpuWorkletImageProvider<R> + Send>);
-pub struct RasterImageProviderRef<'a, R: CpuSkiaBackend>(pub &'a mut dyn CpuImageProvider<R>);
-impl<R: CpuSkiaBackend> CpuImageProvider<R> for RasterImageProviderRef<'_, R> {
-    fn GetRasterContent(&mut self, image: &CpuDrawImage) -> CpuScopedRasterResult<R> {
-        self.0.GetRasterContent(image)
-    }
-}
 pub trait RasterFailureHandler: Send + Sync {
     fn OnRasterFailure(&self, error: io::Error);
 }

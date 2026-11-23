@@ -10,11 +10,9 @@ use crate::cc::layers::surface_layer_impl::SurfaceLayerImpl;
 
 pub trait SurfaceLayerImplTypes:
     SolidColorLayerImplTypes<RenderPass: SurfaceRenderPass<Self>>
+    + layerize::commit::surface_range::SurfaceRangeTypes
 {
     fn WrapSurfaceLayerImpl(layer: SurfaceLayerImpl<Self>) -> Self::Layer;
-    fn DefaultSurfaceRange() -> Self::SurfaceRange;
-    fn SurfaceRangesEqual(a: &Self::SurfaceRange, b: &Self::SurfaceRange) -> bool;
-    fn SurfaceRangeIsValid(range: &Self::SurfaceRange) -> bool;
     fn SurfaceRangeEnd(range: &Self::SurfaceRange) -> Self::SurfaceId;
 }
 

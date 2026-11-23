@@ -266,7 +266,7 @@ impl local_frame::LocalFrameDomain {
         let Some(page) = self.page.upgrade() else {
             return Ok(());
         };
-        let time = page.rendering.borrow().executor.TimeTicks(frame_time);
+        let time = page.rendering.borrow().impl_half.executor.TimeTicks(frame_time);
         let time = interaction::input::base::time::time::TimeTicks::FromInternalValue(
             time.since_origin().InMicroseconds(),
         );

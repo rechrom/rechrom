@@ -1,0 +1,302 @@
+//! Actual Paint node projections into the canonical GeometryMapper algorithms.
+use super::{ClipNode, EffectNode, PropertyTreeState, TransformNode};
+use crate::{
+    adapter::{
+        geometry::{Rect, RectF, Vector2dF},
+        paint_geometry::{
+            ChunkGeometryMapper, FloatClipRectTransform, GeometryMapperContext, VisualRectFlags,
+        },
+        property_tree::PropertyTreeTransform,
+    },
+    runtime::{geometry::Transform, types::PaintSkiaBackend},
+    third_party::blink::renderer::platform::graphics::paint::{
+        float_clip_rect::{FloatClipRect, InfiniteLooseFloatClipRect},
+        geometry_mapper::GeometryMapper,
+        geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCacheBy},
+    },
+};
+use paint::paint_property_tree;
+use std::{marker::PhantomData, sync::Arc};
+pub struct CpuGeometryMapper<R: PaintSkiaBackend> {
+    pub(super) tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
+    singular_transform_fix: bool,
+    /// The published property trees of the states this context maps; bare
+    /// clip links handed to it resolve through them. Set per mapping call
+    /// with `with_trees`, from the states being mapped.
+    trees: super::HandleTrees,
+    marker: PhantomData<fn() -> R>,
+}
+impl<R: PaintSkiaBackend> CpuGeometryMapper<R> {
+    pub fn IsTracingRasterInvalidations(&self) -> bool {
+        self.tracking.IsTracingRasterInvalidations()
+    }
+    pub fn new(
+        singular_transform_fix: bool,
+        tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
+    ) -> Self {
+        Self {
+            tracking,
+            singular_transform_fix,
+            trees: None,
+            marker: PhantomData,
+        }
+    }
+    /// This context resolving links through `trees`.
+    pub fn with_trees(&self, trees: super::HandleTrees) -> Self {
+        Self {
+            tracking: self.tracking.clone(),
+            singular_transform_fix: self.singular_transform_fix,
+            trees,
+            marker: PhantomData,
+        }
+    }
+    fn property_trees(&self) -> super::HandleTrees {
+        self.trees.clone()
+    }
+    fn resolve_clip(
+        &self,
+        link: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> ClipNode<R> {
+        ClipNode::from_arc_in(link.clone(), self.property_trees()).link_same(link)
+    }
+}
+fn rect(r: paint::paint_engine::PaintRect) -> RectF {
+    RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
+}
+fn clip_rect(r: paint_property_tree::ClipLayoutRect) -> FloatClipRect {
+    let mut value = r
+        .rect
+        .map(|r| FloatClipRect::FromRect(rect(r)))
+        .unwrap_or_default();
+    if r.has_radius {
+        value.SetHasRadius();
+    }
+    value
+}
+impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
+    type State = PropertyTreeState<R>;
+    fn Trees(&self) -> &super::HandleTrees {
+        &self.trees
+    }
+    fn SingularTransformFixEnabled(&self) -> bool {
+        self.singular_transform_fix
+    }
+    fn RootState(&self) -> Self::State {
+        Self::State::default()
+    }
+    fn MakeState(
+        &self,
+        transform: TransformNode<R>,
+        clip: Arc<paint_property_tree::ClipPaintPropertyNode>,
+        effect: EffectNode<R>,
+    ) -> Self::State {
+        let clip = ClipNode::from_arc_in(clip, transform.trees().clone());
+        PropertyTreeState {
+            transform_: transform,
+            clip_: clip,
+            effect_: effect,
+        }
+    }
+    fn ClipLocalTransform(
+        &self,
+        clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> TransformNode<R> {
+        let clip = self.resolve_clip(clip);
+        clip.link_transform(clip.node().LocalTransformSpace())
+    }
+    fn ClipParent(
+        &self,
+        clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
+        self.resolve_clip(clip).parent_handle().map(|parent| parent.as_arc().clone())
+    }
+    fn ClipLowestCommonAncestor(
+        &self,
+        a: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+        b: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> Arc<paint_property_tree::ClipPaintPropertyNode> {
+        self.resolve_clip(a)
+            .lowest_common_ancestor(&self.resolve_clip(b))
+            .as_arc()
+            .clone()
+    }
+    fn LayoutClipRectExcludingOverlayScrollbars(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> FloatClipRect {
+        clip_rect(c.LayoutClipRectExcludingOverlayScrollbars())
+    }
+    fn PreciseLayoutClipRect(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> FloatClipRect {
+        clip_rect(c.PreciseLayoutClipRect())
+    }
+    fn LayoutClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> FloatClipRect {
+        clip_rect(c.LayoutClipRect())
+    }
+    fn PaintClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> RectF {
+        c.PaintClipRect()
+            .map(rect)
+            .unwrap_or_else(|| *FloatClipRect::default().Rect())
+    }
+    fn ClipHasPath(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> bool {
+        c.ClipPath().is_some()
+    }
+    // Source: clip_paint_property_node.h:188-217; this is an exact field query,
+    // not a geometric inference about whether a CSS animation is running.
+    fn IsForCompositeClipPathAnimation(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> bool {
+        c.IsForCompositeClipPathAnimation()
+    }
+    fn PixelMovingFilter(
+        &self,
+        c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> EffectNode<R> {
+        let clip = self.resolve_clip(c);
+        clip.link_effect(clip.node().PixelMovingFilter().expect("source PixelMovingFilter"))
+    }
+    fn FilterLocalTransform(&self, e: &EffectNode<R>) -> TransformNode<R> {
+        e.link_transform(&e.node().local_transform_space)
+    }
+    fn HasActiveFilterAnimation(&self, e: &EffectNode<R>) -> bool {
+        e.node()
+            .direct_compositing_reasons
+            .Has(foundation::CompositingReason::kActiveFilterAnimation)
+    }
+    fn FilterMapRect(&self, e: &EffectNode<R>, r: Rect) -> Rect {
+        let r = e
+            .node()
+            .filters
+            .canonical()
+            .expect("validated PaintInput native filters")
+            .MapRect(
+                foundation::gfx::Rect::new(
+                    foundation::gfx::Point::new(r.x, r.y),
+                    foundation::gfx::Size::new(r.width, r.height),
+                ),
+                None,
+            );
+        Rect::new(r.x(), r.y(), r.width(), r.height())
+    }
+    fn SelfOrAncestorParticipatesInViewTransition(&self, e: &EffectNode<R>) -> bool {
+        e.node().self_or_ancestor_participates_in_view_transition
+    }
+}
+impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
+    type PropertyTreeState = PropertyTreeState<R>;
+    type Transform = Transform<R>;
+    type FloatClipRect = FloatClipRect;
+    fn MakeTranslation(&self, v: Vector2dF) -> Transform<R> {
+        let mut m = Transform::default();
+        m.Translate(v.x(), v.y());
+        m
+    }
+    fn MakeDefaultClipRect(&self) -> FloatClipRect {
+        FloatClipRect::default()
+    }
+    fn MakeFloatClipRect(&self, r: RectF) -> FloatClipRect {
+        FloatClipRect::FromRect(r)
+    }
+    fn InfiniteLooseFloatClipRect(&self) -> FloatClipRect {
+        InfiniteLooseFloatClipRect()
+    }
+    fn SameTransformNode(&self, a: &Self::PropertyTreeState, b: &Self::PropertyTreeState) -> bool {
+        a.transform_ == b.transform_
+    }
+    fn SameClipNode(&self, a: &Self::PropertyTreeState, b: &Self::PropertyTreeState) -> bool {
+        a.clip_ == b.clip_
+    }
+    fn SameNearestPixelMovingFilterClip(
+        &self,
+        a: &Self::PropertyTreeState,
+        b: &Self::PropertyTreeState,
+    ) -> bool {
+        let nearest = |clip: &ClipNode<R>| {
+            let trees = clip.trees().clone();
+            WithClipCacheBy(
+                clip.as_arc(),
+                &trees,
+                &|c| {
+                    ClipNode::<R>::from_arc_in(c.clone(), trees.clone())
+                        .parent_handle()
+                        .map(|parent| parent.as_arc().clone())
+                },
+                |c| c.NearestPixelMovingFilterClip(clip.as_arc()),
+            )
+        };
+        let a = nearest(&a.clip_);
+        let b = nearest(&b.clip_);
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
+            _ => false,
+        }
+    }
+    fn SourceToDestinationProjection(
+        &self,
+        a: &Self::PropertyTreeState,
+        b: &Self::PropertyTreeState,
+        out: &mut Transform<R>,
+    ) -> bool {
+        GeometryMapper::<Self>::SourceToDestinationProjectionTo(
+            self,
+            &a.transform_,
+            &b.transform_,
+            out,
+        )
+    }
+    fn PostTranslate(&self, m: &mut Transform<R>, v: Vector2dF) {
+        m.PostTranslate(v)
+    }
+    fn MakeIdentity(&self, m: &mut Transform<R>) {
+        *m = Transform::default()
+    }
+    fn ScaleToZero(&self, m: &mut Transform<R>) {
+        m.Scale(0., 0.)
+    }
+    fn MapRect(&self, m: &Transform<R>, r: RectF) -> RectF {
+        FloatClipRectTransform::MapRect(m, r)
+    }
+    fn LocalToAncestorClipRect(
+        &self,
+        a: &Self::PropertyTreeState,
+        b: &Self::PropertyTreeState,
+    ) -> FloatClipRect {
+        GeometryMapper::<Self>::LocalToAncestorClipRect(
+            &self.with_trees(a.transform_.trees().clone()),
+            a,
+            b,
+            OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
+        )
+    }
+    fn LocalToAncestorVisualRect(
+        &self,
+        a: &Self::PropertyTreeState,
+        b: &Self::PropertyTreeState,
+        r: &mut FloatClipRect,
+    ) {
+        GeometryMapper::<Self>::LocalToAncestorVisualRect(
+            &self.with_trees(a.transform_.trees().clone()),
+            a,
+            b,
+            r,
+            OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
+            VisualRectFlags::default(),
+        );
+    }
+    fn ClipIsInfinite(&self, r: &FloatClipRect) -> bool {
+        r.IsInfinite()
+    }
+    fn ClipHasRadius(&self, r: &FloatClipRect) -> bool {
+        r.HasRadius()
+    }
+    fn ClipRect(&self, r: &FloatClipRect) -> RectF {
+        *r.Rect()
+    }
+    fn MoveClip(&self, r: &mut FloatClipRect, v: Vector2dF) {
+        r.Move(v)
+    }
+}

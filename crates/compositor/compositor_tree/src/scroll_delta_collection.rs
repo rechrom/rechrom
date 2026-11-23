@@ -5,10 +5,10 @@ use crate::{
     synced_property::{AdditionGroup, SyncedProperty},
     ElementId,
 };
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, sync::{Arc, RwLock}};
 
 pub type SyncedScrollOffset = SyncedProperty<AdditionGroup<PointF, Vector2dF>>;
-pub type SyncedScrollOffsetMap = BTreeMap<ElementId, Rc<RefCell<SyncedScrollOffset>>>;
+pub type SyncedScrollOffsetMap = BTreeMap<ElementId, Arc<RwLock<SyncedScrollOffset>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollDeltaUpdate<Snap> {
@@ -66,7 +66,7 @@ pub fn CollectScrollDeltas<Snap: Clone>(
         let delta = if interrupted {
             Vector2dF::default()
         } else {
-            PullDeltaForMainThread(&mut offset.borrow_mut(), fractional, next_bmf)
+            PullDeltaForMainThread(&mut offset.write().unwrap(), fractional, next_bmf)
         };
         let snap_target = snapped.get(element_id).cloned();
         if delta.IsZero() && snap_target.is_none() {
@@ -101,7 +101,7 @@ pub fn CollectScrollDeltas<Snap: Clone>(
 /// offset without producing commit records.
 pub fn PullAllScrollDeltasForTesting(offsets: &SyncedScrollOffsetMap, fractional: bool) {
     for offset in offsets.values() {
-        PullDeltaForMainThread(&mut offset.borrow_mut(), fractional, false);
+        PullDeltaForMainThread(&mut offset.write().unwrap(), fractional, false);
     }
 }
 
@@ -109,12 +109,12 @@ pub fn PullAllScrollDeltasForTesting(offsets: &SyncedScrollOffsetMap, fractional
 mod tests {
     use super::*;
 
-    fn active_offset(current: PointF) -> Rc<RefCell<SyncedScrollOffset>> {
+    fn active_offset(current: PointF) -> Arc<RwLock<SyncedScrollOffset>> {
         let mut offset = SyncedScrollOffset::default();
         offset.PushMainToPending(PointF::default());
         offset.PushPendingToActive();
         offset.SetCurrent(current);
-        Rc::new(RefCell::new(offset))
+        Arc::new(RwLock::new(offset))
     }
 
     #[test]
@@ -143,7 +143,7 @@ mod tests {
     fn rounds_non_fractional_delta_without_changing_current_value() {
         let id = ElementId::new(2);
         let offset = active_offset(PointF::new(1.25, 2.75));
-        let offsets = BTreeMap::from([(id, Rc::clone(&offset))]);
+        let offsets = BTreeMap::from([(id, Arc::clone(&offset))]);
         let (updates, _) = CollectScrollDeltas::<()>(
             &offsets,
             ElementId::default(),
@@ -153,6 +153,6 @@ mod tests {
             false,
         );
         assert_eq!(updates[0].scroll_delta, Vector2dF::new(1.0, 3.0));
-        assert_eq!(offset.borrow().Current(true), PointF::new(1.25, 2.75));
+        assert_eq!(offset.read().unwrap().Current(true), PointF::new(1.25, 2.75));
     }
 }

@@ -811,8 +811,16 @@ impl ToSkia for paint::paint_engine::DisplayItem {
 }
 
 pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceContext<'_> {
+    record_resources(list.resources.as_deref())
+}
+
+/// The resource catalog retained by a compositor PaintRecord lease. Records
+/// carry only their operations and resources, not the producer artifact.
+pub fn record_resources(
+    resources: Option<&paint_input_types::PaintResources>,
+) -> target::ResourceContext<'_> {
     target::ResourceContext {
-        resources: list.resources.as_ref().map(|r| target::ResourceCatalog {
+        resources: resources.map(|r| target::ResourceCatalog {
             fonts: r
                 .fonts
                 .iter()

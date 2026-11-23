@@ -134,10 +134,10 @@ pub struct PictureLayerImplState<B: PictureLayerImplTypes> {
     should_batch_updated_tiles_: bool,
     // Source: cc/layers/picture_layer_impl.h:315-322.
     raster_source_: Option<Arc<B::RasterSource>>,
-    invalidation_: Region<<B as LayerTreeTypes>::RegionBackend>,
+    invalidation_: Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
     discardable_image_map_: Option<Arc<B::DiscardableImageMap>>,
     pending_raster_source_: Option<Arc<B::RasterSource>>,
-    pending_invalidation_: Region<<B as LayerTreeTypes>::RegionBackend>,
+    pending_invalidation_: Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
     // Source: cc/layers/picture_layer_impl.h:324-341.
     ideal_page_scale_: f32,
     ideal_device_scale_: f32,
@@ -199,7 +199,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
         self.state_.lcd_text_disallowed_reason_
     }
     // Source: cc/layers/picture_layer_impl.h:156-156.
-    pub fn InvalidationForTesting(&self) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    pub fn InvalidationForTesting(&self) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         &self.state_.invalidation_
     }
     // Source: cc/layers/picture_layer_impl.h:165-167.
@@ -282,7 +282,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     pub fn StageNewRasterSourceForCommit(
         &mut self,
         source: Arc<B::RasterSource>,
-        invalidation: Region<<B as LayerTreeTypes>::RegionBackend>,
+        invalidation: Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
     ) {
         self.state_.pending_raster_source_ = Some(source);
         self.state_.pending_invalidation_ = invalidation;
@@ -411,7 +411,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     ) -> crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<
         '_,
         PictureLayerTiling<B>,
-        <B as LayerTreeTypes>::RegionBackend,
+        <B as layerize::commit::CommitTypes>::RegionBackend,
     > {
         self.picture_layer_tiling_set().Cover(rect, scale, ideal)
     }
@@ -1224,7 +1224,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     // Source: cc/layers/picture_layer_impl.h:67-67.
     pub fn GetInvalidationRegionForDebugging(
         &self,
-    ) -> Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         crate::cc::base::region::IntersectRegions(
             &self.state_.invalidation_,
             self.base_.base().update_rect(),
@@ -1484,7 +1484,7 @@ struct PictureTilingClientState<'a, B: PictureLayerImplTypes> {
     should_batch_updated_tiles_: &'a bool,
     twin_layer_: &'a Option<PictureLayerImplId>,
     raster_source_: &'a Option<Arc<B::RasterSource>>,
-    invalidation_: &'a Region<<B as LayerTreeTypes>::RegionBackend>,
+    invalidation_: &'a Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
     discardable_image_map_: &'a Option<Arc<B::DiscardableImageMap>>,
     paint_worklet_records_:
         &'a PaintWorkletRecordMap<<B as PaintWorkletTypes>::Input, B::PaintRecord>,
@@ -1719,7 +1719,7 @@ impl<B: PictureLayerImplTypes> crate::adapter::picture_layer_tiling::PictureLaye
     fn PendingInvalidationById(
         &self,
         id: crate::adapter::picture_layer_tiling::PendingInvalidationId,
-    ) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    ) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         if id.0 == self.identity.0 {
             &self.state.invalidation_
         } else {
@@ -2358,7 +2358,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     // Source: cc/layers/picture_layer_impl.h:413-414.
     pub fn WillProcessReadyToDrawTile(
         &self,
-        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as LayerTreeTypes>::RegionBackend>,
+        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as layerize::commit::CommitTypes>::RegionBackend>,
     ) {
         WillProcessReadyToDrawTileForIterator::<B>(iter)
     }
@@ -2688,7 +2688,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     pub(crate) fn UpdateRasterSourceInternal(
         &mut self,
         source: Arc<B::RasterSource>,
-        mut invalidation: Region<<B as LayerTreeTypes>::RegionBackend>,
+        mut invalidation: Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
         mut update: RasterSourceUpdate<'_, B>,
         c: &mut crate::adapter::picture_layer_impl::PictureLayerImplContext<'_, B>,
     ) {
@@ -2821,7 +2821,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     pub(crate) fn SetRasterSourceForTesting(
         &mut self,
         source: Arc<B::RasterSource>,
-        invalidation: &Region<<B as LayerTreeTypes>::RegionBackend>,
+        invalidation: &Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
         c: &mut crate::adapter::picture_layer_impl::PictureLayerImplContext<'_, B>,
     ) {
         let mut action = RasterSourceTestingUpdate {
@@ -2952,7 +2952,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
     pub(crate) fn DidAppendQuad(
         &self,
         quad: &B::DrawQuad,
-        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as LayerTreeTypes>::RegionBackend>,
+        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as layerize::commit::CommitTypes>::RegionBackend>,
         _data: &mut super::append_quads_data::AppendQuadsData<B::SurfaceId>,
         checkerboard: bool,
         c: &mut crate::adapter::picture_layer_impl::PictureLayerImplContext<'_, B>,
@@ -3199,7 +3199,7 @@ fn WillProcessReadyToDrawTileForIterator<B: PictureLayerImplTypes>(
     iter: &crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<
         '_,
         PictureLayerTiling<B>,
-        <B as LayerTreeTypes>::RegionBackend,
+        <B as layerize::commit::CommitTypes>::RegionBackend,
     >,
 ) {
     if let Some(tile) = iter.current_tile() {
@@ -3364,7 +3364,7 @@ fn DidAppendQuadForBase<B: PictureLayerImplTypes>(
     iter: &crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<
         '_,
         PictureLayerTiling<B>,
-        <B as LayerTreeTypes>::RegionBackend,
+        <B as layerize::commit::CommitTypes>::RegionBackend,
     >,
     _data: &mut super::append_quads_data::AppendQuadsData<B::SurfaceId>,
     checkerboard: bool,
@@ -3488,7 +3488,7 @@ impl<B: PictureLayerImplTypes>
     ) -> crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<
         '_,
         PictureLayerTiling<B>,
-        <B as LayerTreeTypes>::RegionBackend,
+        <B as layerize::commit::CommitTypes>::RegionBackend,
     > {
         self.tilings.Cover(rect, scale, ideal)
     }
@@ -3501,7 +3501,7 @@ impl<B: PictureLayerImplTypes>
     // Source: cc/layers/picture_layer_impl.h:413-414.
     fn WillProcessReadyToDrawTile(
         &self,
-        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as LayerTreeTypes>::RegionBackend>,
+        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as layerize::commit::CommitTypes>::RegionBackend>,
     ) {
         WillProcessReadyToDrawTileForIterator::<B>(iter)
     }
@@ -3529,7 +3529,7 @@ impl<B: PictureLayerImplTypes>
         &self,
         base: &super::layer_impl::LayerImpl<B>,
         quad: &B::DrawQuad,
-        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as LayerTreeTypes>::RegionBackend>,
+        iter:&crate::cc::tiles::tiling_set_coverage_iterator::TilingSetCoverageIterator<'_,PictureLayerTiling<B>,<B as layerize::commit::CommitTypes>::RegionBackend>,
         data: &mut super::append_quads_data::AppendQuadsData<B::SurfaceId>,
         checkerboard: bool,
         c: &mut Self::Context<'_>,
@@ -3837,7 +3837,7 @@ impl<B: PictureLayerImplTypes> PictureTilingReadClient<'_, B> {
     pub(crate) fn IsOnActiveOrPendingTree(&self) -> bool {
         IsOnActiveOrPendingTreeForTree(self.view.tree)
     }
-    pub(crate) fn invalidation(&self) -> &Region<<B as LayerTreeTypes>::RegionBackend> {
+    pub(crate) fn invalidation(&self) -> &Region<<B as layerize::commit::CommitTypes>::RegionBackend> {
         &self.view.state.invalidation_
     }
 }
@@ -3867,7 +3867,7 @@ impl<B: PictureLayerImplTypes> PictureLayerImpl<B> {
 struct RasterSourceTestingUpdate<'a, B: PictureLayerImplTypes> {
     picture: &'a mut PictureLayerImpl<B>,
     source: Option<Arc<B::RasterSource>>,
-    invalidation: &'a Region<<B as LayerTreeTypes>::RegionBackend>,
+    invalidation: &'a Region<<B as layerize::commit::CommitTypes>::RegionBackend>,
     services: &'a mut dyn crate::adapter::picture_layer_impl::PictureLayerImplServices<B>,
     tiling: &'a mut dyn crate::adapter::picture_layer_impl::PictureLayerImplTilingEnvironment<B>,
 }

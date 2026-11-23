@@ -614,7 +614,7 @@ where
     ) {
         RenderSurfaceImpl::AppendQuads(self, c, target, data, surface_context)
     }
-    fn draw_transform(&self) -> &<B as crate::adapter::layer_tree_impl::LayerTreeTypes>::Transform {
+    fn draw_transform(&self) -> &<B as layerize::commit::CommitTypes>::Transform {
         RenderSurfaceImpl::draw_transform(self)
     }
 }

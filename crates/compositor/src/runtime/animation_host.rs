@@ -99,9 +99,17 @@ struct AnimationState {
     delegate: Option<LayerTreeHostId>,
 }
 
+// Source: cc/animation/animation_host.h:37 (ThreadInstance).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadInstance {
+    kMain,
+    kImpl,
+}
+
 #[derive(Clone)]
-pub(crate) struct AnimationHostOwner {
+pub struct AnimationHostOwner {
     identity: super::types::MainMutatorHostIdentity,
+    thread_instance: ThreadInstance,
     host: AnimationHostId,
     state: Arc<Mutex<AnimationState>>,
     config: Arc<ScrollCurveConfig>,
@@ -345,14 +353,25 @@ impl compositor_animation::host_iteration::AnimationActivationContext
     }
 }
 
-impl Default for AnimationHostOwner {
-    fn default() -> Self {
+impl AnimationHostOwner {
+    // Source: cc/animation/animation_host.cc:55-57.
+    pub(crate) fn CreateMainInstance() -> Self {
+        Self::new(ThreadInstance::kMain)
+    }
+    // Source: cc/animation/animation_host.cc:74-79.
+    pub(crate) fn CreateImplInstance(&self) -> Self {
+        debug_assert_eq!(self.thread_instance, ThreadInstance::kMain);
+        Self::new(ThreadInstance::kImpl)
+    }
+    // Source: cc/animation/animation_host.cc:66-67.
+    fn new(thread_instance: ThreadInstance) -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let raw = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         assert_ne!(raw, 0, "native animation identity exhausted");
         let host = AnimationHostId(raw);
         Self {
             identity: super::types::MainMutatorHostIdentity(raw),
+            thread_instance,
             host,
             state: Arc::new(Mutex::new(AnimationState {
                 scroll: Some(ScrollOffsetAnimationsImpl::new(host)),
@@ -937,15 +956,18 @@ impl AnimationHostOwner {
     // The main and impl owners are separate resident graphs. Only translated
     // timeline/animation methods cross this call; no parallel animation cache
     // or snapshot is constructed here.
+    // `self` is the main instance read through ThreadUnsafeCommitState::
+    // mutator_host inside the protected commit sequence
+    // (layer_tree_impl.cc:814-817, S1b-5).
     pub(crate) fn PushMutatorPropertiesTo(
         &self,
-        source_identity: super::types::MainMutatorHostIdentity,
         target: &mut MutatorHost,
         property_trees: &PropertyTreesFor<CompositorTypes>,
     ) {
-        assert_eq!(
-            source_identity, self.identity,
-            "resident main mutator owner"
+        debug_assert_eq!(
+            self.thread_instance,
+            ThreadInstance::kMain,
+            "PushPropertiesTo reads the main AnimationHost"
         );
         let target_queries = target
             .0
@@ -1988,11 +2010,52 @@ impl PropertyTreeMutatorHost for AnimationQueries {
             })
     }
 }
+// The main AnimationHost as the main half (layerize) calls it (S1b-5). Only
+// the main instance is handed to LayerizeEngine.
+impl layerize::commit::main_mutator::MainMutatorHost for AnimationHostOwner {
+    type Events = Box<MutatorEvents>;
+    fn ApplySourceScrollAnimation(
+        &self,
+        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+    ) -> Option<ElementId> {
+        AnimationHostOwner::ApplySourceScrollAnimation(self, mutation)
+    }
+    fn ApplySourcePropertyAnimation(
+        &self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) {
+        AnimationHostOwner::ApplySourcePropertyAnimation(self, mutation)
+    }
+    fn SetAnimationEvents(&self, events: Box<MutatorEvents>) {
+        self.ApplySourceAnimationEvents(events)
+    }
+    fn TakeSourceScrollCompletions(
+        &self,
+    ) -> Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion> {
+        AnimationHostOwner::TakeSourceScrollCompletions(self)
+    }
+    fn TakeNeedsCommit(&self) -> bool {
+        AnimationHostOwner::TakeNeedsCommit(self)
+    }
+    fn IsElementAnimating(&self, id: ElementId) -> bool {
+        AnimationHostOwner::IsElementAnimating(self, id)
+    }
+}
+
 impl super::input::MutatorHostBackend for AnimationQueries {
     fn AsAnyMut(&mut self) -> &mut dyn std::any::Any {
         self
     }
     fn SetLayerTreeMutator(&mut self, mutator: Option<Box<super::host_owners::LayerTreeMutator>>) {
+        // Source: cc/animation/animation_host.cc:986-990. Only the impl
+        // instance receives a mutator (ProxyImpl::InitializeMutatorOnImpl ->
+        // LayerTreeHostImpl::SetLayerTreeMutator); the main instance never
+        // owns one, so the sendable owner stays on the impl thread.
+        assert_eq!(
+            self.owner.thread_instance,
+            ThreadInstance::kImpl,
+            "LayerTreeMutator belongs to the impl AnimationHost"
+        );
         self.owner.lock().layer_tree_mutator = mutator;
     }
     fn identity(&self) -> super::types::MainMutatorHostIdentity {

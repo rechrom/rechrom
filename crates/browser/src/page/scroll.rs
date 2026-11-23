@@ -49,7 +49,7 @@ impl PageState {
         // Local pipelines use the identical mapping owned by their executor.
         let now = std::time::Instant::now();
         let timestamp = self.external_compositor_clock.borrow().map_or_else(
-            || self.rendering.borrow().executor.TimeTicks(now),
+            || self.rendering.borrow().impl_half.executor.TimeTicks(now),
             |mapping| mapping.TimeTicks(now),
         );
         let mut gesture = WebGestureEvent::GenerateInjectedScrollbarGestureScroll(

@@ -19,7 +19,7 @@ pub struct WebVitalsDebugRect {
     pub r#type: WebVitalMetricType,
     pub rect: Rect,
 }
-pub trait DebugRectHud<T: super::property_tree::PropertyTreeTransform> {
+pub trait DebugRectHud<T: super::layer_tree_impl::ImplTreeTransform> {
     type Types: super::layer_tree_impl::LayerTreeTypes<Transform = T>;
     fn WebVitalsDebugRects(&self) -> &[WebVitalsDebugRect];
     fn ScreenSpaceTransform(
@@ -28,7 +28,7 @@ pub trait DebugRectHud<T: super::property_tree::PropertyTreeTransform> {
     ) -> T;
     fn ClearWebVitalsDebugRects(&mut self);
 }
-pub trait DebugRectLayer<T: super::property_tree::PropertyTreeTransform, B: SkRegionBackend> {
+pub trait DebugRectLayer<T: super::layer_tree_impl::ImplTreeTransform, B: SkRegionBackend> {
     type Types: super::layer_tree_impl::LayerTreeTypes<Transform = T, RegionBackend = B>;
     fn GetInvalidationRegionForDebugging(&self) -> Region<B>;
     fn draws_content(&self) -> bool;
@@ -64,10 +64,12 @@ pub trait DebugRectContext: Sized {
         CopyOutputRequest = Self::CopyRequest,
         RegionBackend = Self::RegionBackend,
     >;
-    type Transform: DrawTransform + super::property_tree::PropertyTreeTransform;
-    type Filters: PropertyTreeFilters;
+    type Transform: DrawTransform + super::layer_tree_impl::ImplTreeTransform;
+    type Filters: super::draw_property::DrawFilters;
     type Path: PropertyPath;
-    type Surface: DrawSurface<Self::Transform, Types = Self::Types>;
+    type Surface: DrawSurface<Self::Transform, Types = Self::Types>
+        + super::layer_tree_impl::LayerTreeSurfaceTransform<Transform = Self::Transform>
+        + super::layer_tree_impl::LayerTreeRenderSurface<Self::Types>;
     type CopyRequest: PropertyTreeCopyOutputRequest;
     type Layer: Copy + Eq;
     type Layers<'a>: Iterator<Item = Self::Layer>

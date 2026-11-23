@@ -25,7 +25,7 @@ pub trait ClientHostCapabilities<B: HostImplTypes> {
     fn TracePendingTreeWaiting(
         &self,
         pending: LayerTreeId,
-        active_lsid: &<B as LayerTreeTypes>::LocalSurfaceId,
+        active_lsid: &<B as layerize::commit::CommitTypes>::LocalSurfaceId,
     );
     fn ClientInvalidateFrameSink(&mut self, sink: HostImplFrameSinkId, needs_redraw: bool);
     fn ClientHistogramBoolean(&self, name: &'static str, value: bool);

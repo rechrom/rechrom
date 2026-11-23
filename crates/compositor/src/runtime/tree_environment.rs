@@ -167,9 +167,9 @@ impl HostImplTreeHostServices<CompositorTypes> for TreeEnvironmentServices {
         target: &mut MutatorHost,
         trees: &PropertyTreesFor<CompositorTypes>,
     ) {
-        self.capabilities
-            .main_animations
-            .PushMutatorPropertiesTo(state.mutator_host, target, trees)
+        // layer_tree_impl.cc:814-817: the main AnimationHost is reached only
+        // through the leased ThreadUnsafeCommitState (S1b-5).
+        state.mutator_host.PushMutatorPropertiesTo(target, trees)
     }
     fn CreateRenderSurface(
         &mut self,
