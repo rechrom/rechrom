@@ -69,6 +69,12 @@ impl<F: LayerizeFamily> ProtectedCommitLease<F> {
         self.blocking
     }
 
+    /// The main paint services lent with the unsafe state; FinishCommit's
+    /// TreeSynchronizer traces through them (SynchronizationTrace).
+    pub fn PaintServices(&self) -> &Arc<CpuMainPaintServices<F::Skia>> {
+        &self.paint
+    }
+
     /// Lends the resident main state to LayerTreeHostImpl::FinishCommit
     /// (ProxyImpl::ScheduledActionCommit, proxy_impl.cc:868-899).
     pub fn WithCommitContext<T>(
@@ -217,6 +223,39 @@ pub enum MainToImpl<F: ProxyTypes> {
     /// ProxyMain::Stop -> DestroyProxyImplOnImplThread
     /// (proxy_main.cc:916-946).
     Stop { completion: CompletionEvent },
+    /// Rechrom-only bridge for blocker B1 (S1B_PROXY_DESIGN.md 3), deleted
+    /// in S1b-7: the Page finished a commit outside a dispatched
+    /// BeginMainFrame, so ProxyMain holds it until the next BeginMainFrame
+    /// and posts it from there. ProxyImpl requests that BeginMainFrame and
+    /// pulls its compositor deltas for the pipelined slot, as for
+    /// `data_for_commit_` (proxy_impl.cc:812-815).
+    ReadyCommitAwaitsBeginMainFrame,
+}
+
+/// The posted-task queue of one Proxy direction (the PostTask of
+/// MainThreadTaskRunner / ImplThreadTaskRunner in proxy_main.cc and
+/// proxy_impl.cc). While both halves share one sequence (decision D1) the
+/// in-process transport drains it at the posting call site, so tasks run in
+/// the order the single-thread engine ran the same work; S1b-7 replaces it
+/// with the cross-thread task channels.
+pub struct ProxyTaskQueue<T>(Arc<std::sync::Mutex<std::collections::VecDeque<T>>>);
+impl<T> Clone for ProxyTaskQueue<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T> Default for ProxyTaskQueue<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+impl<T> ProxyTaskQueue<T> {
+    pub fn PostTask(&self, task: T) {
+        self.0.lock().expect("proxy task queue").push_back(task);
+    }
+    pub fn TakeTask(&self) -> Option<T> {
+        self.0.lock().expect("proxy task queue").pop_front()
+    }
 }
 
 /// ProxyImpl -> ProxyMain posted tasks (cc/trees/proxy_main.h:57-86).

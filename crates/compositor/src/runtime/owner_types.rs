@@ -27,6 +27,22 @@ use crate::{
     },
 };
 
+// The impl-built payloads of the ProxyMain/ProxyImpl messages
+// (layerize::commit::proxy, S1B_PROXY_DESIGN.md 1.1). ProxyImplInit, the
+// presentation feedback and the queued DrawImage are not posted before the
+// thread move (S1b-7) and stay unit values until then.
+impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
+    // LayerTreeHostImpl::TakeMutatorEvents (cc/trees/proxy_impl.cc:820).
+    type MutatorEvents = Box<super::host_owners::MutatorEvents>;
+    // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
+    type ProxySwapPromise = Box<super::host_owners::SwapPromise<R>>;
+    // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
+    type LayerTreeMutator = super::host_owners::LayerTreeMutator;
+    type ImplInit = ();
+    type PresentationFeedback = ();
+    type ProxyDrawImage = ();
+}
+
 // The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h). The
 // main traits (MainLayerTypes, ScrollbarLayerTypes, ...) are blanket impls
 // over LayerizeFamily in layerize (runtime/main_family.rs).

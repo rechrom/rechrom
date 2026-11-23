@@ -496,7 +496,10 @@ pub trait ContextVisibilityBackend {}
 pub struct ContextVisibility(pub Box<dyn ContextVisibilityBackend>);
 /// Animation events stay in their native animation subsystem allocation.
 /// The host only tests emptiness and transfers the same owner to the mutator.
-pub trait MutatorEventsBackend {
+/// `Send`: ProxyImpl::ScheduledActionSendBeginMainFrame moves the events to
+/// ProxyMain::BeginMainFrame inside BeginMainFrameAndCommitState
+/// (cc/trees/proxy_impl.cc:820, proxy_main.cc:351-352).
+pub trait MutatorEventsBackend: Send {
     fn IsEmpty(&self) -> bool;
     fn WithScrollAnimationEvents(
         &mut self,

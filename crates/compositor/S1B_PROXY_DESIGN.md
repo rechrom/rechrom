@@ -574,7 +574,17 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   compositor implements in S1b-4; the `MutatorEvents` value moves with its
   main consumer in S1b-5. The metrics-only `BeginMainFrameReasons` is not
   translated.
-- **S1b-4 not started.** Notes for it: implement `ProxyTypes` for
+- **S1b-4 part 1 done (payload types).** `ProxyTypes` for
+  `CpuCompositorTypes<R>` (`runtime/owner_types.rs`): `MutatorEvents =
+  Box<host_owners::MutatorEvents>` (`MutatorEventsBackend: Send` now),
+  `ProxySwapPromise = Box<host_owners::SwapPromise<R>>`, `LayerTreeMutator
+  = host_owners::LayerTreeMutator`; `ImplInit`, `PresentationFeedback` and
+  `ProxyDrawImage` are `()` until S1b-7 posts them. `commit::proxy` gained
+  `ProxyTaskQueue<T>` (the in-process posted-task queue of one direction),
+  `ProtectedCommitLease::PaintServices` (FinishCommit's trace) and the
+  Rechrom-only bridge task `MainToImpl::ReadyCommitAwaitsBeginMainFrame`
+  (B1, deleted in S1b-7).
+- **S1b-4 part 2 (ProxyMain/ProxyImpl wiring) not started.** Original notes: implement `ProxyTypes` for
   `CpuCompositorTypes<R>` (`MutatorEvents` = `host_owners::MutatorEvents`,
   whose `MutatorEventsBackend` still needs a `Send` bound;
   `ProxySwapPromise` = the boxed `SwapPromise`; `ImplInit` = the new
