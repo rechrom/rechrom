@@ -22,19 +22,18 @@ use crate::{
     engine::CompositorMainThreadEffect,
     performance::{CompositorPackage, Span},
 };
-use layerize::{
-    commit::{
-        commit_state::{CommitState, CommitTimestamps},
-        completion_event::CompletionEvent,
-        compositor_commit_data::CompositorCommitData,
-        paint_holding::PaintHoldingReason,
-        proxy::{
-            BeginMainFrameAndCommitState, ImplToMain, MainToImpl, ProtectedCommitLease,
-            ProxyTaskQueue,
-        },
+use layerize::commit::{
+    commit_state::{CommitState, CommitTimestamps},
+    completion_event::CompletionEvent,
+    compositor_commit_data::CompositorCommitData,
+    paint_holding::PaintHoldingReason,
+    proxy::{
+        BeginMainFrameAndCommitState, ImplToMain, MainToImpl, ProtectedCommitLease,
+        ProxyTaskQueue,
     },
-    runtime::proxy_main::ProxyMainClient,
 };
+// In-process main client bridge; removed at S1b-7.
+use layerize::runtime::proxy_main::ProxyMainClient;
 type Root = CpuCompositorTypes<SkRegion>;
 
 /// Ensures that the commit CompletionEvent is always signaled.

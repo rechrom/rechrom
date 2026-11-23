@@ -19,13 +19,18 @@ const PAINT_PROPERTY_NODES: &[&str] = &[
 /// Do not add entries.
 const PROPERTY_NODE_ALLOWED: &[&str] = &[];
 
-/// Temporary (S1a only): EngineCore / EngineAssembly hold the main-half
-/// engine and call it where they ran the main half; removed in S1b, when
-/// Page owns `layerize::LayerizeEngine`.
+/// Temporary (until S1b-7): these files host the lent main half
+/// (`layerize::LayerizeEngine`, `layerize::runtime::proxy_main`) on the
+/// compositor sequence. Removed at the thread move, when Page owns the main
+/// half on the document thread. Do not add entries.
 const LAYERIZE_ENGINE_ALLOWED: &[&str] = &[
+    "crates/compositor/src/engine.rs",
     "crates/compositor/src/runtime/engine_core.rs",
     "crates/compositor/src/runtime/engine_assembly.rs",
+    "crates/compositor/src/runtime/proxy_impl.rs",
 ];
+/// Main-half names the hosting files above may use until S1b-7.
+const MAIN_HALF_PREFIXES: &[&str] = &["layerize::LayerizeEngine", "layerize::runtime::proxy_main"];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -97,7 +102,7 @@ fn compositor_names_only_the_commit_vocabulary() {
                     .is_some_and(|c| c.is_alphanumeric() || c == '_');
                 if !preceded
                     && !line[index..].starts_with("layerize::commit")
-                    && !(line[index..].starts_with("layerize::LayerizeEngine")
+                    && !(MAIN_HALF_PREFIXES.iter().any(|p| line[index..].starts_with(p))
                         && LAYERIZE_ENGINE_ALLOWED.contains(&relative.as_str()))
                 {
                     violations.push(format!("{relative}:{}: {}", number + 1, line.trim()));
