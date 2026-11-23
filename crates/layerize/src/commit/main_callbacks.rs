@@ -27,3 +27,19 @@ impl LayerDidScrollCallback for DidScrollCallback {
         (self.0.as_ref().expect("native null callback invocation"))(offset, element)
     }
 }
+
+/// The main-thread part of cc::ViewTransitionRequest that
+/// LayerTreeHost::AddViewTransitionRequest / NotifyTransitionRequestsFinished
+/// read (cc/view_transition/view_transition_request.h:35-36,70-72,89-91;
+/// cc/trees/layer_tree_host.cc:589-604,1044-1090).
+pub trait MainViewTransitionRequest {
+    /// The ViewTransitionElementResourceRects the finished callback receives.
+    type ElementResourceRects: Clone + Send + 'static;
+    type FinishedCallback: FnOnce(&Self::ElementResourceRects) + Send + 'static;
+    fn sequence_id(&self) -> u32;
+    fn token(&self) -> [u64; 2];
+    fn IsSave(&self) -> bool;
+    fn IsAnimateRenderer(&self) -> bool;
+    fn maybe_cross_frame_sink(&self) -> bool;
+    fn TakeFinishedCallback(&mut self) -> Option<Self::FinishedCallback>;
+}

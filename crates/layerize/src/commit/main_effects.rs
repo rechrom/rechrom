@@ -34,3 +34,49 @@ pub enum PacScrollEffect {
         hidden: bool,
     },
 }
+
+/// viz::LocalSurfaceId, carried by the LayerTreeHost -> Proxy requests below.
+pub use compositor_frame::surface_id::LocalSurfaceId;
+
+/// Proxy calls from LayerTreeHost (cc/trees/layer_tree_host.cc:321-337,
+/// 520-547,835-849,877-880), not copied commit/tree state. They are posted in
+/// source order to the impl half (ProxyMain -> ProxyImpl).
+/// Moved from compositor/src/runtime/main_endpoint.rs.
+pub enum MainHostEffect {
+    NeedsUpdateLayers,
+    NeedsCommit { urgent: bool },
+    NotifyLatencyInfoSwapPromiseMonitors,
+    SaveActiveEventMetrics,
+    SetTargetLocalSurfaceId(LocalSurfaceId),
+    NewLocalSurfaceIdExpectedWhilePaused,
+    UpdateDeferMainFrameUpdate,
+}
+
+/// The embedding side of the main host's Proxy endpoint: the sequence the
+/// main half runs on, the posted Proxy effects, the main task runner and the
+/// main AnimationHost query LayerTreeHost forwards (layer_tree_host.cc
+/// IsElementAnimating -> mutator_host_). No Host, Layer or Page reference can
+/// be recovered from it. Not yet `Send + Sync`: the compositor's main
+/// AnimationHost owner holds a non-Send mutator backend (S1a open item).
+pub trait MainHostEffectSink {
+    fn RunsTasksInCurrentSequence(&self) -> bool;
+    fn PostEffect(&self, effect: MainHostEffect);
+    fn TraceCommitRequest(&self, urgent: bool);
+    fn IsElementAnimating(&self, id: ElementId) -> bool;
+    fn MainThreadTaskRunner(&self) -> super::main_callbacks::TaskRunner;
+}
+
+/// Construction values of the main LayerTreeHost
+/// (cc/trees/layer_tree_host.cc:143-182, LayerTreeHost::InitParams): the
+/// global-sequence id, property-tree owner, main MutatorHost identity,
+/// settings, the actual executor mode and the embedder background color
+/// (WebLayerTreeView forwards it to LayerTreeHost::set_background_color).
+pub struct MainHostInit<M> {
+    pub id: u64,
+    pub owner: super::property_tree_services::PropertyTreesOwnerId,
+    pub mutator: M,
+    pub settings: super::layer_tree_settings::LayerTreeSettings,
+    pub threaded: bool,
+    pub background_color: Option<compositor_draw::Color4f>,
+    pub sink: std::sync::Arc<dyn MainHostEffectSink>,
+}

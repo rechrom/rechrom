@@ -380,3 +380,29 @@ fn ValidateArtifactGraph(
     }
     Ok(())
 }
+impl From<PaintInputError> for crate::commit::layerize_error::LayerizeError {
+    fn from(error: PaintInputError) -> Self {
+        use crate::commit::layerize_error::LayerizeErrorKind as K;
+        use PaintInputError as E;
+        let kind = match &error {
+            E::MissingImageResource { .. } => K::MissingImageResource,
+            E::ImageMetadata { .. } => K::ImageMetadata,
+            E::ImagePlayback { .. } => K::ImagePlayback,
+            E::MissingViewportMetadata => K::MissingViewportMetadata,
+            E::InvalidViewportMetadata { .. } => K::InvalidViewportMetadata,
+            E::MissingStickyConstraint { .. } => K::MissingStickyConstraint,
+            E::InvalidCanvasChild { .. } => K::InvalidCanvasChild,
+            E::InvalidRecordRange { .. } => K::InvalidRecordRange,
+            E::MissingScrollCompositorData { .. } => K::MissingScrollCompositorData,
+            E::MissingChunkCompositorData { .. } => K::MissingChunkCompositorData,
+            E::UnsupportedDisplayItem { .. } => K::UnsupportedDisplayItem,
+            E::EffectFilter { .. } => K::EffectFilter,
+            E::ClipPath { .. } => K::ClipPath,
+            E::InvalidChunkRange { .. } => K::InvalidChunkRange,
+        };
+        Self {
+            kind,
+            detail: error.to_string(),
+        }
+    }
+}

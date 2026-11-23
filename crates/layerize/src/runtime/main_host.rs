@@ -1,53 +1,51 @@
 //! The resident layer-list main-host subset required by PAC and TreeSynchronizer.
 //! Source algorithms are identified individually; this is not a Proxy/platform
 //! implementation. Request/sequence effects are independent injected capabilities.
-use super::{
-    host_owners::{ViewTransitionCaptureCallback, ViewTransitionRequest},
-    paint::{CpuForeignLayer, CpuPaintServices},
-    types::{CpuCompositorTypes, CpuSkiaBackend, MainMutatorHostIdentity, TaskRunner},
-};
+//! Moved from compositor/src/runtime/main_host.rs (MAIN_IMPL_SPLIT.md S1a-3
+//! B3); generic over the one `LayerizeFamily`.
+use super::paint::{CpuForeignLayer, CpuPaintServices};
 use crate::{
-    adapter::{
-        geometry::Rect,
-        input_types::ElementId,
-        layer_tree_host_impl::{
-            host_impl_chunk_c::HostViewTransitionElementResourceRects,
-            HostMetadataTransitionRequest,
-        },
-        layer_tree_impl::{
-            LayerTreeViewTransitionRequest, PropertyTreesFor, UIResourceId, UIResourceRequestType,
-        },
-        main_layer::{
-            LayerContext, MainLayerHost, MainLayerHostId, MainLayerHostRead, MainLayerHosts,
-            MainLayerReadHosts, MainLayerServices,
-        },
-        property_tree::PropertyTreeFeatures,
-        property_tree::PropertyTreesOwnerId,
+    adapter::main_layer::{
+        LayerContext, MainLayerHost, MainLayerHostId, MainLayerHostRead, MainLayerHosts,
+        MainLayerReadHosts, MainLayerServices,
     },
     cc::{
-        base::protected_sequence_synchronizer::ProtectedSequenceSynchronizer,
-        debug::layer_tree_debug_state::LayerTreeDebugState,
         input::layer_selection_bound::LayerSelection,
         layers::{
             layer::{Layer, LayerBorrow, LayerRef},
             layer_list_iterator::LayerListConstIterator,
         },
-        trees::{
-            commit_state::{CommitState, ThreadUnsafeCommitState},
-            compositor_commit_data::{CompositorCommitData, ScrollUpdateInfo},
-            damage_reason::DamageReason,
-            layer_tree_settings::LayerTreeSettings,
-            property_ids::kInvalidPropertyNodeId,
-            scroll_source_type::ScrollSourceType,
-            viewport_property_ids::ViewportPropertyIds,
-        },
+    },
+    commit::{
+        commit_state::{CommitState, ThreadUnsafeCommitState},
+        compositor_commit_data::{CompositorCommitData, ScrollUpdateInfo},
+        damage_reason::DamageReason,
+        geometry::Rect,
+        input_types::ElementId,
+        layer_tree_debug_state::LayerTreeDebugState,
+        layer_tree_settings::LayerTreeSettings,
+        layerize_family::LayerizeFamily,
+        main_callbacks::{MainViewTransitionRequest, TaskRunner},
+        main_effects::{CompositorScrollState, LocalSurfaceId},
+        property_ids::kInvalidPropertyNodeId,
+        property_tree_services::{PropertyTreeFeatures, PropertyTreesOwnerId},
+        protected_sequence_synchronizer::ProtectedSequenceSynchronizer,
+        scroll_source_type::ScrollSourceType,
+        values::{UIResourceId, UIResourceRequestType},
+        viewport_property_ids::ViewportPropertyIds,
+        CommitTypes, PropertyTreesFor,
     },
 };
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
-type B<R> = CpuCompositorTypes<R>;
+type ViewTransitionRequestOf<F> = <F as CommitTypes>::ViewTransitionRequest;
+type ViewTransitionCaptureCallback<F> =
+    <ViewTransitionRequestOf<F> as MainViewTransitionRequest>::FinishedCallback;
+/// ViewTransitionElementResourceRects of the family's request type.
+pub type ViewTransitionElementResourceRects<F> =
+    <ViewTransitionRequestOf<F> as MainViewTransitionRequest>::ElementResourceRects;
 /// Source effects at LayerTreeHost.cc:321-337,520-547,835-849,877-880.
 /// The endpoint schedules actual embedding work and preserves monitor/metrics
 /// notifications. It never owns a Layer, PAC, or this host.
@@ -59,23 +57,23 @@ pub trait CpuMainHostEndpoint: ProtectedSequenceSynchronizer {
     fn NotifyLatencyInfoSwapPromiseMonitors(&self);
     fn SaveActiveEventMetrics(&self);
     fn TraceCommitRequest(&self, urgent: bool);
-    fn SetTargetLocalSurfaceId(&self, id: super::types::LocalSurfaceId);
+    fn SetTargetLocalSurfaceId(&self, id: LocalSurfaceId);
     fn IsRenderingPaused(&self) -> bool;
     fn NotifyNewLocalSurfaceIdExpectedWhilePaused(&self);
     fn UpdateDeferMainFrameUpdate(&self);
     fn IsElementAnimating(&self, id: ElementId) -> bool;
     fn MainThreadTaskRunner(&self) -> TaskRunner;
 }
-pub struct CpuMainLayerHost<R: CpuSkiaBackend> {
+pub struct CpuMainLayerHost<F: LayerizeFamily> {
     // Source: cc/trees/layer_tree_host.h:1180-1188. Rust fields drop forward,
     // matching the callback-before-token-map C++ reverse declaration order.
-    view_transition_callbacks: BTreeMap<u32, Option<ViewTransitionCaptureCallback>>,
+    view_transition_callbacks: BTreeMap<u32, Option<ViewTransitionCaptureCallback<F>>>,
     view_transition_needs_new_lsid: BTreeMap<[u64; 2], bool>,
     // Source: cc/trees/layer_tree_host.h:1093-1095,1132,1146-1150.
-    property_trees: PropertyTreesFor<B<R>>,
-    pending: CommitState<B<R>>,
-    unsafe_state: ThreadUnsafeCommitState<B<R>>,
-    element_layers: HashMap<ElementId, LayerBorrow<B<R>>>,
+    property_trees: PropertyTreesFor<F>,
+    pending: CommitState<F>,
+    unsafe_state: ThreadUnsafeCommitState<F>,
+    element_layers: HashMap<ElementId, LayerBorrow<F>>,
     recording_scale_factor: f32,
     in_paint_layer_contents: bool,
     inside_will_commit: bool,
@@ -88,13 +86,13 @@ pub struct CpuMainLayerHost<R: CpuSkiaBackend> {
     has_copy_request: bool,
     endpoint: Arc<dyn CpuMainHostEndpoint>,
 }
-impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
+impl<F: LayerizeFamily> CpuMainLayerHost<F> {
     // Source: cc/trees/layer_tree_host.cc:143-182. The caller supplies the
     // source global-sequence ID and actual executor mode; no thread is created.
     pub fn new(
         id: MainLayerHostId,
         owner: PropertyTreesOwnerId,
-        mutator: MainMutatorHostIdentity,
+        mutator: F::MutatorHostHandle,
         settings: LayerTreeSettings,
         threaded: bool,
         endpoint: Arc<dyn CpuMainHostEndpoint>,
@@ -111,7 +109,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         Self {
             view_transition_callbacks: BTreeMap::new(),
             view_transition_needs_new_lsid: BTreeMap::new(),
-            property_trees: PropertyTreesFor::<B<R>>::new(owner),
+            property_trees: PropertyTreesFor::<F>::new(owner),
             pending,
             unsafe_state: ThreadUnsafeCommitState::new(mutator),
             element_layers: HashMap::new(),
@@ -136,10 +134,10 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     pub fn CreateVideoSurfaceForeignLayer(
         &mut self,
         services: &dyn MainLayerServices,
-        derived: &(dyn CpuPaintServices<B<R>> + 'static),
-        range: <B<R> as layerize::commit::CommitTypes>::SurfaceRange,
+        derived: &(dyn CpuPaintServices<F> + 'static),
+        range: <F as CommitTypes>::SurfaceRange,
     ) -> Arc<dyn paint::ForeignLayer> {
-        let layer = crate::runtime::owner_types::CreateCpuSurfaceLayer::<R>(services);
+        let layer = crate::cc::layers::surface_layer::SurfaceLayer::<F>::Create(services);
         self.with_layer_context(services, derived, |c| {
             layer.SetSurfaceRange(range, None, c);
             // Blink's SurfaceLayerBridge stretches the child Surface into the
@@ -200,9 +198,9 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         }
         if changed {
             if realize_on_main {
-                <Self as MainLayerHost<B<R>>>::SetNeedsCommit(self);
+                <Self as MainLayerHost<F>>::SetNeedsCommit(self);
             }
-            <Self as MainLayerHost<B<R>>>::SetNeedsUpdateLayers(self);
+            <Self as MainLayerHost<F>>::SetNeedsUpdateLayers(self);
         }
         let (scroll_tree, _, state) = self.property_trees.scroll_tree_read_context();
         scroll_tree.NotifyDidCompositorScroll(
@@ -220,7 +218,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     pub fn ApplyCompositorChanges(
         &mut self,
         data: &mut CompositorCommitData,
-    ) -> crate::engine::CompositorScrollState {
+    ) -> CompositorScrollState {
         if self.unsafe_state.root_layer.is_some() {
             // Source: cc/trees/layer_tree_host.cc:1129-1201. The translated
             // commit value already carries the inner viewport element id, so
@@ -258,7 +256,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         }
         // LayerTreeHost.cc:1240: after native scroll offsets/scrollbars, the
         // client receives the state belonging to this exact commit.
-        crate::engine::CompositorScrollState {
+        CompositorScrollState {
             is_scroll_active: data.is_scroll_active,
             scroll_latched_element_id: data.scroll_latched_element_id,
             source_type: data.scroll_type,
@@ -280,8 +278,8 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     }
     pub fn SetEventListenerProperties(
         &mut self,
-        class: crate::cc::input::event_listener_properties::EventListenerClass,
-        properties: crate::cc::input::event_listener_properties::EventListenerProperties,
+        class: crate::commit::event_listener_properties::EventListenerClass,
+        properties: crate::commit::event_listener_properties::EventListenerProperties,
     ) {
         let slot = &mut self.pending.event_listener_properties[class as usize];
         if *slot == properties {
@@ -290,23 +288,23 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         *slot = properties;
         self.SetNeedsCommit();
     }
-    pub fn pending_commit_state(&self) -> &CommitState<B<R>> {
+    pub fn pending_commit_state(&self) -> &CommitState<F> {
         &self.pending
     }
-    pub fn pending_commit_state_mut(&mut self) -> &mut CommitState<B<R>> {
+    pub fn pending_commit_state_mut(&mut self) -> &mut CommitState<F> {
         &mut self.pending
     }
-    pub fn thread_unsafe_commit_state(&self) -> &ThreadUnsafeCommitState<B<R>> {
+    pub fn thread_unsafe_commit_state(&self) -> &ThreadUnsafeCommitState<F> {
         &self.unsafe_state
     }
-    pub fn root_layer(&self) -> Option<&LayerRef<B<R>>> {
+    pub fn root_layer(&self) -> Option<&LayerRef<F>> {
         self.unsafe_state.root_layer.as_ref()
     }
     fn with_layer_context<T>(
         &mut self,
         services: &dyn MainLayerServices,
-        derived: &(dyn CpuPaintServices<B<R>> + 'static),
-        f: impl FnOnce(&mut LayerContext<'_, B<R>>) -> T,
+        derived: &(dyn CpuPaintServices<F> + 'static),
+        f: impl FnOnce(&mut LayerContext<'_, F>) -> T,
     ) -> T {
         let mut hosts = CpuMainLayerHosts { host: self };
         let mut context = LayerContext::new(&mut hosts, services).WithDerivedServices(derived);
@@ -315,16 +313,13 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     /// Lends the same resident main-thread state to Chromium's commit walk.
     /// `unsafe_state` is never cloned: the synchronization context resolves
     /// every main Layer through a read-only view over this host's disjoint
-    /// fields for the duration of the call.
+    /// fields for the duration of the call. The impl half wraps the lent
+    /// read-only LayerContext in its TreeSynchronizer context.
     pub fn WithCommitContext<T>(
         &mut self,
         services: &dyn MainLayerServices,
-        derived: &(dyn CpuPaintServices<B<R>> + 'static),
-        trace: &dyn crate::adapter::tree_sync::SynchronizationTrace,
-        f: impl FnOnce(
-            &ThreadUnsafeCommitState<B<R>>,
-            &mut super::sync::MainSynchronizationContext<'_, '_, B<R>>,
-        ) -> T,
+        derived: &(dyn CpuPaintServices<F> + 'static),
+        f: impl FnOnce(&ThreadUnsafeCommitState<F>, &mut LayerContext<'_, F>, MainLayerHostId) -> T,
     ) -> T {
         let Self {
             property_trees,
@@ -356,20 +351,15 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
             },
         };
         let mut layer = LayerContext::new_read_only(&hosts, services).WithDerivedServices(derived);
-        let mut main = super::sync::MainSynchronizationContext {
-            main: &mut layer,
-            host: *id,
-            trace,
-        };
-        f(unsafe_state, &mut main)
+        f(unsafe_state, &mut layer, *id)
     }
     // Source: cc/trees/layer_tree_host.cc:1393-1407,1417. HUD ownership and
     // Proxy lifecycle are outside this explicitly selected layer-list owner.
     pub fn SetRootLayer(
         &mut self,
-        root: Option<LayerRef<B<R>>>,
+        root: Option<LayerRef<F>>,
         services: &dyn MainLayerServices,
-        derived: &(dyn CpuPaintServices<B<R>> + 'static),
+        derived: &(dyn CpuPaintServices<F> + 'static),
     ) {
         if self.unsafe_state.root_layer == root {
             return;
@@ -393,7 +383,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     // Source: cc/trees/layer_tree_host.cc:504-517. This is the source's explicit
     // commit transfer: property-tree assignment, take change state, reset, then
     // move the commit and retain only its selective persistent constructor.
-    pub fn ActivateCommitState(&mut self, owner: PropertyTreesOwnerId) -> CommitState<B<R>> {
+    pub fn ActivateCommitState(&mut self, owner: PropertyTreesOwnerId) -> CommitState<F> {
         debug_assert!(self.IsMainThread());
         self.pending.property_trees.AssignFrom(&self.property_trees);
         self.pending
@@ -410,7 +400,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     pub fn WillCommit(
         &mut self,
         services: &dyn MainLayerServices,
-        derived: &(dyn CpuPaintServices<B<R>> + 'static),
+        derived: &(dyn CpuPaintServices<F> + 'static),
     ) {
         let Some(root) = self.unsafe_state.root_layer.as_ref().map(LayerRef::borrow) else {
             self.pending.layer_update_rects.clear();
@@ -426,7 +416,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
                     if rect.IsEmpty() {
                         return;
                     }
-                    layer.SetNeedsPushProperties(Layer::<B<R>>::kChangedGeneralProperty, context);
+                    layer.SetNeedsPushProperties(Layer::<F>::kChangedGeneralProperty, context);
                     update_rects.push((layer.id(), rect));
                     layer.ResetUpdateRect(context);
                 });
@@ -443,9 +433,9 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         &mut self,
         device_viewport_rect: Rect,
         device_scale_factor: f32,
-        local_surface_id_from_parent: super::types::LocalSurfaceId,
+        local_surface_id_from_parent: LocalSurfaceId,
     ) {
-        use crate::adapter::unbounded::LocalSurfaceId as _;
+        use compositor_frame::unbounded::LocalSurfaceId as _;
 
         let previous_local_surface_id = self.pending.local_surface_id_from_parent;
         self.SetLocalSurfaceIdFromParent(local_surface_id_from_parent);
@@ -489,7 +479,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         }
     }
 
-    pub(crate) fn PageScaleFactor(&self) -> f32 {
+    pub fn PageScaleFactor(&self) -> f32 {
         self.pending.page_scale_factor
     }
     // Source: cc/trees/layer_tree_host.cc:1592-1625.
@@ -529,7 +519,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     }
 
     // Source: cc/trees/layer_tree_host.cc:1719-1771.
-    fn SetLocalSurfaceIdFromParent(&mut self, id: super::types::LocalSurfaceId) {
+    fn SetLocalSurfaceIdFromParent(&mut self, id: LocalSurfaceId) {
         if self.pending.local_surface_id_from_parent == id {
             return;
         }
@@ -567,7 +557,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     pub fn UpdateLayers(
         &mut self,
         services: &dyn MainLayerServices,
-        derived: &(dyn CpuPaintServices<B<R>> + 'static),
+        derived: &(dyn CpuPaintServices<F> + 'static),
         features: &dyn PropertyTreeFeatures,
     ) -> bool {
         if self.unsafe_state.root_layer.is_none() {
@@ -576,32 +566,11 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
             return false;
         }
 
-        // Source draw_property_utils.cc:1590-1605. The runtime DrawContext type
-        // is used only as the canonical CPU type family for ComputeClips; no
-        // impl-side tree, layer, or host object is constructed or queried.
-        if self.property_trees.transform_tree().needs_update() {
-            self.property_trees
-                .clip_tree_mutable()
-                .set_needs_update(true);
-            self.property_trees
-                .effect_tree_mutable()
-                .set_needs_update(true);
-        }
-        {
-            let ids = self.pending.viewport_property_ids;
-            let (tree, mut context) = self.property_trees.transform_tree_with_context();
-            crate::cc::trees::draw_property_utils::ComputeTransforms(tree, &ids, &mut context);
-        }
-        {
-            let (tree, mut context) = self.property_trees.effect_tree_with_context(features);
-            crate::cc::trees::draw_property_utils::ComputeEffects::<
-                super::draw::DrawContext<'_, B<R>>,
-            >(tree, &mut context);
-        }
-        crate::cc::trees::draw_property_utils::ComputeClips::<super::draw::DrawContext<'_, B<R>>>(
-            &mut self.property_trees,
-        );
-
+        // Source: cc/trees/layer_tree_host.cc:1093-1125 ->
+        // draw_property_utils::UpdatePropertyTrees (draw_property_utils.cc:
+        // 1590-1605), run by the family over the main PropertyTrees.
+        let ids = self.pending.viewport_property_ids;
+        F::UpdateMainPropertyTrees(&mut self.property_trees, &ids, features);
         let root = self
             .unsafe_state
             .root_layer
@@ -666,7 +635,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     pub fn NotifyTransitionRequestsFinished(
         &mut self,
         id: u32,
-        rects: &HostViewTransitionElementResourceRects,
+        rects: &ViewTransitionElementResourceRects<F>,
     ) {
         debug_assert!(self.IsMainThread());
         if let Some(callback) = self
@@ -690,7 +659,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         self.SetNeedsCommit();
     }
 }
-impl<R: CpuSkiaBackend> ProtectedSequenceSynchronizer for CpuMainLayerHost<R> {
+impl<F: LayerizeFamily> ProtectedSequenceSynchronizer for CpuMainLayerHost<F> {
     // Source: cc/trees/layer_tree_host.cc:329-337,520-524.
     fn IsOwnerThread(&self) -> bool {
         self.endpoint.IsOwnerThread()
@@ -704,7 +673,7 @@ impl<R: CpuSkiaBackend> ProtectedSequenceSynchronizer for CpuMainLayerHost<R> {
         }
     }
 }
-impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerHost<R> {
+impl<F: LayerizeFamily> MainLayerHostRead<F> for CpuMainLayerHost<F> {
     // Source: cc/trees/layer_tree_host.h:205-237,695-696,713-718,928-931;
     // cc/trees/layer_tree_host.cc:304-310,321-324,356-358,399-401,548-550.
     fn device_scale_factor(&self) -> f32 {
@@ -743,11 +712,11 @@ impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerHost<R> {
             ElementId::default()
         }
     }
-    fn LayerByElementId(&self, id: ElementId) -> Option<LayerBorrow<B<R>>> {
+    fn LayerByElementId(&self, id: ElementId) -> Option<LayerBorrow<F>> {
         debug_assert!(self.IsMainThread());
         self.element_layers.get(&id).cloned()
     }
-    fn LayerById(&self, id: i32) -> Option<LayerBorrow<B<R>>> {
+    fn LayerById(&self, id: i32) -> Option<LayerBorrow<F>> {
         debug_assert!(self.IsMainThread());
         self.unsafe_state.LayerById(id)
     }
@@ -764,32 +733,33 @@ impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerHost<R> {
     fn MainThreadTaskRunner(&self) -> TaskRunner {
         self.endpoint.MainThreadTaskRunner()
     }
-    fn property_trees(&self) -> &PropertyTreesFor<B<R>> {
+    fn property_trees(&self) -> &PropertyTreesFor<F> {
         &self.property_trees
     }
     fn IsElementAnimating(&self, id: ElementId) -> bool {
         self.endpoint.IsElementAnimating(id)
     }
 }
-impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
+impl<F: LayerizeFamily> MainLayerHost<F> for CpuMainLayerHost<F> {
     fn CreateUIResource(
         &mut self,
-        bitmap: <B<R> as layerize::commit::CommitTypes>::UIResourceBitmap,
+        bitmap: <F as CommitTypes>::UIResourceBitmap,
     ) -> UIResourceId {
-        use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
         let id = UIResourceId(self.next_ui_resource_id);
         self.next_ui_resource_id = self
             .next_ui_resource_id
             .checked_add(1)
             .expect("UIResourceId overflow");
-        self.pending.ui_resource_sizes.insert(id, bitmap.GetSize());
+        self.pending
+            .ui_resource_sizes
+            .insert(id, F::UIResourceBitmapSize(&bitmap));
         self.pending
             .ui_resource_request_queue
-            .push(super::host_owners::UIResourceRequest {
-                kind: UIResourceRequestType::kCreate,
+            .push(F::CreateUIResourceRequest(
+                UIResourceRequestType::kCreate,
                 id,
                 bitmap,
-            });
+            ));
         self.SetNeedsCommit();
         id
     }
@@ -800,31 +770,24 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
         // read by LayerTreeHostImpl for this request type.
         self.pending
             .ui_resource_request_queue
-            .push(super::host_owners::UIResourceRequest {
-                kind: UIResourceRequestType::kDelete,
+            .push(F::CreateUIResourceRequest(
+                UIResourceRequestType::kDelete,
                 id,
-                bitmap: super::host_resources::UIBitmap(std::sync::Arc::new(
-                    super::host_resources::RawUIBitmap::new(
-                        crate::adapter::geometry::Size::default(),
-                        Vec::new(),
-                        0,
-                        false,
-                    ),
-                )),
-            });
+                F::EmptyUIResourceBitmap(),
+            ));
         self.SetNeedsCommit();
     }
 
     // Source: cc/trees/layer_tree_host.cc:1044-1090.
-    fn AddViewTransitionRequest(&mut self, mut request: Box<ViewTransitionRequest>) {
+    fn AddViewTransitionRequest(&mut self, mut request: Box<ViewTransitionRequestOf<F>>) {
         debug_assert!(!self
             .view_transition_callbacks
             .contains_key(&request.sequence_id()));
-        if let Some(callback) = request.0.TakeFinishedCallback() {
+        if let Some(callback) = request.TakeFinishedCallback() {
             self.view_transition_callbacks
                 .insert(request.sequence_id(), Some(callback));
         }
-        if request.0.maybe_cross_frame_sink() {
+        if request.maybe_cross_frame_sink() {
             let token = request.token();
             if request.IsSave()
                 && !self.view_transition_needs_new_lsid.contains_key(&token)
@@ -881,12 +844,12 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
         self.endpoint.NotifyLatencyInfoSwapPromiseMonitors();
         self.endpoint.SaveActiveEventMetrics();
     }
-    fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<B<R>> {
+    fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<F> {
         &mut self.property_trees
     }
     // Source: cc/trees/layer_tree_host.cc:1809-1823. allocation is the actual
     // most-derived raw pointer equivalence, not a reconstructed base owner.
-    fn RegisterLayer(&mut self, layer: &Layer<B<R>>, allocation: LayerBorrow<B<R>>) {
+    fn RegisterLayer(&mut self, layer: &Layer<F>, allocation: LayerBorrow<F>) {
         debug_assert!(self.IsMainThread());
         debug_assert!(!self.unsafe_state.layer_id_map.contains_key(&layer.id()));
         debug_assert!(!self.in_paint_layer_contents);
@@ -895,7 +858,7 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
             .layer_id_map
             .insert(layer.id(), allocation);
     }
-    fn UnregisterLayer(&mut self, layer: &Layer<B<R>>) {
+    fn UnregisterLayer(&mut self, layer: &Layer<F>) {
         debug_assert!(self.IsMainThread());
         debug_assert!(self.unsafe_state.layer_id_map.contains_key(&layer.id()));
         debug_assert!(!self.in_paint_layer_contents);
@@ -905,7 +868,7 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
         self.unsafe_state.layer_id_map.remove(&layer.id());
     }
     // Source: cc/trees/layer_tree_host.cc:1936-1965.
-    fn RegisterElement(&mut self, id: ElementId, layer: &Layer<B<R>>) {
+    fn RegisterElement(&mut self, id: ElementId, layer: &Layer<F>) {
         debug_assert!(self.IsMainThread());
         if let Some(old) = self.element_layers.get(&id) {
             if old.MatchesBase(layer) {
@@ -921,7 +884,7 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
         assert!(allocation.MatchesBase(layer));
         self.element_layers.insert(id, allocation.clone());
     }
-    fn UnregisterElement(&mut self, id: ElementId, layer: &Layer<B<R>>) {
+    fn UnregisterElement(&mut self, id: ElementId, layer: &Layer<F>) {
         debug_assert!(self.IsMainThread());
         if !self
             .element_layers
@@ -933,7 +896,7 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
         self.element_layers.remove(&id);
     }
     // Source: cc/trees/layer_tree_host.cc:1860-1863,1909-1913,2132-2135,2186-2189.
-    fn AddLayerShouldPushProperties(&mut self, layer: &Layer<B<R>>) {
+    fn AddLayerShouldPushProperties(&mut self, layer: &Layer<F>) {
         self.pending
             .layer_ids_that_should_push_properties
             .insert(layer.id());
@@ -956,11 +919,11 @@ impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
 /// Read-only phase view used only while the impl tree pulls a commit. The
 /// fields are direct borrows of `CpuMainLayerHost`; this is a capability view,
 /// not a copied host or a state snapshot.
-struct CpuMainLayerReadHost<'a, R: CpuSkiaBackend> {
-    property_trees: &'a PropertyTreesFor<B<R>>,
-    pending: &'a CommitState<B<R>>,
-    unsafe_state: &'a ThreadUnsafeCommitState<B<R>>,
-    element_layers: &'a HashMap<ElementId, LayerBorrow<B<R>>>,
+struct CpuMainLayerReadHost<'a, F: LayerizeFamily> {
+    property_trees: &'a PropertyTreesFor<F>,
+    pending: &'a CommitState<F>,
+    unsafe_state: &'a ThreadUnsafeCommitState<F>,
+    element_layers: &'a HashMap<ElementId, LayerBorrow<F>>,
     recording_scale_factor: f32,
     in_paint_layer_contents: bool,
     inside_will_commit: bool,
@@ -969,7 +932,7 @@ struct CpuMainLayerReadHost<'a, R: CpuSkiaBackend> {
     threaded: bool,
     endpoint: &'a Arc<dyn CpuMainHostEndpoint>,
 }
-impl<R: CpuSkiaBackend> ProtectedSequenceSynchronizer for CpuMainLayerReadHost<'_, R> {
+impl<F: LayerizeFamily> ProtectedSequenceSynchronizer for CpuMainLayerReadHost<'_, F> {
     fn IsOwnerThread(&self) -> bool {
         self.endpoint.IsOwnerThread()
     }
@@ -982,7 +945,7 @@ impl<R: CpuSkiaBackend> ProtectedSequenceSynchronizer for CpuMainLayerReadHost<'
         }
     }
 }
-impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerReadHost<'_, R> {
+impl<F: LayerizeFamily> MainLayerHostRead<F> for CpuMainLayerReadHost<'_, F> {
     fn device_scale_factor(&self) -> f32 {
         self.pending.device_scale_factor
     }
@@ -1019,11 +982,11 @@ impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerReadHost<'_, R> 
             ElementId::default()
         }
     }
-    fn LayerByElementId(&self, id: ElementId) -> Option<LayerBorrow<B<R>>> {
+    fn LayerByElementId(&self, id: ElementId) -> Option<LayerBorrow<F>> {
         debug_assert!(self.IsMainThread());
         self.element_layers.get(&id).cloned()
     }
-    fn LayerById(&self, id: i32) -> Option<LayerBorrow<B<R>>> {
+    fn LayerById(&self, id: i32) -> Option<LayerBorrow<F>> {
         debug_assert!(self.IsMainThread());
         self.unsafe_state.LayerById(id)
     }
@@ -1040,39 +1003,39 @@ impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerReadHost<'_, R> 
     fn MainThreadTaskRunner(&self) -> TaskRunner {
         self.endpoint.MainThreadTaskRunner()
     }
-    fn property_trees(&self) -> &PropertyTreesFor<B<R>> {
+    fn property_trees(&self) -> &PropertyTreesFor<F> {
         self.property_trees
     }
     fn IsElementAnimating(&self, id: ElementId) -> bool {
         self.endpoint.IsElementAnimating(id)
     }
 }
-struct CpuMainLayerReadHosts<'a, R: CpuSkiaBackend> {
-    host: CpuMainLayerReadHost<'a, R>,
+struct CpuMainLayerReadHosts<'a, F: LayerizeFamily> {
+    host: CpuMainLayerReadHost<'a, F>,
 }
-impl<R: CpuSkiaBackend> MainLayerReadHosts<B<R>> for CpuMainLayerReadHosts<'_, R> {
-    fn Host(&self, id: MainLayerHostId) -> &dyn MainLayerHostRead<B<R>> {
+impl<F: LayerizeFamily> MainLayerReadHosts<F> for CpuMainLayerReadHosts<'_, F> {
+    fn Host(&self, id: MainLayerHostId) -> &dyn MainLayerHostRead<F> {
         assert_eq!(id, self.host.id);
         &self.host
     }
 }
 
-pub struct CpuMainLayerHosts<'a, R: CpuSkiaBackend> {
-    pub host: &'a mut CpuMainLayerHost<R>,
+pub struct CpuMainLayerHosts<'a, F: LayerizeFamily> {
+    pub host: &'a mut CpuMainLayerHost<F>,
 }
-impl<R: CpuSkiaBackend> MainLayerReadHosts<B<R>> for CpuMainLayerHosts<'_, R> {
-    fn Host(&self, id: MainLayerHostId) -> &dyn MainLayerHostRead<B<R>> {
+impl<F: LayerizeFamily> MainLayerReadHosts<F> for CpuMainLayerHosts<'_, F> {
+    fn Host(&self, id: MainLayerHostId) -> &dyn MainLayerHostRead<F> {
         assert_eq!(id, self.host.id);
         self.host
     }
 }
-impl<R: CpuSkiaBackend> MainLayerHosts<B<R>> for CpuMainLayerHosts<'_, R> {
-    fn HostMut(&mut self, id: MainLayerHostId) -> &mut dyn MainLayerHost<B<R>> {
+impl<F: LayerizeFamily> MainLayerHosts<F> for CpuMainLayerHosts<'_, F> {
+    fn HostMut(&mut self, id: MainLayerHostId) -> &mut dyn MainLayerHost<F> {
         assert_eq!(id, self.host.id);
         self.host
     }
 }
-impl<R: CpuSkiaBackend> Drop for CpuMainLayerHost<R> {
+impl<F: LayerizeFamily> Drop for CpuMainLayerHost<F> {
     fn drop(&mut self) {
         assert!(
             self.unsafe_state.root_layer.is_none(),

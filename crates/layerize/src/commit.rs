@@ -14,6 +14,7 @@ pub mod layer_tree_settings;
 pub mod invalidation_region;
 pub mod draw_property_utils;
 pub mod layer_value_backend;
+pub mod layerize_error;
 pub mod layerize_family;
 pub mod main_callbacks;
 pub mod main_effects;

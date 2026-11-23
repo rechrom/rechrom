@@ -906,11 +906,7 @@ pub trait LayerTreeSurfaceTransform {
 
 pub use crate::cc::trees::layer_tree_settings::ScrollbarAnimator;
 pub use compositor_resource::ResourceId;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UIResourceRequestType {
-    kCreate,
-    kDelete,
-}
+pub use layerize::commit::values::UIResourceRequestType;
 pub trait LayerTreeUIResourceRequest<B: LayerTreeTypes> {
     fn GetType(&self) -> UIResourceRequestType;
     fn GetId(&self) -> UIResourceId;

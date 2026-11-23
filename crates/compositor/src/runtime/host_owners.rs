@@ -256,6 +256,30 @@ impl crate::adapter::layer_tree_impl::LayerTreeViewTransitionRequest for ViewTra
         self.0.sequence_id()
     }
 }
+// The main LayerTreeHost's view of the same request (layerize main_host).
+impl layerize::commit::main_callbacks::MainViewTransitionRequest for ViewTransitionRequest {
+    type ElementResourceRects =
+        crate::adapter::layer_tree_host_impl::host_impl_chunk_c::HostViewTransitionElementResourceRects;
+    type FinishedCallback = ViewTransitionCaptureCallback;
+    fn sequence_id(&self) -> u32 {
+        self.0.sequence_id()
+    }
+    fn token(&self) -> [u64; 2] {
+        self.0.token()
+    }
+    fn IsSave(&self) -> bool {
+        self.0.IsSave()
+    }
+    fn IsAnimateRenderer(&self) -> bool {
+        self.0.IsAnimateRenderer()
+    }
+    fn maybe_cross_frame_sink(&self) -> bool {
+        self.0.maybe_cross_frame_sink()
+    }
+    fn TakeFinishedCallback(&mut self) -> Option<ViewTransitionCaptureCallback> {
+        self.0.TakeFinishedCallback()
+    }
+}
 impl crate::adapter::layer_tree_host_impl::HostMetadataTransitionRequest for ViewTransitionRequest {
     fn delay_layer_tree_view_deletion(&self) -> bool {
         self.0.delay_layer_tree_view_deletion()

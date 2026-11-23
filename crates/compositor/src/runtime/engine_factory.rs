@@ -26,8 +26,6 @@ use super::{
     images::{CheckerImageClient, CpuImageServices, ImageDecodeCacheRegistry},
     latency_info_swap_promise_monitor::LatencyMonitorRegistry,
     layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
-    main_endpoint::EngineMainEndpoint,
-    main_host::CpuMainLayerHost,
     metrics::{MetricsConfig, MetricsServices},
     paint_services::{CpuImplPaintServices, CpuMainPaintServices},
     render::{RenderConfig, RenderServices},
@@ -50,7 +48,6 @@ use crate::{
     adapter::{
         layer_tree_host_impl::*,
         layer_tree_impl::{Color4f, LayerTreeHostId},
-        main_layer::MainLayerHostId,
         property_tree::PropertyTreesOwnerId,
     },
     cc::{
@@ -341,7 +338,7 @@ pub(crate) fn Create(
         draw: Box::new(capabilities.render.clone()),
         surface: Box::new(capabilities.render.clone()),
     };
-    let endpoint = Arc::new(EngineMainEndpoint::new(
+    let main_effects = Arc::new(super::execution::EngineMainHostEffects::new(
         executors.compositor.clone(),
         commands.clone(),
         main_animations.clone(),
@@ -349,25 +346,23 @@ pub(crate) fn Create(
     ));
     let settings = options.settings;
     let scheduler_settings = settings.ToSchedulerSettings(options.picture.as_ref());
-    let mut main = CpuMainLayerHost::new(
-        MainLayerHostId(owner),
-        PropertyTreesOwnerId::FromOwnerValue(owner),
-        main_animations.identity(),
-        settings.clone(),
-        config.thread,
-        endpoint.clone(),
-    );
-    if config.transparent_background {
-        // Chromium's WebLayerTreeView forwards the embedder background color
-        // to LayerTreeHost. An alpha-zero root keeps popup Pages compositable
-        // over the document instead of producing an opaque white fill quad.
-        main.pending_commit_state_mut().background_color = Color4f {
+    // Chromium's WebLayerTreeView forwards the embedder background color to
+    // LayerTreeHost. An alpha-zero root keeps popup Pages compositable over
+    // the document instead of producing an opaque white fill quad.
+    let main_init = layerize::commit::main_effects::MainHostInit {
+        id: owner,
+        owner: PropertyTreesOwnerId::FromOwnerValue(owner),
+        mutator: main_animations.identity(),
+        settings: settings.clone(),
+        threaded: config.thread,
+        background_color: config.transparent_background.then_some(Color4f {
             red: 0.0,
             green: 0.0,
             blue: 0.0,
             alpha: 0.0,
-        };
-    }
+        }),
+        sink: main_effects.clone() as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
+    };
     let image_worker_task_runner: <CompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
         Arc::new(super::execution::EngineSequencedTaskRunner::new(
             executors.compositor.clone(),
@@ -401,9 +396,9 @@ pub(crate) fn Create(
     let core = EngineCore::new(
         services,
         init,
-        main,
+        main_init,
         paint,
-        endpoint,
+        main_effects,
         lifecycle,
         queries,
         sink,

@@ -51,6 +51,14 @@ impl Ord for UIResourceId {
     }
 }
 
+// Source: cc/resources/ui_resource_request.h:17-21 UIResourceRequest::Type.
+// Moved from compositor/src/adapter/layer_tree_impl.rs, which re-exports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UIResourceRequestType {
+    kCreate,
+    kDelete,
+}
+
 // Source dependency: gfx::InsetsF native value (top,left,bottom,right).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InsetsF {

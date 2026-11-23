@@ -472,32 +472,30 @@ impl From<io::Error> for CompositorError {
     }
 }
 
-impl From<crate::runtime::paint::PaintInputError> for CompositorError {
-    fn from(error: crate::runtime::paint::PaintInputError) -> Self {
-        use crate::runtime::paint::PaintInputError as E;
-        let kind = match &error {
-            E::MissingImageResource { .. } => CompositorPaintInputKind::MissingImageResource,
-            E::ImageMetadata { .. } => CompositorPaintInputKind::ImageMetadata,
-            E::ImagePlayback { .. } => CompositorPaintInputKind::ImagePlayback,
+impl From<layerize::commit::layerize_error::LayerizeError> for CompositorError {
+    fn from(error: layerize::commit::layerize_error::LayerizeError) -> Self {
+        use layerize::commit::layerize_error::LayerizeErrorKind as E;
+        let kind = match error.kind {
+            E::MissingImageResource => CompositorPaintInputKind::MissingImageResource,
+            E::ImageMetadata => CompositorPaintInputKind::ImageMetadata,
+            E::ImagePlayback => CompositorPaintInputKind::ImagePlayback,
             E::MissingViewportMetadata => CompositorPaintInputKind::MissingViewportMetadata,
-            E::InvalidViewportMetadata { .. } => CompositorPaintInputKind::InvalidViewportMetadata,
-            E::MissingStickyConstraint { .. } => CompositorPaintInputKind::MissingStickyConstraint,
-            E::InvalidCanvasChild { .. } => CompositorPaintInputKind::UnsupportedCanvasChild,
-            E::InvalidRecordRange { .. } => CompositorPaintInputKind::InvalidRecordRange,
-            E::MissingScrollCompositorData { .. } => {
-                CompositorPaintInputKind::MissingScrollCompositorData
-            }
-            E::MissingChunkCompositorData { .. } => {
-                CompositorPaintInputKind::MissingChunkCompositorData
-            }
-            E::UnsupportedDisplayItem { .. } => CompositorPaintInputKind::UnsupportedDisplayItem,
-            E::EffectFilter { .. } => CompositorPaintInputKind::EffectFilter,
-            E::ClipPath { .. } => CompositorPaintInputKind::ClipPath,
-            E::InvalidChunkRange { .. } => CompositorPaintInputKind::InvalidChunkRange,
+            E::InvalidViewportMetadata => CompositorPaintInputKind::InvalidViewportMetadata,
+            E::MissingStickyConstraint => CompositorPaintInputKind::MissingStickyConstraint,
+            E::InvalidCanvasChild => CompositorPaintInputKind::UnsupportedCanvasChild,
+            E::InvalidRecordRange => CompositorPaintInputKind::InvalidRecordRange,
+            E::MissingScrollCompositorData => CompositorPaintInputKind::MissingScrollCompositorData,
+            E::MissingChunkCompositorData => CompositorPaintInputKind::MissingChunkCompositorData,
+            E::UnsupportedDisplayItem => CompositorPaintInputKind::UnsupportedDisplayItem,
+            E::EffectFilter => CompositorPaintInputKind::EffectFilter,
+            E::ClipPath => CompositorPaintInputKind::ClipPath,
+            E::InvalidChunkRange => CompositorPaintInputKind::InvalidChunkRange,
+            E::InvalidDomNodeId => CompositorPaintInputKind::InvalidDomNodeId,
+            E::MissingCanvasDocument => CompositorPaintInputKind::UnsupportedCanvasChild,
         };
         Self::PaintInput {
             kind,
-            detail: error.to_string(),
+            detail: error.detail,
         }
     }
 }

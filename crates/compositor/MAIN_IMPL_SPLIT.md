@@ -1,6 +1,6 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2, the blanket family impls, B3a and B3b done (see "S1a-3 status" and "Plan
+Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2, the blanket family impls, B3a, B3b and B3c done (see "S1a-3 status" and "Plan
 correction" at the end); S1a-3 B3-B4 and the thread split (S1b/S1d) are not
 implemented.
 
@@ -614,18 +614,55 @@ Approved for S1a-3: option (h) as above; during S1a only,
   the re-export stubs (plus `runtime/paint_services.rs`), which go when
   EngineCore stops naming the main types through them. The test passes.
 
-Next: B3 rest. Move into `LayerizeEngine`: `main_host.rs` (CpuMainLayerHost;
-it still names impl owners `draw::DrawContext`,
-`sync::MainSynchronizationContext`, `host_owners::UIResourceRequest`,
-`host_resources::UIBitmap`, `cc::trees::draw_property_utils`, `engine::*`,
-which need splitting off or `LayerizeFamily` hooks first), `main_endpoint.rs`
-(names `animation_host::AnimationHostOwner`, `execution::EngineTaskQueue`,
-`services::EventSink`, `host_owners::MutatorEvents`), the main half of
-`ApplyCompositorDeltas`, the canvas-child publication (needs a layerize error
-value), `ConvertPaintArtifactSubsetToRecord` / `CreateVideoSurfaceForeignLayer`
-and the composited-animation coalescing in `engine_assembly.rs`. Then B4
-(boundary test to zero allowance, layerize
-unit tests).
+- **B3c done (main LayerTreeHost in LayerizeEngine).** git mv
+  `runtime/main_host.rs` and `runtime/main_endpoint.rs` to
+  `layerize/src/runtime/`. `CpuMainLayerHost<F: LayerizeFamily>` is generic;
+  `LayerizeEngine` owns it (declared after PAC) and its
+  `EngineMainEndpoint`, and builds both from
+  `commit::main_effects::MainHostInit` (id, owner, mutator, settings,
+  threaded, embedder background color, sink). The impl owners it named were
+  split off as follows:
+  - `LayerizeFamily` fixes `LocalSurfaceId` (viz value, re-exported as
+    `commit::main_effects::LocalSurfaceId`), `MainRootLayer = LayerRef<Self>`,
+    `MainLayerRef = LayerBorrow<Self>` and `ViewTransitionRequest:
+    commit::main_callbacks::MainViewTransitionRequest` (implemented for
+    `host_owners::ViewTransitionRequest`), and gains the hooks
+    `CreateUIResourceRequest`, `UIResourceBitmapSize`, `EmptyUIResourceBitmap`
+    (UIResourceRequest/UIBitmap) and `UpdateMainPropertyTrees` (the
+    draw_property_utils.cc:1590-1605 step of UpdateLayers; its body, which
+    needs the impl `DrawContext` type, is in `runtime/owner_types.rs`).
+    `UIResourceRequestType` moved to `commit::values`.
+  - `WithCommitContext` lends `(&ThreadUnsafeCommitState, &mut LayerContext,
+    MainLayerHostId)`; EngineCore builds `sync::MainSynchronizationContext`
+    from it. `LayerizeEngine::WithCommitContext` enters the protected
+    sequence.
+  - The endpoint's Proxy side is `commit::main_effects::{MainHostEffect,
+    MainHostEffectSink}`; the compositor implements the sink with
+    `execution::EngineMainHostEffects` (executor, command queue, events, main
+    `AnimationHostOwner`, main task runner). The AnimationHost mutations
+    (`ApplySource{Scroll,Property}Animation`, animation events, scroll
+    completions) are EngineCore calls on that owner, followed by
+    `LayerizeEngine::SetNeedsCommitFromMutatorHost`. The sink and
+    `CpuMainHostEndpoint` are not `Send + Sync` yet (the AnimationHost owner
+    holds a non-Send mutator backend).
+  Moved into `LayerizeEngine` from EngineCore/EngineAssembly, same call order:
+  `ApplyCompositorChanges` (main half of ApplyCompositorDeltas; returns the
+  page scale for the ViewportScaleChanged effect), `UpdatePaintArtifact`
+  (PAC::Update + canvas-child publication + resident artifact; in an
+  `F: LayerizeFamily<Skia = SkRegion>` block because raster downcasts the
+  SkRegion `CanvasChildRecordReplay`), `ActivateCommitState` (UpdateLayers,
+  WillCommit, ActivateCommitState, source frame advance, DidBeginCommit),
+  `ConvertPaintArtifactSubsetToRecord`, `CreateVideoSurfaceForeignLayer`,
+  `NotifyTransitionRequestsFinished` and the composited-animation coalescing
+  (`CoalesceCompositedAnimationProperties`, `TakePendingCompositedAnimation`,
+  `HasPendingCompositedAnimation`). Errors cross as
+  `commit::layerize_error::LayerizeError { kind, detail }` (PaintInputError
+  names paint property nodes; `engine.rs` maps the kind to
+  `CompositorPaintInputKind` as before). Plain LayerTreeHost setters are
+  reached through `LayerizeEngine::{Main, MainMut}`.
+
+Next: B3 task 3 (empty `MAIN_HALF_REEXPORT_ALLOWED`: point compositor imports
+at `layerize::commit` or delete dead stubs), then B4 (layerize unit tests).
 
 ### Plan correction: option (a) does not compile
 

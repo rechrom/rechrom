@@ -13,7 +13,6 @@ pub mod layer;
 pub mod canvas_child_record {
     pub use layerize::commit::paint::canvas_child_record::*;
 }
-pub mod main_host;
 pub mod paint;
 pub mod paint_services;
 
@@ -91,7 +90,6 @@ pub(crate) mod pool_services;
 
 pub(crate) mod tile_execution;
 
-pub(crate) mod main_endpoint;
 
 pub(crate) mod engine_core;
 

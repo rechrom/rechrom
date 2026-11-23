@@ -20,7 +20,12 @@ use super::{
     commit_state::CommitStateTypes,
     geometry::Size,
     layer_value_backend::MainLayerCopyOutputRequest,
-    main_callbacks::TaskRunner,
+    main_callbacks::{MainViewTransitionRequest, TaskRunner},
+    main_effects::LocalSurfaceId,
+    property_tree_services::PropertyTreeFeatures,
+    values::{UIResourceId, UIResourceRequestType},
+    viewport_property_ids::ViewportPropertyIds,
+    PropertyTreesFor,
     paint::{CpuFilterQuality, DynamicRangeLimit, NodeId},
     push_properties::PushPropertiesTypes,
     skia_value_backend::{MainSkiaBackend, PaintSkiaBackend},
@@ -50,13 +55,17 @@ pub trait LayerizeFamily:
         TrackedElementRects = TrackedElementRects,
         FilterQuality = CpuFilterQuality,
         DynamicRangeLimit = DynamicRangeLimit,
+        LocalSurfaceId = LocalSurfaceId,
+        ViewTransitionRequest: MainViewTransitionRequest,
         Layer: PictureLayerImplTarget<Self>
                    + SolidColorLayerImplTarget<Self>
                    + PaintedScrollbarLayerImplTarget<Self>
                    + SolidColorScrollbarLayerImplTarget<Self>
                    + SurfaceLayerImplTarget<Self>,
-    > + CommitStateTypes
-    + SurfaceRangeTypes
+    > + CommitStateTypes<
+        MainRootLayer = crate::cc::layers::layer::LayerRef<Self>,
+        MainLayerRef = crate::cc::layers::layer::LayerBorrow<Self>,
+    > + SurfaceRangeTypes
 {
     /// The external Skia value backend (the compositor's `R`).
     type Skia: PaintSkiaBackend;
@@ -69,4 +78,31 @@ pub trait LayerizeFamily:
         logical_size: Size,
         pixel_size: Size,
     ) -> Self::UIResourceBitmap;
+
+    /// Source: cc/resources/ui_resource_request.h:17-56. The impl family owns
+    /// the request and bitmap types LayerTreeHost::CreateUIResource /
+    /// DeleteUIResource queue (cc/trees/layer_tree_host.cc).
+    fn CreateUIResourceRequest(
+        kind: UIResourceRequestType,
+        id: UIResourceId,
+        bitmap: Self::UIResourceBitmap,
+    ) -> Self::UIResourceRequest;
+    /// UIResourceBitmap::GetSize.
+    fn UIResourceBitmapSize(bitmap: &Self::UIResourceBitmap) -> Size;
+    /// The empty native bitmap a DELETE request carries (its payload is not
+    /// read by LayerTreeHostImpl for that request type).
+    fn EmptyUIResourceBitmap() -> Self::UIResourceBitmap;
+
+    /// Source: cc/trees/draw_property_utils.cc:1590-1605, the
+    /// UpdatePropertyTrees step of LayerTreeHost::DoUpdateLayers
+    /// (layer_tree_host.cc:1093-1125) over the main PropertyTrees. The
+    /// translated draw_property_utils is shared with the impl draw path and
+    /// stays in the compositor until it is classified (S4); this hook runs it
+    /// with the canonical CPU draw-context type family, constructing or
+    /// querying no impl tree, layer or host.
+    fn UpdateMainPropertyTrees(
+        trees: &mut PropertyTreesFor<Self>,
+        ids: &ViewportPropertyIds,
+        features: &dyn PropertyTreeFeatures,
+    );
 }

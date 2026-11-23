@@ -68,7 +68,7 @@ pub(crate) enum EngineTask {
         task: crate::adapter::scrollbar::AutoscrollTask,
     },
     ImageAnimation(crate::adapter::image_animation::ImageAnimationTask),
-    MainHost(super::main_endpoint::MainHostEffect),
+    MainHost(layerize::commit::main_effects::MainHostEffect),
     ImageDecoded {
         callback: crate::adapter::layer_tree_host_impl::HostImageDecodeCallback,
         succeeded: bool,
@@ -230,5 +230,67 @@ impl<C: 'static> TaskGraphRunner<C> for ExecutorTaskGraphRunner<C> {
     }
     fn RunTasksUntilIdleForTest(&self) {
         self.runner.RunUntilIdle();
+    }
+}
+
+/// The impl half's side of the main LayerTreeHost Proxy endpoint
+/// (`layerize::commit::main_effects::MainHostEffectSink`): the Page
+/// compositor sequence, the command queue that carries the posted
+/// LayerTreeHost -> Proxy effects in source order, the main task runner and
+/// the main AnimationHost. Moved from the former main_endpoint.rs; the
+/// endpoint state itself lives in layerize.
+pub(crate) struct EngineMainHostEffects {
+    executor: Arc<dyn crate::engine::CompositorExecutor>,
+    commands: EngineTaskQueue,
+    animations: super::animation_host::AnimationHostOwner,
+    events: Arc<dyn super::services::EventSink>,
+}
+struct MainTaskRunner {
+    executor: Arc<dyn crate::engine::CompositorExecutor>,
+}
+impl super::types::ResultTaskRunner for MainTaskRunner {
+    fn PostTask(&self, task: Box<dyn FnOnce() + Send>) {
+        self.executor.Execute(task)
+    }
+}
+impl EngineMainHostEffects {
+    pub(crate) fn new(
+        executor: Arc<dyn crate::engine::CompositorExecutor>,
+        commands: EngineTaskQueue,
+        animations: super::animation_host::AnimationHostOwner,
+        events: Arc<dyn super::services::EventSink>,
+    ) -> Self {
+        Self {
+            executor,
+            commands,
+            animations,
+            events,
+        }
+    }
+    pub(crate) fn Animations(&self) -> &super::animation_host::AnimationHostOwner {
+        &self.animations
+    }
+    pub(crate) fn Clock(&self) -> Arc<dyn crate::engine::CompositorExecutor> {
+        self.executor.clone()
+    }
+}
+impl layerize::commit::main_effects::MainHostEffectSink for EngineMainHostEffects {
+    fn RunsTasksInCurrentSequence(&self) -> bool {
+        self.executor.RunsTasksInCurrentSequence()
+    }
+    fn PostEffect(&self, effect: layerize::commit::main_effects::MainHostEffect) {
+        self.commands.Push(EngineTask::MainHost(effect));
+    }
+    fn TraceCommitRequest(&self, urgent: bool) {
+        self.events
+            .Emit("compositor.main", format!("SetNeedsCommit urgent={urgent}"));
+    }
+    fn IsElementAnimating(&self, id: crate::adapter::input_types::ElementId) -> bool {
+        self.animations.IsElementAnimating(id)
+    }
+    fn MainThreadTaskRunner(&self) -> super::types::TaskRunner {
+        Arc::new(MainTaskRunner {
+            executor: self.executor.clone(),
+        })
     }
 }

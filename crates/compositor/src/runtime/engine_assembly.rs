@@ -5,12 +5,12 @@ use super::{
     engine_core::EngineCore,
     execution::{EngineTask, EngineTaskQueue},
     host_lifecycle::{HostLifecycleEffect, HostLifecycleEffects},
-    main_endpoint::MainHostEffect,
     render::RenderServices,
     resource_events::{ResourceEffect, ResourceEffects},
     resources::RasterReturnedResource,
     scheduler_services::{EngineSchedulerHost, SchedulerEffect, SchedulerEffects, TimingHistory},
 };
+use layerize::commit::main_effects::MainHostEffect;
 use crate::{
     adapter::{begin_frame::BeginFrameArgs, layer_tree_host_impl::HostImplContext},
     cc::{
@@ -39,7 +39,6 @@ enum PendingWheelStage {
 pub(crate) struct EngineAssembly {
     core: EngineCore,
     scroll_animation_commit: Option<crate::engine::ScrollAnimationCommitToken>,
-    pending_composited_animation: Option<paint::CompositedAnimationPropertyUpdate>,
     next_scroll_animation_commit: u64,
     pending_wheel_inputs: std::collections::BTreeMap<u64, PendingWheelInput>,
     next_wheel_request: u64,
@@ -148,7 +147,6 @@ impl EngineAssembly {
             wheel_events_async: false,
             core,
             scroll_animation_commit: None,
-            pending_composited_animation: None,
             next_scroll_animation_commit: 0,
             scheduler,
             commands,
@@ -346,27 +344,11 @@ impl EngineAssembly {
             );
             trace.set("transform_updates", update.transforms.len() as f64);
             trace.set("effect_updates", update.effects.len() as f64);
-            let retained = self
-                .pending_composited_animation
-                .get_or_insert_with(Default::default);
-            for transform in update.transforms {
-                retained
-                    .transforms
-                    .retain(|current| !current.lifecycle.same_node(&transform.lifecycle));
-                retained.transforms.push(transform);
-            }
-            for effect in update.effects {
-                retained
-                    .effects
-                    .retain(|current| !current.lifecycle.same_node(&effect.lifecycle));
-                retained.effects.push(effect);
-            }
-            for binding in update.bindings {
-                retained.bindings.retain(|current| {
-                    current.node_id != binding.node_id || current.property != binding.property
-                });
-                retained.bindings.push(binding);
-            }
+            // The main half retains the latest value per property node.
+            self.core
+                .layerize
+                .CoalesceCompositedAnimationProperties(update);
+            drop(trace);
             return self.Poll();
         }
         self.PrepareCompositedAnimationProperties(update)?;
@@ -513,7 +495,8 @@ impl EngineAssembly {
                     return Err(Self::WheelContinuationError("invalid page scale limits"));
                 }
                 self.core
-                    .main
+                    .layerize
+                    .MainMut()
                     .SetPageScaleFactorAndLimits(scale, minimum, maximum);
                 return self.Poll();
             }
@@ -543,11 +526,14 @@ impl EngineAssembly {
                 return self.Poll();
             }
             CompositorInput::SetHaveScrollEventHandlers(value) => {
-                self.core.main.SetHaveScrollEventHandlers(value);
+                self.core.layerize.MainMut().SetHaveScrollEventHandlers(value);
                 return self.Poll();
             }
             CompositorInput::SetEventListenerProperties { class, properties } => {
-                self.core.main.SetEventListenerProperties(class, properties);
+                self.core
+                    .layerize
+                    .MainMut()
+                    .SetEventListenerProperties(class, properties);
                 return self.Poll();
             }
             _ => {}
@@ -1149,11 +1135,12 @@ impl EngineAssembly {
         let promise = super::report_time_swap_promise::Create(
             request,
             self.resource_effects.clone(),
-            self.core.endpoint.Clock(),
+            self.core.main_effects.Clock(),
         );
         // LayerTreeHost::QueueSwapPromise does not invent a commit or paint.
         self.core
-            .main
+            .layerize
+            .MainMut()
             .pending_commit_state_mut()
             .swap_promises
             .push(promise);
@@ -1287,9 +1274,7 @@ impl EngineAssembly {
                     MainHostEffect::NeedsUpdateLayers | MainHostEffect::NeedsCommit { .. } => {
                         // Source endpoint requests fulfilled by the current main
                         // commit have already cleared their actual request bit.
-                        if super::main_host::CpuMainHostEndpoint::CommitRequested(
-                            self.core.endpoint.as_ref(),
-                        ) {
+                        if self.core.layerize.CommitRequested() {
                             self.core
                                 .effects
                                 .push(CompositorMainThreadEffect::RequestMainFrame);
@@ -1650,7 +1635,8 @@ impl EngineAssembly {
             } => {
                 assert_eq!(target, delegate);
                 self.core
-                    .main
+                    .layerize
+                    .MainMut()
                     .NotifyTransitionRequestsFinished(sequence, &rects);
             }
             ResourceEffect::CustomMetrics {
@@ -1773,7 +1759,7 @@ impl EngineAssembly {
             // failing the Page. Once the native commit slot is free, prepare
             // exactly one coalesced follow-up commit.
             if self.core.CanPrepareCompositedAnimationCommit() {
-                if let Some(update) = self.pending_composited_animation.take() {
+                if let Some(update) = self.core.layerize.TakePendingCompositedAnimation() {
                     self.PrepareCompositedAnimationProperties(update)?;
                     progressed = true;
                 }
@@ -1828,7 +1814,7 @@ impl EngineAssembly {
             needs_begin_frames: self.needs_begin_frames,
             work_pending,
             main_commit_pending: self.core.HasReadyCommit()
-                || self.pending_composited_animation.is_some()
+                || self.core.layerize.HasPendingCompositedAnimation()
                 || self.scroll_animation_commit.is_some(),
         })
     }
@@ -1870,7 +1856,7 @@ impl EngineAssembly {
             needs_begin_frames: self.needs_begin_frames,
             work_pending: false,
             main_commit_pending: self.core.HasReadyCommit()
-                || self.pending_composited_animation.is_some()
+                || self.core.layerize.HasPendingCompositedAnimation()
                 || self.scroll_animation_commit.is_some(),
         }
     }
