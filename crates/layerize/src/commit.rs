@@ -4,11 +4,32 @@
 //! under which LayerTreeHostImpl::FinishCommit reads main-thread state.
 //! Nothing here names Blink paint types.
 
+pub mod geometry;
 pub mod layer_tree_debug_state;
+pub mod property_tree;
+pub mod property_tree_services;
+pub mod property_types;
 pub mod protected_sequence_synchronizer;
+pub mod scroll_elasticity;
+pub mod scroll_elasticity_utils;
+pub mod scroll_node;
 pub mod values;
 
-// cc property-tree identities and synchronized values used by both halves.
-// Source: cc/base/synced_property.h; cc/trees/property_ids.h;
-//         cc/trees/viewport_property_ids.h.
-pub use compositor_tree::{property_ids, synced_property, viewport_property_ids};
+// cc value modules translated in the shared model packages. Both halves name
+// them through this vocabulary.
+// Source: cc/base/{math_util,synced_property}.h; cc/trees/{clip_node,
+//         effect_node,transform_node,property_ids,viewport_property_ids,
+//         target_property,damage_reason,property_animation_state,
+//         compositor_commit_data,scroll_source_type}.h;
+//         cc/input/{scroll_snap_data,overscroll_behavior,
+//         main_thread_scrolling_reason}.h.
+pub use compositor_animation::property_animation_state;
+pub use compositor_draw::damage_reason;
+pub use compositor_input::{
+    compositor_commit_data, input_types, main_thread_scrolling_reason, overscroll_behavior,
+    scroll_snap_data, scroll_source_type,
+};
+pub use compositor_tree::{
+    clip_node, effect_node, math_util, property_ids, synced_property, target_property,
+    transform_node, viewport_property_ids,
+};

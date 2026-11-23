@@ -10,3 +10,7 @@ publish = false
 # crates/compositor/MAIN_IMPL_SPLIT.md.
 [dependencies]
 compositor_tree = { path = "../compositor/compositor_tree" }
+compositor_input = { path = "../compositor/compositor_input" }
+compositor_draw = { path = "../compositor/compositor_draw" }
+compositor_animation = { path = "../compositor/compositor_animation" }
+skia = { path = "../skia" }

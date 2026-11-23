@@ -9,3 +9,4 @@
 //! ProxyMain -> ProxyImpl commit. See crates/compositor/MAIN_IMPL_SPLIT.md.
 
 pub mod commit;
+mod skia_path;

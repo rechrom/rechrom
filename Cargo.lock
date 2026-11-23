@@ -2286,7 +2286,11 @@ dependencies = [
 name = "layerize"
 version = "0.0.1"
 dependencies = [
+ "compositor_animation",
+ "compositor_draw",
+ "compositor_input",
  "compositor_tree",
+ "skia",
 ]
 
 [[package]]
