@@ -75,6 +75,9 @@ fn clip_rect(r: paint_property_tree::ClipLayoutRect) -> FloatClipRect {
 }
 impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
     type State = PropertyTreeState<R>;
+    fn Trees(&self) -> &super::HandleTrees {
+        &self.trees
+    }
     fn SingularTransformFixEnabled(&self) -> bool {
         self.singular_transform_fix
     }
@@ -215,12 +218,13 @@ impl<R: CpuSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
             let trees = clip.trees().clone();
             WithClipCacheBy(
                 clip.as_arc(),
+                &trees,
                 &|c| {
                     ClipNode::<R>::from_arc_in(c.clone(), trees.clone())
                         .parent_handle()
                         .map(|parent| parent.as_arc().clone())
                 },
-                |c| c.NearestPixelMovingFilterClip(),
+                |c| c.NearestPixelMovingFilterClip(clip.as_arc()),
             )
         };
         let a = nearest(&a.clip_);

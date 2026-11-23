@@ -14,14 +14,19 @@ pub trait FloatClipRectTransform {
 /// and its own cache slot; they do not implement cache/projection algorithms.
 pub trait TransformCacheNode: Clone + PartialEq + Send + Sync + 'static {
     type Matrix: super::matrix::GeometryMapperMatrix + Send + Sync + 'static;
-    fn Downgrade(&self) -> std::sync::Weak<crate::paint_property_tree::TransformPaintPropertyNode>;
+    /// The actual Paint node; the transform cache keeps cached members alive
+    /// with it, as Blink's traced Member<> does.
+    fn NodeArc(&self) -> std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>;
     /// A cached ancestor of this node as a handle that resolves its links
     /// the way this one does.
-    fn Upgrade(
+    fn Linked(
         &self,
-        weak: &std::sync::Weak<crate::paint_property_tree::TransformPaintPropertyNode>,
+        node: std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>,
     ) -> Self;
     fn CacheSlot(&self) -> &crate::opaque_paint_cache_slot::OpaquePaintCacheSlot;
+    /// The published property trees this handle resolves its links through;
+    /// the cache slot is valid only for queries in the same trees.
+    fn Trees(&self) -> &super::native::NativeTrees;
     fn IsRoot(&self) -> bool;
     fn IsIdentity(&self) -> bool;
     fn Parent(&self) -> Option<Self>;
@@ -63,6 +68,9 @@ pub trait GeometryMapperState: Clone {
 }
 pub trait GeometryMapperContext {
     type State: GeometryMapperState;
+    /// The published property trees this context maps in; geometry caches
+    /// are valid only for queries in the same trees.
+    fn Trees(&self) -> &super::native::NativeTrees;
     fn SingularTransformFixEnabled(&self) -> bool;
     fn RootState(&self) -> Self::State;
     fn MakeState(

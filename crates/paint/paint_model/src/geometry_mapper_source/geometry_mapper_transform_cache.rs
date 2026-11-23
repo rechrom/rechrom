@@ -2,10 +2,14 @@
 // Copyright 2017 The Chromium Authors. BSD-style license in LICENSE.
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:1-39;
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.cc:1-16.
-// Includes/namespace/GC tracing map to native modules and non-owning weak node
-// handles. The actual Paint node owns the synchronized cache allocation.
+// Includes/namespace map to native modules. The cache's node members are
+// traced Member<> references in Blink (geometry_mapper_transform_cache.cc
+// Trace), so they keep their nodes alive: here they are strong Arcs, with
+// `CachedNode::Owner` for the node that owns this cache, which an Arc cannot
+// hold without a cycle. The actual Paint node owns the cache allocation.
 use super::matrix::{GeometryMapperMatrix, SharedGeometryTransform};
-use crate::paint_property_tree::TransformPaintPropertyNode;
+use crate::geometry_mapper_source::native::NativeTrees;
+use crate::paint_property_tree::{FrozenPropertyTrees, TransformPaintPropertyNode};
 use crate::{
     geometry_mapper_source::traits::TransformCacheNode,
     source_geometry::{Transform, Vector2dF},
@@ -14,17 +18,44 @@ use crate::{
 };
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc, Mutex, Weak,
+    Arc, Mutex,
 };
 static S_GLOBAL_GENERATION: AtomicU32 = AtomicU32::new(1);
 fn global_generation() -> u32 {
     S_GLOBAL_GENERATION.load(Ordering::Relaxed)
 }
+/// A cached Member<const TransformPaintPropertyNode>: the node owning this
+/// cache, or another node (a transform- or scroll-tree ancestor) it keeps
+/// alive, so a cache entry can never outlive the node it names.
+#[derive(Clone)]
+enum CachedNode {
+    Owner,
+    Node(Arc<TransformPaintPropertyNode>),
+}
+impl CachedNode {
+    fn of(node: Arc<TransformPaintPropertyNode>, owner: &Arc<TransformPaintPropertyNode>) -> Self {
+        if Arc::ptr_eq(&node, owner) {
+            Self::Owner
+        } else {
+            Self::Node(node)
+        }
+    }
+    fn resolve(&self, owner: &Arc<TransformPaintPropertyNode>) -> Arc<TransformPaintPropertyNode> {
+        match self {
+            Self::Owner => owner.clone(),
+            Self::Node(node) => node.clone(),
+        }
+    }
+    /// The parent cache's member, as held by a child's cache.
+    fn inherited(&self, parent: &Arc<TransformPaintPropertyNode>) -> Self {
+        Self::Node(self.resolve(parent))
+    }
+}
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:173-237.
 struct PlaneRootTransform {
     to_plane_root: SharedGeometryTransform,
     from_plane_root: SharedGeometryTransform,
-    plane_root: Weak<TransformPaintPropertyNode>,
+    plane_root: CachedNode,
     has_animation: bool,
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:239-245.
@@ -47,16 +78,39 @@ impl<M: Default> Default for ScreenTransform<M> {
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:25-32,161-172,247-265.
 struct NativeGeometryMapperTransformCache {
     to_2d_translation_root_: Vector2dF,
-    root_of_2d_translation_: Option<Weak<TransformPaintPropertyNode>>,
+    root_of_2d_translation_: Option<CachedNode>,
     plane_root_transform_: Option<Box<PlaneRootTransform>>,
     screen_transform_: Option<ScreenTransform<SharedGeometryTransform>>,
-    nearest_scroll_translation_: Option<Weak<TransformPaintPropertyNode>>,
-    scroll_translation_state_: Option<Weak<TransformPaintPropertyNode>>,
-    nearest_directly_composited_ancestor_: Option<Weak<TransformPaintPropertyNode>>,
+    nearest_scroll_translation_: Option<CachedNode>,
+    scroll_translation_state_: Option<CachedNode>,
+    nearest_directly_composited_ancestor_: Option<CachedNode>,
     has_sticky_or_anchor_position_: bool,
     is_backface_hidden_: bool,
     screen_transform_updated_: bool,
     cache_generation_: u32,
+    /// The published property trees this cache was computed in.
+    tree_scope_: CacheTreeScope,
+}
+/// Which published property trees a geometry cache was computed in. Blink has
+/// one live property tree, so the generation alone proves validity there.
+/// Here an unchanged node is shared by consecutive published trees (a scroll
+/// publishes a new one while the compositor still maps the previous one), and
+/// one shared cache slot must not hand values computed against one tree's
+/// ancestors to a query in the other. The Weak only names the tree; it pins
+/// the allocation, so the address cannot be reused while it is compared.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CacheTreeScope(Option<std::sync::Weak<FrozenPropertyTrees>>);
+impl CacheTreeScope {
+    pub(crate) fn of(trees: &NativeTrees) -> Self {
+        Self(trees.as_ref().map(Arc::downgrade))
+    }
+    pub(crate) fn is(&self, trees: &NativeTrees) -> bool {
+        match (&self.0, trees) {
+            (None, None) => true,
+            (Some(scope), Some(trees)) => std::ptr::eq(scope.as_ptr(), Arc::as_ptr(trees)),
+            _ => false,
+        }
+    }
 }
 impl Default for NativeGeometryMapperTransformCache {
     fn default() -> Self {
@@ -72,6 +126,7 @@ impl Default for NativeGeometryMapperTransformCache {
             is_backface_hidden_: false,
             screen_transform_updated_: false,
             cache_generation_: global_generation().wrapping_sub(1),
+            tree_scope_: CacheTreeScope::default(),
         }
     }
 }
@@ -89,7 +144,7 @@ impl NativeGeometryMapperTransformCache {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:44-58.
     pub fn UpdateIfNeeded<N: TransformCacheNode>(&mut self, node: &N) {
-        if self.cache_generation_ != global_generation() {
+        if self.cache_generation_ != global_generation() || !self.tree_scope_.is(node.Trees()) {
             self.Update(node);
         }
         debug_assert_eq!(self.cache_generation_, global_generation());
@@ -97,12 +152,14 @@ impl NativeGeometryMapperTransformCache {
     pub fn to_2d_translation_root(&self) -> &Vector2dF {
         &self.to_2d_translation_root_
     }
-    pub fn root_of_2d_translation(&self) -> Arc<TransformPaintPropertyNode> {
+    fn root_of_2d_translation(
+        &self,
+        owner: &Arc<TransformPaintPropertyNode>,
+    ) -> Arc<TransformPaintPropertyNode> {
         self.root_of_2d_translation_
             .as_ref()
             .expect("source initialized root")
-            .upgrade()
-            .expect("source live cached node")
+            .resolve(owner)
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:62-101.
     pub fn to_screen(&self) -> &SharedGeometryTransform {
@@ -186,11 +243,11 @@ impl NativeGeometryMapperTransformCache {
             );
         }
     }
-    pub fn plane_root(&self) -> Arc<TransformPaintPropertyNode> {
-        self.plane_root_transform_
-            .as_ref()
-            .map(|plane| plane.plane_root.upgrade().expect("source live plane root"))
-            .unwrap_or_else(|| self.root_of_2d_translation())
+    fn plane_root(&self, owner: &Arc<TransformPaintPropertyNode>) -> Arc<TransformPaintPropertyNode> {
+        match &self.plane_root_transform_ {
+            Some(plane) => plane.plane_root.resolve(owner),
+            None => self.root_of_2d_translation(owner),
+        }
     }
     pub fn has_animation_to_plane_root(&self) -> bool {
         if let Some(plane) = &self.plane_root_transform_ {
@@ -205,42 +262,28 @@ impl NativeGeometryMapperTransformCache {
     pub fn is_backface_hidden(&self) -> bool {
         self.is_backface_hidden_
     }
-    pub fn nearest_scroll_translation(&self) -> Arc<TransformPaintPropertyNode> {
-        self.nearest_scroll_translation_
-            .as_ref()
-            .expect("source initialized cache node")
-            .upgrade()
-            .expect("source live cached node")
-    }
-    pub fn scroll_translation_state(&self) -> Arc<TransformPaintPropertyNode> {
-        self.scroll_translation_state_
-            .as_ref()
-            .expect("source initialized cache node")
-            .upgrade()
-            .expect("source live cached node")
-    }
-    pub fn nearest_directly_composited_ancestor(&self) -> Option<Arc<TransformPaintPropertyNode>> {
-        self.nearest_directly_composited_ancestor_
-            .as_ref()
-            .map(|node| node.upgrade().expect("source live cached node"))
-    }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.cc:26-133.
     fn Update<N: TransformCacheNode>(&mut self, node: &N) {
-        debug_assert_ne!(self.cache_generation_, global_generation());
         self.cache_generation_ = global_generation();
+        self.tree_scope_ = CacheTreeScope::of(node.Trees());
         if node.IsRoot() {
             debug_assert!(node.IsIdentity());
             self.to_2d_translation_root_ = Vector2dF::default();
-            self.root_of_2d_translation_ = Some(node.Downgrade());
+            self.root_of_2d_translation_ = Some(CachedNode::Owner);
             self.plane_root_transform_ = None;
             self.screen_transform_ = None;
             self.screen_transform_updated_ = true;
             debug_assert!(node.HasScrollNode());
-            self.nearest_scroll_translation_ = Some(node.Downgrade());
-            self.scroll_translation_state_ = Some(node.Downgrade());
+            self.nearest_scroll_translation_ = Some(CachedNode::Owner);
+            self.scroll_translation_state_ = Some(CachedNode::Owner);
             return;
         }
+        let owner = node.NodeArc();
         let parent_node = node.Parent().expect("source node.UnaliasedParent()");
+        let parent_arc = parent_node.NodeArc();
+        let inherited = |member: &Option<CachedNode>| {
+            member.as_ref().map(|member| member.inherited(&parent_arc))
+        };
         WithTransformCache(&parent_node, |parent| {
             self.has_sticky_or_anchor_position_ = node.RequiresCompositingForStickyPosition()
                 || node.RequiresCompositingForAnchorPosition()
@@ -248,30 +291,31 @@ impl NativeGeometryMapperTransformCache {
             self.is_backface_hidden_ =
                 node.IsBackfaceHiddenInternal(parent.data.is_backface_hidden_);
             self.nearest_scroll_translation_ = if node.HasScrollNode() {
-                Some(node.Downgrade())
+                Some(CachedNode::Owner)
             } else {
-                parent.data.nearest_scroll_translation_.clone()
+                inherited(&parent.data.nearest_scroll_translation_)
             };
             if let Some(scroll_parent) = node.ScrollParentScrollTranslation() {
-                self.scroll_translation_state_ = Some(scroll_parent.Downgrade());
+                self.scroll_translation_state_ =
+                    Some(CachedNode::of(scroll_parent.NodeArc(), &owner));
             } else if node.HasScrollNode() {
-                self.scroll_translation_state_ = Some(node.Downgrade());
+                self.scroll_translation_state_ = Some(CachedNode::Owner);
             } else {
-                self.scroll_translation_state_ = parent.data.scroll_translation_state_.clone();
+                self.scroll_translation_state_ = inherited(&parent.data.scroll_translation_state_);
             }
             self.nearest_directly_composited_ancestor_ = if node.HasDirectCompositingReasons() {
-                Some(node.Downgrade())
+                Some(CachedNode::Owner)
             } else {
-                parent.data.nearest_directly_composited_ancestor_.clone()
+                inherited(&parent.data.nearest_directly_composited_ancestor_)
             };
             if node.IsIdentityOr2dTranslation() && !node.HasActiveTransformAnimation() {
-                self.root_of_2d_translation_ = parent.data.root_of_2d_translation_.clone();
+                self.root_of_2d_translation_ = inherited(&parent.data.root_of_2d_translation_);
                 self.to_2d_translation_root_ = parent.data.to_2d_translation_root_;
                 let translation = node.Get2dTranslation();
                 self.to_2d_translation_root_ += translation;
                 if parent.data.plane_root_transform_.is_some() {
                     self.plane_root_transform_ = Some(Box::new(PlaneRootTransform {
-                        plane_root: Arc::downgrade(&parent.data.plane_root()),
+                        plane_root: CachedNode::of(parent.data.plane_root(&parent_arc), &owner),
                         to_plane_root: parent.data.to_plane_root().clone(),
                         from_plane_root: SharedGeometryTransform::default(),
                         has_animation: false,
@@ -289,7 +333,7 @@ impl NativeGeometryMapperTransformCache {
                     self.plane_root_transform_ = None;
                 }
             } else {
-                self.root_of_2d_translation_ = Some(node.Downgrade());
+                self.root_of_2d_translation_ = Some(CachedNode::Owner);
                 self.to_2d_translation_root_ = Vector2dF::default();
                 let local = node.MatrixWithOriginApplied().ToGeometryMapperMatrix();
                 let is_plane_root = !local.IsFlat() || !local.IsInvertible();
@@ -297,7 +341,7 @@ impl NativeGeometryMapperTransformCache {
                     self.plane_root_transform_ = None;
                 } else {
                     self.plane_root_transform_ = Some(Box::new(PlaneRootTransform {
-                        plane_root: Arc::downgrade(&parent.data.plane_root()),
+                        plane_root: CachedNode::of(parent.data.plane_root(&parent_arc), &owner),
                         to_plane_root: SharedGeometryTransform::default(),
                         from_plane_root: SharedGeometryTransform::default(),
                         has_animation: false,
@@ -313,7 +357,7 @@ impl NativeGeometryMapperTransformCache {
                 }
             }
         });
-        if self.plane_root().parent.is_none() {
+        if self.plane_root(&owner).parent.is_none() {
             self.screen_transform_ = None;
             self.screen_transform_updated_ = true;
         } else {
@@ -327,7 +371,7 @@ impl NativeGeometryMapperTransformCache {
             return;
         }
         self.screen_transform_updated_ = true;
-        debug_assert!(!self.plane_root().parent.is_none());
+        debug_assert!(!self.plane_root(&node.NodeArc()).parent.is_none());
         debug_assert!(!node.IsRoot());
         let parent_node = node.Parent().expect("source parent_node");
         WithTransformCache(&parent_node, |parent| {
@@ -378,15 +422,21 @@ pub fn WithTransformCache<N: TransformCacheNode, R>(
 /// wrapper, engine owner or second mutable cache is retained by a Paint node.
 pub struct GeometryMapperTransformCache<'a, N: TransformCacheNode> {
     data: &'a mut NativeGeometryMapperTransformCache,
-    /// The node whose cache this is; cached ancestors upgrade through it.
+    /// The node whose cache this is; cached ancestors link through it.
     node: &'a N,
 }
 impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
+    fn link(&self, member: &CachedNode) -> N {
+        match member {
+            CachedNode::Owner => self.node.clone(),
+            CachedNode::Node(node) => self.node.Linked(node.clone()),
+        }
+    }
     pub fn ClearCache() {
         NativeGeometryMapperTransformCache::ClearCache();
     }
     pub fn IsValid(&self) -> bool {
-        self.data.IsValid()
+        self.data.IsValid() && self.data.tree_scope_.is(self.node.Trees())
     }
     pub fn UpdateIfNeeded(&mut self, node: &N) {
         self.data.UpdateIfNeeded(node);
@@ -398,7 +448,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         self.data.to_2d_translation_root()
     }
     pub fn root_of_2d_translation(&self) -> N {
-        self.node.Upgrade(
+        self.link(
             self.data
                 .root_of_2d_translation_
                 .as_ref()
@@ -407,12 +457,12 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
     }
     pub fn plane_root(&self) -> N {
         match &self.data.plane_root_transform_ {
-            Some(plane) => self.node.Upgrade(&plane.plane_root),
+            Some(plane) => self.link(&plane.plane_root),
             None => self.root_of_2d_translation(),
         }
     }
     pub fn nearest_scroll_translation(&self) -> N {
-        self.node.Upgrade(
+        self.link(
             self.data
                 .nearest_scroll_translation_
                 .as_ref()
@@ -420,7 +470,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         )
     }
     pub fn scroll_translation_state(&self) -> N {
-        self.node.Upgrade(
+        self.link(
             self.data
                 .scroll_translation_state_
                 .as_ref()
@@ -431,7 +481,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         self.data
             .nearest_directly_composited_ancestor_
             .as_ref()
-            .map(|weak| self.node.Upgrade(weak))
+            .map(|member| self.link(member))
     }
     pub fn projection_from_screen_is_valid(&self) -> bool {
         self.data.projection_from_screen_is_valid()

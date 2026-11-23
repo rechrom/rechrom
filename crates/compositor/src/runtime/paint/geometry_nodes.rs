@@ -8,7 +8,7 @@ use crate::{
     runtime::{geometry::Transform, types::CpuSkiaBackend},
 };
 use paint::paint_property_tree;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 fn rect(value: paint::paint_engine::PaintRect) -> Rect {
     ToEnclosingRect(RectF::new(
         value.x as f32,
@@ -19,14 +19,17 @@ fn rect(value: paint::paint_engine::PaintRect) -> Rect {
 }
 impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
     type Matrix = Transform<R>;
-    fn Downgrade(&self) -> Weak<paint_property_tree::TransformPaintPropertyNode> {
-        Arc::downgrade(self.as_arc())
+    fn NodeArc(&self) -> Arc<paint_property_tree::TransformPaintPropertyNode> {
+        self.as_arc().clone()
     }
-    fn Upgrade(&self, weak: &Weak<paint_property_tree::TransformPaintPropertyNode>) -> Self {
-        Self::from_arc_in(weak.upgrade().expect("source live cached node"), self.trees().clone())
+    fn Linked(&self, node: Arc<paint_property_tree::TransformPaintPropertyNode>) -> Self {
+        Self::from_arc_in(node, self.trees().clone())
     }
     fn CacheSlot(&self) -> &paint::opaque_paint_cache_slot::OpaquePaintCacheSlot {
         &self.node().geometry_mapper_cache
+    }
+    fn Trees(&self) -> &super::HandleTrees {
+        self.trees()
     }
     fn IsRoot(&self) -> bool {
         self.node().parent.is_none()

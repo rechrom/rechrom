@@ -47,8 +47,8 @@ fn nearest_filter<C: GeometryMapperContext>(
     context: &C,
     clip: &Arc<ClipPaintPropertyNode>,
 ) -> Option<Arc<ClipPaintPropertyNode>> {
-    WithClipCacheBy(clip, &|clip| context.ClipParent(clip), |cache| {
-        cache.NearestPixelMovingFilterClip()
+    WithClipCacheBy(clip, context.Trees(), &|clip| context.ClipParent(clip), |cache| {
+        cache.NearestPixelMovingFilterClip(clip)
     })
 }
 impl<C: GeometryMapperContext> GeometryMapper<C>
@@ -441,7 +441,7 @@ where
                 && !(flags.Has(VisualRectFlag::kUsePreciseClipPath)
                     && context.IsForCompositeClipPathAnimation(node))
             {
-                cached = WithClipCacheBy(node, &|clip| context.ClipParent(clip), |cache| cache.GetCachedClip(&key).cloned());
+                cached = WithClipCacheBy(node, context.Trees(), &|clip| context.ClipParent(clip), |cache| cache.GetCachedClip(&key).cloned());
             }
             if OVERLAP
                 && cached
@@ -489,7 +489,7 @@ where
                 if !(flags.Has(VisualRectFlag::kUsePreciseClipPath)
                     && context.IsForCompositeClipPathAnimation(node))
                 {
-                    WithClipCacheBy(node, &|clip| context.ClipParent(clip), |cache| {
+                    WithClipCacheBy(node, context.Trees(), &|clip| context.ClipParent(clip), |cache| {
                         cache.SetCachedClip(&ClipCacheEntry {
                             clip_and_transform: key.clone(),
                             clip_rect: clip,
@@ -505,7 +505,7 @@ where
                 || (flags.Has(VisualRectFlag::kUsePreciseClipPath)
                     && context.IsForCompositeClipPathAnimation(descendant))
                 || OVERLAP
-                || WithClipCacheBy(descendant, &|clip| context.ClipParent(clip), |cache| cache
+                || WithClipCacheBy(descendant, context.Trees(), &|clip| context.ClipParent(clip), |cache| cache
                     .GetCachedClip(&key)
                     .expect("source cached descendant clip")
                     .clip_rect
