@@ -1,75 +1,8 @@
-//! PAC's PaintRecord op walk (paint_artifact_compositor.cc custom-data
-//! replacement) for the concrete CPU family. It names the family directly:
-//! a family-generic impl in layerize cannot satisfy the trait's opaque `ops`
-//! iterator while the family bound itself implies this impl. It moves to
-//! layerize with the blanket family impls (MAIN_IMPL_SPLIT.md S1a-3).
+//! Unit test of PAC's PaintRecord op walk (layerize
+//! runtime/paint/artifact_record.rs, a blanket impl over LayerizeFamily) on
+//! the concrete CPU family, which only the compositor owns.
+#[cfg(test)]
 use super::*;
-use crate::{
-    adapter::paint_artifact_compositor::{ArtifactPaintRecord, ArtifactRecordOp},
-    runtime::types::{CpuCompositorTypes, CpuSkiaBackend},
-};
-impl<R: CpuSkiaBackend> ArtifactPaintRecord<CpuCompositorTypes<R>> for CpuPaintRecord<R> {
-    fn ops(&self) -> impl Iterator<Item = ArtifactRecordOp<'_, CpuCompositorTypes<R>>> {
-        use crate::adapter::display_item_list::DisplayPaintOpBuffer;
-        self.buffer()
-            .into_iter()
-            .flat_map(|b| b.iter())
-            .map(|op| match op {
-                CpuPaintOpRef::PaintRecord { op, .. }
-                    if op.r#type == paint::paint_engine::DisplayItemType::kCustomData =>
-                {
-                    ArtifactRecordOp::CustomData(op.custom_data_id)
-                }
-                CpuPaintOpRef::Converted(CpuPaintOp::CustomData(id)) => {
-                    ArtifactRecordOp::CustomData(*id)
-                }
-                CpuPaintOpRef::Converted(CpuPaintOp::DrawRecord(r)) => {
-                    ArtifactRecordOp::DrawRecord(r)
-                }
-                _ => ArtifactRecordOp::Other,
-            })
-    }
-    fn ReplaceCustomData(&self, replacements: &std::collections::BTreeMap<u32, Self>) -> Self {
-        use crate::adapter::display_item_list::DisplayPaintOpBuffer;
-        if replacements.is_empty() {
-            return self.clone();
-        }
-        let Some(source) = self.buffer() else {
-            return self.clone();
-        };
-        let mut output = CpuPaintOpBuffer::new(source.values().clone());
-        for (index, op) in source.iter().enumerate() {
-            let custom_data_id = match op {
-                CpuPaintOpRef::PaintRecord { op, .. }
-                    if op.r#type == paint::paint_engine::DisplayItemType::kCustomData =>
-                {
-                    Some(op.custom_data_id)
-                }
-                CpuPaintOpRef::Converted(CpuPaintOp::CustomData(id)) => Some(*id),
-                _ => None,
-            };
-            if let Some(id) = custom_data_id {
-                if let Some(replacement) = replacements.get(&id) {
-                    output.push(CpuPaintOp::DrawRecord(replacement.clone()));
-                } else {
-                    output.push(CpuPaintOp::CustomData(id));
-                }
-                continue;
-            }
-            match op {
-                CpuPaintOpRef::Converted(CpuPaintOp::DrawRecord(record)) => {
-                    output.push(CpuPaintOp::DrawRecord(
-                        record.ReplaceCustomData(replacements),
-                    ));
-                }
-                _ => {
-                    output.push(source.RetainOpAt(index));
-                }
-            }
-        }
-        output.ReleaseAsRecord()
-    }
-}
 
 #[cfg(test)]
 mod tests {

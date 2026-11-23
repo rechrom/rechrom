@@ -1,145 +1,17 @@
 //! Exact native Paint/Picture/Tile owners for the production CPU family.
 //! Registered jointly with owner_types; this file contains no service owner.
+//! The main-half traits (PAC, PaintChunksToCcLayer, PendingLayer, the main
+//! layers) are blanket impls over LayerizeFamily in layerize
+//! (runtime/main_family.rs).
 use super::{
     paint,
     types::{CpuCompositorTypes, CpuSkiaBackend},
 };
 use crate::adapter::{
-    paint_worklet::PaintWorkletTypes, picture_layer::PictureLayerTypes,
+    paint_worklet::PaintWorkletTypes,
     picture_layer_impl::PictureLayerImplTypes,
     tile::TileTypes,
 };
-impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::PaintArtifactCompositorTypes
-    for CpuCompositorTypes<R>
-{
-    type CanvasSnapshotCallback = std::sync::Arc<dyn paint::CpuCanvasSnapshot<R>>;
-    type CompositingReasons = paint::CpuCompositingReasons;
-    type LayersAsJson = paint::CpuLayersAsJson<Self>;
-    type CrashKeyScope = paint::PaintTraceScope;
-    type UpdateTraceScope = paint::PaintTraceScope;
-}
-impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksTypes
-    for CpuCompositorTypes<R>
-{
-    type ChunkMapper = paint::CpuGeometryMapper<R>;
-    type RoundedRect = crate::adapter::geometry::RRectF;
-    type PaintPath = std::sync::Arc<::paint::paint_clip_path::PaintClipPath>;
-    type ScrollNode = paint::ScrollNode<R>;
-    type PaintFlags = paint::CpuPaintFlags<R>;
-    type PaintFilter = paint::CpuPaintFilter;
-    type FilterOperations = ::paint::cc::paint::filter_operations::FilterOperations;
-    type HitTestData = ::paint::paint_engine::PaintHitTestData;
-    type RegionCaptureData = Vec<([u64; 2], ::paint::paint_engine::PaintRect)>;
-    type TrackedData = Vec<::paint::paint_engine::PaintTrackedElementRect>;
-    type SelectionData = ::paint::paint_engine::PaintLayerSelectionData;
-    type CaptureId = super::metadata::RegionCaptureCropId;
-    type TrackingFeature = super::metadata::TrackedElementFeature;
-    type TrackedId = [u64; 2];
-    type FrameToken = Option<super::metadata::FrameToken>;
-    type PaintRecorder = paint::CpuConversionRecorder<R>;
-    type UnderInvalidationPicture = paint::CpuPaintRecord<R>;
-}
-impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::SynthesizedClipTypes
-    for CpuCompositorTypes<R>
-{
-    type SkRoundedRect = super::skia::SkRoundedRect;
-}
-impl<R: CpuSkiaBackend> crate::adapter::property_tree_manager::PropertyTreeManagerTypes
-    for CpuCompositorTypes<R>
-{
-    fn RootTransformNode() -> paint::TransformNode<R> {
-        paint::PropertyTreeState::<R>::default().transform()
-    }
-    fn RootClipNode() -> paint::ClipNode<R> {
-        paint::PropertyTreeState::<R>::default().clip()
-    }
-    fn RootEffectNode() -> paint::EffectNode<R> {
-        paint::PropertyTreeState::<R>::default().effect()
-    }
-    fn RootScrollNode() -> paint::ScrollNode<R> {
-        paint::ScrollNode::from_arc(
-            ::paint::paint_property_tree::PropertyTreeState::default()
-                .transform
-                .scroll
-                .as_ref()
-                .expect("native ScrollRoot")
-                .clone(),
-        )
-    }
-    fn ScrollNodeForTransform(t: &paint::TransformNode<R>) -> Option<paint::ScrollNode<R>> {
-        t.node()
-            .scroll
-            .as_ref()
-            .map(|s| paint::ScrollNode::from_arc(s.clone()))
-    }
-    fn UniformScaleTransform(scale: f32) -> super::geometry::Transform<R> {
-        let mut t = super::geometry::Transform::default();
-        t.transform_mut().Scale(scale, scale);
-        t
-    }
-    fn SourceToDestinationProjection(
-        s: &paint::TransformNode<R>,
-        d: &paint::TransformNode<R>,
-    ) -> super::geometry::Transform<R> {
-        crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper::GeometryMapper::<paint::CpuGeometryMapper<R>>::SourceToDestinationProjection(s,d)
-    }
-    // Source: platform/graphics/compositor_element_id.cc:41-49. Replace only
-    // namespace bits, preserving the original unique object identity.
-    fn EffectMaskElementId(
-        effect: crate::adapter::input_types::ElementId,
-    ) -> crate::adapter::input_types::ElementId {
-        let n = foundation::CompositorElementIdNamespace::kEffectMask as u64;
-        let bits = foundation::compositor_element_id::kCompositorNamespaceBitCount
-            + foundation::compositor_element_id::kCompositorReservedBitCount;
-        crate::adapter::input_types::ElementId::new(
-            (effect.GetInternalValue() & !((1u64 << bits) - 1))
-                | (n << foundation::compositor_element_id::kCompositorReservedBitCount),
-        )
-    }
-    fn NewUniqueElementId() -> crate::adapter::input_types::ElementId {
-        crate::adapter::input_types::ElementId::new(
-            foundation::CompositorElementIdFromUniqueObjectId(
-                foundation::NewUniqueObjectId(),
-                foundation::CompositorElementIdNamespace::kUniqueObjectId,
-            )
-            .GetInternalValue(),
-        )
-    }
-}
-impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingLayerTypes for CpuCompositorTypes<R> {
-    type ContentDisplayItemList = paint::ContentDisplayItemList<R>;
-    type RasterInvalidator = paint::CpuRasterInvalidator<R>;
-    type RasterInvalidationTracking=crate::third_party::blink::renderer::platform::graphics::paint::raster_invalidation_tracking::RasterInvalidationTracking<paint::CpuRasterTrackingTypes<R>>;
-    type PaintRecord = paint::CpuPaintRecord<R>;
-    type PaintOpBuffer = paint::CpuPaintOpBuffer<R>;
-    type Json = serde_json::Value;
-    type JsonArray = Vec<serde_json::Value>;
-    type LoggingCanvas = paint::CpuLoggingCanvas<R>;
-    type PaintArtifact = paint::PaintArtifact;
-    type PaintChunk = paint::PaintChunk;
-    type DisplayItem = paint::DisplayItem;
-    type PaintChunkSubset = paint::PaintChunkSubset;
-    type PropertyTreeState = paint::PropertyTreeState<R>;
-    type TransformNode = paint::TransformNode<R>;
-    type ClipNode = paint::ClipNode<R>;
-    type EffectNode = paint::EffectNode<R>;
-    type PropertyNodeIdentity = usize;
-    type PaintPropertyChange = paint::PaintPropertyChange;
-    type DomNodeId = super::types::NodeId;
-    type ClientId = usize;
-    type CanvasChildPaintRecord = paint::CpuCanvasChildPaintRecord<R>;
-    type CanvasChildPaintState =
-        std::sync::Arc<::paint::paint_property_tree::PaintCanvasChildState>;
-    fn UnchangedPaintPropertyChange() -> Self::PaintPropertyChange {
-        Self::PaintPropertyChange::Unchanged
-    }
-    fn ChangedOnlySimpleValues() -> Self::PaintPropertyChange {
-        Self::PaintPropertyChange::ChangedOnlySimpleValues
-    }
-    fn InvalidDomNodeId() -> Self::DomNodeId {
-        super::types::NodeId(0)
-    }
-}
 impl<R: CpuSkiaBackend> TileTypes for CpuCompositorTypes<R> {
     type ResourceId = crate::adapter::layer_tree_impl::ResourceId;
     type Resource = crate::cc::resources::resource_pool::InUsePoolResource<Self>;
@@ -182,18 +54,6 @@ impl<R: CpuSkiaBackend> PictureLayerImplTypes for CpuCompositorTypes<R> {
     ) -> Self::Layer {
         super::layer::CompositorLayer::Picture(layer)
     }
-}
-impl<R: CpuSkiaBackend> PictureLayerTypes for CpuCompositorTypes<R> {
-    type Recording = paint::CpuRecordingTypes<R>;
-    type ObjectTracker = paint::ObjectTracker;
-    type TraceScope = paint::PaintTraceScope;
-    type LayerTreeTask = paint::PaintTraceScope;
-    type PictureRecorder = paint::CpuPictureRecorder<R>;
-}
-impl<R: CpuSkiaBackend> crate::adapter::solid_color_layer::SolidColorLayerTypes
-    for CpuCompositorTypes<R>
-{
-    type SolidPictureRecorder = paint::CpuPictureRecorder<R>;
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_layer::SolidColorLayerImplTarget<CpuCompositorTypes<R>>

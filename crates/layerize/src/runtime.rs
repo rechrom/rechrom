@@ -4,6 +4,7 @@
 //! concrete CPU family.
 
 pub mod paint;
+mod main_family;
 
 // Module paths of the shared value roots under which the moved bindings name
 // them (the compositor keeps the same paths). Aliases only.

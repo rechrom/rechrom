@@ -52,12 +52,7 @@ impl<R: CpuSkiaBackend> CpuCompositorTypes<R> {
     }
 }
 
-/// Strong native sequenced-task-runner capability, supplied by the embedding.
-/// No worker/thread/clock implementation is created by the compositor family.
-pub trait ResultTaskRunner: Send + Sync {
-    fn PostTask(&self, task: Box<dyn FnOnce() + Send>);
-}
-pub type TaskRunner = Arc<dyn ResultTaskRunner>;
+pub use layerize::commit::main_callbacks::{ResultTaskRunner, TaskRunner};
 /// Native Viz request ownership and abort-on-drop behavior are implemented by
 /// the external Viz request owner. This wrapper forwards only native fields.
 pub trait CopyOutputRequestBackend:
@@ -184,30 +179,7 @@ impl crate::adapter::layer_impl::LayerImplNodeId for NodeId {
         self.0
     }
 }
-/// Native base::RepeatingCallback void(PointF,ElementId). Cloning shares only
-/// the callback allocation, not any compositor tree or Layer state.
-#[derive(Clone, Default)]
-pub struct DidScrollCallback(
-    pub  Option<
-        Arc<
-            dyn Fn(crate::adapter::geometry::PointF, crate::adapter::input_types::ElementId)
-                + Send
-                + Sync,
-        >,
-    >,
-);
-impl crate::adapter::main_layer::LayerDidScrollCallback for DidScrollCallback {
-    fn is_null(&self) -> bool {
-        self.0.is_none()
-    }
-    fn Run(
-        &self,
-        offset: crate::adapter::geometry::PointF,
-        element: crate::adapter::input_types::ElementId,
-    ) {
-        (self.0.as_ref().expect("native null callback invocation"))(offset, element)
-    }
-}
+pub use layerize::commit::main_callbacks::DidScrollCallback;
 /// Only the native global trace effect survives until LayerImpl's destructor.
 /// The injected sink is forbidden from retaining a Layer, tree, host or Page.
 pub struct DeletionTrace(

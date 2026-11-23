@@ -27,11 +27,35 @@ use crate::{
     },
 };
 
-// The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h).
+// The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h). The
+// main traits (MainLayerTypes, ScrollbarLayerTypes, ...) are blanket impls
+// over LayerizeFamily in layerize (runtime/main_family.rs).
 impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
     for CpuCompositorTypes<R>
 {
     type Skia = R;
+    // Source: cc/layers/painted_scrollbar_layer.cc RasterizeScrollbarPart.
+    fn RasterizeScrollbarThumb(
+        scrollbar: &super::paint::Scrollbar,
+        logical_size: crate::adapter::geometry::Size,
+        pixel_size: crate::adapter::geometry::Size,
+    ) -> super::host_resources::UIBitmap {
+        use crate::cc::input::scrollbar::Scrollbar as _;
+        let mut canvas = super::paint::ScrollbarCanvas::new(logical_size, pixel_size);
+        let mut adapter = scrollbar.clone();
+        adapter.PaintThumb(
+            &mut canvas,
+            &crate::adapter::geometry::Rect::new(0, 0, logical_size.width(), logical_size.height()),
+        );
+        super::host_resources::UIBitmap(std::sync::Arc::new(
+            super::host_resources::RawUIBitmap::new(
+                canvas.pixel_size(),
+                canvas.pixels().to_vec(),
+                canvas.row_bytes(),
+                false,
+            ),
+        ))
+    }
 }
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
     type Transform = Transform<R>;
@@ -169,62 +193,6 @@ impl<R: CpuSkiaBackend> layerize::commit::push_properties::PushPropertiesTypes
     type FilterQuality = super::paint::FilterQuality;
     type DynamicRangeLimit = super::paint::DynamicRangeLimit;
     type ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, Self>;
-}
-impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
-    type DidScrollCallback = super::types::DidScrollCallback;
-    type NodeInfo = super::display_item_list::NodeInfo;
-    type Picture = super::paint::Picture<R>;
-    type LayerSelection = crate::cc::input::layer_selection_bound::LayerSelection;
-    type MicroBenchmark = super::paint::MicroBenchmark<Self>;
-    type TaskRunner = super::types::TaskRunner;
-    type DerivedServices = dyn super::paint::CpuPaintServices<Self>;
-}
-impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes
-    for CpuCompositorTypes<R>
-{
-    type ScrollbarCanvas = super::paint::ScrollbarCanvas;
-    type Scrollbar = super::paint::Scrollbar;
-    fn RasterizeScrollbarThumb(
-        scrollbar: &Self::Scrollbar,
-        logical_size: crate::adapter::geometry::Size,
-        pixel_size: crate::adapter::geometry::Size,
-    ) -> <Self as layerize::commit::CommitTypes>::UIResourceBitmap {
-        use crate::cc::input::scrollbar::Scrollbar as _;
-        let mut canvas = super::paint::ScrollbarCanvas::new(logical_size, pixel_size);
-        let mut adapter = scrollbar.clone();
-        adapter.PaintThumb(
-            &mut canvas,
-            &crate::adapter::geometry::Rect::new(0, 0, logical_size.width(), logical_size.height()),
-        );
-        super::host_resources::UIBitmap(std::sync::Arc::new(
-            super::host_resources::RawUIBitmap::new(
-                canvas.pixel_size(),
-                canvas.pixels().to_vec(),
-                canvas.row_bytes(),
-                false,
-            ),
-        ))
-    }
-    fn WithPaintedScrollbarAnimation(
-        scrollbar: &Self::Scrollbar,
-        opacity: f32,
-        thumb_width: i32,
-        needs_repaint: bool,
-    ) -> std::sync::Arc<Self::Scrollbar> {
-        std::sync::Arc::new(scrollbar.WithPaintedAnimation(opacity, thumb_width, needs_repaint))
-    }
-    fn PaintedScrollbarConstructor(
-    ) -> Option<crate::adapter::scrollbar_layer_base::ScrollbarConstructor<Self>> {
-        Some(crate::cc::layers::painted_scrollbar_layer::PaintedScrollbarLayer::<Self>::Constructor)
-    }
-}
-impl<R: CpuSkiaBackend> crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
-    for CpuCompositorTypes<R>
-{
-}
-impl<R: CpuSkiaBackend> crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerTypes
-    for CpuCompositorTypes<R>
-{
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<CpuCompositorTypes<R>>

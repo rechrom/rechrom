@@ -22,6 +22,7 @@ use paint::paint_property_tree;
 // commit vocabulary shared with the impl half.
 pub use crate::commit::paint::*;
 mod artifact_nodes;
+mod artifact_record;
 mod conversion;
 mod conversion_nodes;
 mod conversion_values;

@@ -1,6 +1,6 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2 and S1a-3 B1-B2 done (see "S1a-3 status" and "Plan
+Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B2 and the blanket family impls done (see "S1a-3 status" and "Plan
 correction" at the end); S1a-3 B3-B4 and the thread split (S1b/S1d) are not
 implemented.
 
@@ -537,7 +537,34 @@ Approved for S1a-3: option (h) as above; during S1a only,
   dev-dependencies; the moved `invalidation`, `scroll_nodes`, `scrollbar` and
   `subset` tests name only layerize paths but were not run (B4).
 
-Next: blanket family impls (with `ArtifactPaintRecord`), B3
+- **Blanket family impls done.** `layerize/src/runtime/main_family.rs` holds
+  `impl<F: LayerizeFamily>` blanket impls of PAC, PaintChunks,
+  SynthesizedClip, PropertyTreeManager, PendingLayer, PictureLayer,
+  SolidColorLayer, MainLayer, ScrollbarLayer, SolidColorScrollbarLayer and
+  PaintedScrollbarLayer types (cut from `runtime/{picture_types,
+  owner_types}.rs`). `LayerizeFamily` now fixes, through its
+  `PushPropertiesTypes<..>` supertrait, the commit values the main half names
+  (`Transform = Transform<Skia>`, `Filters`/`Path` of `Skia`,
+  `RegionBackend = Skia`, `NodeId`, `RegionCaptureBounds`,
+  `TrackedElementRects`, `FilterQuality`, `DynamicRangeLimit`,
+  `CopyOutputRequest: MainLayerCopyOutputRequest<TaskRunner = TaskRunner>`)
+  and requires the push targets (`Layer: PictureLayerImplTarget<Self> +
+  SolidColorLayerImplTarget + PaintedScrollbarLayerImplTarget +
+  SolidColorScrollbarLayerImplTarget + SurfaceLayerImplTarget`) plus
+  `SurfaceRangeTypes`, so `F: LayerizeFamily` alone proves every main trait
+  and their associated types normalize. Its only hook is
+  `RasterizeScrollbarThumb` (builds the impl `UIBitmap`). `DidScrollCallback`,
+  `ResultTaskRunner` and `TaskRunner` moved to `commit::main_callbacks`
+  (re-exported from `runtime/types.rs`). Rule for main code from now on:
+  bound generics on `F: LayerizeFamily` only, never on a main trait, or the
+  param-env candidate shadows the blanket impl and projections stop
+  normalizing. `ArtifactPaintRecord` is
+  `impl<F: LayerizeFamily> for CpuPaintRecord<F::Skia>` in
+  `layerize/src/runtime/paint/artifact_record.rs` (no boxing needed); its unit
+  test stays in the compositor file of the same name (it needs the concrete
+  family).
+
+Next: B3
 (`paint_services`, `pac_scroll`, `canvas_child_record`, `main_host`,
 `main_endpoint`, `main_frame_lifecycle`, animation coalescing,
 `LayerizeEngine`), B4 (boundary test to zero allowance plus the

@@ -15,6 +15,7 @@ pub mod invalidation_region;
 pub mod draw_property_utils;
 pub mod layer_value_backend;
 pub mod layerize_family;
+pub mod main_callbacks;
 pub mod property_tree;
 pub mod property_tree_services;
 pub mod property_types;
