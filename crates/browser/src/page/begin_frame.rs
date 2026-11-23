@@ -459,7 +459,7 @@ impl Page {
                     .state
                     .rendering
                     .borrow()
-                    .executor
+                    .impl_half.executor
                     .TimeTicks(args.frame_time);
                 // Preserve the compositor clock origin while crossing into
                 // Blink's independent source input timestamp value type.

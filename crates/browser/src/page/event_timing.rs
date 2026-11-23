@@ -111,7 +111,7 @@ impl PageState {
             document: Rc::downgrade(document),
             frame,
             identity: document.borrow().GetDocument().RootHandle(),
-            clock: self.rendering.borrow().executor.clone(),
+            clock: self.rendering.borrow().impl_half.executor.clone(),
             widget: Rc::downgrade(&self.event_timing_widget),
         });
         if let Some(performance) = timing.ExistingEventTimingSource() {
@@ -121,7 +121,7 @@ impl PageState {
             let origin = self
                 .rendering
                 .borrow()
-                .executor
+                .impl_half.executor
                 .TimeForInstant(timing.MonotonicOrigin());
             timing.BindEventTimingEnvironment(
                 self.InteractionEventClock(),

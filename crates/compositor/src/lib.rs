@@ -44,6 +44,7 @@ pub type CompositorFrameSubmission =
 pub mod engine;
 pub use engine::{
     CommitDeferralReason, CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
+    CompositorMainEngine,
     CompositorExecutors, CompositorInput, CompositorMainThreadEffect, CompositorMutation,
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,

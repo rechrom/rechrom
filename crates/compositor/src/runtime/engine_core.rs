@@ -57,11 +57,14 @@ pub(crate) struct EngineCore {
     // main side of the open main frame and its prepared or ready commit,
     // ProxyImpl the posted DataForCommit. Declared before `layerize` so that
     // the commit leases they may hold are released before the main host.
-    pub(crate) proxy_main: layerize::runtime::proxy_main::ProxyMain<Root>,
+    // Since S1b-6 the Page owns ProxyMain and `layerize` (the main half,
+    // `crate::engine::CompositorMainEngine`); they are lent here for the
+    // duration of one CompositorEngine call (`lent_main`).
+    pub(crate) proxy_main: super::lent_main::LentMain<layerize::runtime::proxy_main::ProxyMain<Root>>,
     pub(crate) proxy_impl: super::proxy_impl::ProxyImpl,
     // The main half: PAC, previous artifact, scroll callbacks, main paint
     // services and the main-frame deferral state (MAIN_IMPL_SPLIT.md B3).
-    pub(crate) layerize: layerize::LayerizeEngine<Root>,
+    pub(crate) layerize: super::lent_main::LentMain<layerize::LayerizeEngine<Root>>,
     pub(crate) host: Option<ClientLayerTreeHostImpl<Root>>,
     pub(crate) services: CpuHostServices<Root>,
     // The impl side of the main host's Proxy endpoint (the main AnimationHost
@@ -91,22 +94,6 @@ pub(crate) struct EngineCore {
     surface_parameters: Option<(crate::adapter::geometry::Size, u32)>,
 }
 impl EngineCore {
-    pub(crate) fn ConvertPaintArtifactSubsetToRecord(
-        &self,
-        artifact: Arc<PaintArtifact>,
-        state: &paint::paint_property_tree::PropertyTreeState,
-    ) -> crate::engine::ImmutablePaintRecord {
-        self.layerize
-            .ConvertPaintArtifactSubsetToRecord(artifact, state)
-    }
-
-    pub(crate) fn CreateVideoSurfaceForeignLayer(
-        &mut self,
-        range: crate::runtime::types::SurfaceRange,
-    ) -> Arc<dyn paint::ForeignLayer> {
-        self.layerize.CreateVideoSurfaceForeignLayer(range)
-    }
-
     pub(crate) fn SetViewportState(
         &mut self,
         viewport: CompositorViewportState,
@@ -192,7 +179,7 @@ impl EngineCore {
     pub(crate) fn new(
         mut services: CpuHostServices<Root>,
         init: HostInit<Root>,
-        layerize: layerize::LayerizeEngine<Root>,
+        layerize: Box<layerize::LayerizeEngine<Root>>,
         main_effects: Arc<EngineMainHostEffects>,
         lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
         scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
@@ -220,14 +207,16 @@ impl EngineCore {
             },
         );
         let result = Self {
-            proxy_main: layerize::runtime::proxy_main::ProxyMain::new(Default::default()),
+            proxy_main: super::lent_main::LentMain::new(Box::new(
+                layerize::runtime::proxy_main::ProxyMain::new(Default::default()),
+            )),
             proxy_impl: super::proxy_impl::ProxyImpl::new(),
             host: Some(host),
             services,
             main_effects,
             lifecycle,
             scheduler_queries,
-            layerize,
+            layerize: super::lent_main::LentMain::new(layerize),
             frame_sink,
             last_committed_source_frame_number: None,
             effects: Vec::new(),
@@ -576,7 +565,11 @@ impl EngineCore {
     pub(crate) fn Shutdown(&mut self) {
         // Native child client finalization needs the current actual main tree;
         // clear clients before detaching/dropping the main root allocation.
-        self.layerize.Shutdown();
+        // The main half is lent only when the Page shuts the engine down
+        // (CompositorEngine::Shutdown); a later drop finds it returned.
+        if self.layerize.IsLent() {
+            self.layerize.Shutdown();
+        }
         if let Some(mut host) = self.host.take() {
             host.BaseMutable()
                 .ReleaseLayerTreeFrameSink(&mut HostImplContext {

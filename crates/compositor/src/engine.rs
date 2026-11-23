@@ -532,10 +532,40 @@ impl From<layerize::commit::main_effects::PacScrollEffect> for CompositorMainThr
 pub type ImmutablePaintRecord =
     crate::runtime::paint::CpuPaintRecord<crate::runtime::skia::SkRegion>;
 
-pub struct CompositorEngine {
-    assembly: crate::runtime::engine_assembly::EngineAssembly,
+type MainFamily = crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>;
+
+/// The main half of one Page compositor (S1b-6 of S1B_PROXY_DESIGN.md):
+/// Blink's LayerTreeView role over `layerize::LayerizeEngine` (main
+/// LayerTreeHost, PaintArtifactCompositor, main AnimationHost) and
+/// `ProxyMain`. The Page owns it next to its `CompositorEngine` (the impl
+/// half) and lends it to every `CompositorEngine` call, because both halves
+/// still run on one sequence with the in-process Proxy transport (decision
+/// D1). Declared fields drop ProxyMain (which may hold a commit lease)
+/// before the main host.
+pub struct CompositorMainEngine {
+    proxy_main: Option<Box<layerize::runtime::proxy_main::ProxyMain<MainFamily>>>,
+    layerize: Option<Box<layerize::LayerizeEngine<MainFamily>>>,
 }
-impl CompositorEngine {
+impl CompositorMainEngine {
+    pub(crate) fn new(
+        proxy_main: Box<layerize::runtime::proxy_main::ProxyMain<MainFamily>>,
+        layerize: Box<layerize::LayerizeEngine<MainFamily>>,
+    ) -> Self {
+        Self {
+            proxy_main: Some(proxy_main),
+            layerize: Some(layerize),
+        }
+    }
+    fn Layerize(&self) -> &layerize::LayerizeEngine<MainFamily> {
+        self.layerize
+            .as_deref()
+            .expect("main half returned after the CompositorEngine call")
+    }
+    fn LayerizeMut(&mut self) -> &mut layerize::LayerizeEngine<MainFamily> {
+        self.layerize
+            .as_deref_mut()
+            .expect("main half returned after the CompositorEngine call")
+    }
     /// PaintRecordBuilder::EndRecording, source paint_record_builder.cc:36-44.
     /// This is a value-only conversion using the same Page compositor's source
     /// Paint services. It neither commits nor mutates the resident PAC/tree.
@@ -544,123 +574,188 @@ impl CompositorEngine {
         artifact: Arc<PaintArtifact>,
         state: &paint::paint_property_tree::PropertyTreeState,
     ) -> ImmutablePaintRecord {
-        self.assembly
+        self.Layerize()
             .ConvertPaintArtifactSubsetToRecord(artifact, state)
     }
-
-    pub fn new(
-        config: CompositorConfig,
-        executors: CompositorExecutors,
-    ) -> Result<Self, CompositorError> {
-        crate::runtime::engine_factory::CreateDefault(config, executors)
-            .map(|assembly| Self { assembly })
-    }
-    pub fn Commit(
-        &mut self,
-        artifact: Arc<PaintArtifact>,
-        viewport: CompositorViewportState,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.Commit(artifact, viewport)
-    }
-    pub fn CommitWithScrollAnimations(
-        &mut self,
-        artifact: Arc<PaintArtifact>,
-        viewport: CompositorViewportState,
-        areas: Vec<ElementId>,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.assembly
-            .CommitWithScrollAnimations(artifact, viewport, areas)
-    }
     /// Creates the resident cc::SurfaceLayer used by VideoPainter's
-    /// kForeignLayerVideo item. The child frame is submitted separately to Viz
-    /// and identified by `range`; Browser never receives compositor services.
+    /// kForeignLayerVideo item, through the main LayerTreeHost. The child
+    /// frame is submitted separately to Viz and identified by `range`;
+    /// Browser never receives compositor services.
     pub fn CreateVideoSurfaceForeignLayer(
         &mut self,
         range: crate::runtime::types::SurfaceRange,
     ) -> Arc<dyn paint::ForeignLayer> {
-        self.assembly.CreateVideoSurfaceForeignLayer(range)
+        self.LayerizeMut().CreateVideoSurfaceForeignLayer(range)
+    }
+}
+
+pub struct CompositorEngine {
+    assembly: crate::runtime::engine_assembly::EngineAssembly,
+}
+impl CompositorEngine {
+    /// Creates both halves of one Page compositor: the main half the Page
+    /// owns and the impl half (S1b-6).
+    pub fn new(
+        config: CompositorConfig,
+        executors: CompositorExecutors,
+    ) -> Result<(CompositorMainEngine, Self), CompositorError> {
+        crate::runtime::engine_factory::CreateDefault(config, executors)
+            .map(|(main, assembly)| (main, Self { assembly }))
+    }
+    /// Runs one impl-half call with the main half lent to it
+    /// (`runtime::lent_main`). The halves are returned before this returns.
+    fn Lend<T>(
+        &mut self,
+        main: &mut CompositorMainEngine,
+        call: impl FnOnce(&mut crate::runtime::engine_assembly::EngineAssembly) -> T,
+    ) -> T {
+        self.assembly.LendMain(
+            main.proxy_main.take().expect("main half not lent twice"),
+            main.layerize.take().expect("main half not lent twice"),
+        );
+        let result = call(&mut self.assembly);
+        let (proxy_main, layerize) = self.assembly.ReturnMain();
+        main.proxy_main = Some(proxy_main);
+        main.layerize = Some(layerize);
+        result
+    }
+    /// Tears both halves down in the former single-engine order (scheduler
+    /// stop, PAC destruction and main root detach, impl host). The Page calls
+    /// it before dropping the halves; a dropped engine that was never shut
+    /// down still tears down its impl half.
+    pub fn Shutdown(&mut self, main: &mut CompositorMainEngine) {
+        if main.proxy_main.is_some() && main.layerize.is_some() {
+            self.Lend(main, |assembly| assembly.Shutdown())
+        } else {
+            // A call that unwound left the main half lent to the core; the
+            // teardown then runs with it there (no second panic in Drop).
+            self.assembly.Shutdown()
+        }
+    }
+    pub fn Commit(
+        &mut self,
+        main: &mut CompositorMainEngine,
+        artifact: Arc<PaintArtifact>,
+        viewport: CompositorViewportState,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.Commit(artifact, viewport))
+    }
+    pub fn CommitWithScrollAnimations(
+        &mut self,
+        main: &mut CompositorMainEngine,
+        artifact: Arc<PaintArtifact>,
+        viewport: CompositorViewportState,
+        areas: Vec<ElementId>,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| {
+            assembly.CommitWithScrollAnimations(artifact, viewport, areas)
+        })
     }
     pub fn SetViewport(
         &mut self,
+        main: &mut CompositorMainEngine,
         viewport: CompositorViewportState,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.SetViewport(viewport)
+        self.Lend(main, |assembly| assembly.SetViewport(viewport))
     }
     /// Mirrors LayerTreeHost/ProxyMain commit demand before the main-frame
     /// lifecycle has produced its PaintArtifact.
-    pub fn RequestMainFrame(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.RequestMainFrame()
+    pub fn RequestMainFrame(
+        &mut self,
+        main: &mut CompositorMainEngine,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.RequestMainFrame())
     }
     /// Requests a compositor frame from the resident active tree without
     /// manufacturing a new PaintArtifact or main-tree commit.
-    pub fn RequestRedraw(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.RequestRedraw()
+    pub fn RequestRedraw(
+        &mut self,
+        main: &mut CompositorMainEngine,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.RequestRedraw())
     }
-    pub fn FinishMainFrameWithoutUpdates(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.FinishMainFrameWithoutUpdates()
+    pub fn FinishMainFrameWithoutUpdates(
+        &mut self,
+        main: &mut CompositorMainEngine,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.FinishMainFrameWithoutUpdates())
     }
-    pub fn CanApplyCompositedAnimationProperties(&self) -> bool {
-        self.assembly.CanApplyCompositedAnimationProperties()
+    pub fn CanApplyCompositedAnimationProperties(&self, main: &CompositorMainEngine) -> bool {
+        main.Layerize().HasResidentPaintArtifact()
     }
     pub fn BeginFrame(
         &mut self,
+        main: &mut CompositorMainEngine,
         args: BeginFrameArgs,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.BeginFrame(args)
+        self.Lend(main, |assembly| assembly.BeginFrame(args))
     }
-    pub fn Input(&mut self, input: CompositorInput) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.Input(input)
+    pub fn Input(
+        &mut self,
+        main: &mut CompositorMainEngine,
+        input: CompositorInput,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.Input(input))
     }
     pub fn Mutate(
         &mut self,
+        main: &mut CompositorMainEngine,
         mutation: CompositorMutation,
     ) -> Result<CompositorOutput, CompositorError> {
-        match mutation {
+        self.Lend(main, |assembly| match mutation {
             CompositorMutation::RequestPresentationTime { request } => {
-                self.assembly.RequestPresentationTime(request)
+                assembly.RequestPresentationTime(request)
             }
             CompositorMutation::FrameLifecycle(mutation) => {
-                self.assembly.ApplyFrameLifecycle(mutation)
+                assembly.ApplyFrameLifecycle(mutation)
             }
-            CompositorMutation::Input(input) => self.assembly.Input(input),
+            CompositorMutation::Input(input) => assembly.Input(input),
             CompositorMutation::CompositedAnimationProperties(update) => {
-                self.assembly.ApplyCompositedAnimationProperties(update)
+                assembly.ApplyCompositedAnimationProperties(update)
             }
             CompositorMutation::ScrollbarPaint(mutation) => {
-                self.assembly.ApplyScrollbarPaintMutation(mutation)
+                assembly.ApplyScrollbarPaintMutation(mutation)
             }
             CompositorMutation::PropertyAnimation(mutation) => {
-                self.assembly.ApplySourcePropertyAnimation(mutation)
+                assembly.ApplySourcePropertyAnimation(mutation)
             }
             CompositorMutation::ScrollAnimation(mutation) => {
-                self.assembly.ApplySourceScrollAnimation(mutation)
+                assembly.ApplySourceScrollAnimation(mutation)
             }
             CompositorMutation::FinalizeScrollAnimations { token, commands } => {
-                self.assembly.FinalizeScrollAnimationCommit(token, commands)
+                assembly.FinalizeScrollAnimationCommit(token, commands)
             }
-        }
+        })
     }
     /// Signals that Viz accepted a submitted frame. This does not reclaim
     /// resources; their actual lease returns arrive through ReclaimResources.
-    pub fn DidReceiveFrameAck(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.DidReceiveFrameAck()
+    pub fn DidReceiveFrameAck(
+        &mut self,
+        main: &mut CompositorMainEngine,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.DidReceiveFrameAck())
     }
     /// Actual Viz presentation feedback; neither submit nor ack synthesizes it.
     pub fn DidPresentFrame(
         &mut self,
+        main: &mut CompositorMainEngine,
         frame_token: u32,
         details: CompositorFrameTimingDetails,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.DidPresentFrame(frame_token, details)
+        self.Lend(main, |assembly| assembly.DidPresentFrame(frame_token, details))
     }
     pub fn ReclaimResources(
         &mut self,
+        main: &mut CompositorMainEngine,
         resources: Vec<RasterReturnedResource>,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.ReclaimResources(resources)
+        self.Lend(main, |assembly| assembly.ReclaimResources(resources))
     }
-    pub fn Poll(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.assembly.Poll()
+    pub fn Poll(
+        &mut self,
+        main: &mut CompositorMainEngine,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.Lend(main, |assembly| assembly.Poll())
     }
 }
 
@@ -673,43 +768,36 @@ mod public_boundary_tests {
         let _: fn(
             CompositorConfig,
             CompositorExecutors,
-        ) -> Result<CompositorEngine, CompositorError> = CompositorEngine::new;
+        ) -> Result<(CompositorMainEngine, CompositorEngine), CompositorError> =
+            CompositorEngine::new;
         let _: fn(
             &mut CompositorEngine,
+            &mut CompositorMainEngine,
             Arc<PaintArtifact>,
             CompositorViewportState,
         ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Commit;
         let _: fn(
-            &mut CompositorEngine,
+            &mut CompositorMainEngine,
             crate::runtime::types::SurfaceRange,
-        ) -> Arc<dyn paint::ForeignLayer> = CompositorEngine::CreateVideoSurfaceForeignLayer;
-        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
-            CompositorEngine::RequestMainFrame;
-        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
-            CompositorEngine::RequestRedraw;
-        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
-            CompositorEngine::FinishMainFrameWithoutUpdates;
+        ) -> Arc<dyn paint::ForeignLayer> = CompositorMainEngine::CreateVideoSurfaceForeignLayer;
         let _: fn(
             &mut CompositorEngine,
+            &mut CompositorMainEngine,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::RequestMainFrame;
+        let _: fn(
+            &mut CompositorEngine,
+            &mut CompositorMainEngine,
             BeginFrameArgs,
         ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::BeginFrame;
         let _: fn(
             &mut CompositorEngine,
+            &mut CompositorMainEngine,
             CompositorInput,
         ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Input;
-        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
-            CompositorEngine::DidReceiveFrameAck;
         let _: fn(
             &mut CompositorEngine,
-            u32,
-            CompositorFrameTimingDetails,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::DidPresentFrame;
-        let _: fn(
-            &mut CompositorEngine,
-            Vec<RasterReturnedResource>,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::ReclaimResources;
-        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
-            CompositorEngine::Poll;
+            &mut CompositorMainEngine,
+        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Poll;
 
         fn frame_boundary(output: CompositorOutput) -> Option<CompositorFrameSubmission> {
             output.frame

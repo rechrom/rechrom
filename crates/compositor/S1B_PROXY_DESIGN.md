@@ -1,6 +1,6 @@
 # S1b design: ProxyMain / ProxyImpl across the document and compositor threads
 
-Status: S1b-1..S1b-5 implemented (see "S1b status" at the end); designed
+Status: S1b-1..S1b-6 implemented (see "S1b status" at the end); designed
 2026-11-23 at b084f58d. Originally nothing here was
 implemented. Prerequisite: S1a (`layerize::LayerizeEngine<F>` holds the main
 half, see `MAIN_IMPL_SPLIT.md`). The S1a leftovers (Send + Sync endpoint, real
@@ -666,3 +666,39 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   the main instance; the new waits return immediately on the shared
   sequence. Checks: `cargo check -p layerize`, `-p compositor`, `-p
   rechrom_app` pass; Matrix / Scroll set not run (no builds on this machine).
+- **S1b-6 done (Page owns the main half, one thread).** The compositor
+  facade has two halves: `compositor::CompositorMainEngine` (boxed
+  `ProxyMain` + `LayerizeEngine`; main-side `ConvertPaintArtifactSubsetToRecord`
+  and `CreateVideoSurfaceForeignLayer` moved here) and `CompositorEngine`
+  (impl: EngineAssembly/EngineCore, ProxyImpl, Scheduler, LayerTreeHostImpl).
+  `CompositorEngine::new` returns both; every impl entry takes `&mut
+  CompositorMainEngine` and lends its boxes into `EngineCore::{proxy_main,
+  layerize}` (`runtime::lent_main::LentMain`, Deref to the lent value) for
+  exactly that call, because the in-process transport still runs ProxyMain
+  tasks inside Scheduler callbacks. `CompositorEngine::Shutdown(main)` runs
+  the former drop sequence (scheduler stop, PAC destroy / root detach, impl
+  host) with the main half lent; `EngineAssembly::Shutdown` is idempotent
+  and its `Drop` calls it (an engine whose main half is not lent skips only
+  the main part). `PageRenderPipeline` (`browser/src/page.rs`) is now an
+  orchestrator over `PageImplCompositor` (CompositorEngine, executors,
+  raster engine, Viz/Renderer, surfaces, outbound frames, BeginFrame/pump
+  state) and `PageMainCompositor` (CompositorMainEngine, page scale,
+  scroll-animation commit areas, video ForeignLayers, the `pending` /
+  `presentable` commit admission that S1b-7 turns into ProxyMain state); its
+  `Drop` shuts both down, impl part first in field order. Public
+  `PageRenderPipeline` API and call order are unchanged, so `page_runtime.rs`
+  is untouched. Not folded (recorded for S1b-7): the document-thread second
+  pipeline of the external runtime (`state.rendering`, video layers at
+  `PublishVideoFrame`, drag records at `drag_image.rs` RasterDragRecording)
+  still creates both halves, because it also uses its impl part's raster
+  engine (drag-image raster, video transferable resources) and child-frame
+  queue; it can keep only a `PageMainCompositor` once S1b-7 moves the single
+  main half to the document thread and the raster/child-frame services are
+  separated from it (R7). Deviation: `pending` / `presentable` stay Page
+  state in the main part instead of moving into ProxyMain (S1b-7, B2).
+  Intentional behaviour differences: drop order of the two engines' fields
+  after the explicit Shutdown changed (ProxyImpl's DataForCommit lease now
+  drops before ProxyMain's ready commit; both only signal their completion);
+  otherwise none. Checks: `cargo check -p compositor`, `-p browser`, `-p
+  rechrom_app` pass; Matrix / Scroll set / video and drag pages not run (no
+  builds on this machine).

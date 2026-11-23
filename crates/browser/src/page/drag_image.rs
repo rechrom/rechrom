@@ -159,7 +159,8 @@ impl PageState {
     ) -> io::Result<Option<Arc<DragImageBitmap>>> {
         let (record, raster) = {
             let pipeline = self.rendering.borrow();
-            let compositor = pipeline.compositor.as_ref().ok_or_else(|| {
+            // The recording conversion is main-side (S1b-6: the main part).
+            let compositor = pipeline.main_half.engine.as_ref().ok_or_else(|| {
                 io::Error::other("drag image requires the Page compositor's Paint services")
             })?;
             (
@@ -167,7 +168,7 @@ impl PageState {
                     recording.artifact,
                     &recording.border_box_properties,
                 ),
-                pipeline.raster_engine.clone(),
+                pipeline.impl_half.raster_engine.clone(),
             )
         };
         let snapshots = self.SnapshotCanvasCustomData(|visitor| record.VisitCustomData(visitor));
@@ -354,6 +355,7 @@ impl PageMouseFrameGeometry {
         let result = state
             .rendering
             .borrow()
+            .impl_half
             .raster_engine
             .RasterizeLinkDragImage(image.size, scale, &image.text)
             .map(|image| image.map(Packet));

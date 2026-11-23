@@ -62,22 +62,26 @@ pub(crate) struct EngineAssembly {
     input_client: Arc<super::input_client::QueuedInputHandlerClient>,
     smoothness_priority_expiration_notifier:
         Arc<crate::cc::base::delayed_unique_notifier::DelayedUniqueNotifier>,
+    shut_down: bool,
 }
 impl EngineAssembly {
-    pub(crate) fn ConvertPaintArtifactSubsetToRecord(
-        &self,
-        artifact: Arc<PaintArtifact>,
-        state: &paint::paint_property_tree::PropertyTreeState,
-    ) -> crate::engine::ImmutablePaintRecord {
-        self.core
-            .ConvertPaintArtifactSubsetToRecord(artifact, state)
-    }
-
-    pub(crate) fn CreateVideoSurfaceForeignLayer(
+    /// Moves the Page-owned main half into the core for one call
+    /// (`lent_main`, S1b-6).
+    pub(crate) fn LendMain(
         &mut self,
-        range: crate::runtime::types::SurfaceRange,
-    ) -> Arc<dyn paint::ForeignLayer> {
-        self.core.CreateVideoSurfaceForeignLayer(range)
+        proxy_main: Box<layerize::runtime::proxy_main::ProxyMain<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
+        layerize: Box<layerize::LayerizeEngine<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
+    ) {
+        self.core.proxy_main.Lend(proxy_main);
+        self.core.layerize.Lend(layerize);
+    }
+    pub(crate) fn ReturnMain(
+        &mut self,
+    ) -> (
+        Box<layerize::runtime::proxy_main::ProxyMain<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
+        Box<layerize::LayerizeEngine<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
+    ) {
+        (self.core.proxy_main.Return(), self.core.layerize.Return())
     }
 
     pub(crate) fn new(
@@ -159,6 +163,7 @@ impl EngineAssembly {
             latency_monitors,
             input_client,
             smoothness_priority_expiration_notifier,
+            shut_down: false,
         })
     }
     pub(crate) fn Commit(
@@ -1801,8 +1806,14 @@ impl EngineAssembly {
         })
     }
 }
-impl Drop for EngineAssembly {
-    fn drop(&mut self) {
+impl EngineAssembly {
+    /// Teardown in the former drop order: scheduler stop, then the main
+    /// half (PAC destruction, root detach; only when lent by
+    /// CompositorEngine::Shutdown) and the impl host. Runs once.
+    pub(crate) fn Shutdown(&mut self) {
+        if std::mem::replace(&mut self.shut_down, true) {
+            return;
+        }
         self.smoothness_priority_expiration_notifier.Shutdown();
         self.scheduler.Stop();
         // Teardown may query the same scheduler through source Picture hooks.
@@ -1810,6 +1821,11 @@ impl Drop for EngineAssembly {
         let queries = self.core.scheduler_queries.clone();
         let _query = queries.Enter(self.scheduler.IsReadyToActivate());
         self.core.Shutdown();
+    }
+}
+impl Drop for EngineAssembly {
+    fn drop(&mut self) {
+        self.Shutdown();
     }
 }
 

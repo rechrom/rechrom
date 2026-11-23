@@ -289,10 +289,40 @@ struct VideoSurfaceEntry {
     frame_size: (u32, u32),
     layer: Arc<dyn paint::paint_engine::ForeignLayer>,
 }
+/// The Page compositor (S1b-6 of crates/compositor/S1B_PROXY_DESIGN.md): a
+/// main part (LayerTreeView / LayerTreeHost side, later owned by the Page on
+/// the document thread) and an impl part (LayerTreeHostImpl side on the
+/// compositor thread). Both are still driven on the current thread exactly
+/// as before, the main part lent to each impl call; this type only
+/// orchestrates the two. `impl_half` is declared first so that it drops
+/// before the main part it may hold a commit lease into.
 pub struct PageRenderPipeline {
+    impl_half: PageImplCompositor,
+    main_half: PageMainCompositor,
+}
+/// The main part: the main compositor half (`compositor::
+/// CompositorMainEngine`: main LayerTreeHost, PAC, main AnimationHost,
+/// ProxyMain), the LayerTreeHost page scale, the video ForeignLayers created
+/// through the main host, and the Page's main-frame commit admission
+/// (`pending` / `presentable`, which become ProxyMain state in S1b-7).
+struct PageMainCompositor {
+    engine: Option<compositor::CompositorMainEngine>,
     page_scale: (f32, f32, f32),
-    compositor: Option<CompositorEngine>,
     scroll_animation_commit_requests: Vec<compositor::adapter::input_types::ElementId>,
+    video_surfaces: HashMap<u64, VideoSurfaceEntry>,
+    // A main-frame input remains strongly identified until cc consumes it at
+    // ScheduledActionCommit. Drawing and FrameSink submission are allowed to
+    // follow asynchronously after this slot is released.
+    pending: Option<PendingPageRender>,
+    // A weak identity marker avoids forcing PaintEngine's next property-only
+    // scroll update to deep-copy the complete PaintArtifact.
+    presentable: Option<PresentablePageRender>,
+}
+/// The impl part: the impl compositor half (`CompositorEngine`: cc
+/// LayerTreeHostImpl, Scheduler, ProxyImpl), its raster engine, the
+/// synchronous embedding's Viz/Renderer and the outbound frames.
+struct PageImplCompositor {
+    compositor: Option<CompositorEngine>,
     executor: Arc<PageCompositorExecutor>,
     raster_executor: Arc<PageCompositorExecutor>,
     raster_engine: RasterEngine,
@@ -309,7 +339,6 @@ pub struct PageRenderPipeline {
     transparent_background: bool,
     outbound_frames: std::collections::VecDeque<CompositorFrameSubmission>,
     outbound_child_frames: std::collections::VecDeque<PageChildCompositorFrame>,
-    video_surfaces: HashMap<u64, VideoSurfaceEntry>,
     deferred_effects: Vec<CompositorMainThreadEffect>,
     commit_finish_times: Vec<std::time::Instant>,
     begin_frame_sequence: u64,
@@ -327,13 +356,23 @@ pub struct PageRenderPipeline {
     // is narrower than `work_pending`, which input also uses to describe work
     // that an executor or the next BeginFrame will wake independently.
     owner_turn_pending: bool,
-    // A main-frame input remains strongly identified until cc consumes it at
-    // ScheduledActionCommit. Drawing and FrameSink submission are allowed to
-    // follow asynchronously after this slot is released.
-    pending: Option<PendingPageRender>,
-    // A weak identity marker avoids forcing PaintEngine's next property-only
-    // scroll update to deep-copy the complete PaintArtifact.
-    presentable: Option<PresentablePageRender>,
+}
+impl PageMainCompositor {
+    /// The main half, lent to each impl-half call.
+    fn Engine(&mut self) -> &mut compositor::CompositorMainEngine {
+        self.engine.as_mut().expect("initialized compositor")
+    }
+}
+impl Drop for PageRenderPipeline {
+    // Both halves tear down together, in the former single-engine order.
+    fn drop(&mut self) {
+        if let (Some(compositor), Some(main)) = (
+            self.impl_half.compositor.as_mut(),
+            self.main_half.engine.as_mut(),
+        ) {
+            compositor.Shutdown(main);
+        }
+    }
 }
 #[derive(Default)]
 pub struct CompositorWheelResult {
@@ -361,7 +400,7 @@ pub type PageReturnedResource = compositor::runtime::resources::RasterReturnedRe
 impl PageRenderPipeline {
     pub fn PresentationClockMapping(&self) -> PageCompositorClockMapping {
         PageCompositorClockMapping {
-            origin: self.executor.origin,
+            origin: self.impl_half.executor.origin,
         }
     }
 
@@ -416,10 +455,10 @@ impl PageRenderPipeline {
             CompositorTimeDelta::Microseconds(interval.as_micros().min(i64::MAX as u128) as i64);
         details.presentation_feedback.flags = flags;
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .ok_or_else(|| io::Error::other("presentation feedback requires a compositor"))?
-            .DidPresentFrame(frame_token, details)
+            .DidPresentFrame(self.main_half.Engine(), frame_token, details)
             .map_err(|error| io::Error::other(error.to_string()))?;
         let (submitted, _, _, _) = self.AcceptOutput(output)?;
         Ok(CompositorWheelResult {
@@ -461,10 +500,16 @@ impl PageRenderPipeline {
             std::sync::atomic::AtomicU64::new(1);
         let command_buffer = NEXT_COMMAND_BUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let raster_engine = RasterEngine::new(command_buffer, 64 * 1024 * 1024);
-        Self {
+        let main_half = PageMainCompositor {
+            engine: None,
             page_scale: (1.0, 1.0, 1.0),
-            compositor: None,
             scroll_animation_commit_requests: Vec::new(),
+            video_surfaces: HashMap::new(),
+            pending: None,
+            presentable: None,
+        };
+        let impl_half = PageImplCompositor {
+            compositor: None,
             executor: Arc::new(PageCompositorExecutor::new(compositor_executor)),
             raster_executor: Arc::new(PageCompositorExecutor::new(raster_executor)),
             raster_engine,
@@ -480,7 +525,6 @@ impl PageRenderPipeline {
             transparent_background,
             outbound_frames: Default::default(),
             outbound_child_frames: Default::default(),
-            video_surfaces: HashMap::new(),
             deferred_effects: Vec::new(),
             commit_finish_times: Vec::new(),
             begin_frame_sequence: 0,
@@ -490,8 +534,10 @@ impl PageRenderPipeline {
             input_frame_issued_since_physical: false,
             input_frame_pump_pending: false,
             owner_turn_pending: false,
-            pending: None,
-            presentable: None,
+        };
+        Self {
+            impl_half,
+            main_half,
         }
     }
 
@@ -506,22 +552,22 @@ impl PageRenderPipeline {
     ///         media/blink/video_frame_submitter.cc.
     fn SetExternalPresentation(&mut self, external: bool) {
         assert!(
-            self.compositor.is_none()
-                && self.outbound_frames.is_empty()
-                && self.outbound_child_frames.is_empty()
-                && self.video_surfaces.is_empty(),
+            self.impl_half.compositor.is_none()
+                && self.impl_half.outbound_frames.is_empty()
+                && self.impl_half.outbound_child_frames.is_empty()
+                && self.main_half.video_surfaces.is_empty(),
             "presentation ownership must be selected before compositor initialization"
         );
-        if self.external_presentation == external {
+        if self.impl_half.external_presentation == external {
             return;
         }
-        self.external_presentation = external;
+        self.impl_half.external_presentation = external;
         if external {
-            self.viz = None;
-            self.renderer = None;
+            self.impl_half.viz = None;
+            self.impl_half.renderer = None;
         } else {
-            self.viz = Some(viz::adapter::VizEngine::New());
-            self.renderer = Some(renderer::Renderer::new(RendererSkiaBackend::default()));
+            self.impl_half.viz = Some(viz::adapter::VizEngine::New());
+            self.impl_half.renderer = Some(renderer::Renderer::new(RendererSkiaBackend::default()));
         }
     }
 
@@ -530,7 +576,7 @@ impl PageRenderPipeline {
         video: &image_resource::VideoFrameResource,
     ) -> io::Result<compositor::CompositorFrame> {
         let resource = self
-            .raster_engine
+            .impl_half.raster_engine
             .CreateImmutableVideoTransferableResource(video)?;
         let width = i32::try_from(video.width)
             .map_err(|_| io::Error::other("video frame width overflow"))?;
@@ -566,11 +612,11 @@ impl PageRenderPipeline {
             true,
         );
         let mut frame = compositor::CompositorFrame::default();
-        self.video_frame_token = self.video_frame_token.wrapping_add(1).max(1);
+        self.impl_half.video_frame_token = self.impl_half.video_frame_token.wrapping_add(1).max(1);
         frame.metadata.device_scale_factor = 1.0;
         frame.metadata.page_scale_factor = 1.0;
         frame.metadata.may_contain_video = true;
-        frame.metadata.frame_token = self.video_frame_token;
+        frame.metadata.frame_token = self.impl_half.video_frame_token;
         frame.metadata.visible_viewport_size = CompositorSize::new(width, height);
         frame.metadata.root_background_color = CompositorColor4f {
             red: 0.0,
@@ -589,19 +635,19 @@ impl PageRenderPipeline {
         video: &image_resource::VideoFrameResource,
     ) -> io::Result<()> {
         let frame = self.BuildVideoChildFrame(video)?;
-        if self.external_presentation {
+        if self.impl_half.external_presentation {
             if let Some(pending) = self
-                .outbound_child_frames
+                .impl_half.outbound_child_frames
                 .iter_mut()
                 .find(|pending| pending.surface_id == surface_id)
             {
                 pending.frame = frame;
             } else {
-                self.outbound_child_frames
+                self.impl_half.outbound_child_frames
                     .push_back(PageChildCompositorFrame { surface_id, frame });
             }
         } else {
-            self.viz
+            self.impl_half.viz
                 .as_mut()
                 .expect("internal presentation owns Viz")
                 .SubmitFrame(surface_id, frame)
@@ -622,7 +668,7 @@ impl PageRenderPipeline {
         self.EnsureCompositor(None)?;
         let frame_size = (video.width, video.height);
         let replace_surface = self
-            .video_surfaces
+            .main_half.video_surfaces
             .get(&node_id)
             .is_none_or(|current| current.frame_size != frame_size);
         if replace_surface {
@@ -632,12 +678,8 @@ impl PageRenderPipeline {
             }
             let surface_id = viz::adapter::SurfaceId(raw);
             let range = viz::adapter::VizEngine::RuntimeSurfaceRange(surface_id);
-            let layer = self
-                .compositor
-                .as_mut()
-                .expect("initialized compositor")
-                .CreateVideoSurfaceForeignLayer(range);
-            self.video_surfaces.insert(
+            let layer = self.main_half.Engine().CreateVideoSurfaceForeignLayer(range);
+            self.main_half.video_surfaces.insert(
                 node_id,
                 VideoSurfaceEntry {
                     surface_id,
@@ -648,7 +690,7 @@ impl PageRenderPipeline {
         }
         let (surface_id, layer) = {
             let entry = self
-                .video_surfaces
+                .main_half.video_surfaces
                 .get(&node_id)
                 .expect("video surface entry was created");
             (entry.surface_id, Arc::clone(&entry.layer))
@@ -677,7 +719,7 @@ impl PageRenderPipeline {
             frame.metadata.device_scale_factor.to_bits(),
         );
         let mut returned = Vec::new();
-        if let Some(current) = self.local_surface_id {
+        if let Some(current) = self.impl_half.local_surface_id {
             let same_embed = current.embed_token == local_surface_id.embed_token;
             if same_embed && !local_surface_id.IsSameOrNewerThan(&current) {
                 returned.extend(frame.resource_list.iter().map(
@@ -687,11 +729,11 @@ impl PageRenderPipeline {
             }
         }
         let generation_changed = self
-            .local_surface_id
+            .impl_half.local_surface_id
             .is_some_and(|current| current != local_surface_id);
         if !generation_changed
             && self
-                .surface_parameters
+                .impl_half.surface_parameters
                 .is_some_and(|current| current != parameters)
         {
             return Err(io::Error::other(
@@ -700,32 +742,32 @@ impl PageRenderPipeline {
         }
         if generation_changed {
             if let Some(resources) = self
-                .viz
+                .impl_half.viz
                 .as_mut()
                 .expect("internal presentation owns Viz")
-                .DestroySurface(self.surface)
+                .DestroySurface(self.impl_half.surface)
             {
                 returned.extend(resources);
             }
-            self.surface = viz::adapter::SurfaceId(self.next_surface);
-            self.next_surface = self.next_surface.wrapping_add(1).max(1);
-            self.rendered_surface = None;
+            self.impl_half.surface = viz::adapter::SurfaceId(self.impl_half.next_surface);
+            self.impl_half.next_surface = self.impl_half.next_surface.wrapping_add(1).max(1);
+            self.impl_half.rendered_surface = None;
         }
-        self.local_surface_id = Some(local_surface_id);
-        self.surface_parameters = Some(parameters);
+        self.impl_half.local_surface_id = Some(local_surface_id);
+        self.impl_half.surface_parameters = Some(parameters);
         let accepted = self
-            .viz
+            .impl_half.viz
             .as_mut()
             .expect("internal presentation owns Viz")
-            .SubmitFrame(self.surface, frame)
+            .SubmitFrame(self.impl_half.surface, frame)
             .map_err(|error| io::Error::other(error.to_string()))?;
         returned.extend(accepted.returned_resources);
         // The in-process CPU target has no native presentation clock. This
         // reports the actual accepted Viz identity without manufacturing time.
-        self.deferred_effects.push(
+        self.impl_half.deferred_effects.push(
             CompositorMainThreadEffect::PresentationFeedbackUnavailable {
                 frame_token,
-                surface_id: self.surface.0,
+                surface_id: self.impl_half.surface.0,
                 viz_submission: accepted.submission,
                 reason: compositor::PresentationUnavailableReason::OffscreenTarget,
             },
@@ -734,7 +776,7 @@ impl PageRenderPipeline {
     }
 
     fn EnsureCompositor(&mut self, viewport: Option<CompositorViewportState>) -> io::Result<()> {
-        if self.compositor.is_none() {
+        if self.impl_half.compositor.is_none() {
             let viewport = viewport.unwrap_or(CompositorViewportState {
                 size: CompositorSize::default(),
                 device_scale_factor: 1.0,
@@ -743,26 +785,28 @@ impl PageRenderPipeline {
                 max_page_scale_factor: 1.0,
                 visible: true,
             });
-            let executor: Arc<dyn CompositorExecutor> = self.executor.clone();
-            let raster_provider = Arc::new(self.raster_engine.clone());
+            let executor: Arc<dyn CompositorExecutor> = self.impl_half.executor.clone();
+            let raster_provider = Arc::new(self.impl_half.raster_engine.clone());
             let ui_raster = raster_provider.clone();
-            self.compositor = Some(
-                CompositorEngine::new(
+            let (main, compositor) = CompositorEngine::new(
                     CompositorConfig {
-                        transparent_background: self.transparent_background,
+                        transparent_background: self.impl_half.transparent_background,
                         initial_viewport_size: viewport.size,
                         initial_device_scale_factor: viewport.device_scale_factor,
                         ..Default::default()
                     },
                     CompositorExecutors {
                         compositor: executor.clone(),
-                        raster: self.raster_executor.clone(),
+                        raster: self.impl_half.raster_executor.clone(),
                         raster_provider,
                         ui_raster,
                     },
                 )
-                .map_err(|error| io::Error::other(error.to_string()))?,
-            );
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            // S1b-6: the main half belongs to the main part, the impl half to
+            // the impl part.
+            self.main_half.engine = Some(main);
+            self.impl_half.compositor = Some(compositor);
         }
         Ok(())
     }
@@ -787,17 +831,17 @@ impl PageRenderPipeline {
                 })?,
             ),
             device_scale_factor: scale as f32,
-            page_scale_factor: self.page_scale.0,
-            min_page_scale_factor: self.page_scale.1,
-            max_page_scale_factor: self.page_scale.2,
+            page_scale_factor: self.main_half.page_scale.0,
+            min_page_scale_factor: self.main_half.page_scale.1,
+            max_page_scale_factor: self.main_half.page_scale.2,
             visible: true,
         };
         self.EnsureCompositor(Some(viewport))?;
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .expect("initialized compositor")
-            .SetViewport(viewport)
+            .SetViewport(self.main_half.Engine(), viewport)
             .map_err(|error| io::Error::other(error.to_string()))?;
         self.AcceptOutput(output)?;
         Ok(())
@@ -821,8 +865,8 @@ impl PageRenderPipeline {
             // Ack/reclaim outputs later in this queue supersede earlier values.
             needs_begin_frames = output.needs_begin_frames;
             main_commit_pending = output.main_commit_pending;
-            self.needs_begin_frames = needs_begin_frames;
-            self.work_pending = output.work_pending;
+            self.impl_half.needs_begin_frames = needs_begin_frames;
+            self.impl_half.work_pending = output.work_pending;
             if output.main_thread_effects.iter().any(|effect| {
                 matches!(
                     effect,
@@ -831,15 +875,15 @@ impl PageRenderPipeline {
             }) {
                 // ProxyMain aborted this main-frame input before cc commit.
                 // Release only its in-flight slot; it never became presentable.
-                self.pending.take();
+                self.main_half.pending.take();
             }
             for effect in &output.main_thread_effects {
                 if let CompositorMainThreadEffect::ViewportScaleChanged { scale, .. } = effect {
-                    self.page_scale.0 = *scale;
+                    self.main_half.page_scale.0 = *scale;
                 }
             }
             for effect in output.main_thread_effects.drain(..) {
-                if self.external_presentation {
+                if self.impl_half.external_presentation {
                     if let CompositorMainThreadEffect::MainFrameCommitCompleted {
                         commit_finish_time,
                     } = &effect
@@ -847,45 +891,45 @@ impl PageRenderPipeline {
                         if let Some(instant) =
                             self.PresentationClockMapping().Instant(*commit_finish_time)
                         {
-                            self.commit_finish_times.push(instant);
+                            self.impl_half.commit_finish_times.push(instant);
                         }
                         continue;
                     }
                 }
-                self.deferred_effects.push(effect);
+                self.impl_half.deferred_effects.push(effect);
             }
             let frame_matches_latest_commit = output.frame_matches_latest_commit;
             let Some(frame) = output.frame else {
                 continue;
             };
-            if self.external_presentation {
+            if self.impl_half.external_presentation {
                 submitted = true;
                 submitted_latest_commit |= frame_matches_latest_commit;
-                let compositor = self.compositor.as_mut().expect("initialized compositor");
+                let compositor = self.impl_half.compositor.as_mut().expect("initialized compositor");
                 // The move into the Page FrameSink queue transfers ownership;
                 // Chromium acknowledges submission at this boundary, before
                 // Viz draws the frame. Resource returns arrive separately when
                 // Viz replaces the prior surface frame.
-                self.outbound_frames.push_back(frame);
+                self.impl_half.outbound_frames.push_back(frame);
                 pending.push_back(
                     compositor
-                        .DidReceiveFrameAck()
+                        .DidReceiveFrameAck(self.main_half.Engine())
                         .map_err(|error| io::Error::other(error.to_string()))?,
                 );
             } else {
                 let (accepted, returned_resources) = self.SubmitInternalFrame(frame)?;
                 submitted |= accepted;
                 submitted_latest_commit |= accepted && frame_matches_latest_commit;
-                let compositor = self.compositor.as_mut().expect("initialized compositor");
+                let compositor = self.impl_half.compositor.as_mut().expect("initialized compositor");
                 pending.push_back(
                     compositor
-                        .DidReceiveFrameAck()
+                        .DidReceiveFrameAck(self.main_half.Engine())
                         .map_err(|error| io::Error::other(error.to_string()))?,
                 );
                 if !returned_resources.is_empty() {
                     pending.push_back(
                         compositor
-                            .ReclaimResources(returned_resources)
+                            .ReclaimResources(self.main_half.Engine(), returned_resources)
                             .map_err(|error| io::Error::other(error.to_string()))?,
                     );
                 }
@@ -899,7 +943,7 @@ impl PageRenderPipeline {
         // sequence and can still replace the current deadline with IMMEDIATE;
         // waiting for an unrelated executor wake or the next physical frame
         // would add a full resize frame here.
-        self.owner_turn_pending |= self.work_pending;
+        self.impl_half.owner_turn_pending |= self.impl_half.work_pending;
         Ok((
             submitted,
             submitted_latest_commit,
@@ -927,7 +971,7 @@ impl PageRenderPipeline {
             });
         let (submitted, submitted_latest_commit, needs_begin_frames, main_commit_pending) =
             self.AcceptOutput(output)?;
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         let internal_presentable =
@@ -936,15 +980,15 @@ impl PageRenderPipeline {
         // externally driven Page releases its commit slot at that boundary.
         // The synchronous internal presenter additionally uses this slot as
         // its call-scoped completion guard and waits for the matching frame.
-        if !main_commit_pending && (self.external_presentation || internal_presentable) {
-            if let Some(pending) = self.pending.take() {
-                self.presentable = Some(PresentablePageRender {
+        if !main_commit_pending && (self.impl_half.external_presentation || internal_presentable) {
+            if let Some(pending) = self.main_half.pending.take() {
+                self.main_half.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
                     input: pending.input,
                 });
             }
         }
-        Ok(if self.external_presentation {
+        Ok(if self.impl_half.external_presentation {
             submitted || stable_frame_reuse
         } else {
             internal_presentable
@@ -953,10 +997,10 @@ impl PageRenderPipeline {
 
     fn ContinuePending(&mut self) -> io::Result<bool> {
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .expect("initialized compositor")
-            .Poll()
+            .Poll(self.main_half.Engine())
             .map_err(|error| io::Error::other(error.to_string()))?;
         if self.AcceptPendingOutput(output)? {
             return Ok(true);
@@ -965,12 +1009,12 @@ impl PageRenderPipeline {
         // Polling a pending commit must not invent additional frame clocks.
         // Source: cc/trees/proxy_impl.cc and cc/scheduler/scheduler.cc
         //         OnBeginFrame / ProcessScheduledActions.
-        if self.external_presentation {
+        if self.impl_half.external_presentation {
             return Ok(false);
         }
         for _ in 0..8 {
             if !self
-                .pending
+                .main_half.pending
                 .as_ref()
                 .is_some_and(|pending| pending.needs_begin_frames)
             {
@@ -985,28 +1029,28 @@ impl PageRenderPipeline {
     }
 
     fn BeginFrame(&mut self) -> io::Result<CompositorOutput> {
-        self.begin_frame_sequence = self.begin_frame_sequence.wrapping_add(1).max(1);
-        let now = self.executor.Now();
+        self.impl_half.begin_frame_sequence = self.impl_half.begin_frame_sequence.wrapping_add(1).max(1);
+        let now = self.impl_half.executor.Now();
         let interval = BeginFrameArgs::DefaultInterval();
         let mut trace = browser_tracing::span("compositor", "PageCompositor.ManualBeginFrame");
         trace.set(
             "external_presentation",
-            self.external_presentation as u8 as f64,
+            self.impl_half.external_presentation as u8 as f64,
         );
-        trace.set("sequence", self.begin_frame_sequence as f64);
-        self.compositor
+        trace.set("sequence", self.impl_half.begin_frame_sequence as f64);
+        self.impl_half.compositor
             .as_mut()
             .expect("initialized compositor")
-            .BeginFrame(BeginFrameArgs {
+            .BeginFrame(self.main_half.Engine(), BeginFrameArgs {
                 frame_time: now,
                 deadline: now + interval,
                 interval,
                 unthrottled_interval: interval,
                 frame_id: BeginFrameId {
                     source_id: BeginFrameArgs::kManualSourceId,
-                    sequence_number: self.begin_frame_sequence,
+                    sequence_number: self.impl_half.begin_frame_sequence,
                 },
-                trace_id: self.begin_frame_sequence as i64,
+                trace_id: self.impl_half.begin_frame_sequence as i64,
                 dispatch_time: now,
                 client_arrival_time: now,
                 type_: BeginFrameArgsType::NORMAL,
@@ -1023,14 +1067,14 @@ impl PageRenderPipeline {
         // Routing a host frame into that same scheduler mixes two clock
         // sources and can move frame_time backwards. Only externally
         // presented Pages subscribe to the host's physical BeginFrames.
-        if !self.external_presentation || self.compositor.is_none() {
+        if !self.impl_half.external_presentation || self.impl_half.compositor.is_none() {
             return Ok(CompositorWheelResult::default());
         }
         let mut trace = browser_tracing::span("compositor", "PageCompositor.PhysicalBeginFrame");
         trace.set("source_id", args.source_id as f64);
         trace.set("sequence", args.sequence_number as f64);
-        self.input_frame_issued_since_physical = false;
-        self.input_frame_pump_pending = false;
+        self.impl_half.input_frame_issued_since_physical = false;
+        self.impl_half.input_frame_pump_pending = false;
         let interval = CompositorTimeDelta::Microseconds(
             args.interval.as_micros().min(i64::MAX as u128) as i64,
         );
@@ -1038,12 +1082,12 @@ impl PageRenderPipeline {
             .is_some()
             .then(std::time::Instant::now);
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .expect("checked compositor")
-            .BeginFrame(BeginFrameArgs {
-                frame_time: self.executor.TimeTicks(args.frame_time),
-                deadline: self.executor.TimeTicks(args.deadline),
+            .BeginFrame(self.main_half.Engine(), BeginFrameArgs {
+                frame_time: self.impl_half.executor.TimeTicks(args.frame_time),
+                deadline: self.impl_half.executor.TimeTicks(args.deadline),
                 interval,
                 unthrottled_interval: interval,
                 frame_id: BeginFrameId {
@@ -1051,8 +1095,8 @@ impl PageRenderPipeline {
                     sequence_number: args.sequence_number,
                 },
                 trace_id: args.sequence_number.min(i64::MAX as u64) as i64,
-                dispatch_time: self.executor.Now(),
-                client_arrival_time: self.executor.Now(),
+                dispatch_time: self.impl_half.executor.Now(),
+                client_arrival_time: self.impl_half.executor.Now(),
                 type_: BeginFrameArgsType::NORMAL,
                 ..BeginFrameArgs::default()
             })
@@ -1060,7 +1104,7 @@ impl PageRenderPipeline {
         let began_at = profile.map(|_| std::time::Instant::now());
         let mut result = CompositorWheelResult::default();
         let mut output = output;
-        let stable_frame_reuse = self.pending.is_some()
+        let stable_frame_reuse = self.main_half.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
             && !output.main_thread_effects.iter().any(|effect| {
@@ -1100,21 +1144,21 @@ impl PageRenderPipeline {
                 result.effects.push(effect);
             }
         }
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         if !main_commit_pending
-            && (self.external_presentation || submitted_latest_commit || stable_frame_reuse)
+            && (self.impl_half.external_presentation || submitted_latest_commit || stable_frame_reuse)
         {
-            if let Some(pending) = self.pending.take() {
-                self.presentable = Some(PresentablePageRender {
+            if let Some(pending) = self.main_half.pending.take() {
+                self.main_half.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
                     input: pending.input,
                 });
             }
         }
         result.submitted = submitted;
-        self.input_frame_issued_since_physical = submitted;
+        self.impl_half.input_frame_issued_since_physical = submitted;
         if let (Some(started), Some(began)) = (profile, began_at) {
             eprintln!(
                 "page-compositor-begin-profile begin_ms={:.3} output_ms={:.3} total_ms={:.3} submitted={} effects={}",
@@ -1130,7 +1174,7 @@ impl PageRenderPipeline {
 
     fn BeginInputFrame(&mut self) -> io::Result<CompositorWheelResult> {
         let mut output = self.BeginFrame()?;
-        let stable_frame_reuse = self.pending.is_some()
+        let stable_frame_reuse = self.main_half.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
             && !output.main_thread_effects.iter().any(|effect| {
@@ -1171,14 +1215,14 @@ impl PageRenderPipeline {
                 result.effects.push(effect);
             }
         }
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         if !main_commit_pending
-            && (self.external_presentation || submitted_latest_commit || stable_frame_reuse)
+            && (self.impl_half.external_presentation || submitted_latest_commit || stable_frame_reuse)
         {
-            if let Some(pending) = self.pending.take() {
-                self.presentable = Some(PresentablePageRender {
+            if let Some(pending) = self.main_half.pending.take() {
+                self.main_half.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
                     input: pending.input,
                 });
@@ -1189,7 +1233,7 @@ impl PageRenderPipeline {
     }
 
     pub fn NeedsBeginFrames(&self) -> bool {
-        self.needs_begin_frames
+        self.impl_half.needs_begin_frames
     }
 
     /// A direct PaintArtifactCompositor property update is admissible only
@@ -1197,9 +1241,12 @@ impl PageRenderPipeline {
     /// resident compositor. During navigation the Paint retained tree can
     /// legitimately precede that boundary; callers must use ordinary Paint.
     pub fn CanApplyCompositedAnimationProperties(&self) -> bool {
-        self.compositor
-            .as_ref()
-            .is_some_and(|compositor| compositor.CanApplyCompositedAnimationProperties())
+        match (&self.impl_half.compositor, &self.main_half.engine) {
+            (Some(compositor), Some(main)) => {
+                compositor.CanApplyCompositedAnimationProperties(main)
+            }
+            _ => false,
+        }
     }
 
     pub fn NeedsPump(&self) -> bool {
@@ -1207,7 +1254,7 @@ impl PageRenderPipeline {
         // budget with runnable typed tasks left. Input's broader work bit can
         // also mean that a task-runner callback or physical BeginFrame will
         // wake us later, and must not create a busy Pump loop.
-        self.input_frame_pump_pending || self.owner_turn_pending
+        self.impl_half.input_frame_pump_pending || self.impl_half.owner_turn_pending
     }
 
     /// Notify cc that the Page needs a main-frame lifecycle before that
@@ -1216,12 +1263,12 @@ impl PageRenderPipeline {
     pub fn RequestMainFrame(&mut self) -> io::Result<CompositorWheelResult> {
         self.EnsureCompositor(None)?;
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .expect("initialized compositor")
-            .RequestMainFrame()
+            .RequestMainFrame(self.main_half.Engine())
             .map_err(|error| io::Error::other(error.to_string()))?;
-        let stable_frame_reuse = self.pending.is_some()
+        let stable_frame_reuse = self.main_half.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
             && !output.main_thread_effects.iter().any(|effect| {
@@ -1233,14 +1280,14 @@ impl PageRenderPipeline {
             });
         let (submitted, submitted_latest_commit, needs_begin_frames, main_commit_pending) =
             self.AcceptOutput(output)?;
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         if !main_commit_pending
-            && (self.external_presentation || submitted_latest_commit || stable_frame_reuse)
+            && (self.impl_half.external_presentation || submitted_latest_commit || stable_frame_reuse)
         {
-            if let Some(pending) = self.pending.take() {
-                self.presentable = Some(PresentablePageRender {
+            if let Some(pending) = self.main_half.pending.take() {
+                self.main_half.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
                     input: pending.input,
                 });
@@ -1260,10 +1307,10 @@ impl PageRenderPipeline {
     /// request.
     pub fn FinishMainFrameWithoutUpdates(&mut self) -> io::Result<CompositorWheelResult> {
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .ok_or_else(|| io::Error::other("no compositor owns the BeginMainFrame"))?
-            .FinishMainFrameWithoutUpdates()
+            .FinishMainFrameWithoutUpdates(self.main_half.Engine())
             .map_err(|error| match error {
                 CompositorError::NotReady { stage } => {
                     io::Error::new(io::ErrorKind::WouldBlock, stage)
@@ -1271,7 +1318,7 @@ impl PageRenderPipeline {
                 error => io::Error::other(error.to_string()),
             })?;
         let (submitted, _, needs_begin_frames, _) = self.AcceptOutput(output)?;
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         Ok(CompositorWheelResult {
@@ -1282,36 +1329,36 @@ impl PageRenderPipeline {
     }
 
     pub fn TakeFrames(&mut self) -> Vec<CompositorFrameSubmission> {
-        self.outbound_frames.drain(..).collect()
+        self.impl_half.outbound_frames.drain(..).collect()
     }
 
     /// Actual impl FinishCommit timestamps translated out of this pipeline's
     /// injected clock. External hosts route these before swap/presentation.
     pub fn TakeCommitFinishTimes(&mut self) -> Vec<std::time::Instant> {
-        std::mem::take(&mut self.commit_finish_times)
+        std::mem::take(&mut self.impl_half.commit_finish_times)
     }
 
     pub fn TakeChildFrames(&mut self) -> Vec<PageChildCompositorFrame> {
-        self.outbound_child_frames.drain(..).collect()
+        self.impl_half.outbound_child_frames.drain(..).collect()
     }
 
     pub fn TakeMainThreadEffects(&mut self) -> Vec<CompositorMainThreadEffect> {
-        std::mem::take(&mut self.deferred_effects)
+        std::mem::take(&mut self.impl_half.deferred_effects)
     }
 
     /// Runs work posted to cc's injected task runner on the Page impl sequence.
     /// The executor only transports owned callbacks; tree and scheduler owners
     /// remain resident here, matching Chromium's task-runner wakeup boundary.
     pub fn Pump(&mut self) -> io::Result<CompositorWheelResult> {
-        let Some(compositor) = self.compositor.as_mut() else {
+        let Some(compositor) = self.impl_half.compositor.as_mut() else {
             return Ok(CompositorWheelResult::default());
         };
-        let input_frame_pump = std::mem::take(&mut self.input_frame_pump_pending);
+        let input_frame_pump = std::mem::take(&mut self.impl_half.input_frame_pump_pending);
         let mut output = compositor
-            .Poll()
+            .Poll(self.main_half.Engine())
             .map_err(|error| io::Error::other(error.to_string()))?;
         let mut result = CompositorWheelResult::default();
-        let stable_frame_reuse = self.pending.is_some()
+        let stable_frame_reuse = self.main_half.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
             && !output.main_thread_effects.iter().any(|effect| {
@@ -1351,23 +1398,23 @@ impl PageRenderPipeline {
                 result.effects.push(effect);
             }
         }
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         if !main_commit_pending
-            && (self.external_presentation || submitted_latest_commit || stable_frame_reuse)
+            && (self.impl_half.external_presentation || submitted_latest_commit || stable_frame_reuse)
         {
-            if let Some(pending) = self.pending.take() {
-                self.presentable = Some(PresentablePageRender {
+            if let Some(pending) = self.main_half.pending.take() {
+                self.main_half.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
                     input: pending.input,
                 });
             }
         }
         result.submitted = submitted;
-        self.input_frame_issued_since_physical |= submitted;
-        self.input_frame_pump_pending = input_frame_pump && !submitted && self.work_pending;
-        self.owner_turn_pending = self.work_pending;
+        self.impl_half.input_frame_issued_since_physical |= submitted;
+        self.impl_half.input_frame_pump_pending = input_frame_pump && !submitted && self.impl_half.work_pending;
+        self.impl_half.owner_turn_pending = self.impl_half.work_pending;
         Ok(result)
     }
 
@@ -1375,14 +1422,14 @@ impl PageRenderPipeline {
         &mut self,
         resources: Vec<compositor::runtime::resources::RasterReturnedResource>,
     ) -> io::Result<()> {
-        if resources.is_empty() || self.compositor.is_none() {
+        if resources.is_empty() || self.impl_half.compositor.is_none() {
             return Ok(());
         }
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .expect("checked compositor")
-            .ReclaimResources(resources)
+            .ReclaimResources(self.main_half.Engine(), resources)
             .map_err(|error| io::Error::other(error.to_string()))?;
         self.AcceptOutput(output)?;
         Ok(())
@@ -1396,7 +1443,7 @@ impl PageRenderPipeline {
         wheel: &::interaction::input_event::WheelEvent,
     ) -> io::Result<CompositorWheelResult> {
         let timestamp = self
-            .executor
+            .impl_half.executor
             .TimeTicks(wheel.timestamp.unwrap_or_else(std::time::Instant::now));
         self.WheelAtTime(wheel, timestamp, self.InputWidgetScale())
     }
@@ -1421,11 +1468,11 @@ impl PageRenderPipeline {
         // active compositor tree corresponds to the last presentable artifact;
         // a newer pending artifact must not change input coordinates early.
         let scale = self
-            .presentable
+            .main_half.presentable
             .as_ref()
             .map(|render| f64::from_bits(render.input.layout_zoom))
             .or_else(|| {
-                self.pending
+                self.main_half.pending
                     .as_ref()
                     .map(|render| f64::from_bits(render.input.layout_zoom))
             })
@@ -1511,7 +1558,7 @@ impl PageRenderPipeline {
         instant: std::time::Instant,
     ) -> interaction::input::base::time::time::TimeTicks {
         interaction::input::base::time::time::TimeTicks::FromInternalValue(
-            self.executor
+            self.impl_half.executor
                 .TimeTicks(instant)
                 .since_origin()
                 .InMicroseconds(),
@@ -1681,13 +1728,13 @@ impl PageRenderPipeline {
         &self,
         sample: std::time::Instant,
     ) -> scroll_animation::TimeTicks {
-        self.executor.TimeTicks(sample)
+        self.impl_half.executor.TimeTicks(sample)
     }
     pub fn SetScrollAnimationCommitRequests(
         &mut self,
         requests: Vec<compositor::adapter::input_types::ElementId>,
     ) {
-        self.scroll_animation_commit_requests = requests;
+        self.main_half.scroll_animation_commit_requests = requests;
     }
     pub fn ContinueCompositorMutation(
         &mut self,
@@ -1701,7 +1748,7 @@ impl PageRenderPipeline {
             },
         ) = &mutation
         {
-            self.page_scale = (*scale, *minimum, *maximum);
+            self.main_half.page_scale = (*scale, *minimum, *maximum);
         }
         self.EnsureCompositor(None)?;
         self.WheelInput(mutation, false)
@@ -1713,17 +1760,17 @@ impl PageRenderPipeline {
     ) -> io::Result<CompositorWheelResult> {
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
         let first = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .ok_or_else(|| {
                 io::Error::other("wheel input requires a committed resident compositor")
             })?
-            .Mutate(input)
+            .Mutate(self.main_half.Engine(), input)
             .map_err(|error| io::Error::other(error.to_string()))?;
         let input_done = profile.map(|start| start.elapsed());
         let mut result = CompositorWheelResult::default();
         let mut output = first;
-        let stable_frame_reuse = self.pending.is_some()
+        let stable_frame_reuse = self.main_half.pending.is_some()
             && output.frame.is_none()
             && !output.needs_begin_frames
             && !output.main_thread_effects.iter().any(|effect| {
@@ -1777,14 +1824,14 @@ impl PageRenderPipeline {
                 result.effects.push(effect);
             }
         }
-        if let Some(pending) = self.pending.as_mut() {
+        if let Some(pending) = self.main_half.pending.as_mut() {
             pending.needs_begin_frames = needs_begin_frames;
         }
         if !main_commit_pending
-            && (self.external_presentation || submitted_latest_commit || stable_frame_reuse)
+            && (self.impl_half.external_presentation || submitted_latest_commit || stable_frame_reuse)
         {
-            if let Some(pending) = self.pending.take() {
-                self.presentable = Some(PresentablePageRender {
+            if let Some(pending) = self.main_half.pending.take() {
+                self.main_half.presentable = Some(PresentablePageRender {
                     artifact: Arc::downgrade(&pending.artifact),
                     input: pending.input,
                 });
@@ -1794,17 +1841,17 @@ impl PageRenderPipeline {
         // A compositor scroll requests redraw on the existing scheduler.
         // External presentation receives its next opportunity from the host,
         // not a second manual BeginFrame generated by the input callback.
-        let input_frame = !self.external_presentation
+        let input_frame = !self.impl_half.external_presentation
             && result.compositor_owned
             && allow_input_frame
             && !result.submitted
-            && !self.input_frame_issued_since_physical;
+            && !self.impl_half.input_frame_issued_since_physical;
         if input_frame {
             // The synchronous internal presenter has no external frame source;
             // its caller explicitly drives a frame after the input mutation.
-            self.input_frame_issued_since_physical = true;
+            self.impl_half.input_frame_issued_since_physical = true;
             let immediate = self.BeginInputFrame()?;
-            self.input_frame_pump_pending = !immediate.submitted && self.work_pending;
+            self.impl_half.input_frame_pump_pending = !immediate.submitted && self.impl_half.work_pending;
             result.submitted |= immediate.submitted;
             result.compositor_owned |= immediate.compositor_owned;
             result.effects.extend(immediate.effects);
@@ -1883,10 +1930,10 @@ impl PageRenderPipeline {
     /// pixels; resource ownership and draw scheduling remain inside cc.
     pub fn RequestRedraw(&mut self) -> io::Result<()> {
         let output = self
-            .compositor
+            .impl_half.compositor
             .as_mut()
             .ok_or_else(|| io::Error::other("redraw requires a presentable compositor tree"))?
-            .RequestRedraw()
+            .RequestRedraw(self.main_half.Engine())
             .map_err(|error| io::Error::other(error.to_string()))?;
         self.AcceptOutput(output)?;
         Ok(())
@@ -1933,12 +1980,12 @@ impl PageRenderPipeline {
         let viewport = CompositorViewportState {
             size: CompositorSize::new(width as i32, height as i32),
             device_scale_factor: raster_scale as f32,
-            page_scale_factor: self.page_scale.0,
-            min_page_scale_factor: self.page_scale.1,
-            max_page_scale_factor: self.page_scale.2,
+            page_scale_factor: self.main_half.page_scale.0,
+            min_page_scale_factor: self.main_half.page_scale.1,
+            max_page_scale_factor: self.main_half.page_scale.2,
             visible: true,
         };
-        if let Some(pending) = self.pending.as_ref() {
+        if let Some(pending) = self.main_half.pending.as_ref() {
             let requested_pending = pending.Matches(artifact, input, viewport);
             self.EnsureCompositor(Some(viewport))?;
             let submitted = self.ContinuePending()?;
@@ -1959,11 +2006,11 @@ impl PageRenderPipeline {
             // subsequent impl frames.  Chromium likewise acknowledges the
             // main-thread commit at ProxyImpl::ScheduledActionCommit, not when
             // DrawLayers later submits a CompositorFrame.
-            if responds_to_main_frame && self.scroll_animation_commit_requests.is_empty() {
+            if responds_to_main_frame && self.main_half.scroll_animation_commit_requests.is_empty() {
                 return Ok(());
             }
-            if self.pending.is_some()
-                || (!submitted && self.scroll_animation_commit_requests.is_empty())
+            if self.main_half.pending.is_some()
+                || (!submitted && self.main_half.scroll_animation_commit_requests.is_empty())
             {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -1971,8 +2018,8 @@ impl PageRenderPipeline {
                 ));
             }
         }
-        let already_presentable = self.scroll_animation_commit_requests.is_empty()
-            && self.presentable.as_ref().is_some_and(|presentable| {
+        let already_presentable = self.main_half.scroll_animation_commit_requests.is_empty()
+            && self.main_half.presentable.as_ref().is_some_and(|presentable| {
                 presentable.input == input
                     && presentable
                         .artifact
@@ -1981,10 +2028,10 @@ impl PageRenderPipeline {
             });
         if already_presentable && responds_to_main_frame {
             let output = self
-                .compositor
+                .impl_half.compositor
                 .as_mut()
                 .expect("a presentable artifact has an initialized compositor")
-                .FinishMainFrameWithoutUpdates()
+                .FinishMainFrameWithoutUpdates(self.main_half.Engine())
                 .map_err(|error| match error {
                     CompositorError::NotReady { stage } => {
                         io::Error::new(io::ErrorKind::WouldBlock, stage)
@@ -1996,13 +2043,14 @@ impl PageRenderPipeline {
         if !already_presentable {
             self.EnsureCompositor(Some(viewport))?;
             let first = match self
-                .compositor
+                .impl_half.compositor
                 .as_mut()
                 .expect("initialized compositor")
                 .CommitWithScrollAnimations(
+                    self.main_half.engine.as_mut().expect("initialized compositor"),
                     artifact.clone(),
                     viewport,
-                    std::mem::take(&mut self.scroll_animation_commit_requests),
+                    std::mem::take(&mut self.main_half.scroll_animation_commit_requests),
                 ) {
                 Ok(output) => output,
                 Err(CompositorError::NotReady { stage }) => {
@@ -2010,7 +2058,7 @@ impl PageRenderPipeline {
                 }
                 Err(error) => return Err(io::Error::other(error.to_string())),
             };
-            self.pending = Some(PendingPageRender {
+            self.main_half.pending = Some(PendingPageRender {
                 artifact: artifact.clone(),
                 input,
                 viewport,
@@ -2023,7 +2071,7 @@ impl PageRenderPipeline {
             // ready commit or the pending tree before that boundary.  Doing
             // so pairs a newer reflected scroll delta with an older absolute
             // main-thread base and makes activation move the viewport back.
-            if self.external_presentation && self.pending.is_none() {
+            if self.impl_half.external_presentation && self.main_half.pending.is_none() {
                 return Ok(());
             }
             let presentable = presentable || self.ContinuePending()?;
@@ -2054,7 +2102,7 @@ impl PageRenderPipeline {
         self.CommitArtifact(artifact, width, height, scale)?;
         let committed_at = profile_started.map(|_| std::time::Instant::now());
 
-        let surface = self.surface;
+        let surface = self.impl_half.surface;
         let output = viz::adapter::DeviceRect::new(0, 0, width as i32, height as i32);
         let placement = viz::adapter::SurfacePlacement {
             surface_id: surface,
@@ -2062,7 +2110,7 @@ impl PageRenderPipeline {
         };
         let (update, viz_output) = {
             let mut viz_output = self
-                .viz
+                .impl_half.viz
                 .as_mut()
                 .expect("internal presentation owns Viz")
                 .Aggregate(output, &[placement])
@@ -2071,7 +2119,7 @@ impl PageRenderPipeline {
             let aggregate_damage_pixels = viz_output.DamagePixels();
             let owned_target = target.to_vec();
             let (update, rendered_target) = self
-                .renderer
+                .impl_half.renderer
                 .as_mut()
                 .expect("internal presentation owns Renderer")
                 .Render(
@@ -2082,7 +2130,7 @@ impl PageRenderPipeline {
                         pixels: renderer_skia::PixelStorage::owned(owned_target),
                         format,
                         row_stride: stride,
-                        retained: retained && self.rendered_surface == Some(surface),
+                        retained: retained && self.impl_half.rendered_surface == Some(surface),
                     },
                 )?;
             target.copy_from_slice(&rendered_target.pixels);
@@ -2103,16 +2151,16 @@ impl PageRenderPipeline {
             }
             (update, viz_output)
         };
-        self.viz
+        self.impl_half.viz
             .as_mut()
             .expect("internal presentation owns Viz")
             .DidDraw(viz_output);
-        self.rendered_surface = Some(surface);
+        self.impl_half.rendered_surface = Some(surface);
         Ok(update)
     }
 
     fn InvalidatePreparedArtifact(&mut self) {
-        self.presentable = None;
+        self.main_half.presentable = None;
     }
 }
 impl Default for PageRenderPipeline {
@@ -2867,7 +2915,7 @@ impl PageInteractionScrollRuntime {
         let Some(state) = self.owner.Page() else {
             return;
         };
-        let now = state.rendering.borrow().executor.TimeTicks(frame_time);
+        let now = state.rendering.borrow().impl_half.executor.TimeTicks(frame_time);
         if self.animators.TickAnimations(now) {
             state.animation_begin_frame_requested.set(true);
         }
@@ -2998,7 +3046,7 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
         let now = state
             .rendering
             .borrow()
-            .executor
+            .impl_half.executor
             .TimeTicks(std::time::Instant::now());
         animator
             .StartOrUpdate(
@@ -3992,7 +4040,7 @@ impl PageState {
         &self,
     ) -> Rc<dyn interaction::dispatch::core::dom::events::event::EventClock> {
         Rc::new(PageInteractionEventClock(
-            self.rendering.borrow().executor.clone(),
+            self.rendering.borrow().impl_half.executor.clone(),
         ))
     }
 
@@ -4302,7 +4350,7 @@ impl PageState {
                         element_id: foundation::CompositorElementId::new(installed.element_id),
                     };
                     let start_time = candidate.sample_time.map(|sample_time| {
-                        self.rendering.borrow().executor.TimeTicks(sample_time)
+                        self.rendering.borrow().impl_half.executor.TimeTicks(sample_time)
                             - compositor::adapter::time::TimeDelta::Microseconds(
                                 (candidate.local_time * 1_000_000.0) as i64,
                             )
@@ -7341,7 +7389,7 @@ impl Page {
         let (interaction, form_controller) =
             opening::InstallRootDocumentInteraction(&state, &scripts);
         let begin_frame =
-            begin_frame::PageBeginFrame::WithInputClock(state.rendering.borrow().executor.clone());
+            begin_frame::PageBeginFrame::WithInputClock(state.rendering.borrow().impl_half.executor.clone());
         let _ = state.document_input_queue.set(begin_frame.InputQueue());
         Self {
             previous_document_frame_sequence: 0,
@@ -9396,7 +9444,7 @@ impl Page {
                 self.state
                     .rendering
                     .borrow()
-                    .executor
+                    .impl_half.executor
                     .TimeTicks(sample_time)
                     - compositor::adapter::time::TimeDelta::Microseconds(
                         (candidate.local_time * 1_000_000.0) as i64,
@@ -10212,7 +10260,7 @@ impl Page {
                                 self.state
                                     .rendering
                                     .borrow()
-                                    .executor
+                                    .impl_half.executor
                                     .TimeTicks(sample_time)
                                     - compositor::adapter::time::TimeDelta::Microseconds(
                                         (candidate.local_time * 1_000_000.0) as i64,

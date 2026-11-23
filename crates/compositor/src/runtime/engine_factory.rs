@@ -129,7 +129,7 @@ pub(crate) fn Create(
     options: FactoryOptions,
     paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
     paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
-) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
+) -> Result<(crate::engine::CompositorMainEngine, super::engine_assembly::EngineAssembly), CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
             reason: "separate main/impl Proxy transport is not yet constructed",
@@ -409,7 +409,7 @@ pub(crate) fn Create(
     let core = EngineCore::new(
         services,
         init,
-        layerize,
+        Box::new(layerize),
         main_effects,
         lifecycle,
         queries,
@@ -418,7 +418,7 @@ pub(crate) fn Create(
         owner + 1,
         input_client.clone(),
     )?;
-    super::engine_assembly::EngineAssembly::new(
+    let mut assembly = super::engine_assembly::EngineAssembly::new(
         core,
         scheduler_settings,
         scheduler_host,
@@ -430,7 +430,14 @@ pub(crate) fn Create(
         capabilities.resource_effects.clone(),
         capabilities.latency_monitors.clone(),
         input_client,
-    )
+    )?;
+    // The main half leaves the impl half once both are constructed: the
+    // Page owns it and lends it to every CompositorEngine call (S1b-6).
+    let (proxy_main, layerize) = assembly.ReturnMain();
+    Ok((
+        crate::engine::CompositorMainEngine::new(proxy_main, layerize),
+        assembly,
+    ))
 }
 
 /// Default capability construction is admitted only after the capabilities Paint
@@ -647,7 +654,7 @@ impl FactoryOptions {
 pub(crate) fn CreateDefault(
     config: CompositorConfig,
     executors: CompositorExecutors,
-) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
+) -> Result<(crate::engine::CompositorMainEngine, super::engine_assembly::EngineAssembly), CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
             reason: "separate main/impl Proxy transport is not yet constructed",

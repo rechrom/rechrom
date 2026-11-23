@@ -281,7 +281,7 @@ impl InteractionHost for NativeEventHandlerHost {
         }
         .unwrap_or_else(std::time::Instant::now);
         use interaction::adapter::host_event_clock::HostInputClock;
-        let timestamp = page.rendering.borrow().executor.TimeForInstant(instant);
+        let timestamp = page.rendering.borrow().impl_half.executor.TimeForInstant(instant);
         Ok(timestamp)
     }
     fn NotifyInput(&self, event: &dyn WebInputEventPayload) -> Result<(), InteractionError> {
