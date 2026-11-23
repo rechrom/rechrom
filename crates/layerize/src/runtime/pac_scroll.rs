@@ -9,12 +9,13 @@
 //! The callback retains only a typed FIFO. It does not retain PAC, Host,
 //! PropertyTrees, a Page, or any layer/tile owner.
 
-use crate::{
-    adapter::{geometry::PointF, input_types::ElementId},
-    cc::{
-        input::scroll_snap_data::TargetSnapAreaElementIds,
-        trees::{property_tree::ScrollCallbacks, scroll_source_type::ScrollSourceType},
-    },
+use crate::commit::{
+    geometry::PointF,
+    input_types::ElementId,
+    main_effects::PacScrollEffect,
+    property_tree::ScrollCallbacks,
+    scroll_snap_data::TargetSnapAreaElementIds,
+    scroll_source_type::ScrollSourceType,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -22,53 +23,37 @@ use std::{
     rc::{Rc, Weak},
 };
 
-#[derive(Clone, Debug)]
-pub(crate) enum PacScrollEffect {
-    DidUpdateCompositorScrollState(crate::engine::CompositorScrollState),
-    DidCompositorScroll {
-        sequence: u64,
-        element: ElementId,
-        offset: PointF,
-        source: ScrollSourceType,
-        snap: Option<TargetSnapAreaElementIds>,
-    },
-    DidChangeScrollbarsHidden {
-        element: ElementId,
-        hidden: bool,
-    },
-}
-
 #[derive(Clone, Default)]
-pub(crate) struct PacScrollEffects(Rc<RefCell<VecDeque<PacScrollEffect>>>);
+pub struct PacScrollEffects(Rc<RefCell<VecDeque<PacScrollEffect>>>);
 
 impl PacScrollEffects {
-    pub(crate) fn Pop(&self) -> Option<PacScrollEffect> {
+    pub fn Pop(&self) -> Option<PacScrollEffect> {
         self.0.borrow_mut().pop_front()
     }
 
-    pub(crate) fn IsEmpty(&self) -> bool {
+    pub fn IsEmpty(&self) -> bool {
         self.0.borrow().is_empty()
     }
 
-    pub(crate) fn Push(&self, effect: PacScrollEffect) {
+    pub fn Push(&self, effect: PacScrollEffect) {
         self.0.borrow_mut().push_back(effect)
     }
 }
 
-pub(crate) struct PacScrollCallbacks {
+pub struct PacScrollCallbacks {
     effects: PacScrollEffects,
     sequence: Cell<u64>,
 }
 
 impl PacScrollCallbacks {
-    pub(crate) fn new(effects: PacScrollEffects) -> Rc<Self> {
+    pub fn new(effects: PacScrollEffects) -> Rc<Self> {
         Rc::new(Self {
             effects,
             sequence: Cell::new(0),
         })
     }
 
-    pub(crate) fn Downgrade(callbacks: &Rc<Self>) -> Weak<dyn ScrollCallbacks> {
+    pub fn Downgrade(callbacks: &Rc<Self>) -> Weak<dyn ScrollCallbacks> {
         let callbacks: Rc<dyn ScrollCallbacks> = callbacks.clone();
         Rc::downgrade(&callbacks)
     }

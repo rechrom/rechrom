@@ -177,7 +177,7 @@ impl EngineAssembly {
         areas: Vec<crate::adapter::input_types::ElementId>,
     ) -> Result<CompositorOutput, CompositorError> {
         self.core.ExpireCommitDeferral();
-        if let Some(reason) = self.core.main_frame_lifecycle.DeferralReason() {
+        if let Some(reason) = self.core.layerize.MainFrameLifecycle().DeferralReason() {
             // ProxyMain completes Blink's lifecycle but aborts before PAC /
             // UpdateLayers. The producer's immutable artifact remains with Page;
             // no cc ready-commit or presentable marker is manufactured here.
@@ -411,20 +411,21 @@ impl EngineAssembly {
             FrameLifecycleMutation::SetDeferMainFrameUpdates(deferred) => {
                 if self
                     .core
-                    .main_frame_lifecycle
+                    .layerize
+                    .MainFrameLifecycleMut()
                     .SetDeferMainFrameUpdates(deferred)
                 {
                     self.core.effects.push(
                         CompositorMainThreadEffect::MainFrameUpdatesDeferralChanged { deferred },
                     );
                     self.scheduler.SetDeferBeginMainFrame(
-                        self.core.main_frame_lifecycle.DeferBeginMainFrame(),
+                        self.core.layerize.MainFrameLifecycle().DeferBeginMainFrame(),
                         &mut self.core,
                     );
                 }
             }
             FrameLifecycleMutation::StartDeferringCommits { timeout, reason } => {
-                if self.core.main_frame_lifecycle.StartDeferringCommits(
+                if self.core.layerize.MainFrameLifecycleMut().StartDeferringCommits(
                     self.core.services.core.MonotonicTimeNow(),
                     timeout,
                     reason,
@@ -438,7 +439,7 @@ impl EngineAssembly {
                 }
             }
             FrameLifecycleMutation::StopDeferringCommits => {
-                if let Some(reason) = self.core.main_frame_lifecycle.StopDeferringCommits() {
+                if let Some(reason) = self.core.layerize.MainFrameLifecycleMut().StopDeferringCommits() {
                     self.core
                         .effects
                         .push(CompositorMainThreadEffect::CommitDeferralChanged {
@@ -1479,9 +1480,9 @@ impl EngineAssembly {
                 self.scheduler.SetWaitingForScrollEvent(waiting)
             }
             E::SetDeferBeginMainFrameFromImpl { defer, .. } => {
-                self.core.main_frame_lifecycle.SetDeferFromImpl(defer);
+                self.core.layerize.MainFrameLifecycleMut().SetDeferFromImpl(defer);
                 self.scheduler.SetDeferBeginMainFrame(
-                    self.core.main_frame_lifecycle.DeferBeginMainFrame(),
+                    self.core.layerize.MainFrameLifecycle().DeferBeginMainFrame(),
                     &mut self.core,
                 )
             }

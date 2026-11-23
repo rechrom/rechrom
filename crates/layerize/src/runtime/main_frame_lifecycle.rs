@@ -1,28 +1,11 @@
 //! ProxyMain.cc:282-307,328-337,382-426,793-817,848-887 and
 //! SingleThreadProxy.cc:436-473. State belongs to cc's main-frame proxy;
 //! Page never filters submitted CompositorFrames to implement paint holding.
-use crate::adapter::time::{TimeDelta, TimeTicks};
+use crate::commit::paint_holding::{CommitDeferralReason, PaintHoldingReason};
+use compositor_scheduler::{TimeDelta, TimeTicks};
 use std::time::Duration;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PaintHoldingReason {
-    FirstContentfulPaint,
-}
-#[derive(Clone, Copy, Debug)]
-pub enum FrameLifecycleMutation {
-    SetDeferMainFrameUpdates(bool),
-    StartDeferringCommits {
-        timeout: Duration,
-        reason: PaintHoldingReason,
-    },
-    StopDeferringCommits,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommitDeferralReason {
-    MainFrameUpdates,
-    PaintHolding(PaintHoldingReason),
-}
 #[derive(Default)]
-pub(crate) struct MainFrameLifecycle {
+pub struct MainFrameLifecycle {
     defer_main_frame_updates: bool,
     defer_from_impl: bool,
     holding: Option<(PaintHoldingReason, TimeTicks)>,

@@ -13,6 +13,10 @@ pub mod third_party;
 mod cc;
 pub mod commit;
 mod skia_path;
+mod layerize_engine;
+/// The main-half engine. During S1a only the compositor's EngineCore and
+/// EngineAssembly name it (S1b moves it to Page).
+pub use layerize_engine::LayerizeEngine;
 /// Paint-value bindings of the main half. Until S1a-3 B3 the compositor's
 /// EngineCore still drives them directly.
 pub mod runtime;

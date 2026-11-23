@@ -8,8 +8,11 @@ pub mod metadata;
 
 pub mod layer;
 
-pub mod canvas_child_record;
-pub(crate) mod main_frame_lifecycle;
+/// The canvas child raster input (a commit value since S1a-3 B3), at the
+/// path the raster worker names.
+pub mod canvas_child_record {
+    pub use layerize::commit::paint::canvas_child_record::*;
+}
 pub mod main_host;
 pub mod paint;
 pub mod paint_services;
@@ -73,7 +76,6 @@ pub(crate) mod latency_info_swap_promise_monitor;
 pub(crate) mod layer_tree_frame_sink_endpoint;
 pub mod metrics;
 pub mod owner_types;
-pub(crate) mod pac_scroll;
 pub mod picture_types;
 pub(crate) mod scheduler_services;
 

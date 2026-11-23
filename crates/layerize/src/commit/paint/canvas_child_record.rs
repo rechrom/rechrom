@@ -2,7 +2,8 @@
 //! allocation. The prefix offset is calculated by ContentLayerClientImpl.
 //! Nested CustomData must be substituted from actual canvas snapshots when a
 //! Canvas2D receiver consumes this input; it is not a pre-flattened record.
-use super::{paint::ContentDisplayItemList, skia::SkRegion};
+use super::ContentDisplayItemList;
+use crate::commit::skia_region::SkRegion;
 use crate::adapter::geometry::Vector2dF;
 use std::sync::Arc;
 pub struct CanvasChildRecordReplay {

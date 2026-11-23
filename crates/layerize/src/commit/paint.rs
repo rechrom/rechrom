@@ -23,6 +23,9 @@ pub use lowering::{CpuPaintColorFilter, CpuPaintShader, PaintSource};
 pub mod metadata;
 pub mod node_info;
 mod node_id;
+// Canvas child raster input published by the main half and replayed by the
+// raster worker (moved from compositor/src/runtime/canvas_child_record.rs).
+pub mod canvas_child_record;
 pub use node_id::NodeId;
 mod picture;
 pub use picture::*;

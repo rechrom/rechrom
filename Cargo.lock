@@ -2287,6 +2287,7 @@ name = "layerize"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "compositor_animation",
  "compositor_draw",
  "compositor_frame",

@@ -7,7 +7,8 @@ pub use crate::cc::{
     input::scroll_snap_data::TargetSnapAreaElementIds, trees::scroll_source_type::ScrollSourceType,
 };
 pub use crate::runtime::host_metrics::CustomTrackerResults;
-pub use crate::runtime::main_frame_lifecycle::{
+pub use layerize::commit::main_effects::CompositorScrollState;
+pub use layerize::commit::paint_holding::{
     CommitDeferralReason, FrameLifecycleMutation, PaintHoldingReason,
 };
 pub use crate::runtime::metadata::FrameTimingDetails as CompositorFrameTimingDetails;
@@ -278,15 +279,6 @@ pub enum CompositorMutation {
         commands: Vec<scroll_animation::compositor_mutation::ScrollAnimationMutation>,
     },
 }
-/// LayerTreeHostClient::UpdateCompositorScrollState, from the same commit
-/// as the preceding scroll deltas. Element/source identities remain native.
-#[derive(Clone, Debug)]
-pub struct CompositorScrollState {
-    pub is_scroll_active: bool,
-    pub scroll_latched_element_id: ElementId,
-    pub source_type: ScrollSourceType,
-    pub done_containers: Vec<ElementId>,
-}
 /// A backend can acknowledge a buffer without knowing a display time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentationUnavailableReason {
@@ -509,9 +501,9 @@ impl From<crate::runtime::paint::PaintInputError> for CompositorError {
         }
     }
 }
-impl From<crate::runtime::pac_scroll::PacScrollEffect> for CompositorMainThreadEffect {
-    fn from(effect: crate::runtime::pac_scroll::PacScrollEffect) -> Self {
-        use crate::runtime::pac_scroll::PacScrollEffect as E;
+impl From<layerize::commit::main_effects::PacScrollEffect> for CompositorMainThreadEffect {
+    fn from(effect: layerize::commit::main_effects::PacScrollEffect) -> Self {
+        use layerize::commit::main_effects::PacScrollEffect as E;
         match effect {
             E::DidCompositorScroll {
                 sequence,

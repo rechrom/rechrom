@@ -8,7 +8,6 @@ use super::{
     layer_tree_frame_sink_endpoint::FrameSinkEndpoint,
     main_endpoint::EngineMainEndpoint,
     main_host::{CpuMainLayerHost, CpuMainLayerHosts},
-    pac_scroll::{PacScrollCallbacks, PacScrollEffects},
     paint_services::CpuMainPaintServices,
     resources::RasterReturnedResource,
     skia::SkRegion,
@@ -32,36 +31,24 @@ use crate::{
     },
     engine::{CompositorError, CompositorMainThreadEffect, CompositorViewportState},
     performance::{CompositorPackage, Span},
-    third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor,
     CompositorFrameSubmission,
 };
 use paint::PaintArtifact;
-use std::{
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 type Root = CpuCompositorTypes<SkRegion>;
 
 /// All constructor inputs are actual owners/capabilities, never test stand-ins.
 /// This is private to compositor: Page only provides executors/pixel primitives.
 pub(crate) struct EngineCore {
-    pub(crate) main_frame_lifecycle: super::main_frame_lifecycle::MainFrameLifecycle,
+    // The main half: PAC, previous artifact, scroll callbacks, main paint
+    // services and the main-frame deferral state (MAIN_IMPL_SPLIT.md B3).
+    pub(crate) layerize: layerize::LayerizeEngine<Root>,
     pub(crate) host: Option<ClientLayerTreeHostImpl<Root>>,
     pub(crate) services: CpuHostServices<Root>,
     pub(crate) main: CpuMainLayerHost<SkRegion>,
-    pub(crate) paint: Arc<CpuMainPaintServices<SkRegion>>,
-    pac: Option<PaintArtifactCompositor<Root>>,
-    // Blink classifies each producer replacement against the artifact that
-    // populated the resident PAC. This is the immutable engine input itself,
-    // not a copied snapshot.
-    previous_artifact: Option<Arc<PaintArtifact>>,
     pub(crate) endpoint: Arc<EngineMainEndpoint>,
     lifecycle: Arc<super::host_lifecycle::HostLifecycle>,
     pub(crate) scheduler_queries: Arc<super::engine_queries::CallScopedSchedulerQueries>,
-    // PAC stores only Weak. Retaining this exact strong owner is required for
-    // source scroll/snap/scrollbar-hidden delivery throughout PAC's lifetime.
-    _scroll_callbacks: Rc<PacScrollCallbacks>,
-    scroll_effects: PacScrollEffects,
     pub(crate) frame_sink: Arc<Mutex<FrameSinkEndpoint>>,
     ready_commit: Option<CommitState<Root>>,
     // Source frame identity of the last commit consumed by
@@ -108,7 +95,7 @@ impl EngineCore {
         let chunks = super::paint::PaintChunkSubset::from_artifact(artifact);
         let state = super::paint::PropertyTreeState::<SkRegion>::from_source_in(state, trees);
         crate::third_party::blink::renderer::platform::graphics::compositing::paint_chunks_to_cc_layer::Convert::<Root>(
-            &chunks, &state, None, self.paint.as_ref(),
+            &chunks, &state, None, self.layerize.Paint().as_ref(),
         )
     }
 
@@ -117,7 +104,7 @@ impl EngineCore {
         range: crate::runtime::types::SurfaceRange,
     ) -> Arc<dyn paint::ForeignLayer> {
         self.main
-            .CreateVideoSurfaceForeignLayer(self.paint.as_ref(), self.paint.as_ref(), range)
+            .CreateVideoSurfaceForeignLayer(self.layerize.Paint().as_ref(), self.layerize.Paint().as_ref(), range)
     }
 
     pub(crate) fn SetViewportState(
@@ -190,8 +177,11 @@ impl EngineCore {
         }
         // Same FIFO as PAC's offset callbacks: source client state/finished
         // notification cannot overtake the final scroll delta.
-        self.scroll_effects
-            .Push(super::pac_scroll::PacScrollEffect::DidUpdateCompositorScrollState(scroll_state));
+        self.layerize.PushScrollEffect(
+            layerize::commit::main_effects::PacScrollEffect::DidUpdateCompositorScrollState(
+                scroll_state,
+            ),
+        );
     }
 
     pub(crate) fn new(
@@ -207,17 +197,17 @@ impl EngineCore {
         next_property_owner: u64,
         input_client: std::sync::Arc<super::input_client::QueuedInputHandlerClient>,
     ) -> Result<Self, CompositorError> {
-        let scroll_effects = PacScrollEffects::default();
-        let callbacks = PacScrollCallbacks::new(scroll_effects.clone());
-        let pac = {
-            let mut hosts = CpuMainLayerHosts { host: &mut main };
-            let mut context =
-                LayerContext::new(&mut hosts, paint.as_ref()).WithDerivedServices(paint.as_ref());
-            paint.CreateCompositor(PacScrollCallbacks::Downgrade(&callbacks), &mut context)
-        };
+        let layerize = layerize::LayerizeEngine::<Root>::new(
+            paint,
+            &mut CpuMainLayerHosts { host: &mut main },
+        );
         // Native PAC::Update intentionally returns when the root has no host.
         // Attach the actual PAC root before admitting any producer commit.
-        main.SetRootLayer(pac.RootLayer().cloned(), paint.as_ref(), paint.as_ref());
+        main.SetRootLayer(
+            layerize.Pac().and_then(|pac| pac.RootLayer()).cloned(),
+            layerize.Paint().as_ref(),
+            layerize.Paint().as_ref(),
+        );
         let mut host = services.CreateClientHost(init);
         host.BaseMutable().CreateInputHandler(&mut HostImplContext {
             services: &mut services,
@@ -237,18 +227,13 @@ impl EngineCore {
             },
         );
         let result = Self {
-            main_frame_lifecycle: Default::default(),
             host: Some(host),
             services,
             main,
-            paint,
-            pac: Some(pac),
-            previous_artifact: None,
             endpoint,
             lifecycle,
             scheduler_queries,
-            _scroll_callbacks: callbacks,
-            scroll_effects,
+            layerize,
             frame_sink,
             ready_commit: None,
             last_committed_source_frame_number: None,
@@ -297,26 +282,21 @@ impl EngineCore {
         // Validate all producer metadata once, before changing resident owner
         // state, and carry that same live input through PAC update. Rebuilding
         // PaintInput below would repeat the complete artifact/property walk.
-        let paint_input = self.paint.PrepareInput(artifact.clone())?;
+        let paint_input = self.layerize.Paint().PrepareInput(artifact.clone())?;
         self.SetViewportState(viewport)?;
-        let had_canvas_children = self.pac.as_ref().unwrap().CanvasChildIds().next().is_some();
+        let had_canvas_children =
+            self.layerize.Pac().unwrap().CanvasChildIds().next().is_some();
         let source_frame = u64::try_from(self.main.pending_commit_state().source_frame_number)
             .expect("source main-frame number is nonnegative");
         let publication = {
             let mut hosts = CpuMainLayerHosts {
                 host: &mut self.main,
             };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            self.paint.UpdateCompositor(
-                self.pac.as_mut().unwrap(),
-                paint_input,
-                self.previous_artifact.as_ref(),
-                Vec::new(),
-                &mut context,
-                &mut self.sequence,
-            )?;
-            let pac = self.pac.as_ref().unwrap();
+            self.layerize
+                .UpdateCompositor(paint_input, &mut hosts, &mut self.sequence)?;
+            let paint = self.layerize.Paint().as_ref();
+            let context = LayerContext::new(&mut hosts, paint).WithDerivedServices(paint);
+            let pac = self.layerize.Pac().unwrap();
             match artifact.canvas_document {
                 Some(_) if !had_canvas_children && pac.CanvasChildIds().next().is_none() => None,
                 Some(document) => {
@@ -369,7 +349,7 @@ impl EngineCore {
                     publication,
                 ));
         }
-        self.previous_artifact = Some(artifact.clone());
+        self.layerize.SetPreviousArtifact(artifact.clone());
         drop(layerize_trace);
 
         self.prepared_paint_commit = true;
@@ -381,7 +361,7 @@ impl EngineCore {
     }
 
     pub(crate) fn CanPrepareCompositedAnimationCommit(&self) -> bool {
-        self.previous_artifact.is_some()
+        self.layerize.HasResidentPaintArtifact()
             && self.ready_commit.is_none()
             && !self.prepared_paint_commit
     }
@@ -390,24 +370,15 @@ impl EngineCore {
         &mut self,
         mutation: &crate::engine::ScrollbarPaintMutation,
     ) {
-        let applied = {
-            let mut hosts = CpuMainLayerHosts {
+        let applied = self.layerize.ApplyScrollbarPaintMutation(
+            mutation.element,
+            mutation.opacity,
+            mutation.thumb_width,
+            mutation.needs_repaint,
+            &mut CpuMainLayerHosts {
                 host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            self.pac.as_ref().is_some_and(|pac| {
-                self.paint
-                    .ApplyScrollbarPaintMutation(
-                        pac,
-                        mutation.element,
-                        mutation.opacity,
-                        mutation.thumb_width,
-                        mutation.needs_repaint,
-                        &mut context,
-                    )
-            })
-        };
+            },
+        );
         if !applied {
             self.effects
                 .push(CompositorMainThreadEffect::ScrollbarPaintFallback {
@@ -417,7 +388,7 @@ impl EngineCore {
     }
 
     pub(crate) fn HasResidentPaintArtifact(&self) -> bool {
-        self.previous_artifact.is_some()
+        self.layerize.HasResidentPaintArtifact()
     }
 
     /// Apply Blink's deferred animated property values to the resident PAC
@@ -428,7 +399,7 @@ impl EngineCore {
         &mut self,
         update: &paint::CompositedAnimationPropertyUpdate,
     ) -> Result<(), CompositorError> {
-        if self.previous_artifact.is_none() {
+        if !self.layerize.HasResidentPaintArtifact() {
             return Err(CompositorError::NotReady {
                 stage: "composited animation requires a resident paint artifact",
             });
@@ -438,15 +409,11 @@ impl EngineCore {
                 stage: "previous main commit awaits scheduler",
             });
         }
-        let mut hosts = CpuMainLayerHosts {
-            host: &mut self.main,
-        };
-        let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-            .WithDerivedServices(self.paint.as_ref());
-        if !self.paint.ApplyCompositedAnimationProperties(
-            self.pac.as_ref().unwrap(),
+        if !self.layerize.ApplyCompositedAnimationProperties(
             update,
-            &mut context,
+            &mut CpuMainLayerHosts {
+                host: &mut self.main,
+            },
         ) {
             return Err(CompositorError::NotReady {
                 stage: "resident compositor property mapping is unavailable",
@@ -510,10 +477,10 @@ impl EngineCore {
         tree_trace.set("update_layers", update_layers as u8 as f64);
         if update_layers {
             self.main
-                .UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
+                .UpdateLayers(self.layerize.Paint().as_ref(), self.layerize.Paint().as_ref(), features);
         }
         self.main
-            .WillCommit(self.paint.as_ref(), self.paint.as_ref());
+            .WillCommit(self.layerize.Paint().as_ref(), self.layerize.Paint().as_ref());
         let property_owner = PropertyTreesOwnerId::FromOwnerValue(self.property_owner_sequence);
         self.property_owner_sequence = self
             .property_owner_sequence
@@ -548,9 +515,9 @@ impl EngineCore {
         {
             let _protected = self.endpoint.EnterProtectedSequence();
             self.main.WithCommitContext(
-                self.paint.as_ref(),
-                self.paint.as_ref(),
-                self.paint.as_ref(),
+                self.layerize.Paint().as_ref(),
+                self.layerize.Paint().as_ref(),
+                self.layerize.Paint().as_ref(),
                 |unsafe_state, main_context| {
                     host.FinishCommit(&mut state, unsafe_state, main_context, &mut context);
                 },
@@ -716,14 +683,12 @@ impl EngineCore {
         mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
     ) {
         if let Some(element) = self.endpoint.ApplySourceScrollAnimation(mutation) {
-            let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            if let Some(pac) = self.pac.as_ref() {
-                pac.DropCompositorScrollDeltaNextCommit(element, &mut context);
-            }
+            self.layerize.DropCompositorScrollDeltaNextCommit(
+                element,
+                &mut CpuMainLayerHosts {
+                    host: &mut self.main,
+                },
+            );
         }
     }
     pub(crate) fn ApplySourcePropertyAnimation(
@@ -753,7 +718,7 @@ impl EngineCore {
         }
     }
     pub(crate) fn DrainScrollEffects(&self, output: &mut Vec<CompositorMainThreadEffect>) {
-        while let Some(effect) = self.scroll_effects.Pop() {
+        while let Some(effect) = self.layerize.PopScrollEffect() {
             output.push(effect.into());
         }
     }
@@ -762,16 +727,11 @@ impl EngineCore {
     pub(crate) fn Shutdown(&mut self) {
         // Native child client finalization needs the current actual main tree;
         // clear clients before detaching/dropping the main root allocation.
-        if let Some(pac) = self.pac.take() {
-            let mut hosts = CpuMainLayerHosts {
-                host: &mut self.main,
-            };
-            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
-                .WithDerivedServices(self.paint.as_ref());
-            pac.Destroy(&mut context);
-        }
+        self.layerize.Shutdown(&mut CpuMainLayerHosts {
+            host: &mut self.main,
+        });
         self.main
-            .SetRootLayer(None, self.paint.as_ref(), self.paint.as_ref());
+            .SetRootLayer(None, self.layerize.Paint().as_ref(), self.layerize.Paint().as_ref());
         if let Some(mut host) = self.host.take() {
             host.BaseMutable()
                 .ReleaseLayerTreeFrameSink(&mut HostImplContext {
@@ -837,7 +797,7 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
         scheduler.NotifyBeginMainFrameStarted(self.services.core.MonotonicTimeNow());
         self.ExpireCommitDeferral();
         self.main_frame_applied_deltas = false;
-        if !self.main_frame_lifecycle.IsDeferringCommits() {
+        if !self.layerize.MainFrameLifecycle().IsDeferringCommits() {
             self.ApplyCompositorDeltas();
             self.main_frame_applied_deltas = true;
         }
@@ -1071,7 +1031,8 @@ impl Drop for EngineCore {
 impl EngineCore {
     pub(crate) fn ExpireCommitDeferral(&mut self) {
         if let Some(reason) = self
-            .main_frame_lifecycle
+            .layerize
+            .MainFrameLifecycleMut()
             .Expire(self.services.core.MonotonicTimeNow())
         {
             self.effects

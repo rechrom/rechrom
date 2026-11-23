@@ -31,5 +31,7 @@ paint = { path = "../paint" }
 paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
 foundation = { path = "../foundation" }
+# canvas::CanvasRecordReadLease, implemented by the canvas child raster input.
+canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 serde_json = "1"
