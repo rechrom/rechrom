@@ -36,7 +36,8 @@ impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTyp
     type ProxySwapPromise = Box<super::host_owners::SwapPromise<R>>;
     // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
     type LayerTreeMutator = super::host_owners::LayerTreeMutator;
-    type ImplInit = ();
+    // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
+    type ImplInit = Box<super::engine_factory::ProxyImplInit<R>>;
     type PresentationFeedback = ();
     type ProxyDrawImage = ();
 }

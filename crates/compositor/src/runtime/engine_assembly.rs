@@ -10,7 +10,6 @@ use super::{
     resources::RasterReturnedResource,
     scheduler_services::{EngineSchedulerHost, SchedulerEffect, SchedulerEffects, TimingHistory},
 };
-use layerize::commit::main_effects::MainHostEffect;
 use crate::{
     adapter::{begin_frame::BeginFrameArgs, layer_tree_host_impl::HostImplContext},
     cc::{
@@ -23,7 +22,6 @@ use crate::{
     },
     performance::{CompositorPackage, Span},
 };
-use paint::PaintArtifact;
 use std::sync::Arc;
 
 // InputHandlerProxy owns the exact scroll begin while a source DOM ack or
@@ -38,8 +36,6 @@ enum PendingWheelStage {
 }
 pub(crate) struct EngineAssembly {
     core: EngineCore,
-    scroll_animation_commit: Option<crate::engine::ScrollAnimationCommitToken>,
-    next_scroll_animation_commit: u64,
     pending_wheel_inputs: std::collections::BTreeMap<u64, PendingWheelInput>,
     next_wheel_request: u64,
     waiting_wheel_hit_test: Option<u64>,
@@ -65,25 +61,6 @@ pub(crate) struct EngineAssembly {
     shut_down: bool,
 }
 impl EngineAssembly {
-    /// Moves the Page-owned main half into the core for one call
-    /// (`lent_main`, S1b-6).
-    pub(crate) fn LendMain(
-        &mut self,
-        proxy_main: Box<layerize::runtime::proxy_main::ProxyMain<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
-        layerize: Box<layerize::LayerizeEngine<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
-    ) {
-        self.core.proxy_main.Lend(proxy_main);
-        self.core.layerize.Lend(layerize);
-    }
-    pub(crate) fn ReturnMain(
-        &mut self,
-    ) -> (
-        Box<layerize::runtime::proxy_main::ProxyMain<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
-        Box<layerize::LayerizeEngine<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
-    ) {
-        (self.core.proxy_main.Return(), self.core.layerize.Return())
-    }
-
     pub(crate) fn new(
         mut core: EngineCore,
         settings: SchedulerSettings,
@@ -150,8 +127,6 @@ impl EngineAssembly {
             scrollbar_gesture_active: false,
             wheel_events_async: false,
             core,
-            scroll_animation_commit: None,
-            next_scroll_animation_commit: 0,
             scheduler,
             commands,
             lifecycle,
@@ -166,134 +141,6 @@ impl EngineAssembly {
             shut_down: false,
         })
     }
-    pub(crate) fn Commit(
-        &mut self,
-        artifact: Arc<PaintArtifact>,
-        viewport: CompositorViewportState,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.CommitWithScrollAnimations(artifact, viewport, Vec::new())
-    }
-    pub(crate) fn CommitWithScrollAnimations(
-        &mut self,
-        artifact: Arc<PaintArtifact>,
-        viewport: CompositorViewportState,
-        areas: Vec<crate::adapter::input_types::ElementId>,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.core.ExpireCommitDeferral();
-        if let Some(reason) = self.core.layerize.MainFrameLifecycle().DeferralReason() {
-            // ProxyMain completes Blink's lifecycle but aborts before PAC /
-            // UpdateLayers. The producer's immutable artifact remains with Page;
-            // no cc ready-commit or presentable marker is manufactured here.
-            self.core
-                .AbortDeferredMainFrame(&mut self.scheduler, reason);
-            return self.Poll();
-        }
-        if !self.core.proxy_main.IsInBeginMainFrame() {
-            // The embedding can finish Page's artifact before Scheduler has
-            // dispatched the BeginMainFrame which will own it.  Synchronize
-            // impl-side deltas before snapshotting the main tree in that
-            // case.  Otherwise PrepareCommit captures the pre-scroll base;
-            // the later BMF reflects the already-applied delta into a second
-            // slot and a following commit can restore that stale base.
-            //
-            // This preserves Chromium's ordering even though this resident
-            // single-sequence embedding receives the produced artifact at
-            // the Commit boundary: ApplyCompositorDeltas precedes the main
-            // tree commit it belongs to.
-            self.core.ApplyCompositorDeltasOutsideMainFrame();
-        }
-        {
-            let _query = self
-                .core
-                .scheduler_queries
-                .Enter(self.scheduler.IsReadyToActivate());
-            self.core.PreparePaintCommit(artifact, viewport)?;
-        }
-        self.scheduler.SetVisible(viewport.visible, &mut self.core);
-        if !areas.is_empty() {
-            self.next_scroll_animation_commit = self
-                .next_scroll_animation_commit
-                .checked_add(1)
-                .expect("native animation commit identity exhausted");
-            let token =
-                crate::engine::ScrollAnimationCommitToken(self.next_scroll_animation_commit);
-            assert!(self.scroll_animation_commit.replace(token).is_none());
-            let areas = self.core.ClassifyScrollAnimationAreas(&areas);
-            self.core
-                .effects
-                .push(CompositorMainThreadEffect::ScrollAnimationCommitPrepared { token, areas });
-            if !self.core.proxy_main.IsInBeginMainFrame() {
-                self.core.RequestMainFrame(&mut self.scheduler);
-            }
-            return self.Poll();
-        }
-        self.core.FinalizePreparedCommit(&self.main_features)?;
-        self.ScheduleFinalizedMainCommit();
-        self.Poll()
-    }
-    pub(crate) fn FinalizeScrollAnimationCommit(
-        &mut self,
-        token: crate::engine::ScrollAnimationCommitToken,
-        commands: Vec<scroll_animation::compositor_mutation::ScrollAnimationMutation>,
-    ) -> Result<CompositorOutput, CompositorError> {
-        if self.scroll_animation_commit != Some(token) {
-            return Err(CompositorError::NotReady {
-                stage: "scroll animation reply does not own this pending main commit",
-            });
-        }
-        for command in commands {
-            self.core.layerize.ApplySourceScrollAnimation(command);
-        }
-        self.core.FinalizePreparedCommit(&self.main_features)?;
-        self.scroll_animation_commit = None;
-        self.core
-            .effects
-            .push(CompositorMainThreadEffect::ScrollAnimationCommitFinalized { token });
-        self.ScheduleFinalizedMainCommit();
-        self.Poll()
-    }
-    /// Runs what ProxyMain posted for the finalized commit: ProxyImpl's
-    /// NotifyReadyToCommitOnImpl inside an open BeginMainFrame, otherwise the
-    /// B1 request for the BeginMainFrame that will carry the held commit.
-    fn ScheduleFinalizedMainCommit(&mut self) {
-        self.core.RunProxyTasks(&mut self.scheduler);
-    }
-
-    /// Establishes the widget state before the first main-frame request.
-    pub(crate) fn SetViewport(
-        &mut self,
-        viewport: CompositorViewportState,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.core.SetViewportState(viewport)?;
-        self.scheduler.SetVisible(viewport.visible, &mut self.core);
-        self.Poll()
-    }
-
-    /// Main-thread commit demand, before Blink produces DataForCommit.
-    ///
-    /// Source: cc/trees/proxy_main.cc:741-756;
-    ///         cc/trees/proxy_impl.cc:567-573.
-    pub(crate) fn RequestMainFrame(&mut self) -> Result<CompositorOutput, CompositorError> {
-        self.core.RequestMainFrame(&mut self.scheduler);
-        self.Poll()
-    }
-
-    pub(crate) fn FinishMainFrameWithoutUpdates(
-        &mut self,
-    ) -> Result<CompositorOutput, CompositorError> {
-        if !self.core.proxy_main.IsInBeginMainFrame() {
-            return Err(CompositorError::NotReady {
-                stage: "no BeginMainFrame awaits a no-update response",
-            });
-        }
-        if self.core.HasPreparedPaintCommit() {
-            self.core.FinalizePreparedCommit(&self.main_features)?;
-            self.ScheduleFinalizedMainCommit();
-            return self.Poll();
-        }
-        self.core.FinishMainFrameWithoutUpdates(&mut self.scheduler);
-        self.Poll()
-    }
     pub(crate) fn BeginFrame(
         &mut self,
         args: BeginFrameArgs,
@@ -307,121 +154,48 @@ impl EngineAssembly {
         self.Poll()
     }
 
-    pub(crate) fn ApplySourceScrollAnimation(
+    /// ProxyImpl::NotifyReadyToCommitOnImpl (proxy_impl.cc:425-493).
+    pub(crate) fn ReadyToCommit(
         &mut self,
-        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+        commit_state: Box<crate::cc::trees::commit_state::CommitState<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
+        lease: layerize::commit::proxy::ProtectedCommitLease<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>,
+        main_thread_start_time: crate::adapter::time::TimeTicks,
+        scroll_and_viewport_changes_synced: bool,
+        commit_timeout: bool,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.core.layerize.ApplySourceScrollAnimation(mutation);
+        self.core.NotifyReadyToCommitOnImpl(
+            lease,
+            commit_state,
+            main_thread_start_time,
+            scroll_and_viewport_changes_synced,
+            commit_timeout,
+            &mut self.scheduler,
+        );
         self.Poll()
     }
-    pub(crate) fn ApplySourcePropertyAnimation(
+    /// ProxyImpl::BeginMainFrameAbortedOnImpl (proxy_impl.cc:306-323).
+    pub(crate) fn BeginMainFrameAborted(
         &mut self,
-        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+        reason: crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason,
+        main_thread_start_time: crate::adapter::time::TimeTicks,
+        swap_promises: Vec<Box<super::host_owners::SwapPromise<crate::runtime::skia::SkRegion>>>,
+        scroll_and_viewport_changes_synced: bool,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.core.layerize.ApplySourcePropertyAnimation(mutation);
+        self.core.BeginMainFrameAbortedOnImpl(
+            reason,
+            main_thread_start_time,
+            swap_promises,
+            scroll_and_viewport_changes_synced,
+            &mut self.scheduler,
+        );
         self.Poll()
     }
-
-    pub(crate) fn ApplyCompositedAnimationProperties(
+    /// The remaining ProxyMain -> ProxyImpl tasks.
+    pub(crate) fn RunMainThreadTask(
         &mut self,
-        update: paint::CompositedAnimationPropertyUpdate,
+        task: layerize::commit::proxy::MainToImpl<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>,
     ) -> Result<CompositorOutput, CompositorError> {
-        if !self.core.HasResidentPaintArtifact() {
-            return Err(CompositorError::NotReady {
-                stage: "composited animation requires a resident paint artifact",
-            });
-        }
-        if !self.core.CanPrepareCompositedAnimationCommit() {
-            let mut trace = Span(
-                CompositorPackage::Animation,
-                "Compositor.Animation.CoalescePropertyUpdate",
-            );
-            trace.set("transform_updates", update.transforms.len() as f64);
-            trace.set("effect_updates", update.effects.len() as f64);
-            // The main half retains the latest value per property node.
-            self.core
-                .layerize
-                .CoalesceCompositedAnimationProperties(update);
-            drop(trace);
-            return self.Poll();
-        }
-        self.PrepareCompositedAnimationProperties(update)?;
-        self.Poll()
-    }
-
-    pub(crate) fn ApplyScrollbarPaintMutation(
-        &mut self,
-        mutation: crate::engine::ScrollbarPaintMutation,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.core.ApplyScrollbarPaintMutation(&mutation);
-        self.Poll()
-    }
-
-    fn PrepareCompositedAnimationProperties(
-        &mut self,
-        update: paint::CompositedAnimationPropertyUpdate,
-    ) -> Result<(), CompositorError> {
-        let awaiting_main = self.core.proxy_main.IsInBeginMainFrame();
-        self.core.PrepareCompositedAnimationCommit(&update)?;
-        // A style/animation task can execute Blink's pending property updates
-        // before Scheduler has opened a BeginMainFrame. In that case there is
-        // no Page response which could call FinishMainFrameWithoutUpdates;
-        // publish the already-prepared DataForCommit immediately and let the
-        // normal ready-commit Scheduler path open its owning transaction.
-        if !awaiting_main {
-            self.core.FinalizePreparedCommit(&self.main_features)?;
-            self.ScheduleFinalizedMainCommit();
-        }
-        Ok(())
-    }
-
-    pub(crate) fn CanApplyCompositedAnimationProperties(&self) -> bool {
-        self.core.HasResidentPaintArtifact()
-    }
-    pub(crate) fn ApplyFrameLifecycle(
-        &mut self,
-        mutation: crate::engine::FrameLifecycleMutation,
-    ) -> Result<CompositorOutput, CompositorError> {
-        use crate::engine::{CompositorMainThreadEffect, FrameLifecycleMutation};
-        match mutation {
-            FrameLifecycleMutation::SetDeferMainFrameUpdates(deferred) => {
-                let core = &mut self.core;
-                if core
-                    .proxy_main
-                    .SetDeferMainFrameUpdate(deferred, &mut core.layerize)
-                {
-                    core.effects.push(
-                        CompositorMainThreadEffect::MainFrameUpdatesDeferralChanged { deferred },
-                    );
-                    // ProxyImpl::SetDeferBeginMainFrameFromMain.
-                    core.RunProxyTasks(&mut self.scheduler);
-                }
-            }
-            FrameLifecycleMutation::StartDeferringCommits { timeout, reason } => {
-                if self.core.layerize.MainFrameLifecycleMut().StartDeferringCommits(
-                    self.core.services.core.MonotonicTimeNow(),
-                    timeout,
-                    reason,
-                ) {
-                    self.core
-                        .effects
-                        .push(CompositorMainThreadEffect::CommitDeferralChanged {
-                            deferred: true,
-                            reason,
-                        });
-                }
-            }
-            FrameLifecycleMutation::StopDeferringCommits => {
-                if let Some(reason) = self.core.layerize.MainFrameLifecycleMut().StopDeferringCommits() {
-                    self.core
-                        .effects
-                        .push(CompositorMainThreadEffect::CommitDeferralChanged {
-                            deferred: false,
-                            reason,
-                        });
-                }
-            }
-        }
+        self.core.RunMainThreadTask(task, &mut self.scheduler);
         self.Poll()
     }
 
@@ -471,25 +245,13 @@ impl EngineAssembly {
         // the same main host that produces the next pending commit, never to
         // an impl tree or a parallel registry snapshot.
         match input {
-            CompositorInput::SetPageScaleFactorAndLimits {
-                scale,
-                minimum,
-                maximum,
-            } => {
-                if !scale.is_finite()
-                    || !minimum.is_finite()
-                    || !maximum.is_finite()
-                    || minimum <= 0.
-                    || scale < minimum
-                    || scale > maximum
-                {
-                    return Err(Self::WheelContinuationError("invalid page scale limits"));
-                }
-                self.core
-                    .layerize
-                    .MainMut()
-                    .SetPageScaleFactorAndLimits(scale, minimum, maximum);
-                return self.Poll();
+            // LayerTreeHost setters: the main half (document thread).
+            CompositorInput::SetPageScaleFactorAndLimits { .. }
+            | CompositorInput::SetHaveScrollEventHandlers(_)
+            | CompositorInput::SetEventListenerProperties { .. } => {
+                return Err(CompositorError::NotReady {
+                    stage: "main LayerTreeHost input reached the impl half",
+                });
             }
             CompositorInput::StartPageScaleAnimation {
                 target,
@@ -514,17 +276,6 @@ impl EngineAssembly {
                             services: &mut self.core.services,
                         },
                     );
-                return self.Poll();
-            }
-            CompositorInput::SetHaveScrollEventHandlers(value) => {
-                self.core.layerize.MainMut().SetHaveScrollEventHandlers(value);
-                return self.Poll();
-            }
-            CompositorInput::SetEventListenerProperties { class, properties } => {
-                self.core
-                    .layerize
-                    .MainMut()
-                    .SetEventListenerProperties(class, properties);
                 return self.Poll();
             }
             _ => {}
@@ -823,8 +574,7 @@ impl EngineAssembly {
                         main_thread_effects: std::mem::take(&mut self.core.effects),
                         needs_begin_frames: true,
                         work_pending: true,
-                        main_commit_pending: self.core.HasReadyCommit()
-                            || self.scroll_animation_commit.is_some(),
+                        main_commit_pending: self.core.HasReadyCommit(),
                     });
                 }
             }
@@ -1098,7 +848,6 @@ impl EngineAssembly {
             return Err(error);
         }
         let mut effects = std::mem::take(&mut self.core.effects);
-        self.core.DrainScrollEffects(&mut effects);
         // InputHandlerProxy returns after mutating the active tree and posts
         // the resulting scheduler work back to the impl task runner. Running
         // Poll here would drain tile, raster and scheduler commands inside the
@@ -1114,28 +863,8 @@ impl EngineAssembly {
             main_thread_effects: effects,
             needs_begin_frames: true,
             work_pending: true,
-            main_commit_pending: self.core.HasReadyCommit()
-                || self.scroll_animation_commit.is_some(),
+            main_commit_pending: self.core.HasReadyCommit(),
         })
-    }
-    /// The actual Viz acceptance event is distinct from resource returns.
-    pub(crate) fn RequestPresentationTime(
-        &mut self,
-        request: u64,
-    ) -> Result<CompositorOutput, CompositorError> {
-        let promise = super::report_time_swap_promise::Create(
-            request,
-            self.resource_effects.clone(),
-            self.core.main_effects.Clock(),
-        );
-        // LayerTreeHost::QueueSwapPromise does not invent a commit or paint.
-        self.core
-            .layerize
-            .MainMut()
-            .pending_commit_state_mut()
-            .swap_promises
-            .push(promise);
-        self.Poll()
     }
     pub(crate) fn DidReceiveFrameAck(&mut self) -> Result<CompositorOutput, CompositorError> {
         {
@@ -1259,36 +988,6 @@ impl EngineAssembly {
                 drop(query);
                 self.scheduler
                     .SetNeedsImplSideInvalidation(false, &mut self.core);
-            }
-            EngineTask::MainHost(effect) => {
-                match effect {
-                    MainHostEffect::NeedsUpdateLayers | MainHostEffect::NeedsCommit { .. } => {
-                        // Source endpoint requests fulfilled by the current main
-                        // commit have already cleared their actual request bit.
-                        if self.core.layerize.CommitRequested() {
-                            self.core
-                                .effects
-                                .push(CompositorMainThreadEffect::RequestMainFrame);
-                        }
-                    }
-                    MainHostEffect::SetTargetLocalSurfaceId(id) => {
-                        host.SetTargetLocalSurfaceId(&id, &mut context)
-                    }
-                    MainHostEffect::NewLocalSurfaceIdExpectedWhilePaused => {
-                        host.NotifyNewLocalSurfaceIdExpectedWhilePaused(&mut context)
-                    }
-                    MainHostEffect::NotifyLatencyInfoSwapPromiseMonitors => {
-                        host.NotifyLatencyInfoSwapPromiseMonitors(&mut context)
-                    }
-                    MainHostEffect::SaveActiveEventMetrics => self
-                        .core
-                        .effects
-                        .push(CompositorMainThreadEffect::SaveActiveEventMetrics),
-                    MainHostEffect::UpdateDeferMainFrameUpdate => self
-                        .core
-                        .effects
-                        .push(CompositorMainThreadEffect::UpdateDeferMainFrameUpdate),
-                }
             }
             EngineTask::Autoscroll { owner, task } => {
                 host.RunAutoscrollTask(owner, task, &mut context)
@@ -1621,10 +1320,14 @@ impl EngineAssembly {
                 rects,
             } => {
                 assert_eq!(target, delegate);
-                self.core
-                    .layerize
-                    .MainMut()
-                    .NotifyTransitionRequestsFinished(sequence, &rects);
+                // ProxyImpl::NotifyTransitionRequestFinished posts to
+                // ProxyMain (proxy_impl.cc DidFinishViewTransition...).
+                self.core.proxy_impl.PostToMain(
+                    layerize::commit::proxy::ImplToMain::NotifyTransitionRequestFinished {
+                        sequence_id: sequence,
+                        rects,
+                    },
+                );
             }
             ResourceEffect::CustomMetrics {
                 delegate: target,
@@ -1665,7 +1368,6 @@ impl EngineAssembly {
                     EngineTask::CheckerNeedsInvalidation { .. } => (CompositorPackage::Tile, "Compositor.Tile.CheckerInvalidation"),
                     EngineTask::Autoscroll { .. } => (CompositorPackage::Input, "Compositor.Input.Autoscroll"),
                     EngineTask::ImageAnimation(_) => (CompositorPackage::Animation, "Compositor.Animation.Image"),
-                    EngineTask::MainHost(_) => (CompositorPackage::Tree, "Compositor.Tree.MainHostTask"),
                     EngineTask::ImageDecoded { .. } => (CompositorPackage::Resource, "Compositor.Resource.ImageDecoded"),
                     EngineTask::Host(_) => (CompositorPackage::Tree, "Compositor.Tree.HostTask"),
                     EngineTask::Metrics { .. } => (CompositorPackage::Scheduler, "Compositor.Scheduler.Metrics"),
@@ -1740,18 +1442,6 @@ impl EngineAssembly {
             };
             self.scheduler.SetCanDraw(can_draw, &mut self.core);
 
-            // Direct animation values may arrive one VSync before the
-            // preceding property-only commit activates. Chromium retains the
-            // latest pending value on the compositor sequence instead of
-            // failing the Page. Once the native commit slot is free, prepare
-            // exactly one coalesced follow-up commit.
-            if self.core.CanPrepareCompositedAnimationCommit() {
-                if let Some(update) = self.core.layerize.TakePendingCompositedAnimation() {
-                    self.PrepareCompositedAnimationProperties(update)?;
-                    progressed = true;
-                }
-            }
-
             // ScheduleTasks deliberately mutates only Chromium's resident task
             // graph while TileManager/Host borrows are live.  Once this source
             // turn has ended, hand the graph to the injected raster executor.
@@ -1783,7 +1473,6 @@ impl EngineAssembly {
             return Err(error);
         }
         let mut effects = std::mem::take(&mut self.core.effects);
-        self.core.DrainScrollEffects(&mut effects);
         let work_pending = self.deferred.is_some()
             || !self.commands.IsEmpty()
             || !self.lifecycle.IsEmpty()
@@ -1800,9 +1489,7 @@ impl EngineAssembly {
             main_thread_effects: effects,
             needs_begin_frames: self.needs_begin_frames,
             work_pending,
-            main_commit_pending: self.core.HasReadyCommit()
-                || self.core.layerize.HasPendingCompositedAnimation()
-                || self.scroll_animation_commit.is_some(),
+            main_commit_pending: self.core.HasReadyCommit(),
         })
     }
 }
@@ -1853,9 +1540,7 @@ impl EngineAssembly {
             main_thread_effects: std::mem::take(&mut self.core.effects),
             needs_begin_frames: self.needs_begin_frames,
             work_pending: false,
-            main_commit_pending: self.core.HasReadyCommit()
-                || self.core.layerize.HasPendingCompositedAnimation()
-                || self.scroll_animation_commit.is_some(),
+            main_commit_pending: self.core.HasReadyCommit(),
         }
     }
 }

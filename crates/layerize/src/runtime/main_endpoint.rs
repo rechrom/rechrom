@@ -120,15 +120,22 @@ impl EngineMainEndpoint {
         }
     }
     /// Owner teardown: waits until no commit lease can still reach the main
-    /// host, without the abandonment assertion (a terminated impl side has
-    /// already been reported).
+    /// host and retires the completion without the abandonment assertion (a
+    /// commit dropped by the destroyed impl half is abandoned by design;
+    /// ProxyMain::Stop destroys ProxyImpl before the main host,
+    /// proxy_main.cc:916-946).
     pub fn WaitForCommitRelease(&self) {
-        if self.impl_on_owner_sequence {
-            return;
-        }
         let event = self.completion().clone();
-        if let Some(event) = event.filter(|event| !event.IsSignaled()) {
-            event.Wait();
+        if let Some(event) = event {
+            if !self.impl_on_owner_sequence && !event.IsSignaled() {
+                event.Wait();
+            }
+            if event.IsSignaled() {
+                let mut current = self.completion();
+                if current.as_ref().is_some_and(|current| current.SameEvent(&event)) {
+                    *current = None;
+                }
+            }
         }
     }
     /// The impl side enters FinishCommit through the commit lease. The scope

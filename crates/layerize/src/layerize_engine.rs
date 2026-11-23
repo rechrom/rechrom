@@ -110,9 +110,6 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
     // source scroll/snap/scrollbar-hidden delivery throughout PAC's lifetime.
     _scroll_callbacks: Arc<PacScrollCallbacks>,
     scroll_effects: PacScrollEffects,
-    // Blink's direct transform/opacity values that arrived while the commit
-    // slot was occupied, coalesced per property node (the latest value wins).
-    pending_composited_animation: Option<::paint::CompositedAnimationPropertyUpdate>,
     // The main LayerTreeHost (declared after PAC: its root is detached in
     // Shutdown after PAC destruction). A stable allocation: the protected
     // commit lease (S1B_PROXY_DESIGN.md B4) points at it.
@@ -163,7 +160,6 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
             previous_artifact: None,
             _scroll_callbacks: callbacks,
             scroll_effects,
-            pending_composited_animation: None,
             main: MainHostOwner::new(main),
             endpoint,
             mutator_host,
@@ -289,45 +285,6 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
             .ApplyCompositedAnimationProperties(self.pac.as_ref().unwrap(), update, &mut context)
     }
 
-    /// Direct animation values may arrive one VSync before the preceding
-    /// property-only commit activates. The latest pending value per property
-    /// node is retained instead of failing the Page; once the commit slot is
-    /// free, exactly one coalesced follow-up commit is prepared.
-    pub fn CoalesceCompositedAnimationProperties(
-        &mut self,
-        update: ::paint::CompositedAnimationPropertyUpdate,
-    ) {
-        let retained = self
-            .pending_composited_animation
-            .get_or_insert_with(Default::default);
-        for transform in update.transforms {
-            retained
-                .transforms
-                .retain(|current| !current.lifecycle.same_node(&transform.lifecycle));
-            retained.transforms.push(transform);
-        }
-        for effect in update.effects {
-            retained
-                .effects
-                .retain(|current| !current.lifecycle.same_node(&effect.lifecycle));
-            retained.effects.push(effect);
-        }
-        for binding in update.bindings {
-            retained.bindings.retain(|current| {
-                current.node_id != binding.node_id || current.property != binding.property
-            });
-            retained.bindings.push(binding);
-        }
-    }
-    pub fn TakePendingCompositedAnimation(
-        &mut self,
-    ) -> Option<::paint::CompositedAnimationPropertyUpdate> {
-        self.pending_composited_animation.take()
-    }
-    pub fn HasPendingCompositedAnimation(&self) -> bool {
-        self.pending_composited_animation.is_some()
-    }
-
     /// PAC half of ApplySourceScrollAnimation.
     pub fn DropCompositorScrollDeltaNextCommit(&mut self, element: ElementId) {
         let mut hosts = CpuMainLayerHosts {
@@ -409,27 +366,35 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         self.main.GetMut(&self.endpoint).NotifyTransitionRequestsFinished(id, rects)
     }
 
-    /// ProxyMain::BeginMainFrame after Paint: LayerTreeHost::UpdateLayers
-    /// (only when the frame requested UPDATE_LAYERS), WillCommit and
-    /// ActivateCommitState. Persistent source frame numbering advances after
-    /// the activated commit has taken its value (layer_tree_host.cc:487).
-    /// WillCommit stores `completion`, which opens the protected sequence
-    /// (layer_tree_host.cc:501); the returned lease is the `&unsafe_state`
-    /// ProxyMain posts with NotifyReadyToCommitOnImpl (proxy_main.cc:474-477).
-    pub fn ActivateCommitState(
+    /// LayerTreeHost::UpdateLayers (layer_tree_host.cc:958-972), run by
+    /// ProxyMain::BeginMainFrame when the frame requested UPDATE_LAYERS
+    /// (proxy_main.cc:441-455). Returns whether a layer's content updated.
+    pub fn UpdateLayers(&mut self, features: &dyn PropertyTreeFeatures) -> bool {
+        let main = self.main.GetMut(&self.endpoint);
+        main.UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features)
+    }
+
+    /// Source: cc/trees/layer_tree_host.cc:424-503 (LayerTreeHost::
+    /// WillCommit with ActivateCommitState). Without updates the activation
+    /// is unwound and `None` returned (:470-483); otherwise persistent source
+    /// frame numbering advances after the activated commit took its value
+    /// (:487), `completion` is stored, which opens the protected sequence
+    /// (:501), and the returned lease is the `&unsafe_state` ProxyMain posts
+    /// with NotifyReadyToCommitOnImpl (proxy_main.cc:474-477).
+    pub fn WillCommit(
         &mut self,
-        update_layers: bool,
-        features: &dyn PropertyTreeFeatures,
+        has_updates: bool,
         owner: PropertyTreesOwnerId,
         completion: CompletionEvent,
         blocking: bool,
-    ) -> (CommitState<F>, ProtectedCommitLease<F>) {
+    ) -> Option<(CommitState<F>, ProtectedCommitLease<F>)> {
         let main = self.main.GetMut(&self.endpoint);
-        if update_layers {
-            main.UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
-        }
         main.WillCommit(self.paint.as_ref(), self.paint.as_ref());
         let state = main.ActivateCommitState(owner);
+        if !has_updates {
+            main.UnwindCommitState(state);
+            return None;
+        }
         main.pending_commit_state_mut().source_frame_number += 1;
         self.endpoint.BeginProtectedSequence(completion.clone());
         self.endpoint.DidBeginCommit();
@@ -440,7 +405,18 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
             completion,
             blocking,
         );
-        (state, lease)
+        Some((state, lease))
+    }
+
+    /// LayerTreeHost::SourceFrameNumber.
+    pub fn SourceFrameNumber(&mut self) -> i32 {
+        self.main.GetMut(&self.endpoint).pending_commit_state().source_frame_number
+    }
+
+    /// LayerTreeHost::WaitForCommitCompletion (layer_tree_host.cc:526-536),
+    /// for ProxyMain's blocking commit (proxy_main.cc:563-564).
+    pub fn WaitForCommitCompletion(&self) {
+        MainHostOwner::<F>::Wait(&self.endpoint);
     }
 
     /// LayerTreeHost::CommitComplete (layer_tree_host.cc:552-570): retires
@@ -450,8 +426,11 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
     }
 
     /// Native child client finalization needs the current main tree; the
-    /// main root is detached afterwards, before the host is dropped.
+    /// main root is detached afterwards, before the host is dropped. Called
+    /// after ProxyMain::Stop destroyed the impl half, so a commit it dropped
+    /// is retired first instead of being reported as an impl failure.
     pub fn Shutdown(&mut self) {
+        self.endpoint.WaitForCommitRelease();
         if let Some(pac) = self.pac.take() {
             let mut hosts = CpuMainLayerHosts {
                 host: self.main.GetMut(&self.endpoint),

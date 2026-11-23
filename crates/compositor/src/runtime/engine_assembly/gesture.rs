@@ -32,8 +32,7 @@ impl EngineAssembly {
                 main_thread_effects: std::mem::take(&mut self.core.effects),
                 needs_begin_frames: self.needs_begin_frames,
                 work_pending: false,
-                main_commit_pending: self.core.HasReadyCommit()
-                    || self.scroll_animation_commit.is_some(),
+                main_commit_pending: self.core.HasReadyCommit(),
             });
         }
         let dispatch_id = match event {
@@ -297,15 +296,13 @@ impl EngineAssembly {
             return Err(error);
         }
         let mut effects = std::mem::take(&mut self.core.effects);
-        self.core.DrainScrollEffects(&mut effects);
         Ok(CompositorOutput {
             frame: None,
             frame_matches_latest_commit: false,
             main_thread_effects: effects,
             needs_begin_frames: true,
             work_pending: true,
-            main_commit_pending: self.core.HasReadyCommit()
-                || self.scroll_animation_commit.is_some(),
+            main_commit_pending: self.core.HasReadyCommit(),
         })
     }
 }

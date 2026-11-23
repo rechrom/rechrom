@@ -394,6 +394,17 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
         let persistent = self.pending.CopyPersistent(owner);
         std::mem::replace(&mut self.pending, persistent)
     }
+    /// Source: cc/trees/layer_tree_host.cc:470-483. WillCommit found no
+    /// update: undo ActivateCommitState, keep the change tracking of the
+    /// snapshot on the main property trees and advance the source frame.
+    pub fn UnwindCommitState(&mut self, activated: CommitState<F>) {
+        debug_assert!(self.IsMainThread());
+        self.pending = activated;
+        self.pending.source_frame_number += 1;
+        self.property_trees
+            .ApplyChangeStateFrom(&mut self.pending.property_trees);
+        self.pending.property_trees.clear();
+    }
 
     // Source: cc/trees/layer_tree_host.cc:421-441. Raster invalidation lives
     // on the resident main-thread Layer until WillCommit snapshots it into the

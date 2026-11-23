@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 /// `cc::SwapPromise` remains an owned promise whose implementation is supplied
 /// by the embedder that consumes compositor commits.
-pub trait SwapPromise {}
+pub trait SwapPromise: Send {}
 
 /// Shared immutable animated-image frame indices are produced by paint/image
 /// code and only carried through the compositor commit.
-pub trait AnimatedImageFrameIndexMap {}
-impl<K: Ord, V> AnimatedImageFrameIndexMap for std::collections::BTreeMap<K, V> {}
+pub trait AnimatedImageFrameIndexMap: Send + Sync {}
+impl<K: Ord + Send + Sync, V: Send + Sync> AnimatedImageFrameIndexMap for std::collections::BTreeMap<K, V> {}
 
 pub type SharedAnimatedImageFrameIndexMap = Arc<dyn AnimatedImageFrameIndexMap>;
 

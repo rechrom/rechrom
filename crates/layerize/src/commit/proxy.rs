@@ -178,7 +178,7 @@ pub enum CommitPipelineStage {
 pub enum MainToImpl<F: ProxyTypes> {
     /// ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
     Initialize {
-        completion: CompletionEvent,
+        completion: CompletionSignal,
         init: F::ImplInit,
     },
     /// ProxyImpl::SetNeedsCommitOnImpl (proxy_impl.cc:294-298); the
@@ -225,39 +225,88 @@ pub enum MainToImpl<F: ProxyTypes> {
     },
     /// ProxyMain::Stop -> DestroyProxyImplOnImplThread
     /// (proxy_main.cc:916-946).
-    Stop { completion: CompletionEvent },
-    /// Rechrom-only bridge for blocker B1 (S1B_PROXY_DESIGN.md 3), deleted
-    /// in S1b-7: the Page finished a commit outside a dispatched
-    /// BeginMainFrame, so ProxyMain holds it until the next BeginMainFrame
-    /// and posts it from there. ProxyImpl requests that BeginMainFrame and
-    /// pulls its compositor deltas for the pipelined slot, as for
-    /// `data_for_commit_` (proxy_impl.cc:812-815).
-    ReadyCommitAwaitsBeginMainFrame,
+    Stop { completion: CompletionSignal },
+    /// Rechrom: the main LayerTreeHost's commit request notifies the
+    /// LatencyInfoSwapPromiseMonitors, whose registry is owned by the impl
+    /// half (cc/trees/latency_info_swap_promise_monitor.cc).
+    NotifyLatencyInfoSwapPromiseMonitors,
 }
 
 /// The posted-task queue of one Proxy direction (the PostTask of
 /// MainThreadTaskRunner / ImplThreadTaskRunner in proxy_main.cc and
-/// proxy_impl.cc). While both halves share one sequence (decision D1) the
-/// in-process transport drains it at the posting call site, so tasks run in
-/// the order the single-thread engine ran the same work; S1b-7 replaces it
-/// with the cross-thread task channels.
-pub struct ProxyTaskQueue<T>(Arc<std::sync::Mutex<std::collections::VecDeque<T>>>);
+/// proxy_impl.cc). Decision D1: the same type is the in-process queue of a
+/// single-sequence embedding (drained by that embedding after each call) and
+/// the cross-thread transport, whose poster hands every task to the
+/// receiving sequence (S1b-7).
+pub struct ProxyTaskQueue<T>(ProxyTaskQueueKind<T>);
+enum ProxyTaskQueueKind<T> {
+    InProcess(Arc<std::sync::Mutex<std::collections::VecDeque<T>>>),
+    Posted(Arc<dyn Fn(T) -> Result<(), T> + Send + Sync>),
+}
 impl<T> Clone for ProxyTaskQueue<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(match &self.0 {
+            ProxyTaskQueueKind::InProcess(queue) => ProxyTaskQueueKind::InProcess(queue.clone()),
+            ProxyTaskQueueKind::Posted(post) => ProxyTaskQueueKind::Posted(post.clone()),
+        })
     }
 }
 impl<T> Default for ProxyTaskQueue<T> {
     fn default() -> Self {
-        Self(Default::default())
+        Self(ProxyTaskQueueKind::InProcess(Default::default()))
     }
 }
 impl<T> ProxyTaskQueue<T> {
-    pub fn PostTask(&self, task: T) {
-        self.0.lock().expect("proxy task queue").push_back(task);
+    /// The cross-thread form: `post` enqueues the task on the receiving
+    /// sequence and hands it back when that sequence has stopped.
+    pub fn Posting(post: Arc<dyn Fn(T) -> Result<(), T> + Send + Sync>) -> Self {
+        Self(ProxyTaskQueueKind::Posted(post))
     }
+    pub fn IsInProcess(&self) -> bool {
+        matches!(self.0, ProxyTaskQueueKind::InProcess(_))
+    }
+    /// Returns the task when the receiving sequence has stopped; its
+    /// completion guards then signal as abandoned when it is dropped.
+    pub fn PostTask(&self, task: T) -> Result<(), T> {
+        match &self.0 {
+            ProxyTaskQueueKind::InProcess(queue) => {
+                queue.lock().expect("proxy task queue").push_back(task);
+                Ok(())
+            }
+            ProxyTaskQueueKind::Posted(post) => post(task),
+        }
+    }
+    /// The next task of an in-process queue (always `None` when posting).
     pub fn TakeTask(&self) -> Option<T> {
-        self.0.lock().expect("proxy task queue").pop_front()
+        match &self.0 {
+            ProxyTaskQueueKind::InProcess(queue) => {
+                queue.lock().expect("proxy task queue").pop_front()
+            }
+            ProxyTaskQueueKind::Posted(_) => None,
+        }
+    }
+}
+
+/// The CompletionEvent of a posted Initialize/Stop task, which ProxyMain
+/// waits for (proxy_main.cc:898-946). Rust extension: a task dropped without
+/// having run (the impl sequence stopped) signals it as abandoned, so the
+/// waiting main thread is released instead of deadlocking.
+pub struct CompletionSignal(Option<CompletionEvent>);
+impl CompletionSignal {
+    pub fn new(event: CompletionEvent) -> Self {
+        Self(Some(event))
+    }
+    pub fn Signal(mut self) {
+        if let Some(event) = self.0.take() {
+            event.Signal();
+        }
+    }
+}
+impl Drop for CompletionSignal {
+    fn drop(&mut self) {
+        if let Some(event) = self.0.take() {
+            event.SignalAbandoned();
+        }
     }
 }
 

@@ -26,7 +26,7 @@ pub enum SnapTargetsPrioritization {
 }
 // Source: cc/input/snap_selection_strategy.h:17-24,71-122.
 // Full strategy interface for end-position, direction and displacement scrolls.
-pub trait SnapSelectionStrategy {
+pub trait SnapSelectionStrategy: Send {
     // Source: cc/input/snap_selection_strategy.h:71-73.
     fn ShouldSnapOnX(&self) -> bool;
     fn ShouldSnapOnY(&self) -> bool;
