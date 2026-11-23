@@ -431,7 +431,19 @@ Done:
   (needs `canvas` / `paint_input_types` dev-dependencies) do not build as
   layerize unit tests yet; fix them when `paint_services.rs` moves.
 
-Next: S1a-3.
+Next: S1a-3, first sub-step cc main layers. Survey (not started):
+`cc/layers/layer.rs` (3461 lines) names `adapter::{draw_property, geometry,
+layer_tree_impl, main_layer, picture_layer, property_tree, property_types,
+scrollbar_layer_base, surface_layer}` and `cc::{input::hit_test_opaqueness,
+trees::{commit_state, damage_reason, draw_property_utils, effect_node}}`;
+`picture_layer.rs` adds `adapter::{prioritized_tile, recording_source}`;
+`solid_color_layer.rs`, `surface_layer.rs`, `painted_scrollbar_layer.rs`
+(`cc::input::scrollbar`) and `recording_source.rs` name little beyond
+`adapter::main_layer`. The family impls to turn into blanket impls over
+`F: LayerizeFamily` are `MainLayerTypes` (`runtime/owner_types.rs:173`) and
+`PictureLayerTypes` (`runtime/picture_types.rs:186`). `runtime/paint/
+picture.rs` and `raster.rs` still mix main recorder/services parts with impl
+raster-source bindings; split them when `PictureLayerTypes` moves.
 
 ### Plan correction: option (a) does not compile
 
