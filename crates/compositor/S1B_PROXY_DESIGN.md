@@ -1,6 +1,7 @@
 # S1b design: ProxyMain / ProxyImpl across the document and compositor threads
 
-Status: design only (2026-11-23, written at b084f58d). Nothing here is
+Status: S1b-1..S1b-3 implemented (see "S1b status" at the end); designed
+2026-11-23 at b084f58d. Originally nothing here was
 implemented. Prerequisite: S1a (`layerize::LayerizeEngine<F>` holds the main
 half, see `MAIN_IMPL_SPLIT.md`). The S1a leftovers (Send + Sync endpoint, real
 protected-sequence synchronizer) are steps S1b-1/S1b-2 below.
@@ -573,3 +574,13 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   compositor implements in S1b-4; the `MutatorEvents` value moves with its
   main consumer in S1b-5. The metrics-only `BeginMainFrameReasons` is not
   translated.
+- **S1b-4 not started.** Notes for it: implement `ProxyTypes` for
+  `CpuCompositorTypes<R>` (`MutatorEvents` = `host_owners::MutatorEvents`,
+  whose `MutatorEventsBackend` still needs a `Send` bound;
+  `ProxySwapPromise` = the boxed `SwapPromise`; `ImplInit` = the new
+  ProxyImplInit). ProxyImpl's `DataForCommit` replaces EngineCore's
+  `ready_commit: (CommitState, ProtectedCommitLease)` tuple and
+  `ready_commit_notified`; its `ScopedCommitCompletionEvent` takes the
+  completion with `ProtectedCommitLease::TakeCompletion`. Keep
+  `impl_on_owner_sequence = true` until S1b-7: the pipelined BMF applies
+  deltas to the main tree while a ready commit is outstanding.
