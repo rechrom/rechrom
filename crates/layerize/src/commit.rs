@@ -4,7 +4,9 @@
 //! under which LayerTreeHostImpl::FinishCommit reads main-thread state.
 //! Nothing here names Blink paint types.
 
+pub mod layer_tree_debug_state;
 pub mod protected_sequence_synchronizer;
+pub mod values;
 
 // cc property-tree identities and synchronized values used by both halves.
 // Source: cc/base/synced_property.h; cc/trees/property_ids.h;

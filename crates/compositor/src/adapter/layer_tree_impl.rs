@@ -20,33 +20,9 @@ use crate::cc::{
 pub use compositor_draw::Color4f;
 pub use compositor_tree::LayerTreeHostId;
 pub use compositor_tree::LayerTreeId;
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct UnguessableToken(pub [u64; 2]);
-impl UnguessableToken {
-    pub fn is_empty(self) -> bool {
-        self.0 == [0, 0]
-    }
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OverlayTransform {
-    #[default]
-    None,
-    FlipHorizontal,
-    FlipVertical,
-    Rotate90,
-    Rotate180,
-    Rotate270,
-    FlipVerticalRotate90,
-    FlipVerticalRotate270,
-    Invalid,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PropertyChangeForcesCommitCriteria {
-    #[default]
-    kNone,
-    kTransform,
-    kAny,
-}
+pub use layerize::commit::values::{
+    OverlayTransform, PropertyChangeForcesCommitCriteria, UIResourceId, UnguessableToken,
+};
 pub use compositor_input::layer_selection_bound::{Selection, SelectionBoundType};
 pub trait LayerTreeSelectionBound {
     fn r#type(&self) -> SelectionBoundType;
@@ -935,8 +911,6 @@ pub trait LayerTreeSurfaceTransform {
 }
 
 pub use crate::cc::trees::layer_tree_settings::ScrollbarAnimator;
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct UIResourceId(pub i32);
 pub use compositor_resource::ResourceId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UIResourceRequestType {
