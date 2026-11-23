@@ -53,6 +53,14 @@ const MAIN_HALF_REEXPORT_ALLOWED: &[&str] = &[
     "crates/compositor/src/third_party/blink/renderer/platform/graphics/paint/raster_invalidator.rs",
 ];
 
+/// Temporary (S1a only): EngineCore / EngineAssembly hold the main-half
+/// engine and call it where they ran the main half; removed in S1b, when
+/// Page owns `layerize::LayerizeEngine`.
+const LAYERIZE_ENGINE_ALLOWED: &[&str] = &[
+    "crates/compositor/src/runtime/engine_core.rs",
+    "crates/compositor/src/runtime/engine_assembly.rs",
+];
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -123,6 +131,8 @@ fn compositor_names_only_the_commit_vocabulary() {
                     .is_some_and(|c| c.is_alphanumeric() || c == '_');
                 if !preceded
                     && !line[index..].starts_with("layerize::commit")
+                    && !(line[index..].starts_with("layerize::LayerizeEngine")
+                        && LAYERIZE_ENGINE_ALLOWED.contains(&relative.as_str()))
                     && !MAIN_HALF_REEXPORT_ALLOWED.contains(&relative.as_str())
                 {
                     violations.push(format!("{relative}:{}: {}", number + 1, line.trim()));

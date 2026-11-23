@@ -607,6 +607,13 @@ Approved for S1a-3: option (h) as above; during S1a only,
   `commit::paint_holding` (`PaintHoldingReason`, `FrameLifecycleMutation`,
   `CommitDeferralReason`); `engine.rs` re-exports them.
 
+- **Boundary test.** `layerize_boundary.rs` has the named temporary
+  `LAYERIZE_ENGINE_ALLOWED` exception (`layerize::LayerizeEngine` in
+  `runtime/engine_core.rs` and `runtime/engine_assembly.rs`, removed in S1b).
+  `PROPERTY_NODE_ALLOWED` is empty; `MAIN_HALF_REEXPORT_ALLOWED` still lists
+  the re-export stubs (plus `runtime/paint_services.rs`), which go when
+  EngineCore stops naming the main types through them. The test passes.
+
 Next: B3 rest. Move into `LayerizeEngine`: `main_host.rs` (CpuMainLayerHost;
 it still names impl owners `draw::DrawContext`,
 `sync::MainSynchronizationContext`, `host_owners::UIResourceRequest`,
@@ -617,7 +624,7 @@ which need splitting off or `LayerizeFamily` hooks first), `main_endpoint.rs`
 `ApplyCompositorDeltas`, the canvas-child publication (needs a layerize error
 value), `ConvertPaintArtifactSubsetToRecord` / `CreateVideoSurfaceForeignLayer`
 and the composited-animation coalescing in `engine_assembly.rs`. Then B4
-(boundary test to zero allowance plus the LayerizeEngine exception, layerize
+(boundary test to zero allowance, layerize
 unit tests).
 
 ### Plan correction: option (a) does not compile
