@@ -275,6 +275,7 @@ dependencies = [
  "interaction",
  "intersection_observer",
  "javascript",
+ "layerize",
  "layout",
  "layout_style",
  "navigation_history",

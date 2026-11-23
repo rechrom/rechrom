@@ -160,7 +160,7 @@ impl PageState {
         let (record, raster) = {
             let pipeline = self.rendering.borrow();
             // The recording conversion is main-side (S1b-6: the main part).
-            let compositor = pipeline.main_half.engine.as_ref().ok_or_else(|| {
+            let compositor = pipeline.Main().ok_or_else(|| {
                 io::Error::other("drag image requires the Page compositor's Paint services")
             })?;
             (

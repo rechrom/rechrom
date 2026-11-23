@@ -48,6 +48,7 @@ foundation = { path = "../foundation" }
 web_font = { path = "../web_font" }
 font_engine = { path = "../font_engine" }
 compositor = { path = "../compositor" }
+layerize = { path = "../layerize" }
 viz = { path = "../viz" }
 
 [dev-dependencies]

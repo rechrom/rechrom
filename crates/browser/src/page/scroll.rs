@@ -377,9 +377,7 @@ impl Page {
                         self.EventTimingDidCommit(time);
                     }
                 }
-                CompositorMainThreadEffect::ScrollAnimationCommitPrepared { .. }
-                | CompositorMainThreadEffect::ScrollAnimationCommitFinalized { .. }
-                | CompositorMainThreadEffect::ScrollAnimationCompleted(_) => {
+                CompositorMainThreadEffect::ScrollAnimationCompleted(_) => {
                     return Err(io::Error::other(
                         "compositor scroll animation requires an interaction animation owner",
                     ));
@@ -438,8 +436,7 @@ impl Page {
                         .GetDocument()
                         .PublishCanvasChildRecords(records);
                 }
-                CompositorMainThreadEffect::BeginMainFrame
-                | CompositorMainThreadEffect::RequestMainFrame => requested_main_frame = true,
+                CompositorMainThreadEffect::BeginMainFrame => requested_main_frame = true,
                 CompositorMainThreadEffect::UpdateCompositorScrollState(scroll) => {
                     let gesture_ended = self.wheel_scroll_active && !scroll.is_scroll_active;
                     self.wheel_scroll_active = scroll.is_scroll_active;
