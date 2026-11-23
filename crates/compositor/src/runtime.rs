@@ -94,7 +94,7 @@ pub(crate) mod tile_execution;
 pub(crate) mod engine_core;
 pub(crate) mod proxy_impl;
 
-pub(crate) mod render;
+pub mod render;
 
 pub(crate) mod engine_factory;
 
