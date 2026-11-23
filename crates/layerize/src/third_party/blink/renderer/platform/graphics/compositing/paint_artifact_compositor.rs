@@ -349,12 +349,12 @@ pub struct PaintArtifactCompositor<B: PaintArtifactCompositorTypes> {
     should_always_update_on_scroll_: bool,
     layer_debug_info_enabled_: bool,
     tracks_raster_invalidations_: bool,
-    scroll_callbacks_: std::rc::Weak<dyn ScrollCallbacks>,
+    scroll_callbacks_: std::sync::Weak<dyn ScrollCallbacks>,
 }
 impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:113-128.
     pub fn new(
-        scroll_callbacks: std::rc::Weak<dyn ScrollCallbacks>,
+        scroll_callbacks: std::sync::Weak<dyn ScrollCallbacks>,
         c: &mut LayerContext<'_, B>,
         services: &dyn PaintArtifactCompositorServices<B>,
     ) -> Self {

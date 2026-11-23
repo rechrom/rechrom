@@ -139,7 +139,7 @@ impl HostScrollLatency for LatencyInfo {
 }
 /// Source: cc/metrics/events_metrics_manager.h:38-39. Returning None has native
 /// nullptr semantics; ownership of a real metrics event is moved to the caller.
-pub trait EventMetricsBackend {}
+pub trait EventMetricsBackend: Send {}
 pub type EventMetrics = Box<dyn EventMetricsBackend>;
 pub type EventMetricsDoneCallback = Box<dyn FnOnce(bool) -> Option<EventMetrics>>;
 /// Native scope objects execute their external destruction behavior on Drop.

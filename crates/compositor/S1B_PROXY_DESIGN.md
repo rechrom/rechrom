@@ -509,3 +509,29 @@ Risks:
   runtime still has two compositor instances (the Page-side one serving video
   and drag images). S1b-6 must not let them diverge further; S1b-7 removes the
   duplicate.
+
+## S1b status
+
+Decisions adopted by the coordinator: D1 (a) same ProxyMain/ProxyImpl over an
+in-process queue for internal presentation; D2 one waiting accessor that
+blocks while impl holds the commit lease; D3 `has_updates` translated in
+S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
+`block_on_next_commit` on the input path deferred.
+
+- **S1b-1 done (Send groundwork).** `LayerTreeMutatorBackend: Send`;
+  `AnimationHostOwner` records Chromium's `ThreadInstance`
+  (`CreateMainInstance`, `CreateImplInstance`), and `SetLayerTreeMutator`
+  asserts the impl instance. `CpuMainHostEndpoint` and `MainHostEffectSink`
+  are `Send + Sync`; `LayerizeEngine::main` is boxed. Compile-time
+  assertions: `EngineMainEndpoint`, `CpuMainPaintServices<SkRegion>: Send +
+  Sync` (layerize_engine.rs); main host `Send`, `ThreadUnsafeCommitState:
+  Sync`, `CommitState: Send` for the CPU family (engine_core.rs). The
+  assertions found (R2) and S1b-1 fixed: `SyncedScrollOffsetMap` is
+  `Arc<RwLock<..>>` (was `Rc<RefCell<..>>`, both property-tree copies);
+  `ScrollCallbacks: Send + Sync` with `sync::Weak` and the PAC scroll
+  callbacks/effects on `Arc`/`Mutex`/atomic; `Send` on `SwapPromise`,
+  `EventMetricsBackend`, `MicroBenchmarkBackend` and the presentation
+  callback boxes; the compositor `ResourceEffects` queue is
+  `Arc<Mutex<..>>` (ReportTimeSwapPromise pushes into it after moving with
+  the commit). `cargo check -p rechrom_app` passes; the layerize unit tests
+  were not run (memory limit; check only).

@@ -76,7 +76,6 @@ use crate::commit::geometry::{PointF, Rect, RectF, Size, SizeF, Vector2d, Vector
 use crate::commit::property_tree_services::PropertyTreeTransform;
 use crate::commit::math_util::MathUtil;
 use crate::commit::synced_property::{AdditionGroup, SyncedProperty};
-use std::cell::RefCell;
 // Source: cc/trees/property_tree.h:61-62.
 pub type SyncedScrollOffset = SyncedProperty<AdditionGroup<PointF, Vector2dF>>;
 
@@ -1614,11 +1613,11 @@ use super::compositor_commit_data::{CompositorCommitData, ScrollUpdateInfo};
 use super::scroll_source_type::ScrollSourceType;
 use crate::commit::property_tree_services::{PropertyTreeMutatorHost, PropertyTreeScrollLayerTree};
 use crate::commit::scroll_snap_data::TargetSnapAreaElementIds;
-use std::cell::{Ref, RefMut};
-use std::rc::{Rc, Weak};
+use std::cell::RefMut;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 
 // Source: cc/trees/property_tree.h:605-626.
-pub trait ScrollCallbacks {
+pub trait ScrollCallbacks: Send + Sync {
     fn DidCompositorScroll(
         &self,
         element: ElementId,
@@ -1629,9 +1628,11 @@ pub trait ScrollCallbacks {
     fn DidChangeScrollbarsHidden(&self, element: ElementId, hidden: bool);
 }
 // Source: cc/trees/property_tree.h:628-795.
-// Rc<RefCell> is solely the source scoped_refptr<SyncedProperty> value shared by
+// Arc<RwLock> is solely the source scoped_refptr<SyncedProperty> value shared by
 // active/pending trees. Trees and all their nodes remain independently resident.
-pub type SyncedScrollOffsetMap = BTreeMap<ElementId, Rc<RefCell<SyncedScrollOffset>>>;
+// RwLock instead of RefCell: the main tree is lent to the impl thread inside
+// the protected sequence (S1B_PROXY_DESIGN.md B6); the lock is uncontended.
+pub type SyncedScrollOffsetMap = BTreeMap<ElementId, Arc<RwLock<SyncedScrollOffset>>>;
 pub struct ScrollTree {
     base_: PropertyTree<ScrollNode>,
     currently_scrolling_node_id_: i32,
@@ -1858,21 +1859,21 @@ impl ScrollTree {
         &self,
         id: ElementId,
         state: &PropertyTreesState,
-    ) -> Option<Ref<'_, SyncedScrollOffset>> {
+    ) -> Option<RwLockReadGuard<'_, SyncedScrollOffset>> {
         debug_assert!(!state.is_main_thread_);
         self.synced_scroll_offset_map_
             .get(&id)
-            .map(|offset| offset.borrow())
+            .map(|offset| offset.read().unwrap())
     }
     pub fn GetSyncedScrollOffsetMutable(
         &self,
         id: ElementId,
         state: &PropertyTreesState,
-    ) -> Option<RefMut<'_, SyncedScrollOffset>> {
+    ) -> Option<RwLockWriteGuard<'_, SyncedScrollOffset>> {
         debug_assert!(!state.is_main_thread_);
         self.synced_scroll_offset_map_
             .get(&id)
-            .map(|offset| offset.borrow_mut())
+            .map(|offset| offset.write().unwrap())
     }
     // Source: cc/trees/property_tree.cc:1946-1955.
     pub fn ClampScrollToMaxScrollOffset<T: PropertyTreeTransform>(
@@ -2018,7 +2019,7 @@ impl ScrollTree {
         debug_assert!(!context.state.is_main_thread_);
         self.synced_scroll_offset_map_.retain(|id, offset| {
             if !main.scroll_offset_map_.contains_key(id) {
-                let mut offset = offset.borrow_mut();
+                let mut offset = offset.write().unwrap();
                 let current = offset.Current(true);
                 offset.PushMainToPending(current);
                 false
@@ -2030,8 +2031,8 @@ impl ScrollTree {
             let offset = self
                 .synced_scroll_offset_map_
                 .entry(*id)
-                .or_insert_with(|| Rc::new(RefCell::new(SyncedScrollOffset::default())));
-            let mut offset = offset.borrow_mut();
+                .or_insert_with(|| Arc::new(RwLock::new(SyncedScrollOffset::default())));
+            let mut offset = offset.write().unwrap();
             let mut needs_update = offset.PushMainToPending(*main_offset);
             if !fractional {
                 let pending = offset.Current(false);
@@ -2061,8 +2062,8 @@ impl ScrollTree {
         self.synced_scroll_offset_map_.clear();
         for (id, offset) in &pending.synced_scroll_offset_map_ {
             self.synced_scroll_offset_map_
-                .insert(*id, Rc::clone(offset));
-            let changed = offset.borrow_mut().PushPendingToActive();
+                .insert(*id, Arc::clone(offset));
+            let changed = offset.write().unwrap().PushPendingToActive();
             if changed {
                 layer_tree.DidUpdateScrollOffset(*id, true, self, context);
             }
@@ -2077,7 +2078,7 @@ impl ScrollTree {
     ) {
         debug_assert!(state.is_active_);
         for offset in self.synced_scroll_offset_map_.values() {
-            offset.borrow_mut().AbortCommit(next_bmf, applied);
+            offset.write().unwrap().AbortCommit(next_bmf, applied);
         }
     }
     // Source: cc/trees/property_tree.cc:2203-2215.
@@ -2200,11 +2201,11 @@ impl ScrollTree {
     pub fn GetOrCreateSyncedScrollOffsetForTesting(
         &mut self,
         id: ElementId,
-    ) -> RefMut<'_, SyncedScrollOffset> {
+    ) -> RwLockWriteGuard<'_, SyncedScrollOffset> {
         self.synced_scroll_offset_map_
             .entry(id)
-            .or_insert_with(|| Rc::new(RefCell::new(SyncedScrollOffset::default())))
-            .borrow_mut()
+            .or_insert_with(|| Arc::new(RwLock::new(SyncedScrollOffset::default())))
+            .write().unwrap()
     }
     // Source: cc/trees/property_tree.cc:2330-2339.
     pub fn UpdateScrollOffsetBaseForTesting(
@@ -2382,7 +2383,7 @@ impl PartialEq for ScrollTree {
                 other
                     .synced_scroll_offset_map_
                     .get(id)
-                    .is_some_and(|other| Rc::ptr_eq(value, other))
+                    .is_some_and(|other| Arc::ptr_eq(value, other))
             })
         {
             return false;

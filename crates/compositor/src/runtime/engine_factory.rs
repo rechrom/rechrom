@@ -156,8 +156,8 @@ pub(crate) fn Create(
     let runners = Arc::new(TaskRunnerServices::new_threaded_on_single_executor(
         executors.compositor.clone(),
     ));
-    let main_animations = AnimationHostOwner::default();
-    let impl_animations = AnimationHostOwner::default();
+    let main_animations = AnimationHostOwner::CreateMainInstance();
+    let impl_animations = main_animations.CreateImplInstance();
     // The main half (LayerizeEngine): main paint services, the main
     // LayerTreeHost and its Proxy endpoint. Chromium's WebLayerTreeView
     // forwards the embedder background color to LayerTreeHost. An alpha-zero

@@ -34,6 +34,21 @@ use paint::PaintArtifact;
 use std::sync::{Arc, Mutex};
 type Root = CpuCompositorTypes<SkRegion>;
 
+// Compile-time thread-safety of the main-half values that cross to, or are
+// read by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the
+// main LayerTreeHost (lent inside the protected sequence), its
+// ThreadUnsafeCommitState (read by FinishCommit) and the moved CommitState.
+const _: () = {
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_send_ref<T: Send + ?Sized>(_: &T) {}
+    fn assertions(engine: &layerize::LayerizeEngine<Root>) {
+        assert_send_ref(engine.Main());
+        assert_sync::<layerize::commit::commit_state::ThreadUnsafeCommitState<Root>>();
+        assert_send::<CommitState<Root>>();
+    }
+};
+
 /// All constructor inputs are actual owners/capabilities, never test stand-ins.
 /// This is private to compositor: Page only provides executors/pixel primitives.
 pub(crate) struct EngineCore {

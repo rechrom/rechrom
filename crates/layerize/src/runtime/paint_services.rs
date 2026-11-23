@@ -767,7 +767,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> crate::adapter::pending_l
 impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
     /// Engine-internal construction of the actual canonical PAC. The caller
     /// attaches RootLayer to CpuMainLayerHost using its live main context.
-    pub fn CreateCompositor<F: LayerizeFamily<Skia = R>>(&self,callbacks:std::rc::Weak<dyn crate::cc::trees::property_tree::ScrollCallbacks>,c:&mut LayerContext<'_,F>)->crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<F>{
+    pub fn CreateCompositor<F: LayerizeFamily<Skia = R>>(&self,callbacks:std::sync::Weak<dyn crate::cc::trees::property_tree::ScrollCallbacks>,c:&mut LayerContext<'_,F>)->crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<F>{
         crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor::new(callbacks,c,self)
     }
     /// Source: PaintArtifactCompositor::DirectlyUpdateTransform and

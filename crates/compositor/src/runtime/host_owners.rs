@@ -525,7 +525,11 @@ impl MutatorEvents {
 }
 /// Native animation-worklet mutator. HostImpl transfers this owner to the
 /// animation subsystem; no animation state or mutation algorithm is copied.
-pub trait LayerTreeMutatorBackend {
+/// `Send`: ProxyMain::SetMutator hands the mutator from the main thread to
+/// ProxyImpl::InitializeMutatorOnImpl by PostTask (cc/trees/proxy_main.cc
+/// SetMutator, proxy_impl.cc InitializeMutatorOnImpl), so the source
+/// contract is a sendable owner.
+pub trait LayerTreeMutatorBackend: Send {
     fn HasMutators(&mut self) -> bool;
 }
 pub struct LayerTreeMutator(pub Box<dyn LayerTreeMutatorBackend>);
@@ -597,7 +601,7 @@ use crate::cc::tiles::tile_manager::TileManagerRasterQueryQueue;
 pub struct RasterQueryQueue(pub(crate) std::sync::Arc<dyn TileManagerRasterQueryQueue>);
 /// Native benchmark implementation. Completion receives the actual owner and
 /// services for this call, never a retained host identity masquerading as host.
-pub trait MicroBenchmarkBackend<R: super::types::CpuSkiaBackend>
+pub trait MicroBenchmarkBackend<R: super::types::CpuSkiaBackend>: Send
 where
     super::types::CpuCompositorTypes<R>: crate::adapter::layer_tree_host_impl::HostImplTypes,
 {

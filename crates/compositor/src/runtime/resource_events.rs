@@ -9,7 +9,10 @@ use crate::{
     adapter::layer_tree_host_impl::{HostImplDelegateId, HostViewTransitionElementResourceRects},
     cc::trees::presentation_time_callback_buffer::PendingCallbacks,
 };
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 pub(crate) enum ResourceEffect {
     ReportTimeSwapped {
         request: u64,
@@ -55,15 +58,17 @@ pub(crate) enum ResourceEffect {
     },
 }
 #[derive(Clone, Default)]
-pub(crate) struct ResourceEffects(Rc<RefCell<VecDeque<ResourceEffect>>>);
+// Arc<Mutex>: swap promises that push into this queue are queued on the main
+// LayerTreeHost and move to the impl thread with the commit (ReportTimeSwapPromise).
+pub(crate) struct ResourceEffects(Arc<Mutex<VecDeque<ResourceEffect>>>);
 impl ResourceEffects {
     pub(crate) fn Push(&self, effect: ResourceEffect) {
-        self.0.borrow_mut().push_back(effect);
+        self.0.lock().unwrap().push_back(effect);
     }
     pub(crate) fn Pop(&self) -> Option<ResourceEffect> {
-        self.0.borrow_mut().pop_front()
+        self.0.lock().unwrap().pop_front()
     }
     pub(crate) fn IsEmpty(&self) -> bool {
-        self.0.borrow().is_empty()
+        self.0.lock().unwrap().is_empty()
     }
 }

@@ -48,8 +48,10 @@ pub type ViewTransitionElementResourceRects<F> =
     <ViewTransitionRequestOf<F> as MainViewTransitionRequest>::ElementResourceRects;
 /// Source effects at LayerTreeHost.cc:321-337,520-547,835-849,877-880.
 /// The endpoint schedules actual embedding work and preserves monitor/metrics
-/// notifications. It never owns a Layer, PAC, or this host.
-pub trait CpuMainHostEndpoint: ProtectedSequenceSynchronizer {
+/// notifications. It never owns a Layer, PAC, or this host. `Send + Sync`:
+/// the impl thread reaches it through the main host inside the protected
+/// sequence (S1B_PROXY_DESIGN.md B4).
+pub trait CpuMainHostEndpoint: ProtectedSequenceSynchronizer + Send + Sync {
     fn IsMainThread(&self) -> bool;
     fn CommitRequested(&self) -> bool;
     fn SetNeedsUpdateLayers(&self);

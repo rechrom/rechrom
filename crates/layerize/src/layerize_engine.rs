@@ -42,7 +42,18 @@ use crate::{
         paint_artifact_compositor::PaintArtifactCompositor, paint_chunks_to_cc_layer,
     },
 };
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
+
+// Compile-time thread-safety of the family-independent main-half owners the
+// impl thread reads inside the protected sequence (S1B_PROXY_DESIGN.md B4).
+// The family-bound assertions are in the compositor, which names the family.
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn assertions() {
+        assert_send_sync::<EngineMainEndpoint>();
+        assert_send_sync::<CpuMainPaintServices<SkRegion>>();
+    }
+};
 
 pub struct LayerizeEngine<F: LayerizeFamily> {
     main_frame_lifecycle: MainFrameLifecycle,
@@ -54,14 +65,16 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
     previous_artifact: Option<Arc<PaintArtifact>>,
     // PAC stores only Weak. Retaining this exact strong owner is required for
     // source scroll/snap/scrollbar-hidden delivery throughout PAC's lifetime.
-    _scroll_callbacks: Rc<PacScrollCallbacks>,
+    _scroll_callbacks: Arc<PacScrollCallbacks>,
     scroll_effects: PacScrollEffects,
     // Blink's direct transform/opacity values that arrived while the commit
     // slot was occupied, coalesced per property node (the latest value wins).
     pending_composited_animation: Option<::paint::CompositedAnimationPropertyUpdate>,
     // The main LayerTreeHost (declared after PAC: its root is detached in
-    // Shutdown after PAC destruction).
-    main: CpuMainLayerHost<F>,
+    // Shutdown after PAC destruction). Boxed: the protected commit lease
+    // (S1B_PROXY_DESIGN.md B4) points at this allocation, which must not move
+    // with the engine.
+    main: Box<CpuMainLayerHost<F>>,
     endpoint: Arc<EngineMainEndpoint>,
 }
 
@@ -74,14 +87,14 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         init: MainHostInit<F::MutatorHostHandle>,
     ) -> Self {
         let endpoint = Arc::new(EngineMainEndpoint::new(init.sink));
-        let mut main = CpuMainLayerHost::new(
+        let mut main = Box::new(CpuMainLayerHost::new(
             MainLayerHostId(init.id),
             init.owner,
             init.mutator,
             init.settings,
             init.threaded,
             endpoint.clone() as Arc<dyn CpuMainHostEndpoint>,
-        );
+        ));
         if let Some(color) = init.background_color {
             main.pending_commit_state_mut().background_color = color;
         }

@@ -16,7 +16,9 @@ pub enum DidNotSwapAction {
     KEEP_ACTIVE,
 }
 
-pub trait SwapPromise<M: ?Sized> {
+// `Send`: swap promises queued on the main LayerTreeHost move to the impl
+// thread with the commit (cc/trees/layer_tree_host.cc WillCommit).
+pub trait SwapPromise<M: ?Sized>: Send {
     fn DidActivate(&mut self);
     fn WillSwap(&mut self, metadata: &mut M);
     fn DidSwap(&mut self);
