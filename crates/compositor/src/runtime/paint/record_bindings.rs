@@ -129,13 +129,3 @@ impl
         self.0.ValueChangeShouldCauseRepaint(previous, next)
     }
 }
-
-impl crate::adapter::picture_layer::PictureLayerNodeInfo for crate::runtime::display_item_list::NodeInfo {
-    fn visual_rect(&self) -> Rect {
-        self.visual_rect
-    }
-
-    fn set_visual_rect(&mut self, rect: Rect) {
-        self.visual_rect = rect;
-    }
-}

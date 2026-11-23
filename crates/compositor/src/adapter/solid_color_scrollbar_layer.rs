@@ -1,15 +1,2 @@
-//! Same-package concrete solid-scrollbar setter dispatch only. The LayerImpl
-//! constructor is reached through `main_layer::LayerImplFactory`.
-use super::{
-    layer_tree_impl::Color4f,
-    scrollbar_layer_base::{ScrollbarLayerImplTarget, ScrollbarLayerTypes},
-};
-pub trait SolidColorScrollbarLayerTypes:
-    ScrollbarLayerTypes<Layer: SolidColorScrollbarLayerImplTarget<Self>>
-{
-}
-pub trait SolidColorScrollbarLayerImplTarget<B: SolidColorScrollbarLayerTypes>:
-    ScrollbarLayerImplTarget<B>
-{
-    fn scrollbar_set_color(&mut self, color: Color4f, tree: &mut B::ImplContext<'_>);
-}
+// The main-thread translation lives in layerize (MAIN_IMPL_SPLIT.md S1a-3).
+pub use layerize::commit::layer_types::solid_color_scrollbar_layer::*;

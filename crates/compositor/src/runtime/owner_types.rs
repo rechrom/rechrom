@@ -270,19 +270,44 @@ impl<R: CpuSkiaBackend>
     crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<CpuCompositorTypes<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
-    fn painted_scrollbar(
+    fn painted_SetInternalContentsScaleAndBounds(
         &mut self,
-    ) -> Option<
-        &mut crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl<
-            CpuCompositorTypes<R>,
-        >,
-    > {
-        if let CompositorLayer::PaintedScrollbar(layer) = self {
-            Some(layer)
-        } else {
-            None
-        }
+        scale: f32,
+        bounds: crate::adapter::geometry::Size,
+    ) {
+        painted_scrollbar(self).SetInternalContentsScaleAndBounds(scale, bounds);
     }
+    fn painted_SetThumbUIResourceId(&mut self, id: crate::adapter::layer_tree_impl::UIResourceId) {
+        painted_scrollbar(self).SetThumbUIResourceId(id);
+    }
+    fn painted_SetScrollbarPaintedOpacity(&mut self, opacity: f32) {
+        painted_scrollbar(self).SetScrollbarPaintedOpacity(opacity);
+    }
+    fn painted_SetTrackRect(&mut self, rect: crate::adapter::geometry::Rect) {
+        painted_scrollbar(self).SetTrackRect(rect);
+    }
+    fn painted_SetMinimumThumbLength(&mut self, length: i32) {
+        painted_scrollbar(self).SetMinimumThumbLength(length);
+    }
+    fn painted_SetThumbThickness(&mut self, thickness: i32) {
+        painted_scrollbar(self).SetThumbThickness(thickness);
+    }
+    fn painted_set_is_overlay_scrollbar(&mut self, is_overlay: bool) {
+        painted_scrollbar(self)
+            .scrollbar_base_mut()
+            .set_is_overlay_scrollbar(is_overlay);
+    }
+}
+/// Native static_cast to the PaintedScrollbarLayerImpl push target.
+fn painted_scrollbar<R: CpuSkiaBackend>(
+    layer: &mut CompositorLayer<CpuCompositorTypes<R>>,
+) -> &mut crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl<
+    CpuCompositorTypes<R>,
+> {
+    let CompositorLayer::PaintedScrollbar(layer) = layer else {
+        panic!("native PaintedScrollbarLayerImpl target subtype")
+    };
+    layer
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<
@@ -372,6 +397,13 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer_impl::SurfaceLayerImplType
     ) -> Self::Layer {
         CompositorLayer::Surface(layer)
     }
+    fn SurfaceRangeEnd(range: &Self::SurfaceRange) -> Self::SurfaceId {
+        range.end
+    }
+}
+impl<R: CpuSkiaBackend> layerize::commit::surface_range::SurfaceRangeTypes
+    for CpuCompositorTypes<R>
+{
     fn DefaultSurfaceRange() -> Self::SurfaceRange {
         Default::default()
     }
@@ -387,9 +419,6 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer_impl::SurfaceLayerImplType
                 && id.local_surface_id.embed_token != [0, 0]
         };
         valid(&range.end) && range.start.as_ref().is_none_or(valid)
-    }
-    fn SurfaceRangeEnd(range: &Self::SurfaceRange) -> Self::SurfaceId {
-        range.end
     }
 }
 impl<R: CpuSkiaBackend>

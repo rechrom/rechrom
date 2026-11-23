@@ -1,7 +1,7 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1 and S1a-2 done (see "S1a-2 status" and "Plan
-correction" at the end); S1a-3 and the thread split (S1b/S1d) are not
+Status: S1c done. S1a-1, S1a-2 and S1a-3 B1 done (see "S1a-3 status" and "Plan
+correction" at the end); S1a-3 B2-B4 and the thread split (S1b/S1d) are not
 implemented.
 
 ## Chromium reference
@@ -431,19 +431,61 @@ Done:
   (needs `canvas` / `paint_input_types` dev-dependencies) do not build as
   layerize unit tests yet; fix them when `paint_services.rs` moves.
 
-Next: S1a-3, first sub-step cc main layers. Survey (not started):
-`cc/layers/layer.rs` (3461 lines) names `adapter::{draw_property, geometry,
-layer_tree_impl, main_layer, picture_layer, property_tree, property_types,
-scrollbar_layer_base, surface_layer}` and `cc::{input::hit_test_opaqueness,
-trees::{commit_state, damage_reason, draw_property_utils, effect_node}}`;
-`picture_layer.rs` adds `adapter::{prioritized_tile, recording_source}`;
-`solid_color_layer.rs`, `surface_layer.rs`, `painted_scrollbar_layer.rs`
-(`cc::input::scrollbar`) and `recording_source.rs` name little beyond
-`adapter::main_layer`. The family impls to turn into blanket impls over
-`F: LayerizeFamily` are `MainLayerTypes` (`runtime/owner_types.rs:173`) and
-`PictureLayerTypes` (`runtime/picture_types.rs:186`). `runtime/paint/
-picture.rs` and `raster.rs` still mix main recorder/services parts with impl
-raster-source bindings; split them when `PictureLayerTypes` moves.
+### S1a-3 status
+
+Approved for S1a-3: option (h) as above; during S1a only,
+`runtime/engine_core.rs` and `runtime/engine_assembly.rs` may name
+`layerize::LayerizeEngine` (a named temporary exception in
+`layerize_boundary.rs`, removed in S1b when Page owns it).
+
+- **B1 done (cc main layers).** git mv into layerize:
+  `cc/layers/{layer, layer_list_iterator, picture_layer, recording_source,
+  painted_scrollbar_layer, solid_color_layer, solid_color_scrollbar_layer,
+  surface_layer, scrollbar_layer_base, touch_action_region}`,
+  `cc/input/scrollbar.rs` (the cc::Scrollbar trait, plus gfx `Insets` from
+  `adapter/scrollbar.rs`) and the families `adapter/{main_layer,
+  picture_layer, recording_source, scrollbar_layer_base, surface_layer,
+  solid_color_layer, painted_scrollbar_layer, solid_color_scrollbar_layer}`.
+  They live in `layerize/src/{cc,adapter}`; `layerize::commit::layers` and
+  `layerize::commit::layer_types` re-export them for the impl half (the
+  TreeSynchronizer push reads main Layers inside the protected sequence).
+  Private alias modules in `layerize/src/{cc,adapter}.rs` keep the moved
+  files' value-root paths. Shared values moved to `commit`:
+  `layer_tree_settings` (cc/trees), `invalidation_region` (cc/base),
+  `draw_property_utils::ScreenSpaceTransformForLayer`, and the new
+  `surface_range::SurfaceRangeTypes` (viz::SurfaceRange default/==/IsValid,
+  formerly on `SurfaceLayerImplTypes`, now its supertrait). The recording
+  values of `runtime/paint/picture.rs` (Picture, CpuRecordingTypes,
+  RasterSourceStorage + TilingRasterSource, CpuPictureRecorder and its
+  recorder impls, the RecordingDisplayItemList / PictureDisplayItemList
+  impls) are `commit::paint::picture`; the impl facets (PictureRasterSource,
+  TileManagerRasterSource, discardable-image facets), MicroBenchmark,
+  CpuPaintServices and RasterTransform stay in `runtime/paint/picture.rs`.
+  The `PictureLayerNodeInfo` impl for `NodeInfo` moved to layerize.
+  `PaintedScrollbarLayerImplTarget` no longer returns the impl
+  `PaintedScrollbarLayerImpl`: it has the seven setters
+  PaintedScrollbarLayer::PushPropertiesTo calls (implemented in
+  `runtime/owner_types.rs`), and `PaintedScrollbarLayerTypes` no longer
+  requires `PaintedScrollbarLayerImplTypes`.
+- **Deviation (blanket impls deferred to B2).** The family impls of the moved
+  traits (`MainLayerTypes`, `ScrollbarLayerTypes`, `PictureLayerTypes`,
+  `SolidColorLayerTypes`, ...) stay in the compositor as foreign-trait impls
+  for the local `CpuCompositorTypes<R>` (legal). They cannot become blanket
+  impls over `F: LayerizeFamily` yet, because their associated types are
+  still compositor types: `DerivedServices = dyn CpuPaintServices<Self>`
+  names PAC/ContentLayerClient/LayersAsJson service traits (B2),
+  `MicroBenchmark`, `DidScrollCallback`, `TaskRunner`, `ObjectTracker`,
+  `PaintTraceScope`, `ScrollbarCanvas`/`Scrollbar` (`runtime/paint/
+  scrollbar.rs`). Convert them in B2 once those move; add hooks to
+  `LayerizeFamily` for impl-provided items (`RasterizeScrollbarThumb` builds
+  the impl `UIBitmap`; `SurfaceRangeTypes` is already a commit trait).
+
+Next: B2 (Blink compositing translations, `runtime/paint/*` main parts,
+`paint_services.rs`, `pac_scroll.rs`, `canvas_child_record.rs`, then the
+blanket family impls), B3 (`main_host`, `main_endpoint`,
+`main_frame_lifecycle`, animation coalescing, `LayerizeEngine`), B4 (boundary
+test to zero allowance plus the LayerizeEngine exception, layerize unit
+tests).
 
 ### Plan correction: option (a) does not compile
 

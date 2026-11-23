@@ -10,6 +10,9 @@ mod float_clip_rect_transform;
 pub mod geometry;
 pub mod layer_impl_factory;
 pub mod layer_tree_debug_state;
+pub mod layer_tree_settings;
+pub mod invalidation_region;
+pub mod draw_property_utils;
 pub mod layer_value_backend;
 pub mod layerize_family;
 pub mod property_tree;
@@ -25,6 +28,7 @@ pub mod scroll_node;
 pub mod skia_filters;
 pub mod skia_region;
 pub mod skia_value_backend;
+pub mod surface_range;
 pub mod transform;
 pub mod values;
 
@@ -55,3 +59,16 @@ pub use commit_state::{CommitStateTypes, CommitTypes, PropertyTreesFor};
 //         ui/gfx/display_color_spaces.h (ContentColorUsage).
 pub use compositor_frame::surface_id::ContentColorUsage;
 pub use compositor_tile::prioritized_tile_types::ScrollOffsetMap;
+
+// Main cc::Layer owners and their type families. LayerTreeHostImpl::
+// FinishCommit reads them inside the protected sequence
+// (TreeSynchronizer::PushLayerProperties -> Layer::PushPropertiesTo), so the
+// impl half names them here. Their construction and update stay main-side.
+// Source: cc/layers/layer.h; cc/trees/tree_synchronizer.cc.
+pub mod layers {
+    pub use crate::cc::input::scrollbar;
+    pub use crate::cc::layers::*;
+}
+pub mod layer_types {
+    pub use crate::adapter::*;
+}

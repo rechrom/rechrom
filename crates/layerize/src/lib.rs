@@ -8,5 +8,7 @@
 //! half (`compositor`) may name only [`commit`], the values that cross the
 //! ProxyMain -> ProxyImpl commit. See crates/compositor/MAIN_IMPL_SPLIT.md.
 
+mod adapter;
+mod cc;
 pub mod commit;
 mod skia_path;
