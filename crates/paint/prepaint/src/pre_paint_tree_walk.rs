@@ -51,7 +51,7 @@ use paint_model::paint_order::ClassifyFragmentPaintLayer;
 use paint_model::paint_property_tree::{
     ClipPaintPropertyNode, EffectAnimationState, EffectPaintPropertyNode, PaintBackfaceVisibility,
     PaintCompositorStickyConstraint, PaintPropertyChangeType, PaintPropertyKey,
-    PaintPropertyNodeStore, PaintPropertyOwner, PaintPropertyRole, PaintPropertyTrees,
+    PaintPropertyNodeStore, PaintPropertyOwner, PaintPropertyRole,
     ScrollPaintPropertyNode, TransformAnimationState,
     TransformPaintPropertyNode,
 };
@@ -5927,58 +5927,6 @@ impl PrePaintTreeWalk {
     ) -> foundation::intersection_observation_state::IntersectionObservationState {
         self.intersection_observation_state
     }
-    fn RebindResidentPropertySnapshots(&mut self, trees: &mut PaintPropertyTrees) {
-        let mut refresh = |state: &mut paint_model::paint_property_tree::PropertyTreeState| {
-            trees.clear_state_change_markers(state);
-        };
-        refresh(&mut self.viewport_properties.nodes);
-        if let Some(fixed) = &mut self.root_fixed_position {
-            refresh(&mut fixed.properties.nodes);
-        }
-        for &pointer in &self.resident_nodes {
-            // RetainTree rebuilds this directory whenever owners change. All
-            // boxed allocations remain owned by retained_tree.
-            let node = unsafe { &mut *pointer };
-            refresh(&mut node.properties.nodes);
-            refresh(&mut node.contents_properties.nodes);
-            if let Some(fixed) = &mut node.fixed_background_properties {
-                refresh(fixed);
-            }
-            if let Some(mask) = &mut node.mask_properties {
-                refresh(mask);
-            }
-            if let Some(scrollbar) = &mut node.horizontal_scrollbar_properties {
-                refresh(scrollbar);
-            }
-            if let Some(scrollbar) = &mut node.vertical_scrollbar_properties {
-                refresh(scrollbar);
-            }
-            if let Some(cache) = &mut node.cache {
-                refresh(&mut cache.inherited.properties.nodes);
-                refresh(&mut cache.children.properties.nodes);
-            }
-        }
-        drop(refresh);
-        if let Some(fixed) = &mut self.root_fixed_position {
-            if let Some(scroll_translation) = &fixed.scroll_translation {
-                fixed.scroll_translation = trees.transform_for(scroll_translation).cloned();
-            }
-        }
-    }
-
-    /// Blink mutates a property node in its stable slot. The Rust property
-    /// store publishes immutable revisions, so direct scroll publication must
-    /// move every resident reference to the new revision at the same boundary.
-    pub fn CommitDirectScrollPropertySnapshots(
-        &mut self,
-        store: PaintPropertyNodeStore,
-        trees: &mut PaintPropertyTrees,
-    ) {
-        self.RebindResidentPropertySnapshots(trees);
-        self.property_node_store = store;
-        self.property_node_store.invalidate_published();
-    }
-
     fn ClipContextCovers(old: &Option<PaintRect>, new: &Option<PaintRect>) -> bool {
         paint_model::cull::ClipContextCovers(*old, *new)
     }
@@ -8189,6 +8137,15 @@ impl PrePaintTreeWalk {
     /// these objects. Update only their existing ObjectPaintProperties slots;
     /// topology, compositing-reason, or owner changes reject this path so the
     /// caller can run the ordinary complete PrePaint walk.
+    /// Source: object_paint_properties.h:503-522 and
+    /// paint_property_tree_builder.cc DirectlyUpdateCompositedOpacityValue:
+    /// a running compositor opacity animation.
+    const OPACITY_ANIMATION: EffectAnimationState = EffectAnimationState {
+        is_running_opacity_animation_on_compositor: true,
+        is_running_filter_animation_on_compositor: false,
+        is_running_backdrop_filter_animation_on_compositor: false,
+    };
+
     pub fn DirectlyUpdateCompositedAnimationProperties(
         &mut self,
         targeted_nodes: &[u64],
@@ -8297,14 +8254,16 @@ impl PrePaintTreeWalk {
                     &TranslationTransform(-node.paint_snap_offset.x, -node.paint_snap_offset.y),
                     &resolved,
                 );
-                let mut next = (**current).clone();
-                let change = next.DirectlyUpdateTransformAndOrigin(
-                    matrix,
-                    [0.0; 3],
-                    TransformAnimationState {
-                        is_running_animation_on_compositor: true,
-                    },
-                );
+                let change = paint_model::property_cell::with_access(|access| {
+                    current.DirectTransformAndOriginChange(
+                        access,
+                        matrix,
+                        [0.0; 3],
+                        TransformAnimationState {
+                            is_running_animation_on_compositor: true,
+                        },
+                    )
+                });
                 if !matches!(
                     change,
                     PaintPropertyChangeType::Unchanged
@@ -8313,7 +8272,7 @@ impl PrePaintTreeWalk {
                     rejection = 4;
                     break;
                 }
-                transform_proposals.insert(key, (Arc::new(next), change, fragment.ViewNodeId()));
+                transform_proposals.insert(key, (current.clone(), matrix, fragment.ViewNodeId()));
             }
             if rejection != 0 {
                 break;
@@ -8342,14 +8301,10 @@ impl PrePaintTreeWalk {
                         rejection = 3;
                         break;
                     }
-                    let mut next = (**current).clone();
-                    let change = next.DirectlyUpdateOpacity(
-                        MaskAdjustedOpacity(style),
-                        EffectAnimationState {
-                            is_running_opacity_animation_on_compositor: true,
-                            ..Default::default()
-                        },
-                    );
+                    let opacity = MaskAdjustedOpacity(style);
+                    let change = paint_model::property_cell::with_access(|access| {
+                        current.ComputeOpacityChange(access, opacity, Self::OPACITY_ANIMATION)
+                    });
                     if !matches!(
                         change,
                         PaintPropertyChangeType::Unchanged
@@ -8358,7 +8313,7 @@ impl PrePaintTreeWalk {
                         rejection = 4;
                         break;
                     }
-                    effect_proposals.insert(key, (Arc::new(next), change, fragment.ViewNodeId()));
+                    effect_proposals.insert(key, (current.clone(), opacity, fragment.ViewNodeId()));
                 }
             }
         }
@@ -8378,11 +8333,23 @@ impl PrePaintTreeWalk {
             return None;
         }
 
+        // Every proposal was admitted: update the resident slot nodes in
+        // place; the update carries the same live nodes.
         let mut update = DirectCompositedAnimationPropertyUpdate::default();
-        for (key, (snapshot, change, node_id)) in transform_proposals {
-            self.property_node_store
-                .PublishDirectTransformSnapshot(key, snapshot.clone(), change);
-            update.transforms.push(snapshot);
+        for (_, (node, matrix, node_id)) in transform_proposals {
+            let store = &mut self.property_node_store;
+            paint_model::property_cell::with_writer(|writer| {
+                store.DirectlyUpdateTransform(
+                    writer,
+                    &node,
+                    matrix,
+                    [0.0; 3],
+                    TransformAnimationState {
+                        is_running_animation_on_compositor: true,
+                    },
+                )
+            });
+            update.transforms.push(node);
             let element_id = paint_model::property_cell::with_access(|access| {
                 update.transforms.last().unwrap().state(access).compositor.compositor_element_id
             });
@@ -8395,10 +8362,12 @@ impl PrePaintTreeWalk {
                 });
             }
         }
-        for (key, (snapshot, change, node_id)) in effect_proposals {
-            self.property_node_store
-                .PublishDirectEffectSnapshot(key, snapshot.clone(), change);
-            update.effects.push(snapshot);
+        for (_, (node, opacity, node_id)) in effect_proposals {
+            let store = &mut self.property_node_store;
+            paint_model::property_cell::with_writer(|writer| {
+                store.DirectlyUpdateOpacity(writer, &node, opacity, Self::OPACITY_ANIMATION)
+            });
+            update.effects.push(node);
             let element_id = paint_model::property_cell::with_access(|access| {
                 update.effects.last().unwrap().state(access).compositor.compositor_element_id
             });
