@@ -1,8 +1,9 @@
 # S2 design: live paint property nodes
 
 Status: written 2026-11-23 at main `7f978395`; S2-1 and S2-3 (markers and
-node values sequence-confined) are implemented, S2-4 onwards are not (see
-"As implemented" below).
+node values sequence-confined), S2-4 (in-place PrePaint slot updates, D2)
+and S2-5 (in-place direct and retained-scroll updates) are implemented,
+S2-6 is not (see "As implemented" below).
 Stage S2 of the live-property-tree plan (S0 map, S1 split
 LayerizeEngine from CompositorEngine, **S2 live nodes**, S3 delete the
 snapshot machinery, S4 contract/guards, S5 verification).
@@ -99,9 +100,75 @@ Deviations and open points of S2-3:
   `prepaint` tests remain broken as on main (their builder fixtures call
   `PaintPropertyTreeBuilder::new` without the new proof argument too).
 
-Not landed (stopped here): S2-4, S2-5, S2-6. D2 was not reached: the deferred
-reparent phase (`RebindLogicalEffectState`, `RestoreLogicalOutOfFlowParents`)
-is unchanged apart from reading nodes through the proof.
+- **S2-4** (`refactor(paint): update property slot nodes in place during
+  PrePaint`, 72bddaf6). `PaintPropertyNodeStore` is ObjectPaintProperties:
+  `SlotId(key)` gives a slot's stable node id (the builder's
+  `RegisterProperty(fragment, role) -> id` uses it), and
+  `Update{Transform,Clip,Effect,Scroll}(writer, key, node)` creates the
+  slot (kNodeAddedOrRemoved) or calls the node's in-place
+  `Update(&self, writer, State, anim)` (SetParent + ComputeChange +
+  AddChanged; transform/clip changes bump the sequence's cache
+  generations). A node whose state links a newer allocation of the same
+  entity stores that state without promoting the change category. The
+  pass's maximum change and intersection-observation effect are recorded
+  per update; slots no object registered are removed at the end of every
+  walk (`RetainLiveSlots`). Viewport clip and visual-viewport nodes use the
+  same slots. Builder `*_id` fields are the slot nodes' ids
+  (`SyncPropertyIds`); `NodeCache::own_change` records the build's change
+  so `SameGeometry` still sees value changes on identical live nodes.
+  **D2**: `LogicalOutOfFlowEffectContext` gives an absolute/fixed object
+  whose logical parent occurrence is not a physical ancestor that
+  occurrence's recorded effect state (`logical_effect_contexts`, updated per
+  visited node and rebuilt from the final tree in every post-update pass)
+  before admission, so its effect is updated once with the final parent.
+  The post-update pass keeps the logical tree moves and only fixes up, in
+  place, an occurrence the physical walk reached after the object
+  (`PrePaint.RestoreLogicalTree logical_effect_fixups`).
+  Deleted: `PropertyNodeUpdater`, `update_snapshot!`,
+  `PersistPropertyStates`, the `raw_*` builder caches and
+  `RestoreBuilderStates`' property restore, `RebaseOwnEffect`, the cloning
+  `OwnNodeRebase` (now a proof that own nodes keep their links),
+  `prior_property_keys`, `GatherRetainedRawPropertyIds`, the key half of
+  `SameBuilderStructure`/`SameBuilderState` (same slot = same node entity),
+  `PaintPropertyNodeLifecycle::parent_id`, `unresolved_parent_ids`,
+  `snapshot_stats` and the `PrePaint.ParentIds`/`PrePaint.Snapshots` traces.
+- **S2-5** (`refactor(paint): apply direct animation and scroll updates in
+  place`, 6a892206). Direct composited animation updates admit all proposals
+  from computed changes (`DirectTransformAndOriginChange`,
+  `ComputeOpacityChange`) and then update the slot nodes in place; the
+  retained scroll path updates ScrollTranslation/StickyTranslation in place
+  (`retained_scroll_update` returns the admitted values,
+  `ApplyRetainedScrollUpdate` writes them, same change categories as before)
+  and no longer rewrites chunk states, display-item scroll translations or
+  viewport metadata. Deleted: `PublishDirect*Snapshot`, `staged_snapshots`,
+  `RetainedScrollSnapshotRebinder`, `cleared_change_markers`,
+  `PaintPropertyTrees::clear_state_change_markers`,
+  `CommitDirectScrollPropertySnapshots`, `RebindResidentPropertySnapshots`.
+
+Deviations of S2-4/S2-5:
+
+- Proof scopes are narrow, not a walk-wide writer: the PrePaint walk runs
+  under no proof, reads take `with_access` per expression and every slot
+  update takes `with_writer` for that one update. A walk-wide writer would
+  make every per-call `with_access` reachable from the walk (native
+  GeometryMapper handles, `CullRect`, node `Clone`/`PartialEq`/`ToJSON`)
+  panic. The builder therefore no longer holds the explicit proof S2-3 gave
+  it (D1 partly reverted in PrePaint). The invariant to keep: no slot
+  update may run inside a `with_access` closure (it panics, it cannot race).
+- `OpaquePaintCacheSlot`, `CacheTreeScope`, `FrozenPropertyTrees`, the
+  resolvers and `ArtifactPropertyStateRebinder` stay until S2-6: with live
+  nodes they resolve every link to itself but are still read.
+- The retained scroll path updates nodes before its coverage proof; a
+  rejection leaves the new values in place and the ordinary lifecycle that
+  follows computes the same values (Chromium's PrePaint also updates the
+  scroll translation before Paint decides).
+- Node `Clone`/`PartialEq` are still value-based with `with_access`; they
+  must not run inside a writer scope (none does). Make them identity in S2-6.
+- `prepaint` unit tests still do not compile (pre-existing); the named
+  S2-4 tests were not run.
+
+Not landed (stopped here because D: had 1.4 GB free): S2-6. No iteration
+build and no runtime verification (section 6) have been done for S2-4/S2-5.
 
 Runtime facts this part changes: a read of a node marker, cc id or node
 value from a thread other than the one that created the node now panics
