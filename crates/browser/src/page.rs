@@ -686,6 +686,11 @@ struct PageDomainServices {
     // A visibility change made inside ProxyMain::BeginMainFrame (the Page
     // lifecycle), applied when it returns.
     pending_main_compositor_visible: Cell<Option<bool>>,
+    // A main-half call made outside the Page's own tasks (composited
+    // scrollbar layer updates from scrollbar animation callbacks) whose
+    // in-process Proxy tasks and effects the internal presenter runs at the
+    // next lifecycle.
+    main_compositor_mutated_outside_lifecycle: Cell<bool>,
     // ProxyMain::BeginMainFrame is running (PaintArtifactCompositor::Update
     // is only admitted inside it).
     in_main_compositor_frame: Cell<bool>,
@@ -2706,6 +2711,7 @@ impl PageState {
                     main_property_tree_features: Default::default(),
                     main_compositor_shut_down: Cell::new(false),
                     pending_main_compositor_visible: Cell::new(None),
+                    main_compositor_mutated_outside_lifecycle: Cell::new(false),
                     in_main_compositor_frame: Cell::new(false),
                     main_compositor_effects: RefCell::new(Vec::new()),
                     compositor_pac_sequence: Cell::new(0),
@@ -6003,8 +6009,9 @@ impl Page {
                 self.ApplyCompositorWheelEffects(effects)?;
                 before_lifecycle(self);
                 self.UpdateRendering(args)?;
-                // Main-thread compositor mutations the lifecycle produced
-                // (direct animation updates, scrollbar paint) belong to this
+                // Main-thread compositor mutations queued by input routing
+                // (LayerTreeHost setters, deferrals) and the main-half
+                // effects of the lifecycle's synchronous calls belong to this
                 // main frame's commit.
                 self.ApplyPendingMainCompositorMutations()?;
                 if let Some(frame) = self.CurrentFrame() {
@@ -7830,6 +7837,13 @@ impl Page {
                     }
                 }
             }
+        }
+        if self
+            .state
+            .main_compositor_mutated_outside_lifecycle
+            .replace(false)
+        {
+            self.DidMutateMainCompositor()?;
         }
         // Blink's lifecycle remains on the Oilpan-owning thread through
         // PrePaint and Paint. Caret geometry can reshape a text slice while

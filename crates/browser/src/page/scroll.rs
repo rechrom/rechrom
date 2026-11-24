@@ -544,34 +544,6 @@ impl Page {
                         requested_main_frame = true;
                     }
                 }
-                CompositorMainThreadEffect::ScrollbarPaintFallback { element } => {
-                    let native_element =
-                        foundation::CompositorElementId::new(element.GetInternalValue());
-                    if self
-                        .state
-                        .local_frames
-                        .get()
-                        .unwrap()
-                        .InvalidateCompositorScrollbarElement(native_element)
-                    {
-                        requested_main_frame = true;
-                        continue;
-                    }
-                    let target = self
-                        .state
-                        .layout_engine
-                        .borrow()
-                        .CompositorScrollbarOwner(native_element);
-                    if target.is_some_and(|target| {
-                        self.state
-                            .document
-                            .borrow_mut()
-                            .InvalidatePaintForNode(target)
-                    }) {
-                        self.state.dirty.set(true);
-                        requested_main_frame = true;
-                    }
-                }
                 _ => {}
             }
         }

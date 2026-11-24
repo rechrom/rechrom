@@ -1,8 +1,10 @@
 # S1b-8 design: composited animations local on the document thread
 
-Status: design only, nothing implemented. Written 2026-11-23 against main
-`7f978395`; Rechrom line numbers refer to that revision. Resolves blocker B5
-of `S1B_PROXY_DESIGN.md` (section 3, row S1b-8 of the step table).
+Status: S1b-8a..d implemented (2026-11-24, on main `31d5771e`); S1b-8e
+deferred (decision D-B). Written 2026-11-23 against main `7f978395`; the
+Rechrom line numbers in sections 1-4 refer to that revision and are
+historical. Resolves blocker B5 of `S1B_PROXY_DESIGN.md` (section 3, row
+S1b-8 of the step table). See section 8 for what landed.
 
 Prerequisite: S1b-7 as agreed with the coordinator. Page owns
 `layerize::LayerizeEngine` (which now contains ProxyMain) on the
@@ -529,3 +531,48 @@ Decisions for the user:
 - **D-D. Animation fixture pages.** Add them to the repo
   (`apps/rechrom/fixtures/`), or keep them in the handoff tools next to
   `matrix.ps1`?
+
+Decided: D-A per-node fallback; D-B keep Page computing the start time (no
+S1b-8e); D-C with S1b-8d; D-D no fixture pages or tests in the repo.
+
+## 8. As implemented
+
+S1b-7 had already removed the compositor-side coalescing
+(`pending_composited_animation`, the prepared property-only commit slot,
+`CanApplyCompositedAnimationProperties`), the
+`external_compositor_published_frame_sequence` gate (now
+`HasResidentPaintArtifact()`), the `ScrollAnimationCommitPrepared` round trip
+and the impl-clock start time (`compositor_executor` is the Page domain's
+clock). Section 3.1 needed no lent type: `ProxyMain::BeginMainFrame` does not
+borrow the `RefCell<LayerizeEngine>` while `MainFrameClient::UpdateRendering`
+runs, so Page borrows it directly.
+
+- **S1b-8a.** `PageDomainServices::DirectlyUpdateCompositedAnimationProperties`
+  calls `LayerizeEngine::ApplyCompositedAnimationProperties` in the lifecycle
+  task. `CpuMainPaintServices::ApplyCompositedAnimationProperties` works per
+  node (D-A): an accepted node is downgraded with
+  `CompositorSimpleValuesUpdated`; a rejected one keeps
+  `kChangedOnlySimpleValues` and Page falls through to the full Paint, whose
+  `changed_to_root` classification in `UpdateCompositor` calls
+  `PAC::SetNeedsUpdate`. When the PrePaint direct path was taken, that full
+  Paint repeats the PrePaint walk.
+- **S1b-8b.** `InstallCompositorPropertyAnimations` (both paths) and the
+  removal/replacement drains call
+  `PageDomainServices::ApplySourcePropertyAnimation`. Without a started
+  external main half the install is skipped and the animation stays on the
+  document thread.
+- **S1b-8c.** `CompositorMutation::{CompositedAnimationProperties,
+  PropertyAnimation}` deleted.
+- **S1b-8d.** `PublishMacScrollbarAnimation` calls
+  `PageDomainServices::ApplyScrollbarPaint`; on `false`,
+  `PageState::InvalidateCompositedScrollbarPaint` runs the former
+  `ScrollbarPaintFallback` handling. `CompositorMutation::{ScrollbarPaint,
+  ScrollAnimation}` (the latter had no producer), `ScrollbarPaintMutation`
+  and the `ScrollbarPaintFallback` effect deleted. `CompositorMutation` now
+  carries only `FrameLifecycle` and `Input`.
+
+The internal presenter runs the in-process Proxy tasks these calls post
+through `PageDomainServices::DidMutateMainCompositor` (Page's
+`DidMutateMainCompositor` applies the effects). Scrollbar updates from
+animation callbacks set `main_compositor_mutated_outside_lifecycle` and are
+drained at the next lifecycle, where the queued mutation used to be applied.

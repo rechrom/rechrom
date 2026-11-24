@@ -469,27 +469,36 @@ impl PageDomainServices {
                     }
                 }
             }
-            CompositorMutation::ScrollbarPaint(mutation) => {
-                let applied = self.MainLayerize().borrow_mut().ApplyScrollbarPaintMutation(
-                    mutation.element,
-                    mutation.opacity,
-                    mutation.thumb_width,
-                    mutation.needs_repaint,
-                );
-                if !applied {
-                    self.main_compositor_effects.borrow_mut().push(
-                        CompositorMainThreadEffect::ScrollbarPaintFallback {
-                            element: mutation.element,
-                        },
-                    );
-                }
-            }
-            CompositorMutation::ScrollAnimation(mutation) => self
-                .MainLayerize()
-                .borrow_mut()
-                .ApplySourceScrollAnimation(mutation),
         }
         Ok(())
+    }
+
+    /// Blink's live WebScrollbar values on the resident composited
+    /// PaintedScrollbarLayer (PaintArtifactCompositor's scrollbar layer for
+    /// `element`; scrollbar_display_item.h:93-106,
+    /// painted_scrollbar_layer.cc:185-283), synchronously on the main half;
+    /// the layer asks LayerTreeHost for a commit. `false` when the scrollbar
+    /// has no resident composited layer: the caller falls back to Blink's
+    /// ordinary targeted scrollbar paint invalidation.
+    pub(super) fn ApplyScrollbarPaint(
+        &self,
+        element: compositor::adapter::input_types::ElementId,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+    ) -> bool {
+        let applied = self.layerize.get().is_some_and(|layerize| {
+            layerize.borrow_mut().ApplyScrollbarPaintMutation(
+                element,
+                opacity,
+                thumb_width,
+                needs_repaint,
+            )
+        });
+        if applied {
+            self.main_compositor_mutated_outside_lifecycle.set(true);
+        }
+        applied
     }
 
     pub(super) fn ConvertPaintArtifactSubsetToRecord(
