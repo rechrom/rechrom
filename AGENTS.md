@@ -226,14 +226,25 @@ with `ProxyImpl` receiving the commit.
   There is no separate `LayerTileEngine` or `FramePlan` lifecycle between
   Paint and Compositor.
 - Active/pending layer and tile state stay private. Raster execution and pixel
-  caches are injected services; the compositor owns their task selection,
-  completion accounting and teardown policy. Viz/Renderer never take its layer
-  or tile owners. It owns frame scheduling and compositor scrolling, not raster
-  playback, surface aggregation or presentation.
-- Typed main-thread effects carry wheel disposition and acknowledged
-  impl-scroll deltas; Page returns a completed frame's acknowledgement.
-  Main-frame completion and pending-tree activation gate commits without
-  blocking impl input/display or impl-only tile coverage.
+  caches are injected services (`CompositorServices`, passed to
+  `CompositorEngine::new` with the `ProxyImplInit` values and the `to_main`
+  queue); the compositor owns their task selection, completion accounting and
+  teardown policy. Viz/Renderer never take its layer or tile owners. It owns
+  frame scheduling and compositor scrolling, not raster playback, surface
+  aggregation or presentation: the embedding that owns the engine receives
+  its move-only frames and returns acknowledgements and resources.
+- `LayerizeEngine` (with its `ProxyMain`) and `CompositorEngine` are
+  independent instances, each held directly by its owner (the Page domain
+  on the document thread; the embedding's impl runner, or the Page's
+  synchronous presenter), connected only by the Proxy task queues. No type
+  groups the two halves.
+- `CompositorOutput` carries no main-thread effects. Impl → main
+  notifications are ProxyImpl → ProxyMain tasks; only the synchronous
+  InputHandlerProxy results of an input call (wheel/gesture disposition,
+  DOM-acknowledgement and main-thread hit-test requests) return as typed
+  `input_effects` to the input owner. Main-frame completion and pending-tree
+  activation gate commits without blocking impl input/display or impl-only
+  tile coverage.
 
 **Viz** (`viz`): surface manager → aggregator (`Aggregate`) → display
 scheduling. Input is `CompositorFrame`, surface lifecycle, BeginFrame/deadline
