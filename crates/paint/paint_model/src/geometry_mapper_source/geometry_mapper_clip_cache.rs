@@ -117,7 +117,7 @@ impl GeometryMapperClipCache {
         self.cache_generation_ = global_generation();
         self.tree_scope_ = CacheTreeScope::of(trees);
         self.clip_cache_.clear();
-        if node.pixel_moving_filter.is_some() {
+        if crate::property_cell::with_access(|access| node.PixelMovingFilter(access).is_some()) {
             self.nearest_pixel_moving_filter_clip_ = Some(CachedClip::Owner);
         } else if let Some(parent) = parent_of(node) {
             self.nearest_pixel_moving_filter_clip_ = WithClipCacheBy(&parent, trees, parent_of, |cache| {
@@ -164,7 +164,12 @@ pub fn WithClipCache<R>(
     node: &Arc<ClipPaintPropertyNode>,
     callback: impl FnOnce(&mut GeometryMapperClipCache) -> R,
 ) -> R {
-    WithClipCacheBy(node, &None, &|clip| clip.parent.clone(), callback)
+    WithClipCacheBy(
+        node,
+        &None,
+        &|clip| crate::property_cell::with_access(|access| clip.Parent(access).cloned()),
+        callback,
+    )
 }
 /// A clip's current parent (a resolver over its parent link).
 pub type ClipParentFn<'a> =

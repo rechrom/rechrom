@@ -57,13 +57,10 @@ where
     >,
 {
     fn UnaliasedParent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| self.link_same(p))
+        self.parent_handle()
     }
     fn PaintClipRect(&self) -> RRectF {
-        let r = self.node().PaintClipRadii();
+        let r = read(|a| self.node().PaintClipRadii(a));
         RRectF {
             rect: PendingClipNode::<TransformNode<R>, usize>::PaintClipRectRect(self),
             corner_radii: [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
@@ -71,7 +68,7 @@ where
         }
     }
     fn ClipPath(&self) -> Option<Arc<paint::paint_clip_path::PaintClipPath>> {
-        self.node().ClipPath().cloned()
+        read(|a| self.node().ClipPath(a).cloned())
     }
 }
 impl<R, B> ConversionEffectNode<B> for EffectNode<R>
@@ -84,10 +81,7 @@ where
     >,
 {
     fn UnaliasedParent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| self.link_same(p))
+        self.parent_handle()
     }
     fn HasDirectCompositingReasons(&self) -> bool {
         self.node().HasDirectCompositingReasons()

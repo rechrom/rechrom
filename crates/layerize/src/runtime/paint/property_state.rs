@@ -208,7 +208,7 @@ fn clip_chain_in_transform_compositing_boundary<R: PaintSkiaBackend>(
 ) -> bool {
     let mut current = node.clone();
     while current != *ancestor {
-        let local = current.link_transform(current.node().LocalTransformSpace());
+        let local = super::read(|a| current.link_transform(current.node().LocalTransformSpace(a)));
         if in_same_transform_compositing_boundary(
             transform,
             &local,

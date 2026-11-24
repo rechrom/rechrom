@@ -111,8 +111,8 @@ mod tests {
         let root = PropertyTreeState::Root();
         let mut viewport_clip = root.clip.as_ref().clone();
         viewport_clip.lifecycle = PaintPropertyNodeLifecycle::default();
-        viewport_clip.parent = Some(root.clip.clone());
-        viewport_clip.rect = Some(PaintRect {
+        viewport_clip.state_mut().parent = Some(root.clip.clone());
+        viewport_clip.state_mut().rect = Some(PaintRect {
             x: 0.0,
             y: 0.0,
             width: 100.0,
@@ -129,9 +129,9 @@ mod tests {
         let scroll = Arc::new(scroll);
         let mut clip = root.clip.as_ref().clone();
         clip.lifecycle = PaintPropertyNodeLifecycle::default();
-        clip.parent = Some(viewport_clip.clone());
-        clip.local_transform_space = scroll.clone();
-        clip.rect = Some(PaintRect {
+        clip.state_mut().parent = Some(viewport_clip.clone());
+        clip.state_mut().local_transform_space = scroll.clone();
+        clip.state_mut().rect = Some(PaintRect {
             x: 0.0,
             y: 0.0,
             width: 20.0,

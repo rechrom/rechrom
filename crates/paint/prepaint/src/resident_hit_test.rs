@@ -385,7 +385,7 @@ impl<'a> ResidentPaintHitTest<'a> {
         &self.node.contents_properties.nodes
     }
     // Source: fragment_data.cc:89-140. Property parents keep their exact owner.
-    pub fn PreClip(self) -> &'a std::sync::Arc<ClipPaintPropertyNode> {
+    pub fn PreClip(self) -> std::sync::Arc<ClipPaintPropertyNode> {
         for role in [
             PaintPropertyRole::ClipPathClip,
             PaintPropertyRole::MaskClip,
@@ -393,13 +393,16 @@ impl<'a> ResidentPaintHitTest<'a> {
             PaintPropertyRole::PixelMovingFilterClipExpander,
         ] {
             if let Some(clip) = self.Clip(role) {
-                return paint_model::paint_property_tree::PropertyNodeResolver::clip(
-                    self.slots,
-                    clip.parent.as_ref().expect("non-root own clip has parent"),
-                );
+                return paint_model::property_cell::with_access(|access| {
+                    paint_model::paint_property_tree::PropertyNodeResolver::clip(
+                        self.slots,
+                        clip.Parent(access).expect("non-root own clip has parent"),
+                    )
+                    .clone()
+                });
             }
         }
-        &self.node.properties.nodes.clip
+        self.node.properties.nodes.clip.clone()
     }
     pub fn PreEffect(self) -> &'a std::sync::Arc<EffectPaintPropertyNode> {
         for role in [PaintPropertyRole::Effect, PaintPropertyRole::Filter] {
@@ -460,7 +463,7 @@ impl<'a> ResidentPaintHitTest<'a> {
     }
 
     pub fn ForegroundClip(self) -> Option<PaintRect> {
-        self.node.contents_properties.nodes.clip.PaintClipRect()
+        paint_model::property_cell::with_access(|a| self.node.contents_properties.nodes.clip.PaintClipRect(a))
     }
 }
 

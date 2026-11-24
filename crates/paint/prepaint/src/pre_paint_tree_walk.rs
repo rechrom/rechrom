@@ -5096,12 +5096,20 @@ impl<'a> OwnNodeRebase<'a> {
         }
         let mut value = (**node).clone();
         value.lifecycle = Default::default();
-        value.parent = match &node.parent {
+        let (parent, transform, filter) = {
+            let state = value.state_mut();
+            (
+                state.parent.clone(),
+                state.local_transform_space.clone(),
+                state.pixel_moving_filter.clone(),
+            )
+        };
+        value.state_mut().parent = match &parent {
             Some(parent) => Some(self.clip(parent)?),
             None => None,
         };
-        value.local_transform_space = self.transform(&node.local_transform_space)?;
-        value.pixel_moving_filter = match &node.pixel_moving_filter {
+        value.state_mut().local_transform_space = self.transform(&transform)?;
+        value.state_mut().pixel_moving_filter = match &filter {
             Some(filter) => Some(self.effect(filter)?),
             None => None,
         };
@@ -7844,11 +7852,8 @@ impl PrePaintTreeWalk {
                 };
                 self.viewport_properties.clip_id = id;
                 self.viewport_properties.nodes.clip = Arc::new(
-                    ClipPaintPropertyNode {
-                        geometry_mapper_cache: Default::default(),
+                    ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
-                        lifecycle: Default::default(),
-                        id,
                         parent: Some(self.viewport_properties.nodes.clip.clone()),
                         local_transform_space: PropertyTreeState::default().nodes.transform,
                         rect: Some(rect),
@@ -7856,7 +7861,7 @@ impl PrePaintTreeWalk {
                         clip_path: None,
                         clip_path_error: None,
                         pixel_moving_filter: None,
-                    }
+                    })
                     .with_layout_clips(),
                 );
             }

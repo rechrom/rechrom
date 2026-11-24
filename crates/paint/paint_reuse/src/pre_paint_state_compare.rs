@@ -10,7 +10,7 @@ use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,
         PaintPropertyNodeLifecycle, PropertyTreeState, ScrollPaintPropertyNode,
-        ScrollPaintPropertyNodeState,
+        ClipPaintPropertyNodeState, ScrollPaintPropertyNodeState,
         TransformPaintPropertyNode,
     },
     property_cell::PropertyAccess,
@@ -228,11 +228,10 @@ impl Compare<'_> {
         if let Some(result) = cached {
             return result;
         }
-        let ClipPaintPropertyNode {
-            geometry_mapper_cache: _,
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let ClipPaintPropertyNodeState {
             layout_clip_rects,
-            lifecycle,
-            id,
             parent,
             local_transform_space,
             rect,
@@ -240,19 +239,20 @@ impl Compare<'_> {
             clip_path,
             clip_path_error,
             pixel_moving_filter,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
             && rect.as_ref().is_none_or(finite_rect)
-            && rect == &b.rect
+            && rect == &bs.rect
             && finite_radii(radii)
-            && radii == &b.radii
-            && layout_clip_rects == &b.layout_clip_rects
+            && radii == &bs.radii
+            && layout_clip_rects == &bs.layout_clip_rects
             && clip_path.as_ref().is_none_or(|path| path.is_finite())
-            && clip_path == &b.clip_path
-            && clip_path_error == &b.clip_path_error
-            && self.optional(parent, &b.parent, Self::clip)
-            && self.transform(local_transform_space, &b.local_transform_space)
-            && self.optional(pixel_moving_filter, &b.pixel_moving_filter, Self::effect);
+            && clip_path == &bs.clip_path
+            && clip_path_error == &bs.clip_path_error
+            && self.optional(parent, &bs.parent, Self::clip)
+            && self.transform(local_transform_space, &bs.local_transform_space)
+            && self.optional(pixel_moving_filter, &bs.pixel_moving_filter, Self::effect);
         self.finish(key, same)
     }
     fn effect(

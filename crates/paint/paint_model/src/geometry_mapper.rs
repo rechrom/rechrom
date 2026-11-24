@@ -293,37 +293,39 @@ pub fn LocalToAncestorClipRectIn<R: PropertyNodeResolver + ?Sized>(
         return None;
     }
 
-    let mut intermediate = Vec::with_capacity(16);
-    let mut current = Some(local.clip.as_ref());
-    while let Some(clip) = current {
-        if SameClip(clip, &ancestor.clip) {
-            break;
+    crate::property_cell::with_access(|access| {
+        let mut intermediate = Vec::with_capacity(16);
+        let mut current = Some(local.clip.as_ref());
+        while let Some(clip) = current {
+            if SameClip(clip, &ancestor.clip) {
+                break;
+            }
+            intermediate.push(clip.state(access));
+            current = clip.Parent(access).map(|parent| &**resolver.clip(parent));
         }
-        intermediate.push(clip);
-        current = clip.parent.as_ref().map(|parent| &**resolver.clip(parent));
-    }
-    // Chromium deliberately declines to clip abnormal hierarchies.
-    current?;
+        // Chromium deliberately declines to clip abnormal hierarchies.
+        current?;
 
-    let mut result: Option<PaintRect> = None;
-    for clip in intermediate.into_iter().rev() {
-        if let Some(rect) = clip.layout_clip_rects.expanded.rect.or(clip.rect) {
-            let Some(mapped) = SourceToDestinationRectIn(
-                resolver,
-                resolver.transform(&clip.local_transform_space),
-                &ancestor.transform,
-                rect,
-            )
-            else {
-                return Some(PaintRect::default());
-            };
-            result = Some(result.map_or(mapped, |old| old.intersection(mapped)));
-            if result.is_some_and(|rect| rect.is_empty()) {
-                return result;
+        let mut result: Option<PaintRect> = None;
+        for clip in intermediate.into_iter().rev() {
+            if let Some(rect) = clip.layout_clip_rects.expanded.rect.or(clip.rect) {
+                let Some(mapped) = SourceToDestinationRectIn(
+                    resolver,
+                    resolver.transform(&clip.local_transform_space),
+                    &ancestor.transform,
+                    rect,
+                )
+                else {
+                    return Some(PaintRect::default());
+                };
+                result = Some(result.map_or(mapped, |old| old.intersection(mapped)));
+                if result.is_some_and(|rect| rect.is_empty()) {
+                    return result;
+                }
             }
         }
-    }
-    result
+        result
+    })
 }
 
 // Map a point through one paint-property transform. Hit testing uses the

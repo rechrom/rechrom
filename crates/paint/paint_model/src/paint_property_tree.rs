@@ -665,16 +665,27 @@ pub struct PaintAnchorPositionScrollData {
     pub needs_scroll_adjustment_in_y: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Source: clip_paint_property_node.h:163-258. Dump id, lifecycle identity
+/// and the GeometryMapper cache slot are plain fields; the node `State` (with
+/// the parent link, paint_property_node.h:232) is confined to the document
+/// sequence that created the node and read through a `PropertyAccess`.
+#[derive(Debug)]
 pub struct ClipPaintPropertyNode {
     /// Source: clip_paint_property_node.h:249-258.
     pub geometry_mapper_cache: crate::opaque_paint_cache_slot::OpaquePaintCacheSlot,
+    pub lifecycle: PaintPropertyNodeLifecycle,
+    pub id: u64,
+    state: PropertyCell<ClipPaintPropertyNodeState>,
+}
+
+/// Source: clip_paint_property_node.h:88-125 `ClipPaintPropertyNode::State`
+/// plus the parent link.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipPaintPropertyNodeState {
     /// Source: clip_paint_property_node.h:88-125,188-217. Layout and paint
     /// clips are distinct source values, including compositor animation bounds.
     pub layout_clip_rects: ClipLayoutRects,
-    pub lifecycle: PaintPropertyNodeLifecycle,
-    pub id: u64,
-    pub parent: Option<Arc<Self>>,
+    pub parent: Option<Arc<ClipPaintPropertyNode>>,
     pub local_transform_space: Arc<TransformPaintPropertyNode>,
     pub rect: Option<PaintRect>,
     pub radii: PaintCornerRadii,
@@ -687,18 +698,63 @@ pub struct ClipPaintPropertyNode {
     pub pixel_moving_filter: Option<Arc<EffectPaintPropertyNode>>,
 }
 
+impl Clone for ClipPaintPropertyNode {
+    /// A snapshot copy (S2-4 replaces copies with in-place `Update`); the
+    /// cache slot starts empty as before.
+    fn clone(&self) -> Self {
+        Self::new(
+            self.lifecycle.clone(),
+            self.id,
+            crate::property_cell::with_access(|access| self.state(access).clone()),
+        )
+    }
+}
+impl PartialEq for ClipPaintPropertyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.lifecycle == other.lifecycle
+            && self.id == other.id
+            && crate::property_cell::with_access(|access| {
+                self.state(access) == other.state(access)
+            })
+    }
+}
+
 impl ClipPaintPropertyNode {
+    /// Source: clip_paint_property_node.h:150-160 `Create`. The node belongs
+    /// to the calling document sequence.
+    pub fn new(
+        lifecycle: PaintPropertyNodeLifecycle,
+        id: u64,
+        state: ClipPaintPropertyNodeState,
+    ) -> Self {
+        Self {
+            geometry_mapper_cache: Default::default(),
+            lifecycle,
+            id,
+            state: PropertyCell::with_owner(PaintSequenceId::current(), state),
+        }
+    }
+    #[inline]
+    pub fn state<'a>(&'a self, access: &'a PropertyAccess) -> &'a ClipPaintPropertyNodeState {
+        self.state.get(access)
+    }
+    /// Exclusive access to a snapshot that is not shared yet.
+    #[inline]
+    pub fn state_mut(&mut self) -> &mut ClipPaintPropertyNodeState {
+        self.state.get_mut()
+    }
     /// Source: paint_property_node.h:116-119 `Parent`.
     #[inline]
-    pub fn Parent<'a>(&'a self, _access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
-        self.parent.as_ref()
+    pub fn Parent<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.state(access).parent.as_ref()
     }
     /// Source: clip_paint_property_node.h:88-99,110-125. Normal source clip
     /// creation supplies equal precise/paint input until the builder supplies
     /// its unsnapped layout value or an explicit animation expansion.
     pub fn with_layout_clips(mut self) -> Self {
-        self.layout_clip_rects =
-            ClipLayoutRects::new(self.rect, self.radii.HasRadius(), None, None);
+        let state = self.state_mut();
+        state.layout_clip_rects =
+            ClipLayoutRects::new(state.rect, state.radii.HasRadius(), None, None);
         self
     }
     pub fn with_layout_clip_values(
@@ -707,57 +763,71 @@ impl ClipPaintPropertyNode {
         expanded: Option<PaintRect>,
         excluding_overlay: Option<PaintRect>,
     ) -> Self {
-        self.layout_clip_rects =
-            ClipLayoutRects::new(precise, self.radii.HasRadius(), expanded, excluding_overlay);
+        let state = self.state_mut();
+        state.layout_clip_rects =
+            ClipLayoutRects::new(precise, state.radii.HasRadius(), expanded, excluding_overlay);
         self
     }
-    pub fn clip_path_child_count(&self) -> usize {
-        self.clip_path
+    pub fn clip_path_child_count(&self, access: &PropertyAccess) -> usize {
+        self.state(access)
+            .clip_path
             .as_ref()
             .map_or(0, |shape| shape.paths().len())
     }
-    pub fn single_clip_path(&self) -> Option<&crate::paint_clip_path::PaintPath> {
-        self.clip_path.as_ref()?.single_path().map(Arc::as_ref)
+    pub fn single_clip_path<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> Option<&'a crate::paint_clip_path::PaintPath> {
+        self.state(access).clip_path.as_ref()?.single_path().map(Arc::as_ref)
     }
-    pub fn clip_path_verb_count(&self) -> usize {
-        self.clip_path.as_ref().map_or(0, |shape| {
+    pub fn clip_path_verb_count(&self, access: &PropertyAccess) -> usize {
+        self.state(access).clip_path.as_ref().map_or(0, |shape| {
             shape.paths().iter().map(|p| p.verb_count()).sum()
         })
     }
 
     // Source: clip_paint_property_node.h:183-232. The node owns these source
     // queries; compositor adapters only convert their value types.
-    pub fn LocalTransformSpace(&self) -> &Arc<TransformPaintPropertyNode> {
-        &self.local_transform_space
+    pub fn LocalTransformSpace<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> &'a Arc<TransformPaintPropertyNode> {
+        &self.state(access).local_transform_space
     }
-    pub fn PaintClipRect(&self) -> Option<PaintRect> {
-        self.rect
+    pub fn PaintClipRect(&self, access: &PropertyAccess) -> Option<PaintRect> {
+        self.state(access).rect
     }
-    pub fn PaintClipRadii(&self) -> PaintCornerRadii {
-        self.radii
+    pub fn PaintClipRadii(&self, access: &PropertyAccess) -> PaintCornerRadii {
+        self.state(access).radii
     }
-    pub fn LayoutClipRect(&self) -> ClipLayoutRect {
-        self.layout_clip_rects.expanded
+    pub fn LayoutClipRect(&self, access: &PropertyAccess) -> ClipLayoutRect {
+        self.state(access).layout_clip_rects.expanded
     }
-    pub fn PreciseLayoutClipRect(&self) -> ClipLayoutRect {
-        self.layout_clip_rects.precise
+    pub fn PreciseLayoutClipRect(&self, access: &PropertyAccess) -> ClipLayoutRect {
+        self.state(access).layout_clip_rects.precise
     }
-    pub fn IsForCompositeClipPathAnimation(&self) -> bool {
-        self.layout_clip_rects.expanded != self.layout_clip_rects.precise
+    pub fn IsForCompositeClipPathAnimation(&self, access: &PropertyAccess) -> bool {
+        let rects = &self.state(access).layout_clip_rects;
+        rects.expanded != rects.precise
     }
-    pub fn LayoutClipRectExcludingOverlayScrollbars(&self) -> ClipLayoutRect {
-        self.layout_clip_rects
-            .excluding_overlay
-            .unwrap_or(self.layout_clip_rects.precise)
+    pub fn LayoutClipRectExcludingOverlayScrollbars(
+        &self,
+        access: &PropertyAccess,
+    ) -> ClipLayoutRect {
+        let rects = &self.state(access).layout_clip_rects;
+        rects.excluding_overlay.unwrap_or(rects.precise)
     }
-    pub fn ClipPath(&self) -> Option<&Arc<PaintClipPath>> {
-        self.clip_path.as_ref()
+    pub fn ClipPath<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<PaintClipPath>> {
+        self.state(access).clip_path.as_ref()
     }
-    pub fn ClipPathEquals(&self, path: Option<&Arc<PaintClipPath>>) -> bool {
-        self.clip_path.as_ref() == path
+    pub fn ClipPathEquals(&self, access: &PropertyAccess, path: Option<&Arc<PaintClipPath>>) -> bool {
+        self.state(access).clip_path.as_ref() == path
     }
-    pub fn PixelMovingFilter(&self) -> Option<&Arc<EffectPaintPropertyNode>> {
-        self.pixel_moving_filter.as_ref()
+    pub fn PixelMovingFilter<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> Option<&'a Arc<EffectPaintPropertyNode>> {
+        self.state(access).pixel_moving_filter.as_ref()
     }
 
     /// Source: clip_paint_property_node.h:163-178. The incoming node is the
@@ -768,7 +838,7 @@ impl ClipPaintPropertyNode {
         parent: Arc<ClipPaintPropertyNode>,
         mut state: ClipPaintPropertyNode,
     ) -> PaintPropertyChangeType {
-        state.parent = Some(parent);
+        state.state_mut().parent = Some(parent);
         let change = clip_state_change(self, &state);
         if change != PaintPropertyChangeType::Unchanged {
             let lifecycle = self.lifecycle.updated(change);
@@ -800,14 +870,17 @@ impl ClipPaintPropertyNode {
             }
             node.lifecycle.clear_changed(access, sequence_number);
             resolver
-                .transform(node.LocalTransformSpace())
+                .transform(node.LocalTransformSpace(access))
                 .ClearChangedToRootIn(access, resolver, sequence_number);
-            current = node.parent.as_ref().map(|parent| &**resolver.clip(parent));
+            current = node.Parent(access).map(|parent| &**resolver.clip(parent));
         }
     }
 
     /// Source: clip_paint_property_node.cc:83-114.
     pub fn ToJSON(&self) -> serde_json::Value {
+        crate::property_cell::with_access(|access| self.ToJSONIn(access))
+    }
+    fn ToJSONIn(&self, access: &PropertyAccess) -> serde_json::Value {
         fn rect_string(rect: Option<PaintRect>) -> String {
             let rect = rect.unwrap_or_else(|| {
                 let infinite = foundation::infinite_int_rect::InfiniteIntRect();
@@ -821,41 +894,41 @@ impl ClipPaintPropertyNode {
             format!("{},{} {}x{}", rect.x, rect.y, rect.width, rect.height)
         }
 
-        let mut json = PaintPropertyNodeToJSON(self.parent.as_ref(), &self.lifecycle);
+        let mut json = PaintPropertyNodeToJSON(self.Parent(access), &self.lifecycle);
         json.insert(
             "localTransformSpace".into(),
-            serde_json::Value::String(format!("{:p}", Arc::as_ptr(&self.local_transform_space))),
+            serde_json::Value::String(format!("{:p}", Arc::as_ptr(self.LocalTransformSpace(access)))),
         );
         json.insert(
             "rect".into(),
-            serde_json::Value::String(rect_string(self.PaintClipRect())),
+            serde_json::Value::String(rect_string(self.PaintClipRect(access))),
         );
-        if let Some(excluding) = self.layout_clip_rects.excluding_overlay {
-            if excluding != self.layout_clip_rects.expanded {
+        if let Some(excluding) = self.state(access).layout_clip_rects.excluding_overlay {
+            if excluding != self.state(access).layout_clip_rects.expanded {
                 json.insert(
                     "rectExcludingOverlayScrollbars".into(),
                     serde_json::Value::String(rect_string(excluding.rect)),
                 );
             }
         }
-        if self.ClipPath().is_some() {
+        if self.ClipPath(access).is_some() {
             json.insert("hasClipPath".into(), serde_json::Value::Bool(true));
         }
-        if self.IsForCompositeClipPathAnimation() {
+        if self.IsForCompositeClipPathAnimation(access) {
             json.insert(
                 "isForCompositeClipPathAnimation".into(),
                 serde_json::Value::Bool(true),
             );
             json.insert(
                 "expandedLayoutClipRect".into(),
-                serde_json::Value::String(rect_string(self.LayoutClipRect().rect)),
+                serde_json::Value::String(rect_string(self.LayoutClipRect(access).rect)),
             );
             json.insert(
                 "preciseLayoutClipRect".into(),
-                serde_json::Value::String(rect_string(self.PreciseLayoutClipRect().rect)),
+                serde_json::Value::String(rect_string(self.PreciseLayoutClipRect(access).rect)),
             );
         }
-        if let Some(filter) = self.PixelMovingFilter() {
+        if let Some(filter) = self.PixelMovingFilter(access) {
             json.insert(
                 "pixelMovingFilter".into(),
                 serde_json::Value::String(format!("{:p}", Arc::as_ptr(filter))),
@@ -1899,19 +1972,20 @@ impl PropertyTreeState {
                 direct_compositing_reasons: Default::default(),
             });
             let clip = Arc::new(
-                ClipPaintPropertyNode {
-                    geometry_mapper_cache: Default::default(),
-                    layout_clip_rects: Default::default(),
-                    lifecycle: PaintPropertyNodeLifecycle::root(),
-                    id: 0,
-                    parent: None,
-                    local_transform_space: transform.clone(),
-                    rect: None,
-                    radii: PaintCornerRadii::default(),
-                    clip_path: None,
-                    clip_path_error: None,
-                    pixel_moving_filter: None,
-                }
+                ClipPaintPropertyNode::new(
+                    PaintPropertyNodeLifecycle::root(),
+                    0,
+                    ClipPaintPropertyNodeState {
+                        layout_clip_rects: Default::default(),
+                        parent: None,
+                        local_transform_space: transform.clone(),
+                        rect: None,
+                        radii: PaintCornerRadii::default(),
+                        clip_path: None,
+                        clip_path_error: None,
+                        pixel_moving_filter: None,
+                    },
+                )
                 .with_layout_clips(),
             );
             let effect = Arc::new(
@@ -2204,13 +2278,21 @@ impl PaintPropertyTrees {
             return;
         }
         self.insert_clip(node.clone());
-        if let Some(parent) = &node.parent {
+        let (parent, filter, transform) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (
+                state.parent.clone(),
+                state.pixel_moving_filter.clone(),
+                state.local_transform_space.clone(),
+            )
+        });
+        if let Some(parent) = &parent {
             self.add_clip(parent);
         }
-        if let Some(filter) = &node.pixel_moving_filter {
+        if let Some(filter) = &filter {
             self.add_effect(filter);
         }
-        self.add_transform(&node.local_transform_space);
+        self.add_transform(&transform);
     }
     fn add_effect(&mut self, node: &Arc<EffectPaintPropertyNode>) {
         if self.effect_for(node).is_some() {
@@ -2741,15 +2823,19 @@ impl FrozenPropertyTrees {
         if !Self::admit(node, self.clips.by_id(node.id), seen, coverage) {
             return;
         }
-        if let Some(parent) = &node.parent {
+        let (parent, transform, filter) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (
+                state.parent.clone(),
+                state.local_transform_space.clone(),
+                state.pixel_moving_filter.clone(),
+            )
+        });
+        if let Some(parent) = &parent {
             self.verify_clip(PropertyNodeResolver::clip(self, parent), seen, coverage);
         }
-        self.verify_transform(
-            PropertyNodeResolver::transform(self, &node.local_transform_space),
-            seen,
-            coverage,
-        );
-        if let Some(filter) = &node.pixel_moving_filter {
+        self.verify_transform(PropertyNodeResolver::transform(self, &transform), seen, coverage);
+        if let Some(filter) = &filter {
             self.verify_effect(PropertyNodeResolver::effect(self, filter), seen, coverage);
         }
     }
@@ -2861,9 +2947,15 @@ impl PaintPropertyNodeStore {
             (checked, unresolved)
         }
         let parts = [
-            count(&self.transforms, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
-            count(&self.clips, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
-            count(&self.effects, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+            count(&self.transforms, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
+            count(&self.clips, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
+            count(&self.effects, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
             count(&self.scrolls, |n| {
                 crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
             }),
@@ -3837,23 +3929,30 @@ impl ArtifactPropertyStateRebinder {
             .cloned()
             .unwrap_or_else(|| input.clone());
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
-        let parent = source.parent.as_ref().map(|parent| self.clip(parent));
-        let local_transform_space = self.RebindTransform(&source.local_transform_space);
-        let pixel_moving_filter = source
-            .pixel_moving_filter
-            .as_ref()
-            .map(|effect| self.effect(effect));
-        let node = if same_entity_option(&parent, &source.parent)
-            && same_entity(&local_transform_space, &source.local_transform_space)
-            && same_entity_option(&pixel_moving_filter, &source.pixel_moving_filter)
+        let (source_parent, source_transform, source_filter) =
+            crate::property_cell::with_access(|access| {
+                let state = source.state(access);
+                (
+                    state.parent.clone(),
+                    state.local_transform_space.clone(),
+                    state.pixel_moving_filter.clone(),
+                )
+            });
+        let parent = source_parent.as_ref().map(|parent| self.clip(parent));
+        let local_transform_space = self.RebindTransform(&source_transform);
+        let pixel_moving_filter = source_filter.as_ref().map(|effect| self.effect(effect));
+        let node = if same_entity_option(&parent, &source_parent)
+            && same_entity(&local_transform_space, &source_transform)
+            && same_entity_option(&pixel_moving_filter, &source_filter)
         {
             source
         } else {
             let mut node = (*source).clone();
             node.geometry_mapper_cache = Default::default();
-            node.parent = parent;
-            node.local_transform_space = local_transform_space;
-            node.pixel_moving_filter = pixel_moving_filter;
+            let state = node.state_mut();
+            state.parent = parent;
+            state.local_transform_space = local_transform_space;
+            state.pixel_moving_filter = pixel_moving_filter;
             Arc::new(node)
         };
         self.rebound_clips.insert(source_identity, node.clone());
@@ -4031,33 +4130,36 @@ impl RetainedScrollSnapshotRebinder {
         if let Some(node) = self.trees.clip_for(input) {
             return node.clone();
         }
-        let parent = input.parent.as_ref().map(|parent| self.clip(parent));
-        let transform = self.transform(&input.local_transform_space);
-        let filter = input
-            .pixel_moving_filter
-            .as_ref()
-            .map(|filter| self.effect(filter));
-        let node = if same_snapshot_option(&parent, &input.parent)
-            && Arc::ptr_eq(&transform, &input.local_transform_space)
-            && same_snapshot_option(&filter, &input.pixel_moving_filter)
+        let (input_parent, input_transform, input_filter) =
+            crate::property_cell::with_access(|access| {
+                let state = input.state(access);
+                (
+                    state.parent.clone(),
+                    state.local_transform_space.clone(),
+                    state.pixel_moving_filter.clone(),
+                )
+            });
+        let parent = input_parent.as_ref().map(|parent| self.clip(parent));
+        let transform = self.transform(&input_transform);
+        let filter = input_filter.as_ref().map(|filter| self.effect(filter));
+        let node = if same_snapshot_option(&parent, &input_parent)
+            && Arc::ptr_eq(&transform, &input_transform)
+            && same_snapshot_option(&filter, &input_filter)
             && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
                 == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
-            Arc::new(ClipPaintPropertyNode {
-                geometry_mapper_cache: Default::default(),
-                layout_clip_rects: input.layout_clip_rects,
-                lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
-                id: input.id,
-                parent,
-                local_transform_space: transform,
-                rect: input.rect,
-                radii: input.radii,
-                clip_path: input.clip_path.clone(),
-                clip_path_error: input.clip_path_error.clone(),
-                pixel_moving_filter: filter,
-            })
+            let mut node = ClipPaintPropertyNode::new(
+                input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
+                input.id,
+                crate::property_cell::with_access(|access| input.state(access).clone()),
+            );
+            let state = node.state_mut();
+            state.parent = parent;
+            state.local_transform_space = transform;
+            state.pixel_moving_filter = filter;
+            Arc::new(node)
         };
         self.trees.insert_clip(node.clone());
         node
@@ -4222,12 +4324,15 @@ impl TransformPaintPropertyNode {
 }
 impl ClipPaintPropertyNode {
     fn snapshot_parent_id(&self) -> u64 {
-        self.parent.as_ref().map_or(0, |parent| parent.id)
+        crate::property_cell::with_access(|access| self.Parent(access).map_or(0, |parent| parent.id))
     }
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_entity_option(&self.parent, &other.parent)
-            && same_entity(&self.local_transform_space, &other.local_transform_space)
-            && same_entity_option(&self.pixel_moving_filter, &other.pixel_moving_filter)
+        crate::property_cell::with_access(|access| {
+            let (this, other) = (self.state(access), other.state(access));
+            same_entity_option(&this.parent, &other.parent)
+                && same_entity(&this.local_transform_space, &other.local_transform_space)
+                && same_entity_option(&this.pixel_moving_filter, &other.pixel_moving_filter)
+        })
     }
 }
 impl EffectPaintPropertyNode {
@@ -4376,6 +4481,12 @@ fn transform_state_change(
 fn clip_state_change(
     a: &ClipPaintPropertyNode,
     b: &ClipPaintPropertyNode,
+) -> PaintPropertyChangeType {
+    crate::property_cell::with_access(|access| clip_node_state_change(a.state(access), b.state(access)))
+}
+fn clip_node_state_change(
+    a: &ClipPaintPropertyNodeState,
+    b: &ClipPaintPropertyNodeState,
 ) -> PaintPropertyChangeType {
     if same_optional(&a.parent, &b.parent, |n| &n.lifecycle)
         && a.local_transform_space
@@ -4770,9 +4881,12 @@ impl PropertyNodeUpdater<'_> {
             }
         }
         let mut node = (**input).clone();
-        node.parent = node.parent.as_ref().map(|p| self.clip(p));
-        node.local_transform_space = self.transform(&node.local_transform_space);
-        node.pixel_moving_filter = node.pixel_moving_filter.as_ref().map(|f| self.effect(f));
+        let parent = node.state_mut().parent.as_ref().map(|p| self.clip(p));
+        node.state_mut().parent = parent;
+        let transform = self.transform(&node.state_mut().local_transform_space);
+        node.state_mut().local_transform_space = transform;
+        let filter = node.state_mut().pixel_moving_filter.as_ref().map(|f| self.effect(f));
+        node.state_mut().pixel_moving_filter = filter;
         let node = update_snapshot!(self, node, key, old, clip_state_change, clips);
         if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
             self.store.intersection_observation_state =
@@ -5010,8 +5124,8 @@ mod retained_scroll_update_tests {
             let mut clip = (*root.clip).clone();
             clip.id = id;
             clip.lifecycle = lifecycle;
-            clip.parent = Some(root.clip.clone());
-            clip.local_transform_space = old_transform.clone();
+            clip.state_mut().parent = Some(root.clip.clone());
+            clip.state_mut().local_transform_space = old_transform.clone();
             Arc::new(clip)
         };
         let old_output_clip = make_clip(22, Default::default());
@@ -5020,13 +5134,13 @@ mod retained_scroll_update_tests {
         current_output_clip.lifecycle = old_output_clip
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        current_output_clip.local_transform_space = current_transform.clone();
+        current_output_clip.state_mut().local_transform_space = current_transform.clone();
         let current_output_clip = Arc::new(current_output_clip);
         let mut current_backdrop_clip = (*old_backdrop_clip).clone();
         current_backdrop_clip.lifecycle = old_backdrop_clip
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        current_backdrop_clip.local_transform_space = current_transform.clone();
+        current_backdrop_clip.state_mut().local_transform_space = current_transform.clone();
         let current_backdrop_clip = Arc::new(current_backdrop_clip);
         let old_parent = child_effect(24, root.effect.clone(), old_transform.clone());
         let mut current_parent = (*old_parent).clone();
@@ -5418,7 +5532,7 @@ mod retained_scroll_update_tests {
     fn clip_node_owns_source_clip_queries_and_json() {
         let root = PropertyTreeState::default();
         let mut clip = (*root.clip).clone();
-        clip.rect = Some(PaintRect {
+        clip.state_mut().rect = Some(PaintRect {
             x: 1.0,
             y: 2.0,
             width: 30.0,
@@ -5437,20 +5551,22 @@ mod retained_scroll_update_tests {
             height: 120.0,
         };
         clip = clip.with_layout_clip_values(Some(precise), Some(expanded), None);
-        clip.pixel_moving_filter = Some(root.effect.clone());
+        clip.state_mut().pixel_moving_filter = Some(root.effect.clone());
 
-        assert_eq!(clip.PaintClipRect(), clip.rect);
-        assert_eq!(clip.PreciseLayoutClipRect().rect, Some(precise));
-        assert_eq!(clip.LayoutClipRect().rect, Some(expanded));
+        crate::property_cell::with_access(|a| {
+        assert_eq!(clip.PaintClipRect(a), clip.state(a).rect);
+        assert_eq!(clip.PreciseLayoutClipRect(a).rect, Some(precise));
+        assert_eq!(clip.LayoutClipRect(a).rect, Some(expanded));
         assert_eq!(
-            clip.LayoutClipRectExcludingOverlayScrollbars().rect,
+            clip.LayoutClipRectExcludingOverlayScrollbars(a).rect,
             Some(precise)
         );
-        assert!(clip.IsForCompositeClipPathAnimation());
-        assert!(clip.ClipPathEquals(None));
+        assert!(clip.IsForCompositeClipPathAnimation(a));
+        assert!(clip.ClipPathEquals(a, None));
         assert!(clip
-            .PixelMovingFilter()
+            .PixelMovingFilter(a)
             .is_some_and(|filter| Arc::ptr_eq(filter, &root.effect)));
+        });
 
         let json = clip.ToJSON();
         assert_eq!(json["rect"], "1,2 30x40");
@@ -5463,7 +5579,7 @@ mod retained_scroll_update_tests {
         resident.id = 73;
         resident.lifecycle = PaintPropertyNodeLifecycle::root();
         let mut next = resident.clone();
-        next.rect = Some(PaintRect {
+        next.state_mut().rect = Some(PaintRect {
             x: 5.0,
             y: 6.0,
             width: 7.0,
@@ -5475,11 +5591,12 @@ mod retained_scroll_update_tests {
         );
         assert_eq!(resident.id, 73);
         assert_eq!(resident.lifecycle.revision, 1);
-        assert_eq!(resident.PaintClipRect().expect("updated clip rect").x, 5.0);
-        assert!(resident
-            .parent
-            .as_ref()
-            .is_some_and(|parent| Arc::ptr_eq(parent, &root.clip)));
+        crate::property_cell::with_access(|a| {
+            assert_eq!(resident.PaintClipRect(a).expect("updated clip rect").x, 5.0);
+            assert!(resident
+                .Parent(a)
+                .is_some_and(|parent| Arc::ptr_eq(parent, &root.clip)));
+        });
     }
 
     #[test]
@@ -5860,11 +5977,8 @@ mod retained_scroll_update_tests {
     fn clearing_resident_states_includes_nodes_without_source_owner_slots() {
         let root = PropertyTreeState::default();
         let clip = Arc::new(
-            ClipPaintPropertyNode {
-                geometry_mapper_cache: Default::default(),
+            ClipPaintPropertyNode::new(Default::default(), 17, ClipPaintPropertyNodeState {
                 layout_clip_rects: Default::default(),
-                lifecycle: Default::default(),
-                id: 17,
                 parent: Some(root.clip.clone()),
                 local_transform_space: root.transform.clone(),
                 rect: Some(PaintRect {
@@ -5877,7 +5991,7 @@ mod retained_scroll_update_tests {
                 clip_path: None,
                 clip_path_error: None,
                 pixel_moving_filter: None,
-            }
+            })
             .with_layout_clips(),
         );
         let mut state = PropertyTreeState { clip, ..root };
@@ -5893,7 +6007,9 @@ mod retained_scroll_update_tests {
         assert!(!trees.clips.contains_key(&state.clip.id));
         trees.clear_state_change_markers(&mut state);
         assert_eq!(state.clip.id, previous.clip.id);
-        assert_eq!(state.clip.rect, previous.clip.rect);
+        crate::property_cell::with_access(|a| {
+            assert_eq!(state.clip.state(a).rect, previous.clip.state(a).rect)
+        });
         assert!(state.clip.lifecycle.same_node(&previous.clip.lifecycle));
         assert_eq!(
             state.clip.lifecycle.revision,
@@ -5968,19 +6084,20 @@ mod retained_scroll_update_tests {
             direct_compositing_reasons: Default::default(),
         });
         let clip = Arc::new(
-            ClipPaintPropertyNode {
-                geometry_mapper_cache: Default::default(),
-                layout_clip_rects: Default::default(),
-                id: 4,
-                lifecycle: clean().updated(PaintPropertyChangeType::ChangedOnlyValues),
-                parent: Some(root.clip.clone()),
-                local_transform_space: child.clone(),
-                rect: None,
-                radii: PaintCornerRadii::default(),
-                clip_path: None,
-                clip_path_error: None,
-                pixel_moving_filter: None,
-            }
+            ClipPaintPropertyNode::new(
+                clean().updated(PaintPropertyChangeType::ChangedOnlyValues),
+                4,
+                ClipPaintPropertyNodeState {
+                    layout_clip_rects: Default::default(),
+                    parent: Some(root.clip.clone()),
+                    local_transform_space: child.clone(),
+                    rect: None,
+                    radii: PaintCornerRadii::default(),
+                    clip_path: None,
+                    clip_path_error: None,
+                    pixel_moving_filter: None,
+                },
+            )
             .with_layout_clips(),
         );
         let effect = Arc::new(
@@ -6105,10 +6222,10 @@ mod retained_scroll_update_tests {
             trees.transforms[&3].parent.as_ref().unwrap(),
             &trees.transforms[&2]
         ));
-        assert!(Arc::ptr_eq(
-            &trees.clips[&4].local_transform_space,
+        assert!(crate::property_cell::with_access(|access| Arc::ptr_eq(
+            trees.clips[&4].LocalTransformSpace(access),
             &trees.transforms[&3]
-        ));
+        )));
         assert!(Arc::ptr_eq(
             trees.effects[&5].output_clip.as_ref().unwrap(),
             &trees.clips[&4]

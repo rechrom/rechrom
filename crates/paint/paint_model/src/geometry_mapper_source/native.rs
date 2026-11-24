@@ -5,6 +5,7 @@ use crate::{
     paint_property_tree,
     source_geometry::{Rect, RectF, ToEnclosingRect, Vector2dF},
 };
+use crate::property_cell::with_access as read;
 use std::sync::Arc;
 
 /// The published tree a handle resolves its links through; None follows the
@@ -282,7 +283,7 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> NativeTransformNode {
         NativeTransformNode::from_arc_in(
-            resolve_transform(&self.trees, clip.LocalTransformSpace()).clone(),
+            read(|a| resolve_transform(&self.trees, clip.LocalTransformSpace(a)).clone()),
             self.trees.clone(),
         )
     }
@@ -290,9 +291,7 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
-        clip.parent
-            .as_ref()
-            .map(|parent| resolve_clip(&self.trees, parent).clone())
+        read(|a| clip.Parent(a).map(|parent| resolve_clip(&self.trees, parent).clone()))
     }
     fn ClipLowestCommonAncestor(
         &self,
@@ -305,24 +304,24 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(c.LayoutClipRectExcludingOverlayScrollbars())
+        clip_rect(read(|a| c.LayoutClipRectExcludingOverlayScrollbars(a)))
     }
     fn PreciseLayoutClipRect(
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(c.PreciseLayoutClipRect())
+        clip_rect(read(|a| c.PreciseLayoutClipRect(a)))
     }
     fn LayoutClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> FloatClipRect {
-        clip_rect(c.LayoutClipRect())
+        clip_rect(read(|a| c.LayoutClipRect(a)))
     }
     fn PaintClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> RectF {
-        c.PaintClipRect()
+        read(|a| c.PaintClipRect(a))
             .map(float_rect)
             .unwrap_or_else(|| *FloatClipRect::default().Rect())
     }
     fn ClipHasPath(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> bool {
-        c.ClipPath().is_some()
+        read(|a| c.ClipPath(a).is_some())
     }
     // Source: clip_paint_property_node.h:188-217; this is an exact field query,
     // not a geometric inference about whether a CSS animation is running.
@@ -330,15 +329,17 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> bool {
-        c.IsForCompositeClipPathAnimation()
+        read(|a| c.IsForCompositeClipPathAnimation(a))
     }
     fn PixelMovingFilter(
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> NativeEffectNode {
         NativeEffectNode::from_arc_in(
-            resolve_effect(&self.trees, c.PixelMovingFilter().expect("source PixelMovingFilter"))
-                .clone(),
+            read(|a| {
+                resolve_effect(&self.trees, c.PixelMovingFilter(a).expect("source PixelMovingFilter"))
+                    .clone()
+            }),
             self.trees.clone(),
         )
     }

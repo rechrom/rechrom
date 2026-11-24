@@ -338,19 +338,26 @@ fn clip_output(
     if let Some(bounds) = cache.get(&clip.id) {
         return Some(*bounds);
     }
-    if clip.pixel_moving_filter.is_some() {
+    let (has_filter, parent, rect, transform, has_path) =
+        paint_model::property_cell::with_access(|access| {
+            let state = clip.state(access);
+            (
+                state.pixel_moving_filter.is_some(),
+                state.parent.clone(),
+                state.rect,
+                state.local_transform_space.clone(),
+                state.clip_path.is_some(),
+            )
+        });
+    if has_filter {
         return None;
     }
-    let mut output = match &clip.parent {
+    let mut output = match &parent {
         Some(parent) => clip_output(resolver, resolver.clip(parent), viewport, worlds, cache)?,
         None => ClipOutput::default(),
     };
-    if let Some(rect) = clip.rect {
-        let world = world_transform(
-            resolver,
-            resolver.transform(&clip.local_transform_space),
-            worlds,
-        );
+    if let Some(rect) = rect {
+        let world = world_transform(resolver, resolver.transform(&transform), worlds);
         let rect = MapRectToRoot(rect, &[world])?;
         output.visible = Some(
             output
@@ -366,7 +373,7 @@ fn clip_output(
                     .map_or(rect, |parent| intersection(parent, rect)),
             );
         }
-    } else if clip.clip_path.is_some() {
+    } else if has_path {
         return None;
     }
     cache.insert(clip.id, output);

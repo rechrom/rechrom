@@ -231,7 +231,8 @@ pub trait LayerTransformNode: TransformPaintPropertyNode {
     fn Identity(&self) -> usize;
 }
 pub trait LayerRadiusClip {
-    fn LocalTransformSpace(&self) -> &dyn LayerTransformNode;
+    /// Owned: the clip state is read under the document sequence proof.
+    fn LocalTransformSpace(&self) -> std::sync::Arc<paint::paint_property_tree::TransformPaintPropertyNode>;
     fn IntersectsQuad(&self, quad: &gfx::QuadF) -> bool;
 }
 pub trait LayerPaintProperties {
@@ -1461,7 +1462,7 @@ pub fn HitTestClippedOutByBorderRadius<R: LayerHitTestResult>(
         let mut hit_rect = gfx::RectF::from(*location.BoundingBox());
         let paint_offset = gfx::Vector2dF::from(data.PaintOffset());
         hit_rect.Offset(paint_offset.x(), paint_offset.y());
-        let projection = layer.Projection(transform, clip.LocalTransformSpace());
+        let projection = layer.Projection(transform, &clip.LocalTransformSpace());
         let quad = gfx::QuadF::from(hit_rect);
         let mapped = gfx::QuadF::new(
             projection.MapPoint(*quad.p1()),

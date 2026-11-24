@@ -63,10 +63,7 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
         self.node().parent.is_none()
     }
     fn UnaliasedParent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|n| self.link_same(n))
+        self.parent_handle()
     }
     fn ParentUnalias(&self) -> Self {
         self.UnaliasedParent().expect("source parent")
@@ -363,7 +360,7 @@ impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<
         paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, sequence, id))
     }
     fn IsRoot(&self) -> bool {
-        self.node().parent.is_none()
+        read(|a| self.node().Parent(a).is_none())
     }
     fn Identity(&self) -> usize {
         Arc::as_ptr(&self.node().lifecycle.identity) as usize
@@ -372,10 +369,10 @@ impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<
         self.parent_handle().expect("source clip parent")
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        self.link_transform(self.node().LocalTransformSpace())
+        read(|a| self.link_transform(self.node().LocalTransformSpace(a)))
     }
     fn PaintClipRectRect(&self) -> RectF {
-        self.node().PaintClipRect().map(|r|RectF::new(r.x as f32,r.y as f32,r.width as f32,r.height as f32)).unwrap_or_else(||*crate::third_party::blink::renderer::platform::graphics::paint::float_clip_rect::FloatClipRect::default().Rect())
+        read(|a| self.node().PaintClipRect(a)).map(|r|RectF::new(r.x as f32,r.y as f32,r.width as f32,r.height as f32)).unwrap_or_else(||*crate::third_party::blink::renderer::platform::graphics::paint::float_clip_rect::FloatClipRect::default().Rect())
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
         self.lowest_common_ancestor(other)
@@ -385,26 +382,24 @@ impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<
         self.is_ancestor_of(other)
     }
     fn PaintClipRectIsRounded(&self) -> bool {
-        self.node().PaintClipRadii().HasRadius()
+        read(|a| self.node().PaintClipRadii(a)).HasRadius()
     }
     fn PaintClipRRect(&self) -> Option<RRectF> {
-        self.node().rect.map(|_| RRectF {
+        read(|a| self.node().PaintClipRect(a)).map(|_| RRectF {
             rect: self.PaintClipRectRect(),
             corner_radii: [
-                self.node().PaintClipRadii().top_left,
-                self.node().PaintClipRadii().top_right,
-                self.node().PaintClipRadii().bottom_right,
-                self.node().PaintClipRadii().bottom_left,
+                read(|a| self.node().PaintClipRadii(a)).top_left,
+                read(|a| self.node().PaintClipRadii(a)).top_right,
+                read(|a| self.node().PaintClipRadii(a)).bottom_right,
+                read(|a| self.node().PaintClipRadii(a)).bottom_left,
             ]
             .map(|r| Vector2dF::new(r.x as f32, r.y as f32)),
         })
     }
     fn HasClipPath(&self) -> bool {
-        self.node().ClipPath().is_some()
+        read(|a| self.node().ClipPath(a).is_some())
     }
     fn PixelMovingFilter(&self) -> Option<EffectNode<R>> {
-        self.node()
-            .PixelMovingFilter()
-            .map(|e| self.link_effect(e))
+        read(|a| self.node().PixelMovingFilter(a).map(|e| self.link_effect(e)))
     }
 }

@@ -38,10 +38,7 @@ impl<R: PaintSkiaBackend> TransformCacheNode for TransformNode<R> {
         self.node().IsIdentity()
     }
     fn Parent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| self.link_same(p))
+        self.parent_handle()
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
         self.node().RequiresCompositingForStickyPosition()

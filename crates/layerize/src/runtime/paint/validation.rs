@@ -341,18 +341,28 @@ fn ValidateArtifactGraph(
                 if !seen.insert((1, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if let Some(reason) = &node.clip_path_error {
+                let (error, parent, transform, effect) =
+                    paint_model::property_cell::with_access(|access| {
+                        let state = node.state(access);
+                        (
+                            state.clip_path_error.clone(),
+                            state.parent.clone(),
+                            state.local_transform_space.clone(),
+                            state.pixel_moving_filter.clone(),
+                        )
+                    });
+                if let Some(reason) = error {
                     return Err(PaintInputError::ClipPath {
                         node: node.clone(),
-                        reason: reason.clone(),
+                        reason,
                     });
                 }
-                if let Some(parent) = &node.parent {
-                    pending.push(Node::Clip(parent.clone()));
+                if let Some(parent) = parent {
+                    pending.push(Node::Clip(parent));
                 }
-                pending.push(Node::Transform(node.local_transform_space.clone()));
-                if let Some(effect) = &node.pixel_moving_filter {
-                    pending.push(Node::Effect(effect.clone()));
+                pending.push(Node::Transform(transform));
+                if let Some(effect) = effect {
+                    pending.push(Node::Effect(effect));
                 }
             }
             Node::Effect(node) => {

@@ -294,22 +294,19 @@ mod tests {
             clip: root.clip.clone(),
             effect: root.effect.clone(),
         };
-        let overflow_clip = Arc::new(
-            ClipPaintPropertyNode {
-                lifecycle: Default::default(),
-                id: 2,
-                parent: Some(root.clip.clone()),
-                local_transform_space: translated,
-                rect: Some(PaintRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 320.0,
-                    height: 52.0,
-                }),
-                ..(*root.clip).clone()
-            }
-            .with_layout_clips(),
-        );
+        let mut overflow_clip = (*root.clip).clone();
+        overflow_clip.lifecycle = Default::default();
+        overflow_clip.id = 2;
+        let state = overflow_clip.state_mut();
+        state.parent = Some(root.clip.clone());
+        state.local_transform_space = translated;
+        state.rect = Some(PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 52.0,
+        });
+        let overflow_clip = Arc::new(overflow_clip.with_layout_clips());
         let contents = PropertyTreeState {
             transform: border.transform.clone(),
             clip: overflow_clip,

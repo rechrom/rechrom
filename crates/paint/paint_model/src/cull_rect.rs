@@ -46,13 +46,17 @@ fn TransformIsAncestor(
     false
 }
 
-fn ClipIsAncestor(ancestor: &ClipPaintPropertyNode, descendant: &ClipPaintPropertyNode) -> bool {
+fn ClipIsAncestor(
+    access: &PropertyAccess,
+    ancestor: &ClipPaintPropertyNode,
+    descendant: &ClipPaintPropertyNode,
+) -> bool {
     let mut current = Some(descendant);
     while let Some(node) = current {
         if SameClip(node, ancestor) {
             return true;
         }
-        current = node.parent.as_deref();
+        current = node.Parent(access).map(|parent| &**parent);
     }
     false
 }
@@ -315,7 +319,7 @@ impl CullRect {
             return false;
         }
 
-        let abnormal_hierarchy = !ClipIsAncestor(&source.clip, &destination.clip)
+        let abnormal_hierarchy = !ClipIsAncestor(access, &source.clip, &destination.clip)
             || !TransformIsAncestor(&source.transform, &destination.transform);
         if abnormal_hierarchy {
             *self = Self::Infinite();
@@ -659,9 +663,9 @@ mod tests {
         let mut node = (**parent).clone();
         node.lifecycle = Default::default();
         node.id = id;
-        node.parent = Some(parent.clone());
-        node.local_transform_space = transform.clone();
-        node.rect = Some(rect);
+        node.state_mut().parent = Some(parent.clone());
+        node.state_mut().local_transform_space = transform.clone();
+        node.state_mut().rect = Some(rect);
         Arc::new(node.with_layout_clips())
     }
 

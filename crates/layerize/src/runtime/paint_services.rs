@@ -652,7 +652,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> crate::adapter::paint_art
         c: &paint::ClipNode<R>,
         previous: &Option<Arc<::paint::paint_clip_path::PaintClipPath>>,
     ) -> bool {
-        c.node().clip_path == *previous
+        paint_model::property_cell::with_access(|a| c.node().ClipPathEquals(a, previous.as_ref()))
     }
 }
 
