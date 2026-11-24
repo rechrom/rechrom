@@ -7,6 +7,26 @@ use interaction::adapter::page_pointer_scroll_controls::{
 use interaction::scroll::core::scroll::scrollbar::{ScrollbarGesture, ScrollbarThumbUse};
 use layout::mutation::{LayoutMutation, PointerMutation};
 use layout::scroll::{Scrollbar, NativePointerResizeArea};
+impl PageState {
+    /// The scrollbar has no resident composited PaintedScrollbarLayer:
+    /// Blink's ordinary targeted scrollbar paint invalidation, in the owning
+    /// frame, then the pending compositor scroll offsets of that main frame.
+    fn InvalidateCompositedScrollbarPaint(&self, element: foundation::CompositorElementId) {
+        let frames = self.local_frames.get().unwrap();
+        let requested_main_frame = frames.InvalidateCompositorScrollbarElement(element) || {
+            let target = self.layout_engine.borrow().CompositorScrollbarOwner(element);
+            let invalidated = target
+                .is_some_and(|target| self.document.borrow_mut().InvalidatePaintForNode(target));
+            if invalidated {
+                self.dirty.set(true);
+            }
+            invalidated
+        };
+        if requested_main_frame {
+            frames.CommitCompositorScrollOffsets();
+        }
+    }
+}
 struct OverlayTimer {
     generation: u64,
     token: foundation::popup_types::PopupTaskId,
@@ -202,21 +222,21 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
             )
         };
         if let Some(update) = update {
-            state
-                .pending_compositor_mutations
-                .borrow_mut()
-                .push(PageBrowserInput::Compositor(
-                    compositor::CompositorMutation::ScrollbarPaint(
-                        compositor::ScrollbarPaintMutation {
-                            element: compositor::adapter::input_types::ElementId::new(
-                                update.compositor_element_id.GetInternalValue(),
-                            ),
-                            opacity: update.painted_opacity,
-                            thumb_width: update.painted_thumb_width,
-                            needs_repaint: update.needs_repaint,
-                        },
-                    ),
+            // The composited scrollbar layer takes the values in this task
+            // (S1b-8d); without one, Blink's targeted scrollbar paint
+            // invalidation runs instead.
+            if !state.ApplyScrollbarPaint(
+                compositor::adapter::input_types::ElementId::new(
+                    update.compositor_element_id.GetInternalValue(),
+                ),
+                update.painted_opacity,
+                update.painted_thumb_width,
+                update.needs_repaint,
+            ) {
+                state.InvalidateCompositedScrollbarPaint(foundation::CompositorElementId::new(
+                    update.compositor_element_id.GetInternalValue(),
                 ));
+            }
             // Scrollbar visibility lives in the scroll property tree rather
             // than the painted layer snapshot. Admit only its native owner to
             // Paint; ordinary opacity/width animation stays compositor-direct.

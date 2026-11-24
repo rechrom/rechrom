@@ -3266,8 +3266,9 @@ fn send_page_compositor_continuations(
     // injected scrollbar gestures to that same sequenced ingress. Preserve
     // wheel acknowledgements and all Page-produced continuations in FIFO order
     // after the synchronous document transaction completes. Main-thread
-    // compositor mutations (LayerTreeHost, PAC direct updates, the main
-    // AnimationHost) apply to the main half on this thread.
+    // compositor mutations (LayerTreeHost setters, deferrals) apply to the
+    // main half on this thread; PAC direct updates and the main
+    // AnimationHost are called synchronously by the Page itself.
     page.ApplyPendingMainCompositorMutations()?;
     for disposition in page.TakeWheelDispositions()? {
         let _ = impl_sender.send(ImplCommand::WheelAck {

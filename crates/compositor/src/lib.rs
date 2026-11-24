@@ -50,5 +50,5 @@ pub use engine::{
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
     PresentationUnavailableReason, BeginMainFrameState, ImplToMainTask, MainFamily, MainFrameResult,
     MainLayerize, MainPropertyTreeFeatures, MainProxy, MainToImplTask, ProxyImplInit, CreateMainHalf,
-    ScrollPhase, ScrollSourceType, ScrollbarPaintMutation, TargetSnapAreaElementIds,
+    ScrollPhase, ScrollSourceType, TargetSnapAreaElementIds,
 };

@@ -137,6 +137,49 @@ impl PageDomainServices {
             .get()
             .is_some_and(|layerize| layerize.borrow().HasResidentPaintArtifact())
     }
+    /// PaintArtifactCompositor::DirectlyUpdateTransform /
+    /// DirectlyUpdateCompositedOpacityValue on the main half, synchronously
+    /// in the lifecycle task (paint_property_tree_builder.cc; PAC
+    /// paint_artifact_compositor.cc:1458-1469,1479-1495). Each accepted node
+    /// calls LayerTreeHost::SetNeedsCommit (property_tree_manager.cc:
+    /// 120-136,179-206), which inside ProxyMain::BeginMainFrame only raises
+    /// the final pipeline stage to COMMIT (proxy_main.cc:741-756), so this
+    /// main frame's own commit carries the values. `false` when a node was
+    /// rejected: the caller runs the full Paint, as Blink does.
+    pub(super) fn DirectlyUpdateCompositedAnimationProperties(
+        &self,
+        update: &paint::CompositedAnimationPropertyUpdate,
+    ) -> bool {
+        self.HasResidentPaintArtifact()
+            && self
+                .MainLayerize()
+                .borrow_mut()
+                .ApplyCompositedAnimationProperties(update)
+    }
+    /// cc::Animation::AddKeyframeModel / RemoveKeyframeModel on the main
+    /// AnimationHost (CompositorAnimations::StartAnimationOnCompositor and
+    /// CancelAnimationOnCompositor), then MutatorHostClient::
+    /// SetMutatorsNeedCommit -> LayerTreeHost::SetNeedsCommit; the
+    /// KeyframeModels reach the impl instance in the same commit as the
+    /// property-tree element ids (animation_host.cc:485-518). `false` when
+    /// the external runtime has not started the main half yet: as in Blink
+    /// without a compositor, the animation stays on the document thread.
+    pub(super) fn ApplySourcePropertyAnimation(
+        &self,
+        mutation: compositor::engine::PropertyAnimationMutation,
+    ) -> io::Result<bool> {
+        if self.external_presentation.get() {
+            if !self.HasMainCompositor() {
+                return Ok(false);
+            }
+        } else {
+            self.EnsureCompositor(None)?;
+        }
+        self.MainLayerize()
+            .borrow_mut()
+            .ApplySourcePropertyAnimation(mutation);
+        Ok(true)
+    }
     /// The layout zoom of the artifact last pushed to the main half (the
     /// impl side's InputRouter widget scale).
     pub(super) fn MainCompositorInputScale(&self) -> f64 {
@@ -332,8 +375,8 @@ impl PageDomainServices {
     }
 
     /// The main-thread compositor mutations
-    /// (`CompositorMutation::IsMainThreadMutation`): LayerTreeHost setters,
-    /// PaintArtifactCompositor direct updates and the main AnimationHost.
+    /// (`CompositorMutation::IsMainThreadMutation`): LayerTreeHost setters
+    /// and frame-lifecycle deferrals queued by input routing.
     pub(super) fn MutateMainCompositor(&self, mutation: CompositorMutation) -> io::Result<()> {
         use compositor::FrameLifecycleMutation;
         match mutation {
@@ -426,52 +469,36 @@ impl PageDomainServices {
                     }
                 }
             }
-            // PaintArtifactCompositor::DirectlyUpdate{Transform,Compositing}
-            // (paint_artifact_compositor.cc), then LayerTreeHost::
-            // SetNeedsCommit; the commit follows in the next BeginMainFrame.
-            CompositorMutation::CompositedAnimationProperties(update) => {
-                if !self.HasResidentPaintArtifact() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "composited animation requires a resident paint artifact",
-                    ));
-                }
-                if !self
-                    .MainLayerize()
-                    .borrow_mut()
-                    .ApplyCompositedAnimationProperties(&update)
-                {
-                    return Err(io::Error::other(
-                        "resident compositor property mapping is unavailable",
-                    ));
-                }
-                self.SetNeedsMainCompositorCommit();
-            }
-            CompositorMutation::ScrollbarPaint(mutation) => {
-                let applied = self.MainLayerize().borrow_mut().ApplyScrollbarPaintMutation(
-                    mutation.element,
-                    mutation.opacity,
-                    mutation.thumb_width,
-                    mutation.needs_repaint,
-                );
-                if !applied {
-                    self.main_compositor_effects.borrow_mut().push(
-                        CompositorMainThreadEffect::ScrollbarPaintFallback {
-                            element: mutation.element,
-                        },
-                    );
-                }
-            }
-            CompositorMutation::PropertyAnimation(mutation) => self
-                .MainLayerize()
-                .borrow_mut()
-                .ApplySourcePropertyAnimation(mutation),
-            CompositorMutation::ScrollAnimation(mutation) => self
-                .MainLayerize()
-                .borrow_mut()
-                .ApplySourceScrollAnimation(mutation),
         }
         Ok(())
+    }
+
+    /// Blink's live WebScrollbar values on the resident composited
+    /// PaintedScrollbarLayer (PaintArtifactCompositor's scrollbar layer for
+    /// `element`; scrollbar_display_item.h:93-106,
+    /// painted_scrollbar_layer.cc:185-283), synchronously on the main half;
+    /// the layer asks LayerTreeHost for a commit. `false` when the scrollbar
+    /// has no resident composited layer: the caller falls back to Blink's
+    /// ordinary targeted scrollbar paint invalidation.
+    pub(super) fn ApplyScrollbarPaint(
+        &self,
+        element: compositor::adapter::input_types::ElementId,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+    ) -> bool {
+        let applied = self.layerize.get().is_some_and(|layerize| {
+            layerize.borrow_mut().ApplyScrollbarPaintMutation(
+                element,
+                opacity,
+                thumb_width,
+                needs_repaint,
+            )
+        });
+        if applied {
+            self.main_compositor_mutated_outside_lifecycle.set(true);
+        }
+        applied
     }
 
     pub(super) fn ConvertPaintArtifactSubsetToRecord(

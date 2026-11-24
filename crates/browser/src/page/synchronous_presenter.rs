@@ -178,16 +178,24 @@ impl PageDomainServices {
         self.EnsureCompositor(None)?;
         if mutation.IsMainThreadMutation() {
             self.MutateMainCompositor(mutation)?;
-            let effects = self.TakeMainCompositorEffects();
-            if let Some(presenter) = self.synchronous_presenter.borrow_mut().as_mut() {
-                presenter.RunInProcessProxyTasks(self)?;
-            }
             return Ok(CompositorWheelResult {
-                effects,
+                effects: self.DidMutateMainCompositor()?,
                 ..Default::default()
             });
         }
         self.WithSynchronousPresenter(|presenter, main| presenter.WheelInput(main, mutation, false))
+    }
+
+    /// After synchronous main-half calls (LayerTreeHost, PAC direct
+    /// updates, the main AnimationHost) of the internal presenter: takes the
+    /// main-half effects, then runs the in-process Proxy tasks they posted
+    /// (SetNeedsCommitOnImpl, ...) like SingleThreadProxy.
+    pub(super) fn DidMutateMainCompositor(&self) -> io::Result<Vec<CompositorMainThreadEffect>> {
+        let effects = self.TakeMainCompositorEffects();
+        if let Some(presenter) = self.synchronous_presenter.borrow_mut().as_mut() {
+            presenter.RunInProcessProxyTasks(self)?;
+        }
+        Ok(effects)
     }
 
     /// The internal presenter's synchronous composite

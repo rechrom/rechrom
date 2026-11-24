@@ -246,29 +246,14 @@ pub enum CompositorInput {
     },
 }
 
-/// Blink's live WebScrollbar values needed by the resident composited
-/// PaintedScrollbarLayer. The producer identity stays an ElementId; no Layout
-/// or Paint owner crosses the compositor boundary.
-#[derive(Clone, Copy, Debug)]
-pub struct ScrollbarPaintMutation {
-    pub element: ElementId,
-    pub opacity: f32,
-    pub thumb_width: i32,
-    pub needs_repaint: bool,
-}
-/// Ordered Page-to-compositor commands; curves retain the canonical shared
-/// value type while raw input keeps its original Copy event semantics.
+/// Ordered Page-to-compositor commands; raw input keeps its original Copy
+/// event semantics. PAC direct property and scrollbar-layer updates and the
+/// main AnimationHost's KeyframeModels are synchronous calls on the Page's
+/// own LayerizeEngine (S1b-8), not mutations.
 #[derive(Clone, Debug)]
 pub enum CompositorMutation {
     FrameLifecycle(FrameLifecycleMutation),
     Input(CompositorInput),
-    /// Blink's deferred transform/opacity property-node update. The values
-    /// retain Paint's canonical node identities and update the resident PAC;
-    /// no replacement PaintArtifact crosses this boundary.
-    CompositedAnimationProperties(paint::CompositedAnimationPropertyUpdate),
-    ScrollbarPaint(ScrollbarPaintMutation),
-    PropertyAnimation(compositor_animation::compositor_mutation::PropertyAnimationMutation),
-    ScrollAnimation(scroll_animation::compositor_mutation::ScrollAnimationMutation),
 }
 /// A backend can acknowledge a buffer without knowing a display time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -368,11 +353,6 @@ pub enum CompositorMainThreadEffect {
     ScrollbarsHiddenChanged {
         element: ElementId,
         hidden: bool,
-    },
-    /// The scrollbar did not have a resident composited layer. Blink falls
-    /// back to its ordinary targeted scrollbar paint invalidation.
-    ScrollbarPaintFallback {
-        element: ElementId,
     },
 }
 
@@ -766,16 +746,12 @@ fn mutation_is_main_input(input: &CompositorInput) -> bool {
     )
 }
 impl CompositorMutation {
-    /// The mutation targets the main LayerTreeHost, PaintArtifactCompositor
-    /// or main AnimationHost (main thread), not InputHandlerProxy (impl).
+    /// The mutation targets the main LayerTreeHost or ProxyMain (main
+    /// thread), not InputHandlerProxy (impl).
     pub fn IsMainThreadMutation(&self) -> bool {
         match self {
             Self::Input(input) => mutation_is_main_input(input),
-            Self::FrameLifecycle(_)
-            | Self::CompositedAnimationProperties(_)
-            | Self::ScrollbarPaint(_)
-            | Self::PropertyAnimation(_)
-            | Self::ScrollAnimation(_) => true,
+            Self::FrameLifecycle(_) => true,
         }
     }
 }

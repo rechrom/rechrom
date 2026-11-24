@@ -544,34 +544,6 @@ impl Page {
                         requested_main_frame = true;
                     }
                 }
-                CompositorMainThreadEffect::ScrollbarPaintFallback { element } => {
-                    let native_element =
-                        foundation::CompositorElementId::new(element.GetInternalValue());
-                    if self
-                        .state
-                        .local_frames
-                        .get()
-                        .unwrap()
-                        .InvalidateCompositorScrollbarElement(native_element)
-                    {
-                        requested_main_frame = true;
-                        continue;
-                    }
-                    let target = self
-                        .state
-                        .layout_engine
-                        .borrow()
-                        .CompositorScrollbarOwner(native_element);
-                    if target.is_some_and(|target| {
-                        self.state
-                            .document
-                            .borrow_mut()
-                            .InvalidatePaintForNode(target)
-                    }) {
-                        self.state.dirty.set(true);
-                        requested_main_frame = true;
-                    }
-                }
                 _ => {}
             }
         }
@@ -804,6 +776,20 @@ impl Page {
             self.PresentCompositorOnlyFrame();
         }
         Ok(())
+    }
+    /// The tail of synchronous main-half calls made by the Page (PAC direct
+    /// updates, main AnimationHost KeyframeModels, scrollbar layers). The
+    /// internal presenter runs the in-process Proxy tasks they posted and
+    /// the Page applies the main-half effects, in ContinueCompositorMutation's
+    /// order. The external runtime's ProxyMain posts to the compositor thread
+    /// itself; its effects are taken after the lifecycle
+    /// (`ApplyPendingMainCompositorMutations`).
+    pub(super) fn DidMutateMainCompositor(&mut self) -> io::Result<()> {
+        if self.external_compositor {
+            return Ok(());
+        }
+        let effects = self.state.DidMutateMainCompositor()?;
+        self.ApplyCompositorWheelEffects(effects)
     }
     pub fn TakePendingBrowserInputs(&self) -> Vec<PageBrowserInput> {
         std::mem::take(&mut *self.state.pending_compositor_mutations.borrow_mut())
