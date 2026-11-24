@@ -231,14 +231,17 @@ impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         state.effect_.clone()
     }
     fn ParentEffect(&self, e: &Self::Effect) -> Option<Self::Effect> {
-        e.node().parent.as_ref().map(|parent| e.link_same(parent))
+        e.parent_handle()
     }
     fn HasReferenceFilter(&self, e: &Self::Effect) -> bool {
-        e.node()
-            .filters
-            .canonical()
-            .expect("validated native filters")
-            .HasReferenceFilter()
+        super::read(|a| {
+            e.node()
+                .state(a)
+                .filters
+                .canonical()
+                .expect("validated native filters")
+                .HasReferenceFilter()
+        })
     }
     fn ChunkPropertiesChangedOnlyComposited(
         &self,
@@ -290,15 +293,16 @@ impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         a.as_source().ApproximatelyEqual(b.as_source(), t, o, o)
     }
     fn BackdropFilterBounds(&self, chunk: &PaintChunk) -> Option<RectF> {
-        let effect = &chunk.properties.effect;
-        if effect.backdrop_filters.is_empty() {
-            return None;
-        }
-        let r = effect
-            .backdrop_filter_bounds
-            .as_ref()
-            .expect("producer BackdropFilterInfo bounds")
-            .bounds();
+        let r = super::read(|a| {
+            let effect = chunk.properties.effect.state(a);
+            (!effect.backdrop_filters.is_empty()).then(|| {
+                effect
+                    .backdrop_filter_bounds
+                    .as_ref()
+                    .expect("producer BackdropFilterInfo bounds")
+                    .bounds()
+            })
+        })?;
         Some(RectF::new(
             r.x as f32,
             r.y as f32,

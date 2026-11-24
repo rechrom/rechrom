@@ -29,22 +29,25 @@ impl PaintRecording {
             .as_ref()
             .map_or(1.0, |r| r.layout_zoom_factor);
         Some(self.chunks.iter().flat_map(move |chunk| {
-            let mut transform = Some(chunk.properties.transform.as_ref());
-            let mut root_scrolling = false;
-            while let Some(node) = transform {
-                if viewport
-                    .layout_scroll_translation
-                    .as_ref()
-                    .is_some_and(|root| root.lifecycle.same_node(&node.lifecycle))
-                {
-                    root_scrolling = true;
-                    break;
+            let root_scrolling = paint_model::property_cell::with_access(|access| {
+                let mut transform = Some(chunk.properties.transform.as_ref());
+                while let Some(node) = transform {
+                    if viewport
+                        .layout_scroll_translation
+                        .as_ref()
+                        .is_some_and(|root| root.lifecycle.same_node(&node.lifecycle))
+                    {
+                        return true;
+                    }
+                    transform = node.Parent(access).map(|parent| {
+                        &**paint_model::paint_property_tree::PropertyNodeResolver::transform(
+                            &chunk.property_trees.0,
+                            parent,
+                        )
+                    });
                 }
-                transform = node
-                    .parent
-                    .as_ref()
-                    .map(|parent| &**paint_model::paint_property_tree::PropertyNodeResolver::transform(&chunk.property_trees.0, parent));
-            }
+                false
+            });
             // Chromium maps hit-test regions into the scrolling layer before
             // applying its viewport clip. Keep that stationary outer clip out
             // of a region which the compositor will translate on impl scroll;
@@ -54,8 +57,11 @@ impl PaintRecording {
                     clip: viewport
                         .layout_scroll_translation
                         .as_ref()
-                        .and_then(|node| node.scroll.as_ref())
-                        .and_then(|scroll| scroll.overflow_clip.clone())
+                        .and_then(|node| {
+                            paint_model::property_cell::with_access(|access| {
+                                node.ScrollNode(access)?.OverflowClipNode(access).cloned()
+                            })
+                        })
                         .unwrap_or_else(|| viewport.viewport_clip.clone()),
                     ..root.clone()
                 }
@@ -107,8 +113,8 @@ mod tests {
         let root = PropertyTreeState::Root();
         let mut viewport_clip = root.clip.as_ref().clone();
         viewport_clip.lifecycle = PaintPropertyNodeLifecycle::default();
-        viewport_clip.parent = Some(root.clip.clone());
-        viewport_clip.rect = Some(PaintRect {
+        viewport_clip.state_mut().parent = Some(root.clip.clone());
+        viewport_clip.state_mut().rect = Some(PaintRect {
             x: 0.0,
             y: 0.0,
             width: 100.0,
@@ -120,14 +126,14 @@ mod tests {
         scroll.parent = Some(root.transform.clone());
         scroll.matrix = TranslationTransform(0.0, -20.0);
         let mut scroll_node = scroll.scroll.as_ref().unwrap().as_ref().clone();
-        scroll_node.overflow_clip = Some(viewport_clip.clone());
+        scroll_node.state_mut().overflow_clip = Some(viewport_clip.clone());
         scroll.scroll = Some(Arc::new(scroll_node));
         let scroll = Arc::new(scroll);
         let mut clip = root.clip.as_ref().clone();
         clip.lifecycle = PaintPropertyNodeLifecycle::default();
-        clip.parent = Some(viewport_clip.clone());
-        clip.local_transform_space = scroll.clone();
-        clip.rect = Some(PaintRect {
+        clip.state_mut().parent = Some(viewport_clip.clone());
+        clip.state_mut().local_transform_space = scroll.clone();
+        clip.state_mut().rect = Some(PaintRect {
             x: 0.0,
             y: 0.0,
             width: 20.0,

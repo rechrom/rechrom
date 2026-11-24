@@ -355,7 +355,7 @@ impl NativeGeometryMapperTransformCache {
                 }
             }
         });
-        if self.plane_root(&owner).parent.is_none() {
+        if crate::property_cell::with_access(|access| self.plane_root(&owner).Parent(access).is_none()) {
             self.screen_transform_ = None;
             self.screen_transform_updated_ = true;
         } else {
@@ -369,7 +369,9 @@ impl NativeGeometryMapperTransformCache {
             return;
         }
         self.screen_transform_updated_ = true;
-        debug_assert!(!self.plane_root(&node.NodeArc()).parent.is_none());
+        debug_assert!(!crate::property_cell::with_access(|access| {
+            self.plane_root(&node.NodeArc()).Parent(access).is_none()
+        }));
         debug_assert!(!node.IsRoot());
         let parent_node = node.Parent().expect("source parent_node");
         WithTransformCache(&parent_node, |parent| {

@@ -52,18 +52,18 @@ fn nearest_composited_scroll_translation<R: PaintSkiaBackend>(
 }
 
 fn requires_compositing_for_fixed_position_only<R>(node: &TransformNode<R>) -> bool {
-    node.node().RequiresCompositingForFixedPositionOnly()
+    super::read(|a| node.node().RequiresCompositingForFixedPositionOnly(a))
 }
 
 fn requires_compositing_for_sticky_position_only<R>(node: &TransformNode<R>) -> bool {
-    node.node().RequiresCompositingForStickyPositionOnly()
+    super::read(|a| node.node().RequiresCompositingForStickyPositionOnly(a))
 }
 
 fn can_merge_for_fixed_position<R: PaintSkiaBackend>(
     first: &TransformNode<R>,
     second: &TransformNode<R>,
 ) -> bool {
-    first.node().CanMergeForFixedPosition(second.node())
+    super::read(|a| first.node().CanMergeForFixedPosition(a, second.node()))
 }
 
 fn source_rect(value: paint::paint_engine::PaintRect) -> Rect {
@@ -110,11 +110,13 @@ fn can_merge_for_sticky_position<R: PaintSkiaBackend>(
     };
 
     let scroll_translation = first.PropertyTreeNearestScrollTranslationNode();
-    let scroll_node = scroll_translation
-        .node()
-        .scroll
-        .as_ref()
-        .expect("source sticky nearest scroll translation");
+    let scroll_node = super::read(|a| {
+        scroll_translation
+            .node()
+            .ScrollNode(a)
+            .expect("source sticky nearest scroll translation")
+            .clone()
+    });
     let scroll_element = scroll_translation.ScrollCompositorElementId();
     let can_use_scroll_range = |first: ElementId, second: ElementId| {
         first == second && (!first.IsValid() || first == scroll_element)
@@ -126,9 +128,12 @@ fn can_merge_for_sticky_position<R: PaintSkiaBackend>(
         first_constraint.y_scroll_ancestor_element_id,
         second_constraint.y_scroll_ancestor_element_id,
     ) {
-        let contents = source_rect(scroll_node.ContentsRect());
-        let container = source_rect(scroll_node.ContainerRect());
-        let mut range = source_rect(scroll_node.ScrollingContentsCullRect());
+        let (contents, container, cull) = super::read(|a| {
+            (scroll_node.ContentsRect(a), scroll_node.ContainerRect(a), scroll_node.ScrollingContentsCullRect(a))
+        });
+        let contents = source_rect(contents);
+        let container = source_rect(container);
+        let mut range = source_rect(cull);
         range.Intersect(contents);
         range = Rect::new(
             range.x.saturating_sub(contents.x),
@@ -205,7 +210,7 @@ fn clip_chain_in_transform_compositing_boundary<R: PaintSkiaBackend>(
 ) -> bool {
     let mut current = node.clone();
     while current != *ancestor {
-        let local = current.link_transform(current.node().LocalTransformSpace());
+        let local = super::read(|a| current.link_transform(current.node().LocalTransformSpace(a)));
         if in_same_transform_compositing_boundary(
             transform,
             &local,
@@ -231,12 +236,10 @@ impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
     type EffectNode = EffectNode<R>;
 
     fn EffectRequiresCompositingForBackdropFilterMask(&self) -> bool {
-        self.effect_
-            .node()
-            .RequiresCompositingForBackdropFilterMask()
+        super::read(|a| self.effect_.node().RequiresCompositingForBackdropFilterMask(a))
     }
     fn EffectRequiresCompositingForCanvasChild(&self) -> bool {
-        self.effect_.node().RequiresCompositingForCanvasChild()
+        super::read(|a| self.effect_.node().RequiresCompositingForCanvasChild(a))
     }
     fn ChangedToRoot(&self, change: Self::PaintPropertyChange) -> bool {
         paint_model::property_cell::with_access(|a| self.as_source().ChangedToRootIn(a, self.transform_.trees(), change))
@@ -251,10 +254,10 @@ impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
             .is_some_and(|parent| parent == self.effect_)
     }
     fn EffectIsOpacityOnly(&self) -> bool {
-        self.effect_.node().IsOpacityOnly()
+        super::read(|a| self.effect_.node().IsOpacityOnly(a))
     }
     fn EffectOpacity(&self) -> f32 {
-        self.effect_.node().opacity
+        super::read(|a| self.effect_.node().state(a).opacity)
     }
     fn EffectBlendMode(&self) -> BlendMode {
         <EffectNode<R> as PendingEffectNode<TransformNode<R>, usize>>::BlendMode(&self.effect_)

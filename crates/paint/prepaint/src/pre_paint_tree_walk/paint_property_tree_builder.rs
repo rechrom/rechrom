@@ -5,6 +5,7 @@
 
 use layout::fragment::ResidentBoxGeometry as _;
 use super::*;
+use paint_model::property_cell::PropertyAccess;
 use crate::compositing_reason_finder::CompositingReasonFinder;
 
 // Source: core/paint/paint_property_tree_builder.cc:499-530. The Layout
@@ -29,6 +30,9 @@ fn NeedsCssBlendEffect(
 
 pub(super) struct PaintPropertyTreeBuilder<'a> {
     walk: &'a mut PrePaintTreeWalk,
+    /// The document sequence proof for reading the property nodes this
+    /// builder links to (decision D1: explicit in PrePaint).
+    access: &'a PropertyAccess,
     previous_paint_result: paint_model::PaintResult,
     // The node's offset in its paint-tree parent from its source cursor;
     // fixtures without a cursor use their recorded offset.
@@ -39,9 +43,10 @@ pub(super) struct PaintPropertyTreeBuilder<'a> {
 }
 
 impl<'a> PaintPropertyTreeBuilder<'a> {
-    pub(super) fn new(walk: &'a mut PrePaintTreeWalk) -> Self {
+    pub(super) fn new(walk: &'a mut PrePaintTreeWalk, access: &'a PropertyAccess) -> Self {
         Self {
             walk,
+            access,
             previous_paint_result: paint_model::PaintResult::kMayBeClippedByCullRect,
             link_offset: None,
             source_cursor: None,
@@ -205,13 +210,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let inherited_tainted_subtree = parent_properties
             .nodes
             .effect
-            .compositor
-            .is_in_tainted_subtree;
+            .IsInTaintedSubtree(self.access);
         let is_in_drawable_canvas_subtree = parent_properties
             .nodes
             .effect
-            .compositor
-            .is_in_drawable_canvas_subtree
+            .IsInDrawableCanvasSubtree(self.access)
             || CompositingReasonFinder::DirectReasonsForPaintProperties(fragment)
                 .Has(foundation::CompositingReason::kCanvasChild);
         node.applies_clip = is_root && parent_clip.is_some();
@@ -457,9 +460,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         PaintBackfaceVisibility::Inherited
                     };
                 self.walk.RegisterProperty(fragment, *role, id);
-                let transform_node = Arc::new(TransformPaintPropertyNode {
+                let transform_node = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                     compositor,
-                    geometry_mapper_cache: Default::default(),
                     scroll_parent_scroll_translation: if *role
                         == PaintPropertyRole::PaintOffsetTranslation
                         && fragment.paint.FixedToView()
@@ -471,8 +473,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     } else {
                         None
                     },
-                    lifecycle: Default::default(),
-                    id,
                     parent: Some(parent_transform),
                     matrix: property_matrix,
                     origin: [0.0; 3],
@@ -482,7 +482,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     scroll: None,
                     sticky_constraint,
                     direct_compositing_reasons: reasons,
-                });
+                }));
                 if *role == PaintPropertyRole::PaintOffsetTranslation {
                     node.paint_offset_translation = Some(transform_node.clone());
                 }
@@ -693,11 +693,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         node.properties.clip_id,
                     );
                     node.properties.nodes.clip = Arc::new(
-                        ClipPaintPropertyNode {
-                            geometry_mapper_cache: Default::default(),
+                        ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                             layout_clip_rects: Default::default(),
-                            lifecycle: Default::default(),
-                            id: node.properties.clip_id,
                             parent: Some(node.properties.nodes.clip.clone()),
                             local_transform_space: node.properties.nodes.transform.clone(),
                             rect: Some(PropertySpaceRect(path_bounds, property_space_delta)),
@@ -712,7 +709,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             )),
                             clip_path_error: node.clip_path_error.clone(),
                             pixel_moving_filter: None,
-                        }
+                        })
                         .with_layout_clips(),
                     );
                     node.applies_clip = true;
@@ -738,11 +735,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 self.walk
                     .RegisterProperty(fragment, PaintPropertyRole::BackdropFilterClip, id);
                 Some(Arc::new(
-                    ClipPaintPropertyNode {
-                        geometry_mapper_cache: Default::default(),
+                    ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
-                        lifecycle: Default::default(),
-                        id,
                         parent: Some(node.properties.nodes.clip.clone()),
                         local_transform_space: node.properties.nodes.transform.clone(),
                         rect: Some(PropertySpaceRect(
@@ -763,7 +757,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         clip_path: None,
                         clip_path_error: None,
                         pixel_moving_filter: None,
-                    }
+                    })
                     .with_layout_clips(),
                 ))
             } else {
@@ -858,12 +852,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             compositor.filter_output_bounds = filter_reference_box
                 .and_then(|reference| backdrop_filters.reference_output_bounds(reference));
             node.properties.nodes.effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(Default::default(), node.properties.effect_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor,
 
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: Default::default(),
-                    id: node.properties.effect_id,
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(node.properties.nodes.clip.clone()),
@@ -878,9 +870,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     backdrop_filter_has_reference: backdrop_filter_has_reference
                         && !backdrop_filter_disallowed,
                     backdrop_filter_bounds: backdrop_filter_clip.as_ref().map(|clip| {
+                        let (rect, radii) = paint_model::property_cell::with_access(|a| {
+                            let state = clip.state(a);
+                            (state.rect, state.radii)
+                        });
                         paint_model::paint_clip_path::rounded_bounds(
-                            clip.rect.expect("source finite backdrop bounds"),
-                            clip.radii,
+                            rect.expect("source finite backdrop bounds"),
+                            radii,
                         )
                     }),
                     backdrop_filter_clip,
@@ -893,7 +889,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     // would restrict backdrop reads to individual raster tiles.
                     // The additional effect trigger also carries transform hints.
                     direct_compositing_reasons: effect_reasons,
-                }
+                })
                 .with_filter_presence()
                 .with_inherited_view_transition(),
             );
@@ -908,7 +904,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::Mask, mask_id);
             let mask_effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(Default::default(), mask_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor: EffectCompositorState(
                         fragment,
                         PaintPropertyRole::Mask,
@@ -917,14 +913,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         node.properties
                             .nodes
                             .effect
-                            .compositor
-                            .is_in_tainted_subtree,
+                            .IsInTaintedSubtree(self.access),
                         is_in_drawable_canvas_subtree,
                     ),
                     backdrop_filter_bounds: None,
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: Default::default(),
-                    id: mask_id,
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(mask_output_clip.clone()),
@@ -942,7 +935,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     has_mask: false,
                     is_mask: true,
                     direct_compositing_reasons: Default::default(),
-                }
+                })
                 .with_filter_presence()
                 .with_inherited_view_transition(),
             );
@@ -958,11 +951,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 .RegisterProperty(fragment, PaintPropertyRole::MaskClip, clip_id);
             node.properties.clip_id = clip_id;
             node.properties.nodes.clip = Arc::new(
-                ClipPaintPropertyNode {
-                    geometry_mapper_cache: Default::default(),
+                ClipPaintPropertyNode::new(Default::default(), clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                     layout_clip_rects: Default::default(),
-                    lifecycle: Default::default(),
-                    id: clip_id,
                     parent: Some(mask_output_clip),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     // Source: paint_property_tree_builder.cc UpdateEffect.
@@ -979,7 +969,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     clip_path: None,
                     clip_path_error: None,
                     pixel_moving_filter: None,
-                }
+                })
                 .with_layout_clips(),
             );
         }
@@ -1006,11 +996,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     node.properties.clip_id,
                 );
                 node.properties.nodes.clip = Arc::new(
-                    ClipPaintPropertyNode {
-                        geometry_mapper_cache: Default::default(),
+                    ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
-                        lifecycle: Default::default(),
-                        id: node.properties.clip_id,
                         parent: Some(node.properties.nodes.clip.clone()),
                         local_transform_space: node.properties.nodes.transform.clone(),
                         rect: Some(PropertySpaceRect(local, property_space_delta)),
@@ -1018,7 +1005,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         clip_path: None,
                         clip_path_error: None,
                         pixel_moving_filter: None,
-                    }
+                    })
                     .with_layout_clips(),
                 );
                 node.applies_clip = true;
@@ -1130,8 +1117,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 node.properties
                     .nodes
                     .effect
-                    .compositor
-                    .is_in_tainted_subtree
+                    .IsInTaintedSubtree(self.access)
                     || filter_taints_subtree,
                 is_in_drawable_canvas_subtree,
             );
@@ -1139,12 +1125,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // UpdateFilter follows UpdateEffect and has its own persistent
             // ObjectPaintProperties slot (paint_property_tree_builder.cc:2630).
             node.properties.nodes.effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(Default::default(), node.properties.effect_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor,
                     backdrop_filter_bounds: None,
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: Default::default(),
-                    id: node.properties.effect_id,
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(node.properties.nodes.clip.clone()),
@@ -1162,7 +1146,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     has_mask: false,
                     is_mask: false,
                     direct_compositing_reasons: filter_reasons,
-                }
+                })
                 .with_filter_presence()
                 .with_inherited_view_transition(),
             );
@@ -1182,11 +1166,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     node.properties.clip_id,
                 );
                 node.properties.nodes.clip = Arc::new(
-                    ClipPaintPropertyNode {
-                        geometry_mapper_cache: Default::default(),
+                    ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
-                        lifecycle: Default::default(),
-                        id: node.properties.clip_id,
                         parent: Some(node.properties.nodes.clip.clone()),
                         local_transform_space: node.properties.nodes.transform.clone(),
                         rect: None,
@@ -1194,7 +1175,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         clip_path: None,
                         clip_path_error: None,
                         pixel_moving_filter: Some(node.properties.nodes.effect.clone()),
-                    }
+                    })
                     .with_layout_clips(),
                 );
             }
@@ -1240,11 +1221,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::BackgroundClip, id);
             let clip = Arc::new(
-                ClipPaintPropertyNode {
-                    geometry_mapper_cache: Default::default(),
+                ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                     layout_clip_rects: Default::default(),
-                    lifecycle: Default::default(),
-                    id,
                     parent: Some(node.properties.nodes.clip.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     rect: Some(PropertySpaceRect(
@@ -1255,7 +1233,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     clip_path: None,
                     clip_path_error: None,
                     pixel_moving_filter: None,
-                }
+                })
                 .with_layout_clips(),
             );
             node.fixed_background_properties =
@@ -1338,11 +1316,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 self.walk
                     .RegisterProperty(fragment, PaintPropertyRole::OverflowControlsClip, id);
                 let clip = Arc::new(
-                    ClipPaintPropertyNode {
-                        geometry_mapper_cache: Default::default(),
+                    ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
-                        lifecycle: Default::default(),
-                        id,
                         parent: Some(node.properties.nodes.clip.clone()),
                         local_transform_space: node.properties.nodes.transform.clone(),
                         rect: Some(PropertySpaceRect(border_box, property_space_delta)),
@@ -1350,7 +1325,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         clip_path: None,
                         clip_path_error: None,
                         pixel_moving_filter: None,
-                    }
+                    })
                     .with_layout_clips(),
                 );
                 node.overflow_controls_properties =
@@ -1483,11 +1458,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 self.walk
                     .RegisterProperty(fragment, PaintPropertyRole::InnerBorderRadiusClip, id);
                 node.properties.nodes.clip = Arc::new(
-                    ClipPaintPropertyNode {
-                        geometry_mapper_cache: Default::default(),
+                    ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
-                        lifecycle: Default::default(),
-                        id,
                         parent: Some(node.properties.nodes.clip.clone()),
                         local_transform_space: node.properties.nodes.transform.clone(),
                         rect: Some(PropertySpaceRect(inner_clip, property_space_delta)),
@@ -1495,7 +1467,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         clip_path: None,
                         clip_path_error: None,
                         pixel_moving_filter: None,
-                    }
+                    })
                     .with_layout_clips()
                     .with_layout_clip_values(
                         Some(PropertySpaceRect(inner_radius_clip, property_space_delta)),
@@ -1541,11 +1513,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 }
             }
             node.properties.nodes.clip = Arc::new(
-                ClipPaintPropertyNode {
-                    geometry_mapper_cache: Default::default(),
+                ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                     layout_clip_rects: Default::default(),
-                    lifecycle: Default::default(),
-                    id: node.properties.clip_id,
                     parent: Some(node.properties.nodes.clip.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     rect: Some(PropertySpaceRect(local, property_space_delta)),
@@ -1553,7 +1522,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     clip_path: None,
                     clip_path_error: None,
                     pixel_moving_filter: None,
-                }
+                })
                 .with_layout_clips()
                 .with_layout_clip_values(
                     Some(PropertySpaceRect(precise_layout_clip, property_space_delta)),
@@ -1594,7 +1563,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         .height
                         .max(precise_layout_clip.height),
                 });
-                scroll_node = Some(Arc::new(ScrollPaintPropertyNode {
+                scroll_node = Some(Arc::new(ScrollPaintPropertyNode::new(
+                    Default::default(),
+                    node.properties.scroll_id,
+                    paint_model::paint_property_tree::ScrollPaintPropertyNodeState {
                     // Source: core/paint/paint_property_tree_builder.cc:3570-3648,
                     // 4611-4628. A non-none source scroll-snap payload remains
                     // unsupported; PaintInput rejects it rather than inventing one.
@@ -1685,8 +1657,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         }
                         state
                     },
-                    lifecycle: Default::default(),
-                    id: node.properties.scroll_id,
                     owner_client_id: fragment.paint.DisplayItemClientId(),
                     owner_node_id: u64::try_from(fragment.paint.DisplayItemClientOwnerNodeId())
                         .unwrap_or_default(),
@@ -1729,7 +1699,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         },
                         |scroll| scroll.user_scrollable_vertical,
                     ),
-                }));
+                })));
             }
         }
 
@@ -1766,22 +1736,19 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     scrollbar_reasons = CompositingReasonFinder::ActiveOpacityAnimation();
                 }
                 let effect = Arc::new(
-                    EffectPaintPropertyNode {
+                    EffectPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                         compositor: paint_model::paint_property_tree::EffectCompositorState {
                             compositor_element_id: axis.compositor_element_id,
                             is_in_tainted_subtree: node
                                 .properties
                                 .nodes
                                 .effect
-                                .compositor
-                                .is_in_tainted_subtree,
+                                .IsInTaintedSubtree(self.access),
                             is_in_drawable_canvas_subtree,
                             ..Default::default()
                         },
                         backdrop_filter_bounds: None,
                         self_or_ancestor_participates_in_view_transition: false,
-                        lifecycle: Default::default(),
-                        id,
                         parent: Some(node.properties.nodes.effect.clone()),
                         local_transform_space: border_box_properties.nodes.transform.clone(),
                         output_clip: Some(border_box_properties.nodes.clip.clone()),
@@ -1799,7 +1766,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         has_mask: false,
                         is_mask: false,
                         direct_compositing_reasons: scrollbar_reasons,
-                    }
+                    })
                     .with_filter_presence()
                     .with_inherited_view_transition(),
                 );
@@ -1863,7 +1830,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let mut child_transforms: Vec<TransformMatrix> = node.transforms.to_vec();
         let preserves_3d = style.is_some_and(|style| style.preserves_3d());
         let mut child_rendering_context_id = if preserves_3d {
-            node.properties.nodes.transform.rendering_context_id
+            node.properties.nodes.transform.RenderingContextId(self.access)
         } else {
             0
         };
@@ -1900,12 +1867,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk.next_property_id += 1;
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::Perspective, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(fragment, PaintPropertyRole::Perspective),
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(child_properties.nodes.transform.clone()),
                 matrix,
                 origin: [0.0; 3],
@@ -1915,7 +1879,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 scroll: None,
                 sticky_constraint: None,
                 direct_compositing_reasons: Default::default(),
-            });
+            }));
             child_properties.transform_id = id;
             child_transforms.push(matrix);
             // Chromium's perspective node itself must not flatten, otherwise
@@ -1930,15 +1894,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk.next_property_id += 1;
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::ReplacedContentTransform, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(
                     fragment,
                     PaintPropertyRole::ReplacedContentTransform,
                 ),
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(child_properties.nodes.transform.clone()),
                 matrix,
                 origin: [0.0; 3],
@@ -1948,7 +1909,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 scroll: None,
                 sticky_constraint: None,
                 direct_compositing_reasons: Default::default(),
-            });
+            }));
             child_properties.transform_id = id;
             child_should_flatten = true;
             child_rendering_context_id = 0;
@@ -1964,15 +1925,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk.next_property_id += 1;
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::ScrollTranslation, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(
                     fragment,
                     PaintPropertyRole::ScrollTranslation,
                 ),
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(child_properties.nodes.transform.clone()),
                 matrix: TranslationTransform(-scroll_position.x, -scroll_position.y),
                 origin: [0.0; 3],
@@ -1986,7 +1944,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     PaintPropertyRole::ScrollTranslation,
                     false,
                 ),
-            });
+            }));
             child_properties.transform_id = id;
             child_transforms.push(TranslationTransform(-scroll_position.x, -scroll_position.y));
         }

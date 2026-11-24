@@ -5,6 +5,7 @@ use crate::{
     paint_property_tree,
     source_geometry::{Rect, RectF, ToEnclosingRect, Vector2dF},
 };
+use crate::property_cell::with_access as read;
 use std::sync::Arc;
 
 /// The published tree a handle resolves its links through; None follows the
@@ -116,64 +117,88 @@ impl TransformCacheNode for NativeTransformNode {
         &self.1
     }
     fn IsRoot(&self) -> bool {
-        self.node().parent.is_none()
+        read(|a| {
+            self.node().state(a).parent.is_none()
+        })
     }
     fn IsIdentity(&self) -> bool {
-        self.node().IsIdentity()
+        read(|a| {
+            self.node().IsIdentity(a)
+        })
     }
     fn Parent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| Self(resolve_transform(&self.1, p).clone(), self.1.clone()))
+        read(|a| {
+            self.node().state(a)
+                .parent
+                .as_ref()
+                .map(|p| Self(resolve_transform(&self.1, p).clone(), self.1.clone()))
+        })
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
-        self.node().RequiresCompositingForStickyPosition()
+        read(|a| {
+            self.node().RequiresCompositingForStickyPosition(a)
+        })
     }
     fn RequiresCompositingForAnchorPosition(&self) -> bool {
-        self.node().RequiresCompositingForAnchorPosition()
+        read(|a| {
+            self.node().RequiresCompositingForAnchorPosition(a)
+        })
     }
     fn IsBackfaceHiddenInternal(&self, parent: bool) -> bool {
-        match self.node().backface_visibility {
-            paint_property_tree::PaintBackfaceVisibility::Inherited => parent,
-            paint_property_tree::PaintBackfaceVisibility::Hidden => true,
-            paint_property_tree::PaintBackfaceVisibility::Visible => false,
-        }
+        read(|a| {
+            match self.node().state(a).backface_visibility {
+                paint_property_tree::PaintBackfaceVisibility::Inherited => parent,
+                paint_property_tree::PaintBackfaceVisibility::Hidden => true,
+                paint_property_tree::PaintBackfaceVisibility::Visible => false,
+            }
+        })
     }
     fn HasScrollNode(&self) -> bool {
-        self.node().ScrollNode().is_some()
+        read(|a| {
+            self.node().ScrollNode(a).is_some()
+        })
     }
     fn ScrollParentScrollTranslation(&self) -> Option<Self> {
-        self.node()
-            .scroll_parent_scroll_translation
-            .as_ref()
-            .map(|n| Self(resolve_transform(&self.1, n).clone(), self.1.clone()))
+        read(|a| {
+            self.node().state(a)
+                .scroll_parent_scroll_translation
+                .as_ref()
+                .map(|n| Self(resolve_transform(&self.1, n).clone(), self.1.clone()))
+        })
     }
     fn HasDirectCompositingReasons(&self) -> bool {
-        self.node().HasDirectCompositingReasons()
+        read(|a| {
+            self.node().HasDirectCompositingReasons(a)
+        })
     }
     fn IsIdentityOr2dTranslation(&self) -> bool {
         FloatClipRectTransform::IsIdentityOr2dTranslation(&self.Matrix())
     }
     fn HasActiveTransformAnimation(&self) -> bool {
-        self.node().HasActiveTransformAnimation()
+        read(|a| {
+            self.node().HasActiveTransformAnimation(a)
+        })
     }
     fn Get2dTranslation(&self) -> Vector2dF {
         let value = self.Matrix().as_source().To2dTranslation();
         Vector2dF::new(value.x(), value.y())
     }
     fn MatrixWithOriginApplied(&self) -> Self::Matrix {
-        let mut matrix = self.Matrix();
-        let origin = self.node().Origin();
-        matrix.transform_mut().ApplyTransformOrigin(
-            origin[0] as f32,
-            origin[1] as f32,
-            origin[2] as f32,
-        );
-        matrix
+        read(|a| {
+            let mut matrix = self.Matrix();
+            let origin = self.node().Origin(a);
+            matrix.transform_mut().ApplyTransformOrigin(
+                origin[0] as f32,
+                origin[1] as f32,
+                origin[2] as f32,
+            );
+            matrix
+        })
     }
     fn FlattensInheritedTransform(&self) -> bool {
-        self.node().FlattensInheritedTransform()
+        read(|a| {
+            self.node().FlattensInheritedTransform(a)
+        })
     }
 }
 impl GeometryMapperNode for NativeTransformNode {
@@ -181,10 +206,14 @@ impl GeometryMapperNode for NativeTransformNode {
         self.as_arc()
     }
     fn OriginIsOrigin(&self) -> bool {
-        self.node().Origin() == [0.; 3]
+        read(|a| {
+            self.node().Origin(a) == [0.; 3]
+        })
     }
     fn Matrix(&self) -> SharedGeometryTransform {
-        SharedGeometryTransform::FromColMajor(&self.node().Matrix().values)
+        read(|a| {
+            SharedGeometryTransform::FromColMajor(&self.node().Matrix(a).values)
+        })
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
         let trees = self.1.clone().or_else(|| other.1.clone());
@@ -192,9 +221,7 @@ impl GeometryMapperNode for NativeTransformNode {
             self.as_arc(),
             other.as_arc(),
             |node| {
-                node.parent
-                    .as_ref()
-                    .map(|parent| resolve_transform(&trees, parent).clone())
+                read(|a| node.Parent(a).map(|parent| resolve_transform(&trees, parent).clone()))
             },
         );
         Self(common, trees)
@@ -206,30 +233,23 @@ impl GeometryMapperNode for NativeTransformNode {
         })
     }
     fn ScrollContentsRect(&self) -> Rect {
-        rect(
-            self.node()
-                .scroll
-                .as_ref()
-                .expect("source ScrollNode")
-                .ContentsRect(),
-        )
+        rect(read(|access| {
+            self.node().ScrollNode(access).expect("source ScrollNode").ContentsRect(access)
+        }))
     }
     fn ScrollContainerRect(&self) -> Rect {
-        rect(
-            self.node()
-                .scroll
-                .as_ref()
-                .expect("source ScrollNode")
-                .ContainerRect(),
-        )
+        rect(read(|access| {
+            self.node().ScrollNode(access).expect("source ScrollNode").ContainerRect(access)
+        }))
     }
     fn ScrollOverflowClip(&self) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
-        self.node()
-            .scroll
-            .as_ref()
-            .expect("source ScrollNode")
-            .OverflowClipNode()
-            .cloned()
+        read(|access| {
+            self.node()
+                .ScrollNode(access)
+                .expect("source ScrollNode")
+                .OverflowClipNode(access)
+                .cloned()
+        })
     }
 }
 impl GeometryMapperState for NativeGeometryState {
@@ -296,7 +316,7 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> NativeTransformNode {
         NativeTransformNode::from_arc_in(
-            resolve_transform(&self.trees, clip.LocalTransformSpace()).clone(),
+            read(|a| resolve_transform(&self.trees, clip.LocalTransformSpace(a)).clone()),
             self.trees.clone(),
         )
     }
@@ -304,9 +324,7 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
-        clip.parent
-            .as_ref()
-            .map(|parent| resolve_clip(&self.trees, parent).clone())
+        read(|a| clip.Parent(a).map(|parent| resolve_clip(&self.trees, parent).clone()))
     }
     fn ClipLowestCommonAncestor(
         &self,
@@ -319,24 +337,24 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(c.LayoutClipRectExcludingOverlayScrollbars())
+        clip_rect(read(|a| c.LayoutClipRectExcludingOverlayScrollbars(a)))
     }
     fn PreciseLayoutClipRect(
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(c.PreciseLayoutClipRect())
+        clip_rect(read(|a| c.PreciseLayoutClipRect(a)))
     }
     fn LayoutClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> FloatClipRect {
-        clip_rect(c.LayoutClipRect())
+        clip_rect(read(|a| c.LayoutClipRect(a)))
     }
     fn PaintClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> RectF {
-        c.PaintClipRect()
+        read(|a| c.PaintClipRect(a))
             .map(float_rect)
             .unwrap_or_else(|| *FloatClipRect::default().Rect())
     }
     fn ClipHasPath(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> bool {
-        c.ClipPath().is_some()
+        read(|a| c.ClipPath(a).is_some())
     }
     // Source: clip_paint_property_node.h:188-217; this is an exact field query,
     // not a geometric inference about whether a CSS animation is running.
@@ -344,46 +362,48 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> bool {
-        c.IsForCompositeClipPathAnimation()
+        read(|a| c.IsForCompositeClipPathAnimation(a))
     }
     fn PixelMovingFilter(
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> NativeEffectNode {
         NativeEffectNode::from_arc_in(
-            resolve_effect(&self.trees, c.PixelMovingFilter().expect("source PixelMovingFilter"))
-                .clone(),
+            read(|a| {
+                resolve_effect(&self.trees, c.PixelMovingFilter(a).expect("source PixelMovingFilter"))
+                    .clone()
+            }),
             self.trees.clone(),
         )
     }
     fn FilterLocalTransform(&self, e: &NativeEffectNode) -> NativeTransformNode {
         NativeTransformNode::from_arc_in(
-            resolve_transform(&self.trees, &e.node().local_transform_space).clone(),
+            read(|a| resolve_transform(&self.trees, e.node().LocalTransformSpace(a)).clone()),
             self.trees.clone(),
         )
     }
     fn HasActiveFilterAnimation(&self, e: &NativeEffectNode) -> bool {
-        e.node()
-            .direct_compositing_reasons
-            .Has(foundation::CompositingReason::kActiveFilterAnimation)
+        read(|a| e.node().HasActiveFilterAnimation(a))
     }
     fn FilterMapRect(&self, e: &NativeEffectNode, r: Rect) -> Rect {
-        let r = e
-            .node()
-            .filters
-            .canonical()
-            .expect("validated PaintInput native filters")
-            .MapRect(
-                foundation::gfx::Rect::new(
-                    foundation::gfx::Point::new(r.x, r.y),
-                    foundation::gfx::Size::new(r.width, r.height),
-                ),
-                None,
-            );
+        let r = read(|a| {
+            e.node()
+                .state(a)
+                .filters
+                .canonical()
+                .expect("validated PaintInput native filters")
+                .MapRect(
+                    foundation::gfx::Rect::new(
+                        foundation::gfx::Point::new(r.x, r.y),
+                        foundation::gfx::Size::new(r.width, r.height),
+                    ),
+                    None,
+                )
+        });
         Rect::new(r.x(), r.y(), r.width(), r.height())
     }
     fn SelfOrAncestorParticipatesInViewTransition(&self, e: &NativeEffectNode) -> bool {
-        e.node().self_or_ancestor_participates_in_view_transition
+        read(|a| e.node().state(a).self_or_ancestor_participates_in_view_transition)
     }
 }
 
@@ -407,8 +427,8 @@ mod published_tree_cache_tests {
         let mut node = (*PropertyTreeState::default().transform).clone();
         node.lifecycle = Default::default();
         node.id = id;
-        node.parent = Some(parent);
-        node.matrix.values[13] = y;
+        node.state_mut().parent = Some(parent);
+        node.state_mut().matrix.values[13] = y;
         Arc::new(node)
     }
     fn key(client: u64) -> PaintPropertyKey {

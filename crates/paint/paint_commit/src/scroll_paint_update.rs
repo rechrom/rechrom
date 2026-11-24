@@ -172,13 +172,16 @@ fn world_transform(
     if let Some(matrix) = worlds.get(&node.id) {
         return *matrix;
     }
-    let parent = node
-        .parent
+    let (parent_link, local) = paint_model::property_cell::with_access(|access| {
+        let state = node.state(access);
+        (state.parent.clone(), state.matrix)
+    });
+    let parent = parent_link
         .as_ref()
         .map_or_else(TransformMatrix::default, |parent| {
             world_transform(resolver, resolver.transform(parent), worlds)
         });
-    let matrix = MultiplyTransforms(&parent, &node.matrix);
+    let matrix = MultiplyTransforms(&parent, &local);
     worlds.insert(node.id, matrix);
     matrix
 }
@@ -294,8 +297,10 @@ fn mask_outputs(nodes: &[&PaintTreeNode<'_>]) -> Option<BTreeMap<u64, PaintRect>
             };
         }
         let mask = node.mask_properties.as_ref()?;
-        let content_effect = mask.effect.parent.as_ref()?;
-        outputs.insert(content_effect.id, MapRectToRoot(rect, &node.transforms)?);
+        let content_effect_id = paint_model::property_cell::with_access(|access| {
+            mask.effect.Parent(access).map(|parent| parent.id)
+        })?;
+        outputs.insert(content_effect_id, MapRectToRoot(rect, &node.transforms)?);
     }
     Some(outputs)
 }
@@ -308,13 +313,17 @@ fn effect_mask_output(
     if let Some(bounds) = cache.get(&effect.id) {
         return Some(*bounds);
     }
-    let mut bounds = match &effect.parent {
+    let (parent, has_mask) = paint_model::property_cell::with_access(|access| {
+        let state = effect.state(access);
+        (state.parent.clone(), state.has_mask)
+    });
+    let mut bounds = match &parent {
         Some(parent) => effect_mask_output(parent, own, cache)?,
         None => None,
     };
     if let Some(&mask) = own.get(&effect.id) {
         bounds = Some(bounds.map_or(mask, |parent| intersection(parent, mask)));
-    } else if effect.has_mask {
+    } else if has_mask {
         // Legacy standalone wrapper without a formal source is not reusable.
         return None;
     }
@@ -338,19 +347,26 @@ fn clip_output(
     if let Some(bounds) = cache.get(&clip.id) {
         return Some(*bounds);
     }
-    if clip.pixel_moving_filter.is_some() {
+    let (has_filter, parent, rect, transform, has_path) =
+        paint_model::property_cell::with_access(|access| {
+            let state = clip.state(access);
+            (
+                state.pixel_moving_filter.is_some(),
+                state.parent.clone(),
+                state.rect,
+                state.local_transform_space.clone(),
+                state.clip_path.is_some(),
+            )
+        });
+    if has_filter {
         return None;
     }
-    let mut output = match &clip.parent {
+    let mut output = match &parent {
         Some(parent) => clip_output(resolver, resolver.clip(parent), viewport, worlds, cache)?,
         None => ClipOutput::default(),
     };
-    if let Some(rect) = clip.rect {
-        let world = world_transform(
-            resolver,
-            resolver.transform(&clip.local_transform_space),
-            worlds,
-        );
+    if let Some(rect) = rect {
+        let world = world_transform(resolver, resolver.transform(&transform), worlds);
         let rect = MapRectToRoot(rect, &[world])?;
         output.visible = Some(
             output
@@ -366,7 +382,7 @@ fn clip_output(
                     .map_or(rect, |parent| intersection(parent, rect)),
             );
         }
-    } else if clip.clip_path.is_some() {
+    } else if has_path {
         return None;
     }
     cache.insert(clip.id, output);
@@ -440,7 +456,10 @@ impl RetainedScrollPaintState {
             if !node.applies_mask {
                 continue;
             }
-            let effect_id = node.mask_properties.as_ref()?.effect.parent.as_ref()?.id;
+            let mask_effect = &node.mask_properties.as_ref()?.effect;
+            let effect_id = paint_model::property_cell::with_access(|access| {
+                mask_effect.Parent(access).map(|parent| parent.id)
+            })?;
             let world = property_world(store, &node.properties.nodes, &mut worlds)?;
             retained_masks.push(MaskOutput {
                 effect_id,

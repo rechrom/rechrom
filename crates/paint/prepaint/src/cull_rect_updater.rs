@@ -233,13 +233,14 @@ impl CullRectUpdater {
         if parent_state != local_state {
             let old =
                 old_cull.map(|stored| stored.map_or_else(CullRect::Infinite, CullRect::FromRect));
-            expanded = cull.ApplyPaintProperties(
+            expanded = paint_model::property_cell::with_access(|access| cull.ApplyPaintProperties(
+                access,
                 root_state,
                 parent_state,
                 local_state,
                 old,
                 expansion_ratio,
-            );
+            ));
         }
         (cull.Rect(), expanded)
     }
@@ -258,13 +259,14 @@ impl CullRectUpdater {
         if local_state != contents_state {
             let old = old_contents_cull
                 .map(|stored| stored.map_or_else(CullRect::Infinite, CullRect::FromRect));
-            expanded = contents_cull.ApplyPaintProperties(
+            expanded = paint_model::property_cell::with_access(|access| contents_cull.ApplyPaintProperties(
+                access,
                 root_state,
                 local_state,
                 contents_state,
                 old,
                 expansion_ratio,
-            );
+            ));
         }
         (contents_cull.Rect(), expanded)
     }
@@ -292,22 +294,19 @@ mod tests {
             clip: root.clip.clone(),
             effect: root.effect.clone(),
         };
-        let overflow_clip = Arc::new(
-            ClipPaintPropertyNode {
-                lifecycle: Default::default(),
-                id: 2,
-                parent: Some(root.clip.clone()),
-                local_transform_space: translated,
-                rect: Some(PaintRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 320.0,
-                    height: 52.0,
-                }),
-                ..(*root.clip).clone()
-            }
-            .with_layout_clips(),
-        );
+        let mut overflow_clip = (*root.clip).clone();
+        overflow_clip.lifecycle = Default::default();
+        overflow_clip.id = 2;
+        let state = overflow_clip.state_mut();
+        state.parent = Some(root.clip.clone());
+        state.local_transform_space = translated;
+        state.rect = Some(PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 52.0,
+        });
+        let overflow_clip = Arc::new(overflow_clip.with_layout_clips());
         let contents = PropertyTreeState {
             transform: border.transform.clone(),
             clip: overflow_clip,

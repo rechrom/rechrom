@@ -7,7 +7,7 @@
 use foundation::{TrustedIdentityHashMap, TrustedIdentityHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use crate::property_cell::{MutableCell, PaintSequenceId, PropertyAccess};
+use crate::property_cell::{MutableCell, PaintSequenceId, PropertyAccess, PropertyCell};
 use std::sync::Arc;
 
 use crate::paint_clip_path::PaintClipPath;
@@ -230,17 +230,30 @@ pub enum PaintBackfaceVisibility {
     Hidden,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Source: transform_paint_property_node.h:150-485. Dump id, lifecycle
+/// identity and the GeometryMapper cache slot are plain fields; the node
+/// `State` (with the parent link, paint_property_node.h:232) is confined to
+/// the document sequence that created the node and read through a
+/// `PropertyAccess`.
+#[derive(Debug)]
 pub struct TransformPaintPropertyNode {
-    /// Source: transform_paint_property_node.h:110-134. These remain source
-    /// state fields even when a feature does not populate them on this node.
-    pub compositor: TransformCompositorState,
     /// Source: transform_paint_property_node.h:472-485. Owns only the lazy
     /// source cache allocation; cloning a node starts a new empty cache slot.
     pub geometry_mapper_cache: crate::opaque_paint_cache_slot::OpaquePaintCacheSlot,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
-    pub parent: Option<Arc<Self>>,
+    state: PropertyCell<TransformPaintPropertyNodeState>,
+}
+
+/// Source: transform_paint_property_node.h:110-134
+/// `TransformPaintPropertyNode::State` plus the parent link and Rechrom's
+/// Layout sticky association.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransformPaintPropertyNodeState {
+    /// Source: transform_paint_property_node.h:110-134. These remain source
+    /// state fields even when a feature does not populate them on this node.
+    pub compositor: TransformCompositorState,
+    pub parent: Option<Arc<TransformPaintPropertyNode>>,
     pub matrix: TransformMatrix,
     // The standalone geometry mapper has already folded transform-origin into
     // the matrix. Keeping origin zero preserves that resolved transformation.
@@ -291,7 +304,211 @@ pub struct TransformAnimationState {
     pub is_running_animation_on_compositor: bool,
 }
 
+/// Node accessors for the source predicates implemented on the node `State`:
+/// each reads the state under the caller's proof.
+macro_rules! state_getters {
+    ($lt:lifetime; $($name:ident -> $ret:ty;)*) => {$(
+        #[inline]
+        pub fn $name<$lt>(&$lt self, access: &$lt PropertyAccess) -> $ret {
+            self.state(access).$name()
+        }
+    )*};
+}
+
+impl Clone for TransformPaintPropertyNode {
+    /// A snapshot copy (S2-4 replaces copies with in-place `Update`); the
+    /// cache slot starts empty as before.
+    fn clone(&self) -> Self {
+        Self::new(
+            self.lifecycle.clone(),
+            self.id,
+            crate::property_cell::with_access(|access| self.state(access).clone()),
+        )
+    }
+}
+impl PartialEq for TransformPaintPropertyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.lifecycle == other.lifecycle
+            && self.id == other.id
+            && crate::property_cell::with_access(|access| {
+                self.state(access) == other.state(access)
+            })
+    }
+}
+
 impl TransformPaintPropertyNode {
+    /// Source: transform_paint_property_node.h:150-171 `Create`. The node
+    /// belongs to the calling document sequence.
+    pub fn new(
+        lifecycle: PaintPropertyNodeLifecycle,
+        id: u64,
+        state: TransformPaintPropertyNodeState,
+    ) -> Self {
+        Self {
+            geometry_mapper_cache: Default::default(),
+            lifecycle,
+            id,
+            state: PropertyCell::with_owner(PaintSequenceId::current(), state),
+        }
+    }
+    #[inline]
+    pub fn state<'a>(&'a self, access: &'a PropertyAccess) -> &'a TransformPaintPropertyNodeState {
+        self.state.get(access)
+    }
+    /// Exclusive access to a snapshot that is not shared yet.
+    #[inline]
+    pub fn state_mut(&mut self) -> &mut TransformPaintPropertyNodeState {
+        self.state.get_mut()
+    }
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.state(access).parent.as_ref()
+    }
+
+    state_getters! {'a;
+        IsIdentityOr2dTranslation -> bool;
+        IsIdentity -> bool;
+        Get2dTranslation -> [f32; 2];
+        Matrix -> &'a TransformMatrix;
+        MatrixWithOriginApplied -> foundation::gfx::Transform;
+        Origin -> [f64; 3];
+        ScrollNode -> Option<&'a Arc<ScrollPaintPropertyNode>>;
+        ScrollParentScrollTranslation -> Option<&'a Arc<TransformPaintPropertyNode>>;
+        IsAffectedByOuterViewportBoundsDelta -> bool;
+        IsAffectedBySafeAreaBottom -> bool;
+        IsInSubtreeOfPageScale -> bool;
+        GetStickyConstraint -> Option<&'a PaintCompositorStickyConstraint>;
+        GetAnchorPositionScrollData -> Option<&'a PaintAnchorPositionScrollData>;
+        FlattensInheritedTransform -> bool;
+        HasDirectCompositingReasons -> bool;
+        HasDirectCompositingReasonsOtherThan3dTransform -> bool;
+        HasActiveTransformAnimation -> bool;
+        RequiresCompositingForFixedPosition -> bool;
+        RequiresCompositingForFixedPositionOnly -> bool;
+        RequiresCompositingForFixedToViewport -> bool;
+        RequiresCompositingForStickyPosition -> bool;
+        RequiresCompositingForStickyPositionOnly -> bool;
+        RequiresCompositingForAnchorPosition -> bool;
+        DirectCompositingReasonsForDebugging -> foundation::CompositingReasons;
+        TransformAnimationIsAxisAligned -> bool;
+        RequiresCompositingForRootScroller -> bool;
+        RequiresCompositingForWillChangeTransform -> bool;
+        UsesCompositedScrolling -> bool;
+        RequiresCullRectExpansion -> bool;
+        GetCompositorElementId -> foundation::CompositorElementId;
+        GetVisibleFrameElementId -> foundation::CompositorElementId;
+        IsFramePaintOffsetTranslation -> bool;
+        DelegatesToParentForBackface -> bool;
+        RenderingContextId -> u64;
+        HasRenderingContext -> bool;
+        IsForSVGChild -> bool;
+    }
+
+    /// Source: transform_paint_property_node.h:173-185.
+    pub fn Update(
+        &mut self,
+        parent: Arc<TransformPaintPropertyNode>,
+        mut state: TransformPaintPropertyNode,
+        animation_state: TransformAnimationState,
+    ) -> PaintPropertyChangeType {
+        state.state_mut().parent = Some(parent);
+        let change = transform_state_change_with_animation(self, &state, animation_state);
+        let auxiliary_changed =
+            self.state_mut().sticky_constraint != state.state_mut().sticky_constraint;
+        if change != PaintPropertyChangeType::Unchanged || auxiliary_changed {
+            let lifecycle = if change == PaintPropertyChangeType::Unchanged {
+                self.lifecycle.clone()
+            } else {
+                self.lifecycle.updated(change)
+            };
+            let id = self.id;
+            state.geometry_mapper_cache = Default::default();
+            *self = state;
+            self.lifecycle = lifecycle;
+            self.id = id;
+        }
+        change
+    }
+
+    /// Source: transform_paint_property_node.cc:124-134.
+    pub fn DirectlyUpdateTransformAndOrigin(
+        &mut self,
+        matrix: TransformMatrix,
+        origin: [f64; 3],
+        animation_state: TransformAnimationState,
+    ) -> PaintPropertyChangeType {
+        let mut state = self.state_mut().clone();
+        state.matrix = matrix;
+        state.origin = origin;
+        let change = compute_transform_change(self.state_mut(), &state, animation_state);
+        self.state_mut().matrix = state.matrix;
+        self.state_mut().origin = state.origin;
+        if change != PaintPropertyChangeType::Unchanged {
+            self.lifecycle = self.lifecycle.updated(change);
+            self.geometry_mapper_cache = Default::default();
+        }
+        change
+    }
+
+    /// Source: transform_paint_property_node.cc:151-164. Supported producer
+    /// nodes are unaliased; associated Scroll changes are cleared recursively.
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        access: &PropertyAccess,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
+        let mut current = Some(self);
+        while let Some(node) = current {
+            if node.lifecycle.changed_sequence_number(access) == sequence_number {
+                break;
+            }
+            node.lifecycle.clear_changed(access, sequence_number);
+            if let Some(scroll) = node.ScrollNode(access) {
+                resolver.scroll(scroll).ClearChangedToRootIn(access, resolver, sequence_number);
+            }
+            current = node.Parent(access).map(|parent| &**resolver.transform(parent));
+        }
+    }
+
+    /// Source: transform_paint_property_node.cc:166-177.
+    pub fn CanMergeForFixedPosition(&self, access: &PropertyAccess, other: &Self) -> bool {
+        self.state(access).CanMergeForFixedPosition(other.state(access))
+    }
+
+    /// Source: transform_paint_property_node.cc:221-267.
+    pub fn ToJSON(&self) -> serde_json::Value {
+        crate::property_cell::with_access(|access| {
+            self.state(access).ToJSON(self.Parent(access), &self.lifecycle)
+        })
+    }
+    pub fn ToString(&self) -> String {
+        PaintPropertyNodeToString(&self.ToJSON())
+    }
+}
+
+/// The property-node links of one transform state, cloned out of the proof
+/// scope (snapshot directory and rebinder walks).
+#[derive(Clone)]
+pub struct TransformStateLinks {
+    pub parent: Option<Arc<TransformPaintPropertyNode>>,
+    pub scroll: Option<Arc<ScrollPaintPropertyNode>>,
+    pub scroll_parent_scroll_translation: Option<Arc<TransformPaintPropertyNode>>,
+}
+
+impl TransformPaintPropertyNodeState {
+    pub fn links(&self) -> TransformStateLinks {
+        TransformStateLinks {
+            parent: self.parent.clone(),
+            scroll: self.scroll.clone(),
+            scroll_parent_scroll_translation: self.scroll_parent_scroll_translation.clone(),
+        }
+    }
     fn ResolvedMatrix(&self) -> foundation::gfx::Transform {
         foundation::gfx::Transform::ColMajor(&self.matrix.values)
     }
@@ -452,76 +669,6 @@ impl TransformPaintPropertyNode {
         self.compositor.is_for_svg_child
     }
 
-    /// Source: transform_paint_property_node.h:173-185.
-    pub fn Update(
-        &mut self,
-        parent: Arc<TransformPaintPropertyNode>,
-        mut state: TransformPaintPropertyNode,
-        animation_state: TransformAnimationState,
-    ) -> PaintPropertyChangeType {
-        state.parent = Some(parent);
-        let change = transform_state_change_with_animation(self, &state, animation_state);
-        let auxiliary_changed = self.sticky_constraint != state.sticky_constraint;
-        if change != PaintPropertyChangeType::Unchanged || auxiliary_changed {
-            let lifecycle = if change == PaintPropertyChangeType::Unchanged {
-                self.lifecycle.clone()
-            } else {
-                self.lifecycle.updated(change)
-            };
-            let id = self.id;
-            state.geometry_mapper_cache = Default::default();
-            *self = state;
-            self.lifecycle = lifecycle;
-            self.id = id;
-        }
-        change
-    }
-
-    /// Source: transform_paint_property_node.cc:124-134.
-    pub fn DirectlyUpdateTransformAndOrigin(
-        &mut self,
-        matrix: TransformMatrix,
-        origin: [f64; 3],
-        animation_state: TransformAnimationState,
-    ) -> PaintPropertyChangeType {
-        let mut state = self.clone();
-        state.matrix = matrix;
-        state.origin = origin;
-        let change = compute_transform_change(self, &state, animation_state);
-        self.matrix = state.matrix;
-        self.origin = state.origin;
-        if change != PaintPropertyChangeType::Unchanged {
-            self.lifecycle = self.lifecycle.updated(change);
-            self.geometry_mapper_cache = Default::default();
-        }
-        change
-    }
-
-    /// Source: transform_paint_property_node.cc:151-164. Supported producer
-    /// nodes are unaliased; associated Scroll changes are cleared recursively.
-    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
-        let mut current = Some(self);
-        while let Some(node) = current {
-            if node.lifecycle.changed_sequence_number(access) == sequence_number {
-                break;
-            }
-            node.lifecycle.clear_changed(access, sequence_number);
-            if let Some(scroll) = node.ScrollNode() {
-                resolver.scroll(scroll).ClearChangedToRootIn(access, resolver, sequence_number);
-            }
-            current = node.parent.as_ref().map(|parent| &**resolver.transform(parent));
-        }
-    }
-
     /// Source: transform_paint_property_node.cc:166-177.
     pub fn CanMergeForFixedPosition(&self, other: &Self) -> bool {
         self.direct_compositing_reasons == other.direct_compositing_reasons
@@ -545,8 +692,12 @@ impl TransformPaintPropertyNode {
     /// Source: transform_paint_property_node.cc:221-267. The non-2d matrix
     /// diagnostic uses the source row-major matrix spelling because the full
     /// gfx decomposition formatter is not part of paint_model.
-    pub fn ToJSON(&self) -> serde_json::Value {
-        let mut json = PaintPropertyNodeToJSON(self.parent.as_ref(), &self.lifecycle);
+    fn ToJSON(
+        &self,
+        parent: Option<&Arc<TransformPaintPropertyNode>>,
+        lifecycle: &PaintPropertyNodeLifecycle,
+    ) -> serde_json::Value {
+        let mut json = PaintPropertyNodeToJSON(parent, lifecycle);
         if self.IsIdentityOr2dTranslation() {
             let translation = self.Get2dTranslation();
             if translation != [0.0, 0.0] {
@@ -633,9 +784,6 @@ impl TransformPaintPropertyNode {
         }
         serde_json::Value::Object(json)
     }
-    pub fn ToString(&self) -> String {
-        PaintPropertyNodeToString(&self.ToJSON())
-    }
 }
 /// Source value: cc/trees/sticky_position_constraint.h:23-68. Paint owns the
 /// builder's produced compositor constraint, distinct from Layout constraints.
@@ -660,16 +808,27 @@ pub struct PaintAnchorPositionScrollData {
     pub needs_scroll_adjustment_in_y: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Source: clip_paint_property_node.h:163-258. Dump id, lifecycle identity
+/// and the GeometryMapper cache slot are plain fields; the node `State` (with
+/// the parent link, paint_property_node.h:232) is confined to the document
+/// sequence that created the node and read through a `PropertyAccess`.
+#[derive(Debug)]
 pub struct ClipPaintPropertyNode {
     /// Source: clip_paint_property_node.h:249-258.
     pub geometry_mapper_cache: crate::opaque_paint_cache_slot::OpaquePaintCacheSlot,
+    pub lifecycle: PaintPropertyNodeLifecycle,
+    pub id: u64,
+    state: PropertyCell<ClipPaintPropertyNodeState>,
+}
+
+/// Source: clip_paint_property_node.h:88-125 `ClipPaintPropertyNode::State`
+/// plus the parent link.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipPaintPropertyNodeState {
     /// Source: clip_paint_property_node.h:88-125,188-217. Layout and paint
     /// clips are distinct source values, including compositor animation bounds.
     pub layout_clip_rects: ClipLayoutRects,
-    pub lifecycle: PaintPropertyNodeLifecycle,
-    pub id: u64,
-    pub parent: Option<Arc<Self>>,
+    pub parent: Option<Arc<ClipPaintPropertyNode>>,
     pub local_transform_space: Arc<TransformPaintPropertyNode>,
     pub rect: Option<PaintRect>,
     pub radii: PaintCornerRadii,
@@ -682,13 +841,63 @@ pub struct ClipPaintPropertyNode {
     pub pixel_moving_filter: Option<Arc<EffectPaintPropertyNode>>,
 }
 
+impl Clone for ClipPaintPropertyNode {
+    /// A snapshot copy (S2-4 replaces copies with in-place `Update`); the
+    /// cache slot starts empty as before.
+    fn clone(&self) -> Self {
+        Self::new(
+            self.lifecycle.clone(),
+            self.id,
+            crate::property_cell::with_access(|access| self.state(access).clone()),
+        )
+    }
+}
+impl PartialEq for ClipPaintPropertyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.lifecycle == other.lifecycle
+            && self.id == other.id
+            && crate::property_cell::with_access(|access| {
+                self.state(access) == other.state(access)
+            })
+    }
+}
+
 impl ClipPaintPropertyNode {
+    /// Source: clip_paint_property_node.h:150-160 `Create`. The node belongs
+    /// to the calling document sequence.
+    pub fn new(
+        lifecycle: PaintPropertyNodeLifecycle,
+        id: u64,
+        state: ClipPaintPropertyNodeState,
+    ) -> Self {
+        Self {
+            geometry_mapper_cache: Default::default(),
+            lifecycle,
+            id,
+            state: PropertyCell::with_owner(PaintSequenceId::current(), state),
+        }
+    }
+    #[inline]
+    pub fn state<'a>(&'a self, access: &'a PropertyAccess) -> &'a ClipPaintPropertyNodeState {
+        self.state.get(access)
+    }
+    /// Exclusive access to a snapshot that is not shared yet.
+    #[inline]
+    pub fn state_mut(&mut self) -> &mut ClipPaintPropertyNodeState {
+        self.state.get_mut()
+    }
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.state(access).parent.as_ref()
+    }
     /// Source: clip_paint_property_node.h:88-99,110-125. Normal source clip
     /// creation supplies equal precise/paint input until the builder supplies
     /// its unsnapped layout value or an explicit animation expansion.
     pub fn with_layout_clips(mut self) -> Self {
-        self.layout_clip_rects =
-            ClipLayoutRects::new(self.rect, self.radii.HasRadius(), None, None);
+        let state = self.state_mut();
+        state.layout_clip_rects =
+            ClipLayoutRects::new(state.rect, state.radii.HasRadius(), None, None);
         self
     }
     pub fn with_layout_clip_values(
@@ -697,57 +906,71 @@ impl ClipPaintPropertyNode {
         expanded: Option<PaintRect>,
         excluding_overlay: Option<PaintRect>,
     ) -> Self {
-        self.layout_clip_rects =
-            ClipLayoutRects::new(precise, self.radii.HasRadius(), expanded, excluding_overlay);
+        let state = self.state_mut();
+        state.layout_clip_rects =
+            ClipLayoutRects::new(precise, state.radii.HasRadius(), expanded, excluding_overlay);
         self
     }
-    pub fn clip_path_child_count(&self) -> usize {
-        self.clip_path
+    pub fn clip_path_child_count(&self, access: &PropertyAccess) -> usize {
+        self.state(access)
+            .clip_path
             .as_ref()
             .map_or(0, |shape| shape.paths().len())
     }
-    pub fn single_clip_path(&self) -> Option<&crate::paint_clip_path::PaintPath> {
-        self.clip_path.as_ref()?.single_path().map(Arc::as_ref)
+    pub fn single_clip_path<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> Option<&'a crate::paint_clip_path::PaintPath> {
+        self.state(access).clip_path.as_ref()?.single_path().map(Arc::as_ref)
     }
-    pub fn clip_path_verb_count(&self) -> usize {
-        self.clip_path.as_ref().map_or(0, |shape| {
+    pub fn clip_path_verb_count(&self, access: &PropertyAccess) -> usize {
+        self.state(access).clip_path.as_ref().map_or(0, |shape| {
             shape.paths().iter().map(|p| p.verb_count()).sum()
         })
     }
 
     // Source: clip_paint_property_node.h:183-232. The node owns these source
     // queries; compositor adapters only convert their value types.
-    pub fn LocalTransformSpace(&self) -> &Arc<TransformPaintPropertyNode> {
-        &self.local_transform_space
+    pub fn LocalTransformSpace<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> &'a Arc<TransformPaintPropertyNode> {
+        &self.state(access).local_transform_space
     }
-    pub fn PaintClipRect(&self) -> Option<PaintRect> {
-        self.rect
+    pub fn PaintClipRect(&self, access: &PropertyAccess) -> Option<PaintRect> {
+        self.state(access).rect
     }
-    pub fn PaintClipRadii(&self) -> PaintCornerRadii {
-        self.radii
+    pub fn PaintClipRadii(&self, access: &PropertyAccess) -> PaintCornerRadii {
+        self.state(access).radii
     }
-    pub fn LayoutClipRect(&self) -> ClipLayoutRect {
-        self.layout_clip_rects.expanded
+    pub fn LayoutClipRect(&self, access: &PropertyAccess) -> ClipLayoutRect {
+        self.state(access).layout_clip_rects.expanded
     }
-    pub fn PreciseLayoutClipRect(&self) -> ClipLayoutRect {
-        self.layout_clip_rects.precise
+    pub fn PreciseLayoutClipRect(&self, access: &PropertyAccess) -> ClipLayoutRect {
+        self.state(access).layout_clip_rects.precise
     }
-    pub fn IsForCompositeClipPathAnimation(&self) -> bool {
-        self.layout_clip_rects.expanded != self.layout_clip_rects.precise
+    pub fn IsForCompositeClipPathAnimation(&self, access: &PropertyAccess) -> bool {
+        let rects = &self.state(access).layout_clip_rects;
+        rects.expanded != rects.precise
     }
-    pub fn LayoutClipRectExcludingOverlayScrollbars(&self) -> ClipLayoutRect {
-        self.layout_clip_rects
-            .excluding_overlay
-            .unwrap_or(self.layout_clip_rects.precise)
+    pub fn LayoutClipRectExcludingOverlayScrollbars(
+        &self,
+        access: &PropertyAccess,
+    ) -> ClipLayoutRect {
+        let rects = &self.state(access).layout_clip_rects;
+        rects.excluding_overlay.unwrap_or(rects.precise)
     }
-    pub fn ClipPath(&self) -> Option<&Arc<PaintClipPath>> {
-        self.clip_path.as_ref()
+    pub fn ClipPath<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<PaintClipPath>> {
+        self.state(access).clip_path.as_ref()
     }
-    pub fn ClipPathEquals(&self, path: Option<&Arc<PaintClipPath>>) -> bool {
-        self.clip_path.as_ref() == path
+    pub fn ClipPathEquals(&self, access: &PropertyAccess, path: Option<&Arc<PaintClipPath>>) -> bool {
+        self.state(access).clip_path.as_ref() == path
     }
-    pub fn PixelMovingFilter(&self) -> Option<&Arc<EffectPaintPropertyNode>> {
-        self.pixel_moving_filter.as_ref()
+    pub fn PixelMovingFilter<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> Option<&'a Arc<EffectPaintPropertyNode>> {
+        self.state(access).pixel_moving_filter.as_ref()
     }
 
     /// Source: clip_paint_property_node.h:163-178. The incoming node is the
@@ -758,7 +981,7 @@ impl ClipPaintPropertyNode {
         parent: Arc<ClipPaintPropertyNode>,
         mut state: ClipPaintPropertyNode,
     ) -> PaintPropertyChangeType {
-        state.parent = Some(parent);
+        state.state_mut().parent = Some(parent);
         let change = clip_state_change(self, &state);
         if change != PaintPropertyChangeType::Unchanged {
             let lifecycle = self.lifecycle.updated(change);
@@ -790,14 +1013,17 @@ impl ClipPaintPropertyNode {
             }
             node.lifecycle.clear_changed(access, sequence_number);
             resolver
-                .transform(node.LocalTransformSpace())
+                .transform(node.LocalTransformSpace(access))
                 .ClearChangedToRootIn(access, resolver, sequence_number);
-            current = node.parent.as_ref().map(|parent| &**resolver.clip(parent));
+            current = node.Parent(access).map(|parent| &**resolver.clip(parent));
         }
     }
 
     /// Source: clip_paint_property_node.cc:83-114.
     pub fn ToJSON(&self) -> serde_json::Value {
+        crate::property_cell::with_access(|access| self.ToJSONIn(access))
+    }
+    fn ToJSONIn(&self, access: &PropertyAccess) -> serde_json::Value {
         fn rect_string(rect: Option<PaintRect>) -> String {
             let rect = rect.unwrap_or_else(|| {
                 let infinite = foundation::infinite_int_rect::InfiniteIntRect();
@@ -811,41 +1037,41 @@ impl ClipPaintPropertyNode {
             format!("{},{} {}x{}", rect.x, rect.y, rect.width, rect.height)
         }
 
-        let mut json = PaintPropertyNodeToJSON(self.parent.as_ref(), &self.lifecycle);
+        let mut json = PaintPropertyNodeToJSON(self.Parent(access), &self.lifecycle);
         json.insert(
             "localTransformSpace".into(),
-            serde_json::Value::String(format!("{:p}", Arc::as_ptr(&self.local_transform_space))),
+            serde_json::Value::String(format!("{:p}", Arc::as_ptr(self.LocalTransformSpace(access)))),
         );
         json.insert(
             "rect".into(),
-            serde_json::Value::String(rect_string(self.PaintClipRect())),
+            serde_json::Value::String(rect_string(self.PaintClipRect(access))),
         );
-        if let Some(excluding) = self.layout_clip_rects.excluding_overlay {
-            if excluding != self.layout_clip_rects.expanded {
+        if let Some(excluding) = self.state(access).layout_clip_rects.excluding_overlay {
+            if excluding != self.state(access).layout_clip_rects.expanded {
                 json.insert(
                     "rectExcludingOverlayScrollbars".into(),
                     serde_json::Value::String(rect_string(excluding.rect)),
                 );
             }
         }
-        if self.ClipPath().is_some() {
+        if self.ClipPath(access).is_some() {
             json.insert("hasClipPath".into(), serde_json::Value::Bool(true));
         }
-        if self.IsForCompositeClipPathAnimation() {
+        if self.IsForCompositeClipPathAnimation(access) {
             json.insert(
                 "isForCompositeClipPathAnimation".into(),
                 serde_json::Value::Bool(true),
             );
             json.insert(
                 "expandedLayoutClipRect".into(),
-                serde_json::Value::String(rect_string(self.LayoutClipRect().rect)),
+                serde_json::Value::String(rect_string(self.LayoutClipRect(access).rect)),
             );
             json.insert(
                 "preciseLayoutClipRect".into(),
-                serde_json::Value::String(rect_string(self.PreciseLayoutClipRect().rect)),
+                serde_json::Value::String(rect_string(self.PreciseLayoutClipRect(access).rect)),
             );
         }
-        if let Some(filter) = self.PixelMovingFilter() {
+        if let Some(filter) = self.PixelMovingFilter(access) {
             json.insert(
                 "pixelMovingFilter".into(),
                 serde_json::Value::String(format!("{:p}", Arc::as_ptr(filter))),
@@ -895,17 +1121,28 @@ impl ClipLayoutRects {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Source: effect_paint_property_node.h:216-433. Dump id and lifecycle
+/// identity are plain fields; the node `State` (with the parent link,
+/// paint_property_node.h:232) is confined to the document sequence that
+/// created the node and read through a `PropertyAccess`.
+#[derive(Debug)]
 pub struct EffectPaintPropertyNode {
+    pub lifecycle: PaintPropertyNodeLifecycle,
+    pub id: u64,
+    state: PropertyCell<EffectPaintPropertyNodeState>,
+}
+
+/// Source: effect_paint_property_node.h:82-176 `EffectPaintPropertyNode::State`
+/// plus the parent link.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectPaintPropertyNodeState {
     pub compositor: EffectCompositorState,
     /// Source: effect_paint_property_node.h:97-105,261-269.
     pub backdrop_filter_bounds: Option<Arc<crate::paint_clip_path::PaintPath>>,
     /// Source: effect_paint_property_node.h:427-429; builder.cc:2263-2264,
     /// 2493-2498,2690-2691. The producer publishes inherited participation.
     pub self_or_ancestor_participates_in_view_transition: bool,
-    pub lifecycle: PaintPropertyNodeLifecycle,
-    pub id: u64,
-    pub parent: Option<Arc<Self>>,
+    pub parent: Option<Arc<EffectPaintPropertyNode>>,
     pub local_transform_space: Arc<TransformPaintPropertyNode>,
     pub output_clip: Option<Arc<ClipPaintPropertyNode>>,
     /// Filter reference box in `local_transform_space`.  This is independent
@@ -983,28 +1220,247 @@ pub struct PaintCanvasChildState {
 
 pub use foundation::canvas_child_paint_state::CanvasChildPaintState;
 
+impl Clone for EffectPaintPropertyNode {
+    /// A snapshot copy (S2-4 replaces copies with in-place `Update`).
+    fn clone(&self) -> Self {
+        Self::new(
+            self.lifecycle.clone(),
+            self.id,
+            crate::property_cell::with_access(|access| self.state(access).clone()),
+        )
+    }
+}
+impl PartialEq for EffectPaintPropertyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.lifecycle == other.lifecycle
+            && self.id == other.id
+            && crate::property_cell::with_access(|access| {
+                self.state(access) == other.state(access)
+            })
+    }
+}
+
 impl EffectPaintPropertyNode {
+    /// Source: effect_paint_property_node.h:197-214 `Create`. The node belongs
+    /// to the calling document sequence.
+    pub fn new(
+        lifecycle: PaintPropertyNodeLifecycle,
+        id: u64,
+        state: EffectPaintPropertyNodeState,
+    ) -> Self {
+        Self {
+            lifecycle,
+            id,
+            state: PropertyCell::with_owner(PaintSequenceId::current(), state),
+        }
+    }
+    #[inline]
+    pub fn state<'a>(&'a self, access: &'a PropertyAccess) -> &'a EffectPaintPropertyNodeState {
+        self.state.get(access)
+    }
+    /// Exclusive access to a snapshot that is not shared yet.
+    #[inline]
+    pub fn state_mut(&mut self) -> &mut EffectPaintPropertyNodeState {
+        self.state.get_mut()
+    }
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.state(access).parent.as_ref()
+    }
     /// Current producer publishes FilterInfo only at its actual nonempty filter
     /// construction sites; retain this ownership fact on the published node.
     pub fn with_filter_presence(mut self) -> Self {
-        self.compositor.has_filter_info = !self.filters.is_empty();
-        self.compositor.has_backdrop_filter_info = !self.backdrop_filters.is_empty();
+        let state = self.state_mut();
+        state.compositor.has_filter_info = !state.filters.is_empty();
+        state.compositor.has_backdrop_filter_info = !state.backdrop_filters.is_empty();
         self
     }
     pub fn with_inherited_view_transition(mut self) -> Self {
-        self.self_or_ancestor_participates_in_view_transition |= self
-            .parent
-            .as_ref()
-            .is_some_and(|parent| parent.self_or_ancestor_participates_in_view_transition);
+        let state = self.state_mut();
+        let inherited = state.parent.as_ref().is_some_and(|parent| {
+            crate::property_cell::with_access(|access| {
+                parent.state(access).self_or_ancestor_participates_in_view_transition
+            })
+        });
+        state.self_or_ancestor_participates_in_view_transition |= inherited;
         self
     }
     /// Used by the producer creating a participating view-transition effect;
     /// descendants subsequently inherit this same source-owned value.
     pub fn with_view_transition_participation(mut self, participates: bool) -> Self {
-        self.self_or_ancestor_participates_in_view_transition = participates;
+        self.state_mut().self_or_ancestor_participates_in_view_transition = participates;
         self.with_inherited_view_transition()
     }
 
+    state_getters! {'a;
+        LocalTransformSpace -> &'a Arc<TransformPaintPropertyNode>;
+        OutputClip -> Option<&'a Arc<ClipPaintPropertyNode>>;
+        Filter -> Option<&'a crate::cc::paint::filter_operations::FilterOperations>;
+        BackdropFilter -> Option<&'a crate::cc::paint::filter_operations::FilterOperations>;
+        HasReferenceFilter -> bool;
+        HasFilterThatMovesPixels -> bool;
+        HasRealEffects -> bool;
+        IsOpacityOnly -> bool;
+        HasDirectCompositingReasons -> bool;
+        RequiresCompositingForUnboundedElement -> bool;
+        RequiresCompositingForBackdropFilterMask -> bool;
+        RequiresCompositingForCanvasChild -> bool;
+        FlattensAtLeafOf3DScene -> bool;
+        HasActiveOpacityAnimation -> bool;
+        HasActiveFilterAnimation -> bool;
+        HasActiveBackdropFilterAnimation -> bool;
+        RequiresCompositingForWillChangeOpacity -> bool;
+        RequiresCompositingForWillChangeFilter -> bool;
+        RequiresCompositingForWillChangeBackdropFilter -> bool;
+        MayHaveOpacity -> bool;
+        MayHaveFilter -> bool;
+        MayHaveBackdropFilter -> bool;
+        NeedsPixelMovingFilterClipExpander -> bool;
+        MayHaveBackdropEffect -> bool;
+        HasValidViewTransitionElementResourceId -> bool;
+        HasElementCaptureId -> bool;
+        HasCanvasChildState -> bool;
+        CanvasChildId -> i32;
+        canvas_child_paint_state -> Option<&'a CanvasChildPaintState>;
+        CanvasChildContentTransform -> &'a Arc<TransformPaintPropertyNode>;
+        CanvasChildContentClip -> &'a Arc<ClipPaintPropertyNode>;
+        CanvasChildContentEffect -> &'a Arc<EffectPaintPropertyNode>;
+        DrawsContent -> bool;
+        IsInTaintedSubtree -> bool;
+        IsInDrawableCanvasSubtree -> bool;
+        NeedsEffectFor2DScaleTransform -> bool;
+    }
+
+    /// Source: effect_paint_property_node.cc:112-123.
+    pub fn IsOpacityChangeSimple(
+        opacity: f32,
+        new_opacity: f32,
+        direct_compositing_reasons: foundation::CompositingReasons,
+        new_direct_compositing_reasons: foundation::CompositingReasons,
+    ) -> bool {
+        EffectPaintPropertyNodeState::IsOpacityChangeSimple(
+            opacity,
+            new_opacity,
+            direct_compositing_reasons,
+            new_direct_compositing_reasons,
+        )
+    }
+
+    /// Source: effect_paint_property_node.cc:195-217.
+    pub fn ComputeOpacityChange(
+        &self,
+        access: &PropertyAccess,
+        new_opacity: f32,
+        animation_state: EffectAnimationState,
+    ) -> PaintPropertyChangeType {
+        self.state(access).ComputeOpacityChange(new_opacity, animation_state)
+    }
+
+    /// Source: effect_paint_property_node.h:216-227. The incoming value is the
+    /// source `State`; resident identity and dump-local id stay on this node.
+    pub fn Update(
+        &mut self,
+        parent: Arc<EffectPaintPropertyNode>,
+        mut state: EffectPaintPropertyNode,
+        animation_state: EffectAnimationState,
+    ) -> PaintPropertyChangeType {
+        state.state_mut().parent = Some(parent);
+        let change = effect_state_change_with_animation(self, &state, animation_state);
+        if change != PaintPropertyChangeType::Unchanged {
+            let lifecycle = self.lifecycle.updated(change);
+            let id = self.id;
+            *self = state;
+            self.lifecycle = lifecycle;
+            self.id = id;
+        }
+        change
+    }
+
+    /// Source: effect_paint_property_node.cc:219-227. Rust publishes a new
+    /// immutable value revision while retaining the same resident node identity.
+    pub fn DirectlyUpdateOpacity(
+        &mut self,
+        opacity: f32,
+        animation_state: EffectAnimationState,
+    ) -> PaintPropertyChangeType {
+        let change = self.state_mut().ComputeOpacityChange(opacity, animation_state);
+        self.state_mut().opacity = opacity;
+        if change != PaintPropertyChangeType::Unchanged {
+            self.lifecycle = self.lifecycle.updated(change);
+        }
+        change
+    }
+
+    /// Source: effect_paint_property_node.cc:181-193. Supported snapshots are
+    /// unaliased; local transform and output clip dependencies are included.
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        access: &PropertyAccess,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
+        let mut current = Some(self);
+        while let Some(node) = current {
+            if node.lifecycle.changed_sequence_number(access) == sequence_number {
+                break;
+            }
+            node.lifecycle.clear_changed(access, sequence_number);
+            resolver
+                .transform(node.LocalTransformSpace(access))
+                .ClearChangedToRootIn(access, resolver, sequence_number);
+            if let Some(clip) = node.OutputClip(access) {
+                resolver.clip(clip).ClearChangedToRootIn(access, resolver, sequence_number);
+            }
+            current = node.Parent(access).map(|parent| &**resolver.effect(parent));
+        }
+    }
+
+    /// Source: effect_paint_property_node.cc:257-282.
+    pub fn ToJSON(&self) -> serde_json::Value {
+        crate::property_cell::with_access(|access| {
+            PaintPropertyNodeToJSONWithState(self.Parent(access), &self.lifecycle, self.state(access))
+        })
+    }
+
+    pub fn ToString(&self) -> String {
+        PaintPropertyNodeToString(&self.ToJSON())
+    }
+}
+
+fn PaintPropertyNodeToJSONWithState(
+    parent: Option<&Arc<EffectPaintPropertyNode>>,
+    lifecycle: &PaintPropertyNodeLifecycle,
+    state: &EffectPaintPropertyNodeState,
+) -> serde_json::Value {
+    state.ToJSON(parent, lifecycle)
+}
+
+/// The property-node links of one effect state, cloned out of the proof scope
+/// (snapshot directory and rebinder walks).
+#[derive(Clone)]
+pub struct EffectStateLinks {
+    pub parent: Option<Arc<EffectPaintPropertyNode>>,
+    pub local_transform_space: Arc<TransformPaintPropertyNode>,
+    pub output_clip: Option<Arc<ClipPaintPropertyNode>>,
+    pub backdrop_filter_clip: Option<Arc<ClipPaintPropertyNode>>,
+    pub canvas_child_state: Option<Arc<PaintCanvasChildState>>,
+}
+
+impl EffectPaintPropertyNodeState {
+    pub fn links(&self) -> EffectStateLinks {
+        EffectStateLinks {
+            parent: self.parent.clone(),
+            local_transform_space: self.local_transform_space.clone(),
+            output_clip: self.output_clip.clone(),
+            backdrop_filter_clip: self.backdrop_filter_clip.clone(),
+            canvas_child_state: self.compositor.canvas_child_state.clone(),
+        }
+    }
     pub fn LocalTransformSpace(&self) -> &Arc<TransformPaintPropertyNode> {
         &self.local_transform_space
     }
@@ -1261,72 +1717,13 @@ impl EffectPaintPropertyNode {
         Unchanged
     }
 
-    /// Source: effect_paint_property_node.h:216-227. The incoming value is the
-    /// source `State`; resident identity and dump-local id stay on this node.
-    pub fn Update(
-        &mut self,
-        parent: Arc<EffectPaintPropertyNode>,
-        mut state: EffectPaintPropertyNode,
-        animation_state: EffectAnimationState,
-    ) -> PaintPropertyChangeType {
-        state.parent = Some(parent);
-        let change = effect_state_change_with_animation(self, &state, animation_state);
-        if change != PaintPropertyChangeType::Unchanged {
-            let lifecycle = self.lifecycle.updated(change);
-            let id = self.id;
-            *self = state;
-            self.lifecycle = lifecycle;
-            self.id = id;
-        }
-        change
-    }
-
-    /// Source: effect_paint_property_node.cc:219-227. Rust publishes a new
-    /// immutable value revision while retaining the same resident node identity.
-    pub fn DirectlyUpdateOpacity(
-        &mut self,
-        opacity: f32,
-        animation_state: EffectAnimationState,
-    ) -> PaintPropertyChangeType {
-        let change = self.ComputeOpacityChange(opacity, animation_state);
-        self.opacity = opacity;
-        if change != PaintPropertyChangeType::Unchanged {
-            self.lifecycle = self.lifecycle.updated(change);
-        }
-        change
-    }
-
-    /// Source: effect_paint_property_node.cc:181-193. Supported snapshots are
-    /// unaliased; local transform and output clip dependencies are included.
-    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
-        let mut current = Some(self);
-        while let Some(node) = current {
-            if node.lifecycle.changed_sequence_number(access) == sequence_number {
-                break;
-            }
-            node.lifecycle.clear_changed(access, sequence_number);
-            resolver
-                .transform(node.LocalTransformSpace())
-                .ClearChangedToRootIn(access, resolver, sequence_number);
-            if let Some(clip) = node.OutputClip() {
-                resolver.clip(clip).ClearChangedToRootIn(access, resolver, sequence_number);
-            }
-            current = node.parent.as_ref().map(|parent| &**resolver.effect(parent));
-        }
-    }
-
     /// Source: effect_paint_property_node.cc:257-282. This is the source Paint
     /// node diagnostic object consumed by the compositor debug projection.
-    pub fn ToJSON(&self) -> serde_json::Value {
+    fn ToJSON(
+        &self,
+        parent: Option<&Arc<EffectPaintPropertyNode>>,
+        lifecycle: &PaintPropertyNodeLifecycle,
+    ) -> serde_json::Value {
         use serde_json::Value;
 
         fn blend_mode_name(mode: PaintBlendMode) -> &'static str {
@@ -1351,7 +1748,7 @@ impl EffectPaintPropertyNode {
             }
         }
 
-        let mut json = PaintPropertyNodeToJSON(self.parent.as_ref(), &self.lifecycle);
+        let mut json = PaintPropertyNodeToJSON(parent, lifecycle);
         json.insert(
             "localTransformSpace".into(),
             Value::String(format!("{:p}", Arc::as_ptr(&self.local_transform_space))),
@@ -1397,17 +1794,24 @@ impl EffectPaintPropertyNode {
         }
         Value::Object(json)
     }
-
-    pub fn ToString(&self) -> String {
-        PaintPropertyNodeToString(&self.ToJSON())
-    }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Source: scroll_paint_property_node.h:52-83,231-233. Dump id and lifecycle
+/// identity are plain fields; the node `State` (with the parent link,
+/// paint_property_node.h:232) is confined to the document sequence that
+/// created the node and read through a `PropertyAccess`.
+#[derive(Debug)]
 pub struct ScrollPaintPropertyNode {
-    pub compositor: ScrollCompositorState,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
+    state: PropertyCell<ScrollPaintPropertyNodeState>,
+}
+
+/// Source: scroll_paint_property_node.h:52-83 `ScrollPaintPropertyNode::State`,
+/// plus the parent link and Rechrom's Layout association fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScrollPaintPropertyNodeState {
+    pub compositor: ScrollCompositorState,
     /// Stable source owner identity used to connect Layout's sticky scroll
     /// ancestor to this Paint property node without exposing either owner.
     pub owner_client_id: u64,
@@ -1415,7 +1819,7 @@ pub struct ScrollPaintPropertyNode {
     /// Coordinator uses this retained source identity when reflecting an impl
     /// scroll; it must not depend on optional PaintController debug records.
     pub owner_node_id: u64,
-    pub parent: Option<Arc<Self>>,
+    pub parent: Option<Arc<ScrollPaintPropertyNode>>,
     pub overflow_clip: Option<Arc<ClipPaintPropertyNode>>,
     pub container_rect: PaintRect,
     pub contents_rect: PaintRect,
@@ -1494,54 +1898,111 @@ impl Default for ScrollCompositorState {
     }
 }
 
+impl Clone for ScrollPaintPropertyNode {
+    /// A snapshot copy (S2-4 replaces copies with in-place `Update`).
+    fn clone(&self) -> Self {
+        Self::new(
+            self.lifecycle.clone(),
+            self.id,
+            crate::property_cell::with_access(|access| self.state(access).clone()),
+        )
+    }
+}
+impl PartialEq for ScrollPaintPropertyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.lifecycle == other.lifecycle
+            && self.id == other.id
+            && crate::property_cell::with_access(|access| {
+                self.state(access) == other.state(access)
+            })
+    }
+}
+
 impl ScrollPaintPropertyNode {
+    /// Source: scroll_paint_property_node.h:99-106 `Create`. The node belongs
+    /// to the calling document sequence.
+    pub fn new(
+        lifecycle: PaintPropertyNodeLifecycle,
+        id: u64,
+        state: ScrollPaintPropertyNodeState,
+    ) -> Self {
+        Self {
+            lifecycle,
+            id,
+            state: PropertyCell::with_owner(PaintSequenceId::current(), state),
+        }
+    }
+    #[inline]
+    pub fn state<'a>(&'a self, access: &'a PropertyAccess) -> &'a ScrollPaintPropertyNodeState {
+        self.state.get(access)
+    }
+    /// Exclusive access to a snapshot that is not shared yet.
+    #[inline]
+    pub fn state_mut(&mut self) -> &mut ScrollPaintPropertyNodeState {
+        self.state.get_mut()
+    }
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.state(access).parent.as_ref()
+    }
+
     // Source: scroll_paint_property_node.h:127-211. Both referenced runtime
     // features are stable at the pinned Chromium revision, so ContentsRect and
     // ScrollingContentsCullRect use their enabled source branches.
-    pub fn OverscrollBehavior(&self) -> [LayoutOverscrollBehavior; 2] {
-        self.compositor.overscroll_behavior
+    pub fn OverscrollBehavior(&self, access: &PropertyAccess) -> [LayoutOverscrollBehavior; 2] {
+        self.state(access).compositor.overscroll_behavior
     }
-    pub fn ContainerRect(&self) -> PaintRect {
-        self.container_rect
+    pub fn ContainerRect(&self, access: &PropertyAccess) -> PaintRect {
+        self.state(access).container_rect
     }
-    pub fn ContentsRect(&self) -> PaintRect {
-        self.contents_rect
+    pub fn ContentsRect(&self, access: &PropertyAccess) -> PaintRect {
+        self.state(access).contents_rect
     }
-    pub fn OverflowClipNode(&self) -> Option<&Arc<ClipPaintPropertyNode>> {
-        self.overflow_clip.as_ref()
+    pub fn OverflowClipNode<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> Option<&'a Arc<ClipPaintPropertyNode>> {
+        self.state(access).overflow_clip.as_ref()
     }
-    pub fn UserScrollableHorizontal(&self) -> bool {
-        self.user_scrollable_horizontal
+    pub fn UserScrollableHorizontal(&self, access: &PropertyAccess) -> bool {
+        self.state(access).user_scrollable_horizontal
     }
-    pub fn UserScrollableVertical(&self) -> bool {
-        self.user_scrollable_vertical
+    pub fn UserScrollableVertical(&self, access: &PropertyAccess) -> bool {
+        self.state(access).user_scrollable_vertical
     }
-    pub fn UserScrollable(&self) -> bool {
-        self.UserScrollableHorizontal() || self.UserScrollableVertical()
+    pub fn UserScrollable(&self, access: &PropertyAccess) -> bool {
+        self.UserScrollableHorizontal(access) || self.UserScrollableVertical(access)
     }
-    pub fn PreventViewportScrollingFromInner(&self) -> bool {
-        self.compositor.prevent_viewport_scrolling_from_inner
+    pub fn PreventViewportScrollingFromInner(&self, access: &PropertyAccess) -> bool {
+        self.state(access).compositor.prevent_viewport_scrolling_from_inner
     }
-    pub fn MaxScrollOffsetAffectedByPageScale(&self) -> bool {
-        self.compositor.max_scroll_offset_affected_by_page_scale
+    pub fn MaxScrollOffsetAffectedByPageScale(&self, access: &PropertyAccess) -> bool {
+        self.state(access).compositor.max_scroll_offset_affected_by_page_scale
     }
-    pub fn PreventScrollAxisLocking(&self) -> bool {
-        self.compositor.prevent_scroll_axis_locking
+    pub fn PreventScrollAxisLocking(&self, access: &PropertyAccess) -> bool {
+        self.state(access).compositor.prevent_scroll_axis_locking
     }
-    pub fn GetCompositedScrollingPreference(&self) -> PaintCompositedScrollingPreference {
-        self.compositor.composited_scrolling_preference
+    pub fn GetCompositedScrollingPreference(
+        &self,
+        access: &PropertyAccess,
+    ) -> PaintCompositedScrollingPreference {
+        self.state(access).compositor.composited_scrolling_preference
     }
-    pub fn GetMainThreadRepaintReasons(&self) -> u8 {
-        self.compositor.main_thread_repaint_reasons
+    pub fn GetMainThreadRepaintReasons(&self, access: &PropertyAccess) -> u8 {
+        self.state(access).compositor.main_thread_repaint_reasons
     }
-    pub fn RequiresMainThreadForBackgroundAttachmentFixed(&self) -> bool {
-        self.GetMainThreadRepaintReasons() & 1 != 0
+    pub fn RequiresMainThreadForBackgroundAttachmentFixed(&self, access: &PropertyAccess) -> bool {
+        self.GetMainThreadRepaintReasons(access) & 1 != 0
     }
-    pub fn GetCompositorElementId(&self) -> foundation::CompositorElementId {
-        self.compositor.compositor_element_id
+    pub fn GetCompositorElementId(
+        &self,
+        access: &PropertyAccess,
+    ) -> foundation::CompositorElementId {
+        self.state(access).compositor.compositor_element_id
     }
-    pub fn ScrollingContentsCullRect(&self) -> PaintRect {
-        self.compositor.scrolling_contents_cull_rect
+    pub fn ScrollingContentsCullRect(&self, access: &PropertyAccess) -> PaintRect {
+        self.state(access).compositor.scrolling_contents_cull_rect
     }
 
     /// Source: scroll_paint_property_node.h:199-204. Direct cull-rect updates
@@ -1550,7 +2011,7 @@ impl ScrollPaintPropertyNode {
         self.lifecycle = self
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlySimpleValues);
-        self.compositor.scrolling_contents_cull_rect = rect;
+        self.state_mut().compositor.scrolling_contents_cull_rect = rect;
     }
 
     /// Source: scroll_paint_property_node.h:109-120. Layout-only association
@@ -1561,11 +2022,12 @@ impl ScrollPaintPropertyNode {
         parent: Arc<ScrollPaintPropertyNode>,
         mut state: ScrollPaintPropertyNode,
     ) -> PaintPropertyChangeType {
-        state.parent = Some(parent);
+        state.state_mut().parent = Some(parent);
         let change = scroll_state_change(self, &state);
-        let auxiliary_changed = self.owner_client_id != state.owner_client_id
-            || self.minimum_scroll_offset != state.minimum_scroll_offset
-            || self.maximum_scroll_offset != state.maximum_scroll_offset;
+        let (old, new) = (self.state.get_mut(), state.state.get_mut());
+        let auxiliary_changed = old.owner_client_id != new.owner_client_id
+            || old.minimum_scroll_offset != new.minimum_scroll_offset
+            || old.maximum_scroll_offset != new.maximum_scroll_offset;
         if change != PaintPropertyChangeType::Unchanged || auxiliary_changed {
             let lifecycle = if change == PaintPropertyChangeType::Unchanged {
                 self.lifecycle.clone()
@@ -1597,7 +2059,7 @@ impl ScrollPaintPropertyNode {
                 break;
             }
             node.lifecycle.clear_changed(access, sequence_number);
-            current = node.parent.as_ref().map(|parent| &**resolver.scroll(parent));
+            current = node.Parent(access).map(|parent| &**resolver.scroll(parent));
         }
     }
 
@@ -1605,6 +2067,9 @@ impl ScrollPaintPropertyNode {
     /// intentionally absent until the producer can publish the complete cc
     /// value; supported non-root snapshots prove that absence explicitly.
     pub fn ToJSON(&self) -> serde_json::Value {
+        crate::property_cell::with_access(|access| self.ToJSONIn(access))
+    }
+    fn ToJSONIn(&self, access: &PropertyAccess) -> serde_json::Value {
         fn rect_string(rect: PaintRect) -> String {
             format!("{},{} {}x{}", rect.x, rect.y, rect.width, rect.height)
         }
@@ -1630,28 +2095,28 @@ impl ScrollPaintPropertyNode {
             .join(", ")
         }
 
-        let mut json = PaintPropertyNodeToJSON(self.parent.as_ref(), &self.lifecycle);
-        if self.ContainerRect().width != 0.0 && self.ContainerRect().height != 0.0 {
+        let mut json = PaintPropertyNodeToJSON(self.Parent(access), &self.lifecycle);
+        if self.ContainerRect(access).width != 0.0 && self.ContainerRect(access).height != 0.0 {
             json.insert(
                 "containerRect".into(),
-                serde_json::Value::String(rect_string(self.ContainerRect())),
+                serde_json::Value::String(rect_string(self.ContainerRect(access))),
             );
         }
-        if self.ContentsRect().width != 0.0 && self.ContentsRect().height != 0.0 {
+        if self.ContentsRect(access).width != 0.0 && self.ContentsRect(access).height != 0.0 {
             json.insert(
                 "contentsRect".into(),
-                serde_json::Value::String(rect_string(self.ContentsRect())),
+                serde_json::Value::String(rect_string(self.ContentsRect(access))),
             );
         }
-        if let Some(clip) = self.OverflowClipNode() {
+        if let Some(clip) = self.OverflowClipNode(access) {
             json.insert(
                 "overflowClipNode".into(),
                 serde_json::Value::String(format!("{:p}", Arc::as_ptr(clip))),
             );
         }
-        if self.UserScrollable() {
-            let value = if self.UserScrollableHorizontal() {
-                if self.UserScrollableVertical() {
+        if self.UserScrollable(access) {
+            let value = if self.UserScrollableHorizontal(access) {
+                if self.UserScrollableVertical(access) {
                     "both"
                 } else {
                     "horizontal"
@@ -1664,26 +2129,26 @@ impl ScrollPaintPropertyNode {
                 serde_json::Value::String(value.into()),
             );
         }
-        if self.GetMainThreadRepaintReasons() != 0 {
+        if self.GetMainThreadRepaintReasons(access) != 0 {
             json.insert(
                 "mainThreadReasons".into(),
-                serde_json::Value::String(repaint_reasons(self.GetMainThreadRepaintReasons())),
+                serde_json::Value::String(repaint_reasons(self.GetMainThreadRepaintReasons(access))),
             );
         }
-        if self.MaxScrollOffsetAffectedByPageScale() {
+        if self.MaxScrollOffsetAffectedByPageScale(access) {
             json.insert(
                 "maxScrollOffsetAffectedByPageScale".into(),
                 serde_json::Value::String("true".into()),
             );
         }
-        let compositor_id = self.GetCompositorElementId().GetInternalValue();
+        let compositor_id = self.GetCompositorElementId(access).GetInternalValue();
         if compositor_id != 0 {
             json.insert(
                 "compositorElementId".into(),
                 serde_json::Value::String(format!("({compositor_id})")),
             );
         }
-        let overscroll = self.OverscrollBehavior();
+        let overscroll = self.OverscrollBehavior(access);
         if overscroll[0] != LayoutOverscrollBehavior::kAuto {
             json.insert(
                 "overscroll-behavior-x".into(),
@@ -1696,14 +2161,14 @@ impl ScrollPaintPropertyNode {
                 serde_json::Value::String(overscroll_name(overscroll[1]).into()),
             );
         }
-        if self.PreventScrollAxisLocking() {
+        if self.PreventScrollAxisLocking(access) {
             json.insert(
                 "preventScrollAxisLock".into(),
                 serde_json::Value::Bool(true),
             );
         }
         let infinite = foundation::infinite_int_rect::InfiniteIntRect();
-        let cull = self.ScrollingContentsCullRect();
+        let cull = self.ScrollingContentsCullRect(access);
         let is_infinite = cull.x == f64::from(infinite.x())
             && cull.y == f64::from(infinite.y())
             && cull.width == f64::from(infinite.width())
@@ -1775,30 +2240,29 @@ impl PropertyTreeState {
             };
             // ScrollRoot is a sentinel, not a real scroll. Its nullable overflow
             // clip also avoids manufacturing a cyclic root clip relationship.
-            let scroll = Arc::new(ScrollPaintPropertyNode {
-                compositor: Default::default(),
-                lifecycle: PaintPropertyNodeLifecycle::root(),
-                id: 0,
-                owner_client_id: 0,
-                owner_node_id: 0,
-                parent: None,
-                overflow_clip: None,
-                container_rect: infinite,
-                contents_rect: infinite,
-                minimum_scroll_offset: Offset::default(),
-                maximum_scroll_offset: Offset::default(),
-                user_scrollable_horizontal: false,
-                user_scrollable_vertical: false,
-            });
-            let transform = Arc::new(TransformPaintPropertyNode {
+            let scroll = Arc::new(ScrollPaintPropertyNode::new(
+                PaintPropertyNodeLifecycle::root(),
+                0,
+                ScrollPaintPropertyNodeState {
+                    compositor: Default::default(),
+                    owner_client_id: 0,
+                    owner_node_id: 0,
+                    parent: None,
+                    overflow_clip: None,
+                    container_rect: infinite,
+                    contents_rect: infinite,
+                    minimum_scroll_offset: Offset::default(),
+                    maximum_scroll_offset: Offset::default(),
+                    user_scrollable_horizontal: false,
+                    user_scrollable_vertical: false,
+                },
+            ));
+            let transform = Arc::new(TransformPaintPropertyNode::new(PaintPropertyNodeLifecycle::root(), 0, TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState {
                     in_subtree_of_page_scale: false,
                     ..Default::default()
                 },
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: PaintPropertyNodeLifecycle::root(),
-                id: 0,
                 parent: None,
                 matrix: TransformMatrix::default(),
                 origin: [0.0; 3],
@@ -1808,30 +2272,29 @@ impl PropertyTreeState {
                 scroll: Some(scroll),
                 sticky_constraint: None,
                 direct_compositing_reasons: Default::default(),
-            });
+            }));
             let clip = Arc::new(
-                ClipPaintPropertyNode {
-                    geometry_mapper_cache: Default::default(),
-                    layout_clip_rects: Default::default(),
-                    lifecycle: PaintPropertyNodeLifecycle::root(),
-                    id: 0,
-                    parent: None,
-                    local_transform_space: transform.clone(),
-                    rect: None,
-                    radii: PaintCornerRadii::default(),
-                    clip_path: None,
-                    clip_path_error: None,
-                    pixel_moving_filter: None,
-                }
+                ClipPaintPropertyNode::new(
+                    PaintPropertyNodeLifecycle::root(),
+                    0,
+                    ClipPaintPropertyNodeState {
+                        layout_clip_rects: Default::default(),
+                        parent: None,
+                        local_transform_space: transform.clone(),
+                        rect: None,
+                        radii: PaintCornerRadii::default(),
+                        clip_path: None,
+                        clip_path_error: None,
+                        pixel_moving_filter: None,
+                    },
+                )
                 .with_layout_clips(),
             );
             let effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(PaintPropertyNodeLifecycle::root(), 0, EffectPaintPropertyNodeState {
                     compositor: Default::default(),
                     backdrop_filter_bounds: None,
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: PaintPropertyNodeLifecycle::root(),
-                    id: 0,
                     parent: None,
                     local_transform_space: transform.clone(),
                     output_clip: None,
@@ -1849,7 +2312,7 @@ impl PropertyTreeState {
                     has_mask: false,
                     is_mask: false,
                     direct_compositing_reasons: Default::default(),
-                }
+                })
                 .with_inherited_view_transition(),
             );
             PropertyTreeState {
@@ -1986,14 +2449,16 @@ impl PropertyTreeState {
             .unwrap_or_default()
     }
     pub fn nearest_scroll(&self) -> Option<Arc<ScrollPaintPropertyNode>> {
-        let mut transform = Some(self.transform.clone());
-        while let Some(node) = transform {
-            if let Some(scroll) = &node.scroll {
-                return Some(scroll.clone());
+        crate::property_cell::with_access(|access| {
+            let mut transform = Some(&self.transform);
+            while let Some(node) = transform {
+                if let Some(scroll) = node.ScrollNode(access) {
+                    return Some(scroll.clone());
+                }
+                transform = node.Parent(access);
             }
-            transform = node.parent.clone();
-        }
-        None
+            None
+        })
     }
 }
 
@@ -2100,13 +2565,14 @@ impl PaintPropertyTrees {
             return;
         }
         self.insert_transform(node.clone());
-        if let Some(parent) = &node.parent {
+        let links = crate::property_cell::with_access(|access| node.state(access).links());
+        if let Some(parent) = &links.parent {
             self.add_transform(parent);
         }
-        if let Some(scroll) = &node.scroll {
+        if let Some(scroll) = &links.scroll {
             self.add_scroll(scroll);
         }
-        if let Some(parent) = &node.scroll_parent_scroll_translation {
+        if let Some(parent) = &links.scroll_parent_scroll_translation {
             self.add_transform(parent);
         }
     }
@@ -2115,30 +2581,39 @@ impl PaintPropertyTrees {
             return;
         }
         self.insert_clip(node.clone());
-        if let Some(parent) = &node.parent {
+        let (parent, filter, transform) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (
+                state.parent.clone(),
+                state.pixel_moving_filter.clone(),
+                state.local_transform_space.clone(),
+            )
+        });
+        if let Some(parent) = &parent {
             self.add_clip(parent);
         }
-        if let Some(filter) = &node.pixel_moving_filter {
+        if let Some(filter) = &filter {
             self.add_effect(filter);
         }
-        self.add_transform(&node.local_transform_space);
+        self.add_transform(&transform);
     }
     fn add_effect(&mut self, node: &Arc<EffectPaintPropertyNode>) {
         if self.effect_for(node).is_some() {
             return;
         }
         self.insert_effect(node.clone());
-        if let Some(parent) = &node.parent {
+        let links = crate::property_cell::with_access(|access| node.state(access).links());
+        if let Some(parent) = &links.parent {
             self.add_effect(parent);
         }
-        self.add_transform(&node.local_transform_space);
-        if let Some(clip) = &node.output_clip {
+        self.add_transform(&links.local_transform_space);
+        if let Some(clip) = &links.output_clip {
             self.add_clip(clip);
         }
-        if let Some(clip) = &node.backdrop_filter_clip {
+        if let Some(clip) = &links.backdrop_filter_clip {
             self.add_clip(clip);
         }
-        if let Some(child) = &node.compositor.canvas_child_state {
+        if let Some(child) = &links.canvas_child_state {
             self.add_transform(&child.content_state.transform);
             self.add_clip(&child.content_state.clip);
             self.add_effect(&child.content_state.effect);
@@ -2149,10 +2624,14 @@ impl PaintPropertyTrees {
             return;
         }
         self.insert_scroll(node.clone());
-        if let Some(parent) = &node.parent {
+        let (parent, clip) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        if let Some(parent) = &parent {
             self.add_scroll(parent);
         }
-        if let Some(clip) = &node.overflow_clip {
+        if let Some(clip) = &clip {
             self.add_clip(clip);
         }
     }
@@ -2229,7 +2708,7 @@ macro_rules! persisted_property_node {
                 self.id
             }
             fn linked_parent_id(&self) -> u64 {
-                self.parent.as_ref().map_or(0, |parent| parent.id)
+                self.snapshot_parent_id()
             }
             fn recorded_parent_id(&self) -> u64 {
                 self.lifecycle.parent_id
@@ -2628,13 +3107,14 @@ impl FrozenPropertyTrees {
         if !Self::admit(node, self.transforms.by_id(node.id), seen, coverage) {
             return;
         }
-        if let Some(parent) = &node.parent {
+        let links = crate::property_cell::with_access(|access| node.state(access).links());
+        if let Some(parent) = &links.parent {
             self.verify_transform(PropertyNodeResolver::transform(self, parent), seen, coverage);
         }
-        if let Some(scroll) = &node.scroll {
+        if let Some(scroll) = &links.scroll {
             self.verify_scroll(PropertyNodeResolver::scroll(self, scroll), seen, coverage);
         }
-        if let Some(translation) = &node.scroll_parent_scroll_translation {
+        if let Some(translation) = &links.scroll_parent_scroll_translation {
             self.verify_transform(PropertyNodeResolver::transform(self, translation), seen, coverage);
         }
     }
@@ -2648,15 +3128,19 @@ impl FrozenPropertyTrees {
         if !Self::admit(node, self.clips.by_id(node.id), seen, coverage) {
             return;
         }
-        if let Some(parent) = &node.parent {
+        let (parent, transform, filter) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (
+                state.parent.clone(),
+                state.local_transform_space.clone(),
+                state.pixel_moving_filter.clone(),
+            )
+        });
+        if let Some(parent) = &parent {
             self.verify_clip(PropertyNodeResolver::clip(self, parent), seen, coverage);
         }
-        self.verify_transform(
-            PropertyNodeResolver::transform(self, &node.local_transform_space),
-            seen,
-            coverage,
-        );
-        if let Some(filter) = &node.pixel_moving_filter {
+        self.verify_transform(PropertyNodeResolver::transform(self, &transform), seen, coverage);
+        if let Some(filter) = &filter {
             self.verify_effect(PropertyNodeResolver::effect(self, filter), seen, coverage);
         }
     }
@@ -2670,18 +3154,19 @@ impl FrozenPropertyTrees {
         if !Self::admit(node, self.effects.by_id(node.id), seen, coverage) {
             return;
         }
-        if let Some(parent) = &node.parent {
+        let links = crate::property_cell::with_access(|access| node.state(access).links());
+        if let Some(parent) = &links.parent {
             self.verify_effect(PropertyNodeResolver::effect(self, parent), seen, coverage);
         }
         self.verify_transform(
-            PropertyNodeResolver::transform(self, &node.local_transform_space),
+            PropertyNodeResolver::transform(self, &links.local_transform_space),
             seen,
             coverage,
         );
-        if let Some(clip) = &node.output_clip {
+        if let Some(clip) = &links.output_clip {
             self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
-        if let Some(clip) = &node.backdrop_filter_clip {
+        if let Some(clip) = &links.backdrop_filter_clip {
             self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
     }
@@ -2695,10 +3180,14 @@ impl FrozenPropertyTrees {
         if !Self::admit(node, self.scrolls.by_id(node.id), seen, coverage) {
             return;
         }
-        if let Some(parent) = &node.parent {
+        let (parent, clip) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        if let Some(parent) = &parent {
             self.verify_scroll(PropertyNodeResolver::scroll(self, parent), seen, coverage);
         }
-        if let Some(clip) = &node.overflow_clip {
+        if let Some(clip) = &clip {
             self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
     }
@@ -2764,10 +3253,18 @@ impl PaintPropertyNodeStore {
             (checked, unresolved)
         }
         let parts = [
-            count(&self.transforms, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
-            count(&self.clips, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
-            count(&self.effects, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
-            count(&self.scrolls, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+            count(&self.transforms, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
+            count(&self.clips, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
+            count(&self.effects, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
+            count(&self.scrolls, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
         ];
         parts.iter().fold((0, 0), |(c, u), (pc, pu)| (c + pc, u + pu))
     }
@@ -2883,14 +3380,17 @@ impl PaintPropertyNodeStore {
             // geometry (for example hidden overflow without a Paint scroll
             // node) is not a compositor scroll translation and must not enter
             // PropertyTreeManager::EnsureCompositorScrollNode().
-            (key.role == PaintPropertyRole::ScrollTranslation && node.scroll.is_some())
+            (key.role == PaintPropertyRole::ScrollTranslation
+                && crate::property_cell::with_access(|access| node.ScrollNode(access).is_some()))
                 .then_some(node)
         })
     }
     pub fn root_scroller_scroll_translation(&self) -> Option<&Arc<TransformPaintPropertyNode>> {
         self.transforms.iter().find_map(|(key, node)| {
             (key.role == PaintPropertyRole::ScrollTranslation
-                && node.RequiresCompositingForRootScroller())
+                && crate::property_cell::with_access(|access| {
+                    node.RequiresCompositingForRootScroller(access)
+                }))
             .then_some(node)
         })
     }
@@ -2939,14 +3439,11 @@ impl PaintPropertyNodeStore {
             owner: PaintPropertyOwner::Viewport,
             role: PaintPropertyRole::OverscrollElasticityTransform,
         };
-        let mut overscroll = TransformPaintPropertyNode {
+        let mut overscroll = TransformPaintPropertyNode::new(Default::default(), 0, TransformPaintPropertyNodeState {
             compositor: TransformCompositorState {
                 in_subtree_of_page_scale: false,
                 ..Default::default()
             },
-            geometry_mapper_cache: Default::default(),
-            lifecycle: Default::default(),
-            id: 0,
             parent: Some(roots.transform.clone()),
             matrix: TransformMatrix::default(),
             origin: [0.0; 3],
@@ -2957,7 +3454,7 @@ impl PaintPropertyNodeStore {
             scroll_parent_scroll_translation: None,
             sticky_constraint: None,
             direct_compositing_reasons: Default::default(),
-        };
+        });
         let overscroll = if let Some(old) = self.transforms.get(&overscroll_key) {
             let change = transform_state_change(old, &overscroll);
             // An unchanged value keeps the old snapshot only while its links
@@ -2989,15 +3486,12 @@ impl PaintPropertyNodeStore {
             owner: PaintPropertyOwner::Viewport,
             role: PaintPropertyRole::PageScale,
         };
-        let mut page_scale = TransformPaintPropertyNode {
+        let mut page_scale = TransformPaintPropertyNode::new(Default::default(), 0, TransformPaintPropertyNodeState {
             compositor: TransformCompositorState {
                 compositor_element_id: page_scale_element_id,
                 in_subtree_of_page_scale: false,
                 ..Default::default()
             },
-            geometry_mapper_cache: Default::default(),
-            lifecycle: Default::default(),
-            id: 0,
             parent: Some(overscroll.clone()),
             matrix: {
                 let mut matrix = TransformMatrix::default();
@@ -3017,7 +3511,7 @@ impl PaintPropertyNodeStore {
             direct_compositing_reasons: foundation::CompositingReasons::FromReasons(&[
                 foundation::CompositingReason::kViewport,
             ]),
-        };
+        });
         let page_scale = if let Some(old) = self.transforms.get(&page_scale_key) {
             let change = transform_state_change(old, &page_scale);
             // An unchanged value keeps the old snapshot only while its links
@@ -3049,7 +3543,7 @@ impl PaintPropertyNodeStore {
             owner: PaintPropertyOwner::Viewport,
             role: PaintPropertyRole::VisualViewportScroll,
         };
-        let mut visual_scroll = ScrollPaintPropertyNode {
+        let mut visual_scroll = ScrollPaintPropertyNode::new(Default::default(), 0, ScrollPaintPropertyNodeState {
             compositor: ScrollCompositorState {
                 compositor_element_id: scroll_element_id,
                 max_scroll_offset_affected_by_page_scale: true,
@@ -3057,18 +3551,15 @@ impl PaintPropertyNodeStore {
                 snap_container_data_absent: true,
                 ..Default::default()
             },
-            lifecycle: Default::default(),
-            id: 0,
             owner_client_id: 0,
             owner_node_id: 0,
-            parent: Some(
+            parent: Some(crate::property_cell::with_access(|access| {
                 roots
                     .transform
-                    .scroll
-                    .as_ref()
+                    .ScrollNode(access)
                     .expect("root transform owns the root scroll node")
-                    .clone(),
-            ),
+                    .clone()
+            })),
             overflow_clip: None,
             container_rect: visual_state.map_or(viewport, |s| PaintRect {
                 x: 0.,
@@ -3089,7 +3580,7 @@ impl PaintPropertyNodeStore {
             }),
             user_scrollable_horizontal: true,
             user_scrollable_vertical: true,
-        };
+        });
         let visual_scroll = if let Some(old) = self.scrolls.get(&visual_scroll_key) {
             let change = scroll_state_change(old, &visual_scroll);
             // An unchanged value keeps the old snapshot only while its links
@@ -3122,11 +3613,8 @@ impl PaintPropertyNodeStore {
             owner: PaintPropertyOwner::Viewport,
             role: PaintPropertyRole::VisualViewportScrollTranslation,
         };
-        let mut visual_translation = TransformPaintPropertyNode {
+        let mut visual_translation = TransformPaintPropertyNode::new(Default::default(), 0, TransformPaintPropertyNodeState {
             compositor: Default::default(),
-            geometry_mapper_cache: Default::default(),
-            lifecycle: Default::default(),
-            id: 0,
             parent: Some(page_scale.clone()),
             matrix: TransformMatrix::default(),
             origin: [0.0; 3],
@@ -3139,7 +3627,7 @@ impl PaintPropertyNodeStore {
             direct_compositing_reasons: foundation::CompositingReasons::FromReasons(&[
                 foundation::CompositingReason::kViewport,
             ]),
-        };
+        });
         // VisualViewport::UpdatePaintPropertyNodesIfNeeded: the native owner
         // supplies offset_ for this SAME existing element/translation slot.
         let source_offset = visual_state
@@ -3150,8 +3638,8 @@ impl PaintPropertyNodeStore {
                 element, scroll_element_id,
                 "same VisualViewport source identity"
             );
-            visual_translation.matrix.values[12] = -f64::from(offset.x());
-            visual_translation.matrix.values[13] = -f64::from(offset.y());
+            visual_translation.state_mut().matrix.values[12] = -f64::from(offset.x());
+            visual_translation.state_mut().matrix.values[13] = -f64::from(offset.y());
         }
         let visual_translation = if let Some(old) = self.transforms.get(&visual_translation_key) {
             let change = transform_state_change(old, &visual_translation);
@@ -3207,6 +3695,7 @@ impl PaintPropertyNodeStore {
     /// anchors, indexed by the same source owner/role slots used by the
     /// property builder. No new layer identity.
     pub fn scroll_offsets(&self) -> BTreeMap<PaintPropertyOwner, Offset> {
+        crate::property_cell::with_access(|access| {
         self.transforms
             .iter()
             .filter(|(key, _)| key.role == PaintPropertyRole::ScrollTranslation)
@@ -3214,12 +3703,13 @@ impl PaintPropertyNodeStore {
                 (
                     key.owner,
                     Offset {
-                        x: -node.matrix.values[12],
-                        y: -node.matrix.values[13],
+                        x: -node.state(access).matrix.values[12],
+                        y: -node.state(access).matrix.values[13],
                     },
                 )
             })
             .collect()
+        })
     }
 
     /// Current sticky values carried by the source property owner. Recording
@@ -3227,18 +3717,19 @@ impl PaintPropertyNodeStore {
     pub fn sticky_offsets(
         &self,
     ) -> BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)> {
+        crate::property_cell::with_access(|access| {
         self.transforms
             .iter()
             .filter_map(|(key, node)| {
                 (key.role == PaintPropertyRole::StickyTranslation)
                     .then(|| {
-                        node.sticky_constraint.map(|constraint| {
+                        node.state(access).sticky_constraint.map(|constraint| {
                             (
                                 key.owner,
                                 (
                                     Offset {
-                                        x: node.matrix.values[12],
-                                        y: node.matrix.values[13],
+                                        x: node.state(access).matrix.values[12],
+                                        y: node.state(access).matrix.values[13],
                                     },
                                     constraint,
                                 ),
@@ -3248,6 +3739,7 @@ impl PaintPropertyNodeStore {
                     .flatten()
             })
             .collect()
+        })
     }
 
     /// Retained source geometry has already proved unchanged owners/topology,
@@ -3265,6 +3757,7 @@ impl PaintPropertyNodeStore {
         offsets: &BTreeMap<PaintPropertyOwner, Offset>,
         sticky: &BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)>,
     ) -> Option<(Self, PaintPropertyTrees)> {
+        crate::property_cell::with_access(|access| {
         let mut translations = BTreeMap::new();
         for (owner, offset) in offsets {
             if !offset.x.is_finite() || !offset.y.is_finite() {
@@ -3287,8 +3780,8 @@ impl PaintPropertyNodeStore {
                 return None;
             };
             let current_offset = Offset {
-                x: -node.matrix.values[12],
-                y: -node.matrix.values[13],
+                x: -node.state(access).matrix.values[12],
+                y: -node.state(access).matrix.values[13],
             };
             // Chromium updates the ScrollTranslation belonging to the
             // ScrollableArea whose offset changed. Other translation slots can
@@ -3301,23 +3794,23 @@ impl PaintPropertyNodeStore {
             // Preserve the previous scroll-only admission: translations without
             // real ScrollNodes (e.g. hidden overflow) require ordinary PrePaint.
             if !matches!(key.owner, PaintPropertyOwner::Fragment { .. })
-                || node.scroll.as_ref().is_none_or(|scroll| scroll.id == 0)
-                || node.origin != [0.0; 3]
+                || node.state(access).scroll.as_ref().is_none_or(|scroll| scroll.id == 0)
+                || node.state(access).origin != [0.0; 3]
             {
                 return None;
             }
-            let mut linear = node.matrix.values;
+            let mut linear = node.state(access).matrix.values;
             linear[12] = 0.0;
             linear[13] = 0.0;
             if linear != TransformMatrix::default().values {
                 return None;
             }
-            let mut matrix = node.matrix;
+            let mut matrix = node.state(access).matrix;
             matrix.values[12] = -offset.x;
             matrix.values[13] = -offset.y;
             translations.insert(
                 PaintPropertyTrees::identity(&node.lifecycle),
-                (matrix, node.sticky_constraint),
+                (matrix, node.state(access).sticky_constraint),
             );
         }
         // FragmentPaintPropertyTreeBuilder::UpdateStickyTranslation uses
@@ -3338,30 +3831,30 @@ impl PaintPropertyNodeStore {
             let Some((offset, constraint)) = sticky.get(&key.owner) else {
                 return None;
             };
-            let Some(before) = node.sticky_constraint else {
+            let Some(before) = node.state(access).sticky_constraint else {
                 return None;
             };
             let current_offset = Offset {
-                x: node.matrix.values[12],
-                y: node.matrix.values[13],
+                x: node.state(access).matrix.values[12],
+                y: node.state(access).matrix.values[13],
             };
             if *offset == current_offset && before == *constraint {
                 continue;
             }
             if !offset.x.is_finite()
                 || !offset.y.is_finite()
-                || node.origin != [0.0; 3]
+                || node.state(access).origin != [0.0; 3]
                 || !before.same_geometry(constraint)
             {
                 return None;
             }
-            let mut linear = node.matrix.values;
+            let mut linear = node.state(access).matrix.values;
             linear[12] = 0.0;
             linear[13] = 0.0;
             if linear != TransformMatrix::default().values {
                 return None;
             }
-            let mut matrix = node.matrix;
+            let mut matrix = node.state(access).matrix;
             matrix.values[12] = offset.x;
             matrix.values[13] = offset.y;
             translations.insert(
@@ -3370,6 +3863,7 @@ impl PaintPropertyNodeStore {
             );
         }
         Some(self.staged_snapshots(translations))
+        })
     }
 
     /// Clear the preceding paint pass's change markers in new immutable
@@ -3515,13 +4009,16 @@ impl PaintPropertyNodeStore {
             if !same_identity
                 || !(change == PaintPropertyChangeType::Unchanged
                     || (key.role == PaintPropertyRole::ScrollTranslation
-                        && node.scroll.as_ref().is_some_and(|scroll| scroll.id != 0)
+                        && crate::property_cell::with_access(|access| {
+                            node.ScrollNode(access).is_some_and(|scroll| scroll.id != 0)
+                        })
                         && change == PaintPropertyChangeType::ChangedOnlySimpleValues))
             {
                 if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
                     eprintln!(
                         "scroll-transform-values old={:?} new={:?}",
-                        before.matrix.values, node.matrix.values
+                        crate::property_cell::with_access(|access| before.Matrix(access).values),
+                        crate::property_cell::with_access(|access| node.Matrix(access).values)
                     );
                 }
                 return reject("transform", key, before.id, node.id, same_identity, change);
@@ -3696,28 +4193,27 @@ impl ArtifactPropertyStateRebinder {
             .cloned()
             .unwrap_or_else(|| input.clone());
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
-        let parent = source
-            .parent
-            .as_ref()
-            .map(|parent| self.RebindTransform(parent));
-        let scroll = source.scroll.as_ref().map(|scroll| self.scroll(scroll));
-        let scroll_parent_scroll_translation = source
+        let links = crate::property_cell::with_access(|access| source.state(access).links());
+        let parent = links.parent.as_ref().map(|parent| self.RebindTransform(parent));
+        let scroll = links.scroll.as_ref().map(|scroll| self.scroll(scroll));
+        let scroll_parent_scroll_translation = links
             .scroll_parent_scroll_translation
             .as_ref()
             .map(|parent| self.RebindTransform(parent));
-        let node = if same_entity_option(&parent, &source.parent)
-            && same_entity_option(&scroll, &source.scroll)
+        let node = if same_entity_option(&parent, &links.parent)
+            && same_entity_option(&scroll, &links.scroll)
             && same_entity_option(
                 &scroll_parent_scroll_translation,
-                &source.scroll_parent_scroll_translation,
+                &links.scroll_parent_scroll_translation,
             ) {
             source
         } else {
             let mut node = (*source).clone();
             node.geometry_mapper_cache = Default::default();
-            node.parent = parent;
-            node.scroll = scroll;
-            node.scroll_parent_scroll_translation = scroll_parent_scroll_translation;
+            let state = node.state_mut();
+            state.parent = parent;
+            state.scroll = scroll;
+            state.scroll_parent_scroll_translation = scroll_parent_scroll_translation;
             Arc::new(node)
         };
         self.rebound_transforms
@@ -3740,23 +4236,30 @@ impl ArtifactPropertyStateRebinder {
             .cloned()
             .unwrap_or_else(|| input.clone());
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
-        let parent = source.parent.as_ref().map(|parent| self.clip(parent));
-        let local_transform_space = self.RebindTransform(&source.local_transform_space);
-        let pixel_moving_filter = source
-            .pixel_moving_filter
-            .as_ref()
-            .map(|effect| self.effect(effect));
-        let node = if same_entity_option(&parent, &source.parent)
-            && same_entity(&local_transform_space, &source.local_transform_space)
-            && same_entity_option(&pixel_moving_filter, &source.pixel_moving_filter)
+        let (source_parent, source_transform, source_filter) =
+            crate::property_cell::with_access(|access| {
+                let state = source.state(access);
+                (
+                    state.parent.clone(),
+                    state.local_transform_space.clone(),
+                    state.pixel_moving_filter.clone(),
+                )
+            });
+        let parent = source_parent.as_ref().map(|parent| self.clip(parent));
+        let local_transform_space = self.RebindTransform(&source_transform);
+        let pixel_moving_filter = source_filter.as_ref().map(|effect| self.effect(effect));
+        let node = if same_entity_option(&parent, &source_parent)
+            && same_entity(&local_transform_space, &source_transform)
+            && same_entity_option(&pixel_moving_filter, &source_filter)
         {
             source
         } else {
             let mut node = (*source).clone();
             node.geometry_mapper_cache = Default::default();
-            node.parent = parent;
-            node.local_transform_space = local_transform_space;
-            node.pixel_moving_filter = pixel_moving_filter;
+            let state = node.state_mut();
+            state.parent = parent;
+            state.local_transform_space = local_transform_space;
+            state.pixel_moving_filter = pixel_moving_filter;
             Arc::new(node)
         };
         self.rebound_clips.insert(source_identity, node.clone());
@@ -3785,14 +4288,12 @@ impl ArtifactPropertyStateRebinder {
             .cloned()
             .unwrap_or_else(|| input.clone());
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
-        let parent = source.parent.as_ref().map(|parent| self.effect(parent));
-        let local_transform_space = self.RebindTransform(&source.local_transform_space);
-        let output_clip = source.output_clip.as_ref().map(|clip| self.clip(clip));
-        let backdrop_filter_clip = source
-            .backdrop_filter_clip
-            .as_ref()
-            .map(|clip| self.clip(clip));
-        let canvas_child_state = source.compositor.canvas_child_state.as_ref().map(|child| {
+        let links = crate::property_cell::with_access(|access| source.state(access).links());
+        let parent = links.parent.as_ref().map(|parent| self.effect(parent));
+        let local_transform_space = self.RebindTransform(&links.local_transform_space);
+        let output_clip = links.output_clip.as_ref().map(|clip| self.clip(clip));
+        let backdrop_filter_clip = links.backdrop_filter_clip.as_ref().map(|clip| self.clip(clip));
+        let canvas_child_state = links.canvas_child_state.as_ref().map(|child| {
             let mut rebound = (**child).clone();
             self.RebindState(&mut rebound.content_state);
             if rebound.content_state.same_snapshots(&child.content_state) {
@@ -3801,20 +4302,21 @@ impl ArtifactPropertyStateRebinder {
                 Arc::new(rebound)
             }
         });
-        let node = if same_entity_option(&parent, &source.parent)
-            && same_entity(&local_transform_space, &source.local_transform_space)
-            && same_entity_option(&output_clip, &source.output_clip)
-            && same_entity_option(&backdrop_filter_clip, &source.backdrop_filter_clip)
-            && same_snapshot_option(&canvas_child_state, &source.compositor.canvas_child_state)
+        let node = if same_entity_option(&parent, &links.parent)
+            && same_entity(&local_transform_space, &links.local_transform_space)
+            && same_entity_option(&output_clip, &links.output_clip)
+            && same_entity_option(&backdrop_filter_clip, &links.backdrop_filter_clip)
+            && same_snapshot_option(&canvas_child_state, &links.canvas_child_state)
         {
             source
         } else {
             let mut node = (*source).clone();
-            node.parent = parent;
-            node.local_transform_space = local_transform_space;
-            node.output_clip = output_clip;
-            node.backdrop_filter_clip = backdrop_filter_clip;
-            node.compositor.canvas_child_state = canvas_child_state;
+            let state = node.state_mut();
+            state.parent = parent;
+            state.local_transform_space = local_transform_space;
+            state.output_clip = output_clip;
+            state.backdrop_filter_clip = backdrop_filter_clip;
+            state.compositor.canvas_child_state = canvas_child_state;
             Arc::new(node)
         };
         self.rebound_effects.insert(source_identity, node.clone());
@@ -3825,12 +4327,13 @@ impl ArtifactPropertyStateRebinder {
 
     fn scroll(&mut self, input: &Arc<ScrollPaintPropertyNode>) -> Arc<ScrollPaintPropertyNode> {
         if input.id == 0 {
-            return PropertyTreeState::default()
-                .transform
-                .scroll
-                .as_ref()
-                .expect("root transform owns root scroll")
-                .clone();
+            return crate::property_cell::with_access(|access| {
+                PropertyTreeState::default()
+                    .transform
+                    .ScrollNode(access)
+                    .expect("root transform owns root scroll")
+                    .clone()
+            });
         }
         let identity = PaintPropertyTrees::identity(&input.lifecycle);
         if let Some(node) = self.rebound_scrolls.get(&identity) {
@@ -3842,16 +4345,20 @@ impl ArtifactPropertyStateRebinder {
             .cloned()
             .unwrap_or_else(|| input.clone());
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
-        let parent = source.parent.as_ref().map(|parent| self.scroll(parent));
-        let overflow_clip = source.overflow_clip.as_ref().map(|clip| self.clip(clip));
-        let node = if same_entity_option(&parent, &source.parent)
-            && same_entity_option(&overflow_clip, &source.overflow_clip)
+        let (source_parent, source_clip) = crate::property_cell::with_access(|access| {
+            let state = source.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        let parent = source_parent.as_ref().map(|parent| self.scroll(parent));
+        let overflow_clip = source_clip.as_ref().map(|clip| self.clip(clip));
+        let node = if same_entity_option(&parent, &source_parent)
+            && same_entity_option(&overflow_clip, &source_clip)
         {
             source
         } else {
             let mut node = (*source).clone();
-            node.parent = parent;
-            node.overflow_clip = overflow_clip;
+            node.state_mut().parent = parent;
+            node.state_mut().overflow_clip = overflow_clip;
             Arc::new(node)
         };
         self.rebound_scrolls.insert(source_identity, node.clone());
@@ -3875,9 +4382,13 @@ impl RetainedScrollSnapshotRebinder {
         if let Some(node) = self.trees.transform_for(input) {
             return node.clone();
         }
-        let parent = input.parent.as_ref().map(|parent| self.transform(parent));
-        let scroll = input.scroll.as_ref().map(|scroll| self.scroll(scroll));
-        let scroll_parent = input
+        let (links, input_matrix, input_sticky) = crate::property_cell::with_access(|access| {
+            let state = input.state(access);
+            (state.links(), state.matrix, state.sticky_constraint)
+        });
+        let parent = links.parent.as_ref().map(|parent| self.transform(parent));
+        let scroll = links.scroll.as_ref().map(|scroll| self.scroll(scroll));
+        let scroll_parent = links
             .scroll_parent_scroll_translation
             .as_ref()
             .map(|parent| self.transform(parent));
@@ -3885,43 +4396,37 @@ impl RetainedScrollSnapshotRebinder {
             .translations
             .get(&PaintPropertyTrees::identity(&input.lifecycle))
             .copied()
-            .unwrap_or((input.matrix, input.sticky_constraint));
-        let node = if matrix == input.matrix
-            && sticky_constraint == input.sticky_constraint
-            && same_snapshot_option(&parent, &input.parent)
-            && same_snapshot_option(&scroll, &input.scroll)
-            && same_snapshot_option(&scroll_parent, &input.scroll_parent_scroll_translation)
+            .unwrap_or((input_matrix, input_sticky));
+        let node = if matrix == input_matrix
+            && sticky_constraint == input_sticky
+            && same_snapshot_option(&parent, &links.parent)
+            && same_snapshot_option(&scroll, &links.scroll)
+            && same_snapshot_option(&scroll_parent, &links.scroll_parent_scroll_translation)
             && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
                 == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
-            let change = if sticky_constraint != input.sticky_constraint {
+            let change = if sticky_constraint != input_sticky {
                 PaintPropertyChangeType::ChangedOnlyValues
-            } else if matrix != input.matrix {
+            } else if matrix != input_matrix {
                 PaintPropertyChangeType::ChangedOnlySimpleValues
             } else {
                 PaintPropertyChangeType::Unchanged
             };
             self.changed = self.changed.max(change);
-            // Clone only retained payloads. The old parent/cross-tree/lifecycle
-            // references would otherwise be cloned and immediately overwritten.
-            Arc::new(TransformPaintPropertyNode {
-                compositor: input.compositor.clone(),
-                geometry_mapper_cache: Default::default(),
-                scroll_parent_scroll_translation: scroll_parent,
-                lifecycle: input.lifecycle.updated(change),
-                id: input.id,
-                parent,
-                matrix,
-                origin: input.origin,
-                flattens_inherited_transform: input.flattens_inherited_transform,
-                rendering_context_id: input.rendering_context_id,
-                backface_visibility: input.backface_visibility,
-                scroll,
-                sticky_constraint,
-                direct_compositing_reasons: input.direct_compositing_reasons.clone(),
-            })
+            let mut node = TransformPaintPropertyNode::new(
+                input.lifecycle.updated(change),
+                input.id,
+                crate::property_cell::with_access(|access| input.state(access).clone()),
+            );
+            let state = node.state_mut();
+            state.scroll_parent_scroll_translation = scroll_parent;
+            state.parent = parent;
+            state.matrix = matrix;
+            state.scroll = scroll;
+            state.sticky_constraint = sticky_constraint;
+            Arc::new(node)
         };
         self.trees.insert_transform(node.clone());
         node
@@ -3930,33 +4435,36 @@ impl RetainedScrollSnapshotRebinder {
         if let Some(node) = self.trees.clip_for(input) {
             return node.clone();
         }
-        let parent = input.parent.as_ref().map(|parent| self.clip(parent));
-        let transform = self.transform(&input.local_transform_space);
-        let filter = input
-            .pixel_moving_filter
-            .as_ref()
-            .map(|filter| self.effect(filter));
-        let node = if same_snapshot_option(&parent, &input.parent)
-            && Arc::ptr_eq(&transform, &input.local_transform_space)
-            && same_snapshot_option(&filter, &input.pixel_moving_filter)
+        let (input_parent, input_transform, input_filter) =
+            crate::property_cell::with_access(|access| {
+                let state = input.state(access);
+                (
+                    state.parent.clone(),
+                    state.local_transform_space.clone(),
+                    state.pixel_moving_filter.clone(),
+                )
+            });
+        let parent = input_parent.as_ref().map(|parent| self.clip(parent));
+        let transform = self.transform(&input_transform);
+        let filter = input_filter.as_ref().map(|filter| self.effect(filter));
+        let node = if same_snapshot_option(&parent, &input_parent)
+            && Arc::ptr_eq(&transform, &input_transform)
+            && same_snapshot_option(&filter, &input_filter)
             && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
                 == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
-            Arc::new(ClipPaintPropertyNode {
-                geometry_mapper_cache: Default::default(),
-                layout_clip_rects: input.layout_clip_rects,
-                lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
-                id: input.id,
-                parent,
-                local_transform_space: transform,
-                rect: input.rect,
-                radii: input.radii,
-                clip_path: input.clip_path.clone(),
-                clip_path_error: input.clip_path_error.clone(),
-                pixel_moving_filter: filter,
-            })
+            let mut node = ClipPaintPropertyNode::new(
+                input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
+                input.id,
+                crate::property_cell::with_access(|access| input.state(access).clone()),
+            );
+            let state = node.state_mut();
+            state.parent = parent;
+            state.local_transform_space = transform;
+            state.pixel_moving_filter = filter;
+            Arc::new(node)
         };
         self.trees.insert_clip(node.clone());
         node
@@ -3965,14 +4473,12 @@ impl RetainedScrollSnapshotRebinder {
         if let Some(node) = self.trees.effect_for(input) {
             return node.clone();
         }
-        let parent = input.parent.as_ref().map(|parent| self.effect(parent));
-        let transform = self.transform(&input.local_transform_space);
-        let clip = input.output_clip.as_ref().map(|clip| self.clip(clip));
-        let backdrop_clip = input
-            .backdrop_filter_clip
-            .as_ref()
-            .map(|clip| self.clip(clip));
-        let canvas_child_state = input.compositor.canvas_child_state.as_ref().map(|child| {
+        let links = crate::property_cell::with_access(|access| input.state(access).links());
+        let parent = links.parent.as_ref().map(|parent| self.effect(parent));
+        let transform = self.transform(&links.local_transform_space);
+        let clip = links.output_clip.as_ref().map(|clip| self.clip(clip));
+        let backdrop_clip = links.backdrop_filter_clip.as_ref().map(|clip| self.clip(clip));
+        let canvas_child_state = links.canvas_child_state.as_ref().map(|child| {
             let mut rebound = (**child).clone();
             rebound.content_state.transform = self.transform(&rebound.content_state.transform);
             rebound.content_state.clip = self.clip(&rebound.content_state.clip);
@@ -3983,43 +4489,28 @@ impl RetainedScrollSnapshotRebinder {
                 Arc::new(rebound)
             }
         });
-        let node = if same_snapshot_option(&parent, &input.parent)
-            && Arc::ptr_eq(&transform, &input.local_transform_space)
-            && same_snapshot_option(&clip, &input.output_clip)
-            && same_snapshot_option(&backdrop_clip, &input.backdrop_filter_clip)
-            && same_snapshot_option(&canvas_child_state, &input.compositor.canvas_child_state)
+        let node = if same_snapshot_option(&parent, &links.parent)
+            && Arc::ptr_eq(&transform, &links.local_transform_space)
+            && same_snapshot_option(&clip, &links.output_clip)
+            && same_snapshot_option(&backdrop_clip, &links.backdrop_filter_clip)
+            && same_snapshot_option(&canvas_child_state, &links.canvas_child_state)
             && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
                 == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
-            let mut compositor = input.compositor.clone();
-            compositor.canvas_child_state = canvas_child_state;
-            Arc::new(EffectPaintPropertyNode {
-                compositor,
-                backdrop_filter_bounds: input.backdrop_filter_bounds.clone(),
-                self_or_ancestor_participates_in_view_transition: input
-                    .self_or_ancestor_participates_in_view_transition,
-                lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
-                id: input.id,
-                parent,
-                local_transform_space: transform,
-                output_clip: clip,
-                filter_reference_box: input.filter_reference_box,
-                filter_viewport: input.filter_viewport,
-                filter_space_origin: input.filter_space_origin,
-                filter_reference_scale: input.filter_reference_scale,
-                opacity: input.opacity,
-                blend_mode: input.blend_mode,
-                filters: input.filters.clone(),
-                backdrop_filters: input.backdrop_filters.clone(),
-                backdrop_filter_has_reference: input.backdrop_filter_has_reference,
-                backdrop_filter_clip: backdrop_clip,
-                isolates_blending: input.isolates_blending,
-                has_mask: input.has_mask,
-                is_mask: input.is_mask,
-                direct_compositing_reasons: input.direct_compositing_reasons.clone(),
-            })
+            let mut node = EffectPaintPropertyNode::new(
+                input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
+                input.id,
+                crate::property_cell::with_access(|access| input.state(access).clone()),
+            );
+            let state = node.state_mut();
+            state.compositor.canvas_child_state = canvas_child_state;
+            state.parent = parent;
+            state.local_transform_space = transform;
+            state.output_clip = clip;
+            state.backdrop_filter_clip = backdrop_clip;
+            Arc::new(node)
         };
         self.trees.insert_effect(node.clone());
         node
@@ -4028,30 +4519,27 @@ impl RetainedScrollSnapshotRebinder {
         if let Some(node) = self.trees.scroll_for(input) {
             return node.clone();
         }
-        let parent = input.parent.as_ref().map(|parent| self.scroll(parent));
-        let clip = input.overflow_clip.as_ref().map(|clip| self.clip(clip));
-        let node = if same_snapshot_option(&parent, &input.parent)
-            && same_snapshot_option(&clip, &input.overflow_clip)
+        let (input_parent, input_clip) = crate::property_cell::with_access(|access| {
+            let state = input.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        let parent = input_parent.as_ref().map(|parent| self.scroll(parent));
+        let clip = input_clip.as_ref().map(|clip| self.clip(clip));
+        let node = if same_snapshot_option(&parent, &input_parent)
+            && same_snapshot_option(&clip, &input_clip)
             && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
                 == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
-            Arc::new(ScrollPaintPropertyNode {
-                compositor: input.compositor.clone(),
-                lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
-                id: input.id,
-                owner_client_id: input.owner_client_id,
-                owner_node_id: input.owner_node_id,
-                parent,
-                overflow_clip: clip,
-                container_rect: input.container_rect,
-                contents_rect: input.contents_rect,
-                minimum_scroll_offset: input.minimum_scroll_offset,
-                maximum_scroll_offset: input.maximum_scroll_offset,
-                user_scrollable_horizontal: input.user_scrollable_horizontal,
-                user_scrollable_vertical: input.user_scrollable_vertical,
-            })
+            let mut node = ScrollPaintPropertyNode::new(
+                input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
+                input.id,
+                crate::property_cell::with_access(|access| input.state(access).clone()),
+            );
+            node.state_mut().parent = parent;
+            node.state_mut().overflow_clip = clip;
+            Arc::new(node)
         };
         self.trees.insert_scroll(node.clone());
         node
@@ -4106,49 +4594,73 @@ fn same_snapshot_option<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
     }
 }
 impl TransformPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        crate::property_cell::with_access(|access| self.Parent(access).map_or(0, |parent| parent.id))
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_entity_option(&self.parent, &other.parent)
-            && same_entity_option(&self.scroll, &other.scroll)
-            && same_entity_option(
-                &self.scroll_parent_scroll_translation,
-                &other.scroll_parent_scroll_translation,
-            )
+        crate::property_cell::with_access(|access| {
+            let (this, other) = (self.state(access), other.state(access));
+            same_entity_option(&this.parent, &other.parent)
+                && same_entity_option(&this.scroll, &other.scroll)
+                && same_entity_option(
+                    &this.scroll_parent_scroll_translation,
+                    &other.scroll_parent_scroll_translation,
+                )
             // Layout sticky geometry is an input association outside Chromium
             // TransformPaintPropertyNode::State. Preserve a new boundary value
             // without promoting the source lifecycle category.
-            && self.sticky_constraint == other.sticky_constraint
+                && this.sticky_constraint == other.sticky_constraint
+        })
     }
 }
 impl ClipPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        crate::property_cell::with_access(|access| self.Parent(access).map_or(0, |parent| parent.id))
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_entity_option(&self.parent, &other.parent)
-            && same_entity(&self.local_transform_space, &other.local_transform_space)
-            && same_entity_option(&self.pixel_moving_filter, &other.pixel_moving_filter)
+        crate::property_cell::with_access(|access| {
+            let (this, other) = (self.state(access), other.state(access));
+            same_entity_option(&this.parent, &other.parent)
+                && same_entity(&this.local_transform_space, &other.local_transform_space)
+                && same_entity_option(&this.pixel_moving_filter, &other.pixel_moving_filter)
+        })
     }
 }
 impl EffectPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        crate::property_cell::with_access(|access| self.Parent(access).map_or(0, |parent| parent.id))
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_entity_option(&self.parent, &other.parent)
-            && same_entity(&self.local_transform_space, &other.local_transform_space)
-            && same_entity_option(&self.output_clip, &other.output_clip)
-            && same_entity_option(&self.backdrop_filter_clip, &other.backdrop_filter_clip)
-            && same_snapshot_option(
-                &self.compositor.canvas_child_state,
-                &other.compositor.canvas_child_state,
-            )
+        crate::property_cell::with_access(|access| {
+            let (this, other) = (self.state(access), other.state(access));
+            same_entity_option(&this.parent, &other.parent)
+                && same_entity(&this.local_transform_space, &other.local_transform_space)
+                && same_entity_option(&this.output_clip, &other.output_clip)
+                && same_entity_option(&this.backdrop_filter_clip, &other.backdrop_filter_clip)
+                && same_snapshot_option(
+                    &this.compositor.canvas_child_state,
+                    &other.compositor.canvas_child_state,
+                )
+        })
     }
 }
 impl ScrollPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        crate::property_cell::with_access(|access| self.Parent(access).map_or(0, |parent| parent.id))
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_entity_option(&self.parent, &other.parent)
-            && same_entity_option(&self.overflow_clip, &other.overflow_clip)
-            // These are Rechrom package-boundary associations, not fields in
-            // Chromium ScrollPaintPropertyNode::State. Keep a new value when
-            // they change without promoting the source lifecycle category.
-            && self.owner_client_id == other.owner_client_id
-            && self.owner_node_id == other.owner_node_id
-            && self.minimum_scroll_offset == other.minimum_scroll_offset
-            && self.maximum_scroll_offset == other.maximum_scroll_offset
+        crate::property_cell::with_access(|access| {
+            let (this, other) = (self.state(access), other.state(access));
+            same_entity_option(&this.parent, &other.parent)
+                && same_entity_option(&this.overflow_clip, &other.overflow_clip)
+                // These are Rechrom package-boundary associations, not fields in
+                // Chromium ScrollPaintPropertyNode::State. Keep a new value when
+                // they change without promoting the source lifecycle category.
+                && this.owner_client_id == other.owner_client_id
+                && this.owner_node_id == other.owner_node_id
+                && this.minimum_scroll_offset == other.minimum_scroll_offset
+                && this.maximum_scroll_offset == other.maximum_scroll_offset
+        })
     }
 }
 
@@ -4168,8 +4680,8 @@ fn same_optional<T>(
 }
 /// Source: transform_paint_property_node.cc:18-70.
 fn compute_transform_change(
-    a: &TransformPaintPropertyNode,
-    b: &TransformPaintPropertyNode,
+    a: &TransformPaintPropertyNodeState,
+    b: &TransformPaintPropertyNodeState,
     animation_state: TransformAnimationState,
 ) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
@@ -4211,6 +4723,15 @@ fn transform_state_change_with_animation(
     b: &TransformPaintPropertyNode,
     animation_state: TransformAnimationState,
 ) -> PaintPropertyChangeType {
+    crate::property_cell::with_access(|access| {
+        transform_node_state_change(a.state(access), b.state(access), animation_state)
+    })
+}
+fn transform_node_state_change(
+    a: &TransformPaintPropertyNodeState,
+    b: &TransformPaintPropertyNodeState,
+    animation_state: TransformAnimationState,
+) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
     if !same_optional(&a.parent, &b.parent, |n| &n.lifecycle)
         || !same_optional(&a.scroll, &b.scroll, |n| &n.lifecycle)
@@ -4250,8 +4771,9 @@ fn transform_state_change(
     // category here. `transform_state_change_with_animation` still returns
     // ChangedOnlyValues for parent, scroll, compositing-reason, or any other
     // structural difference; only matrix/origin values receive the downgrade.
-    let directly_sampled_active_animation =
-        a.HasActiveTransformAnimation() && b.HasActiveTransformAnimation();
+    let directly_sampled_active_animation = crate::property_cell::with_access(|access| {
+        a.HasActiveTransformAnimation(access) && b.HasActiveTransformAnimation(access)
+    });
     transform_state_change_with_animation(
         a,
         b,
@@ -4263,6 +4785,12 @@ fn transform_state_change(
 fn clip_state_change(
     a: &ClipPaintPropertyNode,
     b: &ClipPaintPropertyNode,
+) -> PaintPropertyChangeType {
+    crate::property_cell::with_access(|access| clip_node_state_change(a.state(access), b.state(access)))
+}
+fn clip_node_state_change(
+    a: &ClipPaintPropertyNodeState,
+    b: &ClipPaintPropertyNodeState,
 ) -> PaintPropertyChangeType {
     if same_optional(&a.parent, &b.parent, |n| &n.lifecycle)
         && a.local_transform_space
@@ -4285,8 +4813,8 @@ fn clip_state_change(
 // Source: effect_paint_property_node.cc:17-123. Filter and backdrop-filter
 // changes retain the source's animation-aware composited-value downgrade.
 fn filter_state_change(
-    a: &EffectPaintPropertyNode,
-    b: &EffectPaintPropertyNode,
+    a: &EffectPaintPropertyNodeState,
+    b: &EffectPaintPropertyNodeState,
     is_running_filter_animation_on_compositor: bool,
 ) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
@@ -4310,8 +4838,8 @@ fn filter_state_change(
 }
 
 fn backdrop_filter_state_change(
-    a: &EffectPaintPropertyNode,
-    b: &EffectPaintPropertyNode,
+    a: &EffectPaintPropertyNodeState,
+    b: &EffectPaintPropertyNodeState,
     is_running_backdrop_filter_animation_on_compositor: bool,
 ) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
@@ -4337,6 +4865,15 @@ fn backdrop_filter_state_change(
 fn effect_state_change_with_animation(
     a: &EffectPaintPropertyNode,
     b: &EffectPaintPropertyNode,
+    animation_state: EffectAnimationState,
+) -> PaintPropertyChangeType {
+    crate::property_cell::with_access(|access| {
+        effect_node_state_change(a.state(access), b.state(access), animation_state)
+    })
+}
+fn effect_node_state_change(
+    a: &EffectPaintPropertyNodeState,
+    b: &EffectPaintPropertyNodeState,
     animation_state: EffectAnimationState,
 ) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
@@ -4421,6 +4958,14 @@ fn scroll_state_change(
     a: &ScrollPaintPropertyNode,
     b: &ScrollPaintPropertyNode,
 ) -> PaintPropertyChangeType {
+    crate::property_cell::with_access(|access| {
+        scroll_node_state_change(a.state(access), b.state(access))
+    })
+}
+fn scroll_node_state_change(
+    a: &ScrollPaintPropertyNodeState,
+    b: &ScrollPaintPropertyNodeState,
+) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
     // Source: scroll_paint_property_node.cc:31-55. Parent is compared by the
     // enclosing Update's SetParent and therefore participates in the maximum.
@@ -4468,7 +5013,7 @@ macro_rules! update_snapshot {
             if $node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
                 $self.store.change_markers_cleared = false;
             }
-            $node.lifecycle.parent_id = $node.parent.as_ref().map_or(0, |parent| parent.id);
+            $node.lifecycle.parent_id = $node.snapshot_parent_id();
             let node = if let Some(old) = $self.store.$map.get(&key).filter(|old| {
                 $node.lifecycle.changed == PaintPropertyChangeType::Unchanged
                     && crate::property_cell::with_access(|access| old.lifecycle.node_changed(access))
@@ -4598,12 +5143,17 @@ impl PropertyNodeUpdater<'_> {
             }
         }
         let mut node = (**input).clone();
-        node.parent = node.parent.as_ref().map(|p| self.transform(p));
-        node.scroll = node.scroll.as_ref().map(|s| self.scroll(s));
-        node.scroll_parent_scroll_translation = node
+        let links = node.state_mut().links();
+        let parent = links.parent.as_ref().map(|p| self.transform(p));
+        let scroll = links.scroll.as_ref().map(|s| self.scroll(s));
+        let scroll_parent = links
             .scroll_parent_scroll_translation
             .as_ref()
             .map(|s| self.transform(s));
+        let state = node.state_mut();
+        state.parent = parent;
+        state.scroll = scroll;
+        state.scroll_parent_scroll_translation = scroll_parent;
         let node = update_snapshot!(self, node, key, old, transform_state_change, transforms);
         // Source pp_tree_builder.cc:4754-4763: pure scroll translation simple
         // values need only scroll/visibility tracking, other transform changes
@@ -4649,9 +5199,12 @@ impl PropertyNodeUpdater<'_> {
             }
         }
         let mut node = (**input).clone();
-        node.parent = node.parent.as_ref().map(|p| self.clip(p));
-        node.local_transform_space = self.transform(&node.local_transform_space);
-        node.pixel_moving_filter = node.pixel_moving_filter.as_ref().map(|f| self.effect(f));
+        let parent = node.state_mut().parent.as_ref().map(|p| self.clip(p));
+        node.state_mut().parent = parent;
+        let transform = self.transform(&node.state_mut().local_transform_space);
+        node.state_mut().local_transform_space = transform;
+        let filter = node.state_mut().pixel_moving_filter.as_ref().map(|f| self.effect(f));
+        node.state_mut().pixel_moving_filter = filter;
         let node = update_snapshot!(self, node, key, old, clip_state_change, clips);
         if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
             self.store.intersection_observation_state =
@@ -4684,14 +5237,25 @@ impl PropertyNodeUpdater<'_> {
         // Resolve its real node entity to the final logical effect ancestry.
         let source = self.effect_sources.get(&identity).unwrap_or(input);
         let mut node = (**source).clone();
-        node.parent = node.parent.as_ref().map(|p| self.effect(p));
-        node.local_transform_space = self.transform(&node.local_transform_space);
-        node.output_clip = node.output_clip.as_ref().map(|c| self.clip(c));
-        node.backdrop_filter_clip = node.backdrop_filter_clip.as_ref().map(|c| self.clip(c));
-        if let Some(child) = node.compositor.canvas_child_state.as_ref() {
+        let links = node.state_mut().links();
+        let parent = links.parent.as_ref().map(|p| self.effect(p));
+        let transform = self.transform(&links.local_transform_space);
+        let output_clip = links.output_clip.as_ref().map(|c| self.clip(c));
+        let backdrop_clip = links.backdrop_filter_clip.as_ref().map(|c| self.clip(c));
+        let canvas_child_state = links.canvas_child_state.as_ref().map(|child| {
             let mut child = (**child).clone();
             self.state(&mut child.content_state);
-            node.compositor.canvas_child_state = Some(Arc::new(child));
+            Arc::new(child)
+        });
+        {
+            let state = node.state_mut();
+            state.parent = parent;
+            state.local_transform_space = transform;
+            state.output_clip = output_clip;
+            state.backdrop_filter_clip = backdrop_clip;
+            if canvas_child_state.is_some() {
+                state.compositor.canvas_child_state = canvas_child_state;
+            }
         }
         let node = update_snapshot!(self, node, key, old, effect_state_change, effects);
         if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
@@ -4721,8 +5285,10 @@ impl PropertyNodeUpdater<'_> {
             }
         }
         let mut node = (**input).clone();
-        node.parent = node.parent.as_ref().map(|p| self.scroll(p));
-        node.overflow_clip = node.overflow_clip.as_ref().map(|c| self.clip(c));
+        let parent = node.state_mut().parent.as_ref().map(|p| self.scroll(p));
+        node.state_mut().parent = parent;
+        let clip = node.state_mut().overflow_clip.as_ref().map(|c| self.clip(c));
+        node.state_mut().overflow_clip = clip;
         let node = update_snapshot!(self, node, key, old, scroll_state_change, scrolls);
         if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
             self.store.intersection_observation_state =
@@ -4796,8 +5362,8 @@ mod retained_scroll_update_tests {
         let mut effect = (*PropertyTreeState::default().effect).clone();
         effect.id = id;
         effect.lifecycle = Default::default();
-        effect.parent = Some(parent);
-        effect.local_transform_space = transform;
+        effect.state_mut().parent = Some(parent);
+        effect.state_mut().local_transform_space = transform;
         Arc::new(effect)
     }
 
@@ -4806,18 +5372,18 @@ mod retained_scroll_update_tests {
         let root = PropertyTreeState::default();
         let old_parent = child_effect(11, root.effect.clone(), root.transform.clone());
         let mut current_parent = (*old_parent).clone();
-        current_parent.opacity = 0.75;
+        current_parent.state_mut().opacity = 0.75;
         current_parent.lifecycle = old_parent
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
         let current_parent = Arc::new(current_parent);
         let old_child = child_effect(12, old_parent.clone(), root.transform.clone());
         let mut current_child = (*old_child).clone();
-        current_child.opacity = 0.5;
+        current_child.state_mut().opacity = 0.5;
         current_child.lifecycle = old_child
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        current_child.parent = Some(old_parent);
+        current_child.state_mut().parent = Some(old_parent);
         let current_child = Arc::new(current_child);
 
         let mut store = PaintPropertyNodeStore::default();
@@ -4834,11 +5400,12 @@ mod retained_scroll_update_tests {
             ..root
         };
         ArtifactPropertyStateRebinder::new(&store).RebindState(&mut state);
+        let effect_state = crate::property_cell::with_access(|a| state.effect.state(a).clone());
 
         assert!(state.effect.lifecycle.same_node(&current_child.lifecycle));
-        assert_eq!(state.effect.opacity, 0.5);
+        assert_eq!(effect_state.opacity, 0.5);
         assert!(Arc::ptr_eq(
-            state.effect.parent.as_ref().unwrap(),
+            effect_state.parent.as_ref().unwrap(),
             &current_parent
         ));
     }
@@ -4850,8 +5417,8 @@ mod retained_scroll_update_tests {
         let mut wrapper = (*root.effect).clone();
         wrapper.id = 7;
         wrapper.lifecycle = Default::default();
-        wrapper.parent = Some(root.effect.clone());
-        wrapper.opacity = 0.25;
+        wrapper.state_mut().parent = Some(root.effect.clone());
+        wrapper.state_mut().opacity = 0.25;
         let wrapper = Arc::new(wrapper);
         assert!(!wrapper.lifecycle.same_node(&owned.lifecycle));
         let mut store = PaintPropertyNodeStore::default();
@@ -4863,9 +5430,10 @@ mod retained_scroll_update_tests {
             ..root
         };
         ArtifactPropertyStateRebinder::new(&store).RebindState(&mut state);
+        let effect_state = crate::property_cell::with_access(|a| state.effect.state(a).clone());
 
         assert!(Arc::ptr_eq(&state.effect, &wrapper));
-        assert_eq!(state.effect.opacity, 0.25);
+        assert_eq!(effect_state.opacity, 0.25);
     }
 
     #[test]
@@ -4874,10 +5442,10 @@ mod retained_scroll_update_tests {
         let mut old_transform = (*root.transform).clone();
         old_transform.id = 21;
         old_transform.lifecycle = Default::default();
-        old_transform.parent = Some(root.transform.clone());
+        old_transform.state_mut().parent = Some(root.transform.clone());
         let old_transform = Arc::new(old_transform);
         let mut current_transform = (*old_transform).clone();
-        current_transform.matrix.values[12] = 8.0;
+        current_transform.state_mut().matrix.values[12] = 8.0;
         current_transform.lifecycle = old_transform
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlySimpleValues);
@@ -4887,8 +5455,8 @@ mod retained_scroll_update_tests {
             let mut clip = (*root.clip).clone();
             clip.id = id;
             clip.lifecycle = lifecycle;
-            clip.parent = Some(root.clip.clone());
-            clip.local_transform_space = old_transform.clone();
+            clip.state_mut().parent = Some(root.clip.clone());
+            clip.state_mut().local_transform_space = old_transform.clone();
             Arc::new(clip)
         };
         let old_output_clip = make_clip(22, Default::default());
@@ -4897,30 +5465,30 @@ mod retained_scroll_update_tests {
         current_output_clip.lifecycle = old_output_clip
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        current_output_clip.local_transform_space = current_transform.clone();
+        current_output_clip.state_mut().local_transform_space = current_transform.clone();
         let current_output_clip = Arc::new(current_output_clip);
         let mut current_backdrop_clip = (*old_backdrop_clip).clone();
         current_backdrop_clip.lifecycle = old_backdrop_clip
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        current_backdrop_clip.local_transform_space = current_transform.clone();
+        current_backdrop_clip.state_mut().local_transform_space = current_transform.clone();
         let current_backdrop_clip = Arc::new(current_backdrop_clip);
         let old_parent = child_effect(24, root.effect.clone(), old_transform.clone());
         let mut current_parent = (*old_parent).clone();
         current_parent.lifecycle = old_parent
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        current_parent.local_transform_space = current_transform.clone();
+        current_parent.state_mut().local_transform_space = current_transform.clone();
         let current_parent = Arc::new(current_parent);
 
         let mut wrapper = (*root.effect).clone();
         wrapper.id = 25;
         wrapper.lifecycle = Default::default();
-        wrapper.parent = Some(old_parent.clone());
-        wrapper.local_transform_space = old_transform.clone();
-        wrapper.output_clip = Some(old_output_clip.clone());
-        wrapper.backdrop_filter_clip = Some(old_backdrop_clip.clone());
-        wrapper.compositor.canvas_child_state = Some(Arc::new(PaintCanvasChildState {
+        wrapper.state_mut().parent = Some(old_parent.clone());
+        wrapper.state_mut().local_transform_space = old_transform.clone();
+        wrapper.state_mut().output_clip = Some(old_output_clip.clone());
+        wrapper.state_mut().backdrop_filter_clip = Some(old_backdrop_clip.clone());
+        wrapper.state_mut().compositor.canvas_child_state = Some(Arc::new(PaintCanvasChildState {
             id: 9,
             paint_state: Default::default(),
             content_state: PropertyTreeState {
@@ -4954,25 +5522,26 @@ mod retained_scroll_update_tests {
             ..root
         };
         ArtifactPropertyStateRebinder::new(&store).RebindState(&mut state);
+        let effect_state = crate::property_cell::with_access(|a| state.effect.state(a).clone());
 
         assert!(state.effect.lifecycle.same_node(&wrapper.lifecycle));
         assert!(Arc::ptr_eq(
-            state.effect.parent.as_ref().unwrap(),
+            effect_state.parent.as_ref().unwrap(),
             &current_parent
         ));
         assert!(Arc::ptr_eq(
-            &state.effect.local_transform_space,
+            &effect_state.local_transform_space,
             &current_transform
         ));
         assert!(Arc::ptr_eq(
-            state.effect.output_clip.as_ref().unwrap(),
+            effect_state.output_clip.as_ref().unwrap(),
             &current_output_clip
         ));
         assert!(Arc::ptr_eq(
-            state.effect.backdrop_filter_clip.as_ref().unwrap(),
+            effect_state.backdrop_filter_clip.as_ref().unwrap(),
             &current_backdrop_clip
         ));
-        let child = state.effect.compositor.canvas_child_state.as_ref().unwrap();
+        let child = effect_state.compositor.canvas_child_state.as_ref().unwrap();
         assert!(Arc::ptr_eq(
             &child.content_state.transform,
             &current_transform
@@ -4989,11 +5558,8 @@ mod retained_scroll_update_tests {
             fragment: 0,
         };
         let translation = |id, scroll| {
-            Arc::new(TransformPaintPropertyNode {
+            Arc::new(TransformPaintPropertyNode::new(Default::default(), id, TransformPaintPropertyNodeState {
                 compositor: Default::default(),
-                geometry_mapper_cache: Default::default(),
-                lifecycle: Default::default(),
-                id,
                 parent: Some(root.transform.clone()),
                 matrix: TransformMatrix::default(),
                 origin: [0.0; 3],
@@ -5004,9 +5570,9 @@ mod retained_scroll_update_tests {
                 scroll_parent_scroll_translation: None,
                 sticky_constraint: None,
                 direct_compositing_reasons: Default::default(),
-            })
+            }))
         };
-        let with_scroll = translation(1, root.transform.scroll.clone());
+        let with_scroll = translation(1, crate::property_cell::with_access(|a| root.transform.state(a).scroll.clone()).clone());
         let geometry_only = translation(2, None);
         let mut store = PaintPropertyNodeStore::default();
         store.transforms.insert(
@@ -5040,10 +5606,10 @@ mod retained_scroll_update_tests {
 
         let mut child_transform = (*root.transform).clone();
         child_transform.id = 101;
-        child_transform.parent = Some(root.transform.clone());
+        child_transform.state_mut().parent = Some(root.transform.clone());
         child_transform.lifecycle = PaintPropertyNodeLifecycle::default()
             .updated(PaintPropertyChangeType::ChangedOnlyValues);
-        child_transform.matrix.values[12] = 9.0;
+        child_transform.state_mut().matrix.values[12] = 9.0;
         let child_transform = Arc::new(child_transform);
         let mut state = root.clone();
         state.SetTransform(child_transform.clone());
@@ -5070,18 +5636,18 @@ mod retained_scroll_update_tests {
         let root = PropertyTreeState::default();
         let mut transform = (*root.transform).clone();
         transform.id = 91;
-        transform.parent = Some(root.transform.clone());
+        transform.state_mut().parent = Some(root.transform.clone());
         transform.lifecycle = PaintPropertyNodeLifecycle::root();
 
         let mut scaled = transform.clone();
-        scaled.matrix.values[0] = 2.0;
+        scaled.state_mut().matrix.values[0] = 2.0;
         assert_eq!(
             transform_state_change(&transform, &scaled),
             PaintPropertyChangeType::ChangedOnlySimpleValues
         );
 
         let mut skewed = transform.clone();
-        skewed.matrix.values[4] = 0.5;
+        skewed.state_mut().matrix.values[4] = 0.5;
         assert_eq!(
             transform_state_change(&transform, &skewed),
             PaintPropertyChangeType::ChangedOnlyValues
@@ -5098,7 +5664,7 @@ mod retained_scroll_update_tests {
         );
 
         let mut origin_changed = transform.clone();
-        origin_changed.origin = [2.0, 3.0, 0.0];
+        origin_changed.state_mut().origin = [2.0, 3.0, 0.0];
         assert_eq!(
             transform_state_change_with_animation(
                 &transform,
@@ -5112,37 +5678,39 @@ mod retained_scroll_update_tests {
 
         let mut sticky = transform.clone();
         sticky
+            .state_mut()
             .direct_compositing_reasons
             .Put(foundation::CompositingReason::kStickyPosition);
         let mut sticky_moved = sticky.clone();
-        sticky_moved.matrix.values[12] = 10.0;
+        sticky_moved.state_mut().matrix.values[12] = 10.0;
         assert_eq!(
             transform_state_change(&sticky, &sticky_moved),
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
 
         let mut source_state_changed = transform.clone();
-        source_state_changed.compositor.visible_frame_element_id =
+        source_state_changed.state_mut().compositor.visible_frame_element_id =
             foundation::CompositorElementId::new(7);
         assert_eq!(
             transform_state_change(&transform, &source_state_changed),
             PaintPropertyChangeType::ChangedOnlyValues
         );
         let mut auxiliary_changed = transform.clone();
-        auxiliary_changed.sticky_constraint = Some(StickyPositionPaintData::default());
+        auxiliary_changed.state_mut().sticky_constraint = Some(StickyPositionPaintData::default());
         assert_eq!(
             transform_state_change(&transform, &auxiliary_changed),
             PaintPropertyChangeType::Unchanged
         );
 
         let mut translated = transform.clone();
-        translated.matrix.values[12] = 4.0;
-        translated.matrix.values[13] = 5.0;
-        translated.flattens_inherited_transform = false;
-        translated.compositor.in_subtree_of_page_scale = false;
-        translated.backface_visibility = PaintBackfaceVisibility::Hidden;
-        translated.rendering_context_id = 0x2a;
+        translated.state_mut().matrix.values[12] = 4.0;
+        translated.state_mut().matrix.values[13] = 5.0;
+        translated.state_mut().flattens_inherited_transform = false;
+        translated.state_mut().compositor.in_subtree_of_page_scale = false;
+        translated.state_mut().backface_visibility = PaintBackfaceVisibility::Hidden;
+        translated.state_mut().rendering_context_id = 0x2a;
         translated
+            .state_mut()
             .direct_compositing_reasons
             .Put(foundation::CompositingReason::kWillChangeTransform);
         let json = translated.ToJSON();
@@ -5163,21 +5731,22 @@ mod retained_scroll_update_tests {
         );
         assert_eq!(resident.id, 91);
         assert_eq!(resident.lifecycle.revision, 1);
-        assert_eq!(resident.Matrix().values[0], 2.0);
+        assert_eq!(resident.state_mut().Matrix().values[0], 2.0);
 
-        let mut direct_matrix = resident.matrix;
+        let mut direct_matrix = resident.state_mut().matrix;
         direct_matrix.values[12] = 8.0;
+        let direct_origin = resident.state_mut().origin;
         assert_eq!(
             resident.DirectlyUpdateTransformAndOrigin(
                 direct_matrix,
-                resident.origin,
+                direct_origin,
                 TransformAnimationState {
                     is_running_animation_on_compositor: true,
                 }
             ),
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
-        assert_eq!(resident.Matrix().values[12], 8.0);
+        assert_eq!(resident.state_mut().Matrix().values[12], 8.0);
         crate::property_cell::with_access(|a| resident.ClearChangedToRoot(a, 8));
         assert_eq!(crate::property_cell::with_access(|a| resident.lifecycle.changed_sequence_number(a)), 8);
     }
@@ -5185,53 +5754,52 @@ mod retained_scroll_update_tests {
     #[test]
     fn scroll_node_owns_source_change_queries_and_json() {
         let root = PropertyTreeState::default();
-        let root_scroll = root
-            .transform
-            .scroll
-            .as_ref()
-            .expect("root transform owns root scroll")
-            .clone();
+        let root_scroll = crate::property_cell::with_access(|a| {
+            root.transform.ScrollNode(a).expect("root transform owns root scroll").clone()
+        });
         let mut scroll = (*root_scroll).clone();
         scroll.id = 81;
         scroll.lifecycle = PaintPropertyNodeLifecycle::root();
-        scroll.parent = Some(root_scroll.clone());
-        scroll.overflow_clip = Some(root.clip.clone());
-        scroll.container_rect = PaintRect {
+        scroll.state_mut().parent = Some(root_scroll.clone());
+        scroll.state_mut().overflow_clip = Some(root.clip.clone());
+        scroll.state_mut().container_rect = PaintRect {
             x: 1.0,
             y: 2.0,
             width: 30.0,
             height: 40.0,
         };
-        scroll.contents_rect = PaintRect {
+        scroll.state_mut().contents_rect = PaintRect {
             x: 1.0,
             y: 2.0,
             width: 300.0,
             height: 400.0,
         };
-        scroll.user_scrollable_horizontal = true;
-        scroll.user_scrollable_vertical = true;
-        scroll.compositor.main_thread_repaint_reasons = 1 | (1 << 3);
-        scroll.compositor.max_scroll_offset_affected_by_page_scale = true;
-        scroll.compositor.prevent_scroll_axis_locking = true;
-        scroll.compositor.overscroll_behavior = [
+        scroll.state_mut().user_scrollable_horizontal = true;
+        scroll.state_mut().user_scrollable_vertical = true;
+        scroll.state_mut().compositor.main_thread_repaint_reasons = 1 | (1 << 3);
+        scroll.state_mut().compositor.max_scroll_offset_affected_by_page_scale = true;
+        scroll.state_mut().compositor.prevent_scroll_axis_locking = true;
+        scroll.state_mut().compositor.overscroll_behavior = [
             LayoutOverscrollBehavior::kContain,
             LayoutOverscrollBehavior::kNone,
         ];
-        scroll.compositor.snap_container_data_absent = true;
-        scroll.compositor.snap_container_data = None;
-        scroll.compositor.compositor_element_id = foundation::CompositorElementId::new(42);
+        scroll.state_mut().compositor.snap_container_data_absent = true;
+        scroll.state_mut().compositor.snap_container_data = None;
+        scroll.state_mut().compositor.compositor_element_id = foundation::CompositorElementId::new(42);
 
-        assert_eq!(scroll.ContainerRect().width, 30.0);
-        assert_eq!(scroll.ContentsRect().height, 400.0);
-        assert!(scroll.UserScrollable());
-        assert!(scroll.RequiresMainThreadForBackgroundAttachmentFixed());
-        assert!(scroll.PreventScrollAxisLocking());
+        crate::property_cell::with_access(|a| {
+        assert_eq!(scroll.ContainerRect(a).width, 30.0);
+        assert_eq!(scroll.ContentsRect(a).height, 400.0);
+        assert!(scroll.UserScrollable(a));
+        assert!(scroll.RequiresMainThreadForBackgroundAttachmentFixed(a));
+        assert!(scroll.PreventScrollAxisLocking(a));
         assert!(scroll
-            .OverflowClipNode()
+            .OverflowClipNode(a)
             .is_some_and(|clip| Arc::ptr_eq(clip, &root.clip)));
+        });
 
         let mut cull_changed = scroll.clone();
-        cull_changed.compositor.scrolling_contents_cull_rect = PaintRect {
+        cull_changed.state_mut().compositor.scrolling_contents_cull_rect = PaintRect {
             x: 3.0,
             y: 4.0,
             width: 50.0,
@@ -5242,13 +5810,14 @@ mod retained_scroll_update_tests {
             PaintPropertyChangeType::ChangedOnlySimpleValues
         );
         let mut auxiliary_changed = scroll.clone();
-        auxiliary_changed.maximum_scroll_offset.y = 99.0;
+        auxiliary_changed.state_mut().maximum_scroll_offset.y = 99.0;
         assert_eq!(
             scroll_state_change(&scroll, &auxiliary_changed),
             PaintPropertyChangeType::Unchanged
         );
         let mut source_changed = scroll.clone();
         source_changed
+            .state_mut()
             .compositor
             .prevent_viewport_scrolling_from_inner = true;
         assert_eq!(
@@ -5271,7 +5840,7 @@ mod retained_scroll_update_tests {
 
         let mut resident = scroll.clone();
         let mut next = resident.clone();
-        next.user_scrollable_vertical = false;
+        next.state_mut().user_scrollable_vertical = false;
         assert_eq!(
             resident.Update(root_scroll, next),
             PaintPropertyChangeType::ChangedOnlyValues
@@ -5292,7 +5861,7 @@ mod retained_scroll_update_tests {
     fn clip_node_owns_source_clip_queries_and_json() {
         let root = PropertyTreeState::default();
         let mut clip = (*root.clip).clone();
-        clip.rect = Some(PaintRect {
+        clip.state_mut().rect = Some(PaintRect {
             x: 1.0,
             y: 2.0,
             width: 30.0,
@@ -5311,20 +5880,22 @@ mod retained_scroll_update_tests {
             height: 120.0,
         };
         clip = clip.with_layout_clip_values(Some(precise), Some(expanded), None);
-        clip.pixel_moving_filter = Some(root.effect.clone());
+        clip.state_mut().pixel_moving_filter = Some(root.effect.clone());
 
-        assert_eq!(clip.PaintClipRect(), clip.rect);
-        assert_eq!(clip.PreciseLayoutClipRect().rect, Some(precise));
-        assert_eq!(clip.LayoutClipRect().rect, Some(expanded));
+        crate::property_cell::with_access(|a| {
+        assert_eq!(clip.PaintClipRect(a), clip.state(a).rect);
+        assert_eq!(clip.PreciseLayoutClipRect(a).rect, Some(precise));
+        assert_eq!(clip.LayoutClipRect(a).rect, Some(expanded));
         assert_eq!(
-            clip.LayoutClipRectExcludingOverlayScrollbars().rect,
+            clip.LayoutClipRectExcludingOverlayScrollbars(a).rect,
             Some(precise)
         );
-        assert!(clip.IsForCompositeClipPathAnimation());
-        assert!(clip.ClipPathEquals(None));
+        assert!(clip.IsForCompositeClipPathAnimation(a));
+        assert!(clip.ClipPathEquals(a, None));
         assert!(clip
-            .PixelMovingFilter()
+            .PixelMovingFilter(a)
             .is_some_and(|filter| Arc::ptr_eq(filter, &root.effect)));
+        });
 
         let json = clip.ToJSON();
         assert_eq!(json["rect"], "1,2 30x40");
@@ -5337,7 +5908,7 @@ mod retained_scroll_update_tests {
         resident.id = 73;
         resident.lifecycle = PaintPropertyNodeLifecycle::root();
         let mut next = resident.clone();
-        next.rect = Some(PaintRect {
+        next.state_mut().rect = Some(PaintRect {
             x: 5.0,
             y: 6.0,
             width: 7.0,
@@ -5349,11 +5920,12 @@ mod retained_scroll_update_tests {
         );
         assert_eq!(resident.id, 73);
         assert_eq!(resident.lifecycle.revision, 1);
-        assert_eq!(resident.PaintClipRect().expect("updated clip rect").x, 5.0);
-        assert!(resident
-            .parent
-            .as_ref()
-            .is_some_and(|parent| Arc::ptr_eq(parent, &root.clip)));
+        crate::property_cell::with_access(|a| {
+            assert_eq!(resident.PaintClipRect(a).expect("updated clip rect").x, 5.0);
+            assert!(resident
+                .Parent(a)
+                .is_some_and(|parent| Arc::ptr_eq(parent, &root.clip)));
+        });
     }
 
     #[test]
@@ -5361,51 +5933,51 @@ mod retained_scroll_update_tests {
         let root = PropertyTreeState::default();
         let mut effect = (*root.effect).clone();
 
-        assert!(!effect.HasRealEffects());
-        assert!(effect.IsOpacityOnly());
-        assert!(!effect.HasDirectCompositingReasons());
-        assert!(!effect.MayHaveOpacity());
-        assert!(!effect.MayHaveFilter());
-        assert!(!effect.MayHaveBackdropFilter());
-        assert!(!effect.MayHaveBackdropEffect());
-        assert!(!effect.DrawsContent());
+        assert!(!effect.state_mut().HasRealEffects());
+        assert!(effect.state_mut().IsOpacityOnly());
+        assert!(!effect.state_mut().HasDirectCompositingReasons());
+        assert!(!effect.state_mut().MayHaveOpacity());
+        assert!(!effect.state_mut().MayHaveFilter());
+        assert!(!effect.state_mut().MayHaveBackdropFilter());
+        assert!(!effect.state_mut().MayHaveBackdropEffect());
+        assert!(!effect.state_mut().DrawsContent());
 
-        effect.opacity = 0.5;
-        assert!(effect.HasRealEffects());
-        assert!(effect.IsOpacityOnly());
-        assert!(effect.MayHaveOpacity());
+        effect.state_mut().opacity = 0.5;
+        assert!(effect.state_mut().HasRealEffects());
+        assert!(effect.state_mut().IsOpacityOnly());
+        assert!(effect.state_mut().MayHaveOpacity());
 
-        effect
+        effect.state_mut()
             .direct_compositing_reasons
             .Put(foundation::CompositingReason::kWillChangeFilter);
-        assert!(effect.HasDirectCompositingReasons());
-        assert!(effect.RequiresCompositingForWillChangeFilter());
-        assert!(effect.MayHaveFilter());
-        assert!(effect.NeedsPixelMovingFilterClipExpander());
-        assert!(effect.DrawsContent());
+        assert!(effect.state_mut().HasDirectCompositingReasons());
+        assert!(effect.state_mut().RequiresCompositingForWillChangeFilter());
+        assert!(effect.state_mut().MayHaveFilter());
+        assert!(effect.state_mut().NeedsPixelMovingFilterClipExpander());
+        assert!(effect.state_mut().DrawsContent());
 
-        effect
+        effect.state_mut()
             .direct_compositing_reasons
             .Put(foundation::CompositingReason::kWillChangeBackdropFilter);
-        assert!(effect.RequiresCompositingForWillChangeBackdropFilter());
-        assert!(effect.MayHaveBackdropFilter());
-        assert!(effect.MayHaveBackdropEffect());
+        assert!(effect.state_mut().RequiresCompositingForWillChangeBackdropFilter());
+        assert!(effect.state_mut().MayHaveBackdropFilter());
+        assert!(effect.state_mut().MayHaveBackdropEffect());
 
-        effect.compositor.view_transition_element_resource_id = Some(([1, 2], 0, false));
-        assert!(!effect.HasValidViewTransitionElementResourceId());
-        effect.compositor.view_transition_element_resource_id = Some(([1, 2], 7, false));
-        assert!(effect.HasValidViewTransitionElementResourceId());
-        effect.compositor.restriction_target_id = [1, 0];
-        assert!(effect.HasElementCaptureId());
+        effect.state_mut().compositor.view_transition_element_resource_id = Some(([1, 2], 0, false));
+        assert!(!effect.state_mut().HasValidViewTransitionElementResourceId());
+        effect.state_mut().compositor.view_transition_element_resource_id = Some(([1, 2], 7, false));
+        assert!(effect.state_mut().HasValidViewTransitionElementResourceId());
+        effect.state_mut().compositor.restriction_target_id = [1, 0];
+        assert!(effect.state_mut().HasElementCaptureId());
 
-        effect.compositor.canvas_child_state = Some(Arc::new(PaintCanvasChildState {
+        effect.state_mut().compositor.canvas_child_state = Some(Arc::new(PaintCanvasChildState {
             id: 0,
             paint_state: CanvasChildPaintState::default(),
             content_state: root.clone(),
         }));
-        assert!(!effect.HasCanvasChildState());
-        assert_eq!(effect.CanvasChildId(), 0);
-        effect.compositor.canvas_child_state = Some(Arc::new(PaintCanvasChildState {
+        assert!(!effect.state_mut().HasCanvasChildState());
+        assert_eq!(effect.state_mut().CanvasChildId(), 0);
+        effect.state_mut().compositor.canvas_child_state = Some(Arc::new(PaintCanvasChildState {
             id: 9,
             paint_state: CanvasChildPaintState {
                 reference_box_offset: Offset { x: 3.0, y: 4.0 },
@@ -5415,16 +5987,16 @@ mod retained_scroll_update_tests {
             },
             content_state: root.clone(),
         }));
-        assert!(effect.HasCanvasChildState());
-        assert_eq!(effect.CanvasChildId(), 9);
+        assert!(effect.state_mut().HasCanvasChildState());
+        assert_eq!(effect.state_mut().CanvasChildId(), 9);
         assert_eq!(
-            effect
+            effect.state_mut()
                 .canvas_child_paint_state()
                 .expect("canvas child paint state")
                 .reference_box_offset,
             Offset { x: 3.0, y: 4.0 }
         );
-        let canvas_state = effect
+        let canvas_state = effect.state_mut()
             .canvas_child_paint_state()
             .expect("canvas child paint state");
         assert_eq!(
@@ -5452,24 +6024,24 @@ mod retained_scroll_update_tests {
         assert_eq!(around_origin.GetColMajor()[12], 2.0);
         assert_eq!(around_origin.GetColMajor()[13], 6.0);
         assert!(Arc::ptr_eq(
-            effect.CanvasChildContentTransform(),
+            effect.state_mut().CanvasChildContentTransform(),
             &root.transform
         ));
-        assert!(Arc::ptr_eq(effect.CanvasChildContentClip(), &root.clip));
-        assert!(Arc::ptr_eq(effect.CanvasChildContentEffect(), &root.effect));
+        assert!(Arc::ptr_eq(effect.state_mut().CanvasChildContentClip(), &root.clip));
+        assert!(Arc::ptr_eq(effect.state_mut().CanvasChildContentEffect(), &root.effect));
 
-        effect.blend_mode = PaintBlendMode::kMultiply;
-        assert!(!effect.IsOpacityOnly());
-        assert!(effect.MayHaveBackdropEffect());
+        effect.state_mut().blend_mode = PaintBlendMode::kMultiply;
+        assert!(!effect.state_mut().IsOpacityOnly());
+        assert!(effect.state_mut().MayHaveBackdropEffect());
 
-        effect.compositor.is_in_tainted_subtree = true;
-        effect.compositor.is_in_drawable_canvas_subtree = true;
-        effect.compositor.needs_effect_for_2d_scale_transform = true;
-        assert!(effect.IsInTaintedSubtree());
-        assert!(effect.IsInDrawableCanvasSubtree());
-        assert!(effect.NeedsEffectFor2DScaleTransform());
+        effect.state_mut().compositor.is_in_tainted_subtree = true;
+        effect.state_mut().compositor.is_in_drawable_canvas_subtree = true;
+        effect.state_mut().compositor.needs_effect_for_2d_scale_transform = true;
+        assert!(effect.state_mut().IsInTaintedSubtree());
+        assert!(effect.state_mut().IsInDrawableCanvasSubtree());
+        assert!(effect.state_mut().NeedsEffectFor2DScaleTransform());
 
-        effect.compositor.compositor_element_id = foundation::CompositorElementId::new(42);
+        effect.state_mut().compositor.compositor_element_id = foundation::CompositorElementId::new(42);
         let json = effect.ToJSON();
         assert_eq!(json["opacity"], serde_json::json!(0.5));
         assert_eq!(json["blendMode"], "Multiply");
@@ -5521,9 +6093,9 @@ mod retained_scroll_update_tests {
 
         let root = PropertyTreeState::default();
         let mut opacity_a = (*root.effect).clone();
-        opacity_a.opacity = 0.4;
+        opacity_a.state_mut().opacity = 0.4;
         let mut opacity_b = opacity_a.clone();
-        opacity_b.opacity = 0.5;
+        opacity_b.state_mut().opacity = 0.5;
         assert_eq!(
             effect_state_change_with_animation(
                 &opacity_a,
@@ -5545,10 +6117,10 @@ mod retained_scroll_update_tests {
         );
 
         let mut filter_a = (*root.effect).clone();
-        filter_a.filters = blur(1.0, false);
+        filter_a.state_mut().filters = blur(1.0, false);
         filter_a = filter_a.with_filter_presence();
         let mut filter_b = filter_a.clone();
-        filter_b.filters = blur(2.0, false);
+        filter_b.state_mut().filters = blur(2.0, false);
         filter_b = filter_b.with_filter_presence();
         assert_eq!(
             effect_state_change_with_animation(
@@ -5570,7 +6142,7 @@ mod retained_scroll_update_tests {
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
 
-        filter_b.filters = blur(1.0, true);
+        filter_b.state_mut().filters = blur(1.0, true);
         assert_eq!(
             effect_state_change_with_animation(
                 &filter_a,
@@ -5584,10 +6156,10 @@ mod retained_scroll_update_tests {
         );
 
         let mut backdrop_a = (*root.effect).clone();
-        backdrop_a.backdrop_filters = blur(1.0, false);
+        backdrop_a.state_mut().backdrop_filters = blur(1.0, false);
         backdrop_a = backdrop_a.with_filter_presence();
         let mut backdrop_b = backdrop_a.clone();
-        backdrop_b.backdrop_filters = blur(2.0, false);
+        backdrop_b.state_mut().backdrop_filters = blur(2.0, false);
         backdrop_b = backdrop_b.with_filter_presence();
         assert_eq!(
             effect_state_change_with_animation(
@@ -5603,9 +6175,9 @@ mod retained_scroll_update_tests {
 
         let mut direct = (*root.effect).clone();
         direct.lifecycle = PaintPropertyNodeLifecycle::root();
-        direct.opacity = 0.4;
+        direct.state_mut().opacity = 0.4;
         assert_eq!(
-            direct.ComputeOpacityChange(0.5, EffectAnimationState::default()),
+            direct.state_mut().ComputeOpacityChange(0.5, EffectAnimationState::default()),
             PaintPropertyChangeType::ChangedOnlySimpleValues
         );
         assert_eq!(
@@ -5618,7 +6190,7 @@ mod retained_scroll_update_tests {
             ),
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
-        assert_eq!(direct.opacity, 0.5);
+        assert_eq!(direct.state_mut().opacity, 0.5);
         assert_eq!(direct.lifecycle.revision, 1);
         assert_eq!(
             crate::property_cell::with_access(|a| direct.lifecycle.node_changed(a)),
@@ -5632,10 +6204,10 @@ mod retained_scroll_update_tests {
 
         let mut resident = (*root.effect).clone();
         resident.id = 77;
-        resident.parent = Some(root.effect.clone());
+        resident.state_mut().parent = Some(root.effect.clone());
         resident.lifecycle = PaintPropertyNodeLifecycle::root();
         let mut next_state = resident.clone();
-        next_state.opacity = 0.25;
+        next_state.state_mut().opacity = 0.25;
         assert_eq!(
             resident.Update(
                 root.effect.clone(),
@@ -5644,10 +6216,10 @@ mod retained_scroll_update_tests {
             ),
             PaintPropertyChangeType::ChangedOnlyValues
         );
-        assert_eq!(resident.opacity, 0.25);
+        assert_eq!(resident.state_mut().opacity, 0.25);
         assert_eq!(resident.id, 77);
         assert_eq!(resident.lifecycle.revision, 1);
-        assert!(resident
+        assert!(resident.state_mut()
             .parent
             .as_ref()
             .is_some_and(|parent| Arc::ptr_eq(parent, &root.effect)));
@@ -5662,8 +6234,8 @@ mod retained_scroll_update_tests {
             matrix.values[13] = y;
             node.lifecycle = Default::default();
             node.id = id;
-            node.parent = Some(root);
-            node.matrix = matrix;
+            node.state_mut().parent = Some(root);
+            node.state_mut().matrix = matrix;
             Arc::new(node)
         }
 
@@ -5722,23 +6294,20 @@ mod retained_scroll_update_tests {
 
         assert_eq!(rebuilt.transform.id, stable_id);
         assert!(Arc::ptr_eq(&rebuilt.transform, &retained.transform));
-        assert_eq!(retained.transform.matrix.values[13], -4000.0);
+        assert_eq!(crate::property_cell::with_access(|a| retained.transform.state(a).matrix.clone()).values[13], -4000.0);
         assert!(Arc::ptr_eq(&rebuilt.transform, &retained_raw.transform));
-        assert_eq!(retained_raw.transform.matrix.values[13], -4000.0);
+        assert_eq!(crate::property_cell::with_access(|a| retained_raw.transform.state(a).matrix.clone()).values[13], -4000.0);
         assert!(!Arc::ptr_eq(&rebuilt.transform, &collided.transform));
         assert_ne!(collided.transform.id, stable_id);
-        assert_eq!(collided.transform.matrix.values[13], 123.0);
+        assert_eq!(crate::property_cell::with_access(|a| collided.transform.state(a).matrix.clone()).values[13], 123.0);
     }
 
     #[test]
     fn clearing_resident_states_includes_nodes_without_source_owner_slots() {
         let root = PropertyTreeState::default();
         let clip = Arc::new(
-            ClipPaintPropertyNode {
-                geometry_mapper_cache: Default::default(),
+            ClipPaintPropertyNode::new(Default::default(), 17, ClipPaintPropertyNodeState {
                 layout_clip_rects: Default::default(),
-                lifecycle: Default::default(),
-                id: 17,
                 parent: Some(root.clip.clone()),
                 local_transform_space: root.transform.clone(),
                 rect: Some(PaintRect {
@@ -5751,7 +6320,7 @@ mod retained_scroll_update_tests {
                 clip_path: None,
                 clip_path_error: None,
                 pixel_moving_filter: None,
-            }
+            })
             .with_layout_clips(),
         );
         let mut state = PropertyTreeState { clip, ..root };
@@ -5767,7 +6336,9 @@ mod retained_scroll_update_tests {
         assert!(!trees.clips.contains_key(&state.clip.id));
         trees.clear_state_change_markers(&mut state);
         assert_eq!(state.clip.id, previous.clip.id);
-        assert_eq!(state.clip.rect, previous.clip.rect);
+        crate::property_cell::with_access(|a| {
+            assert_eq!(state.clip.state(a).rect, previous.clip.state(a).rect)
+        });
         assert!(state.clip.lifecycle.same_node(&previous.clip.lifecycle));
         assert_eq!(
             state.clip.lifecycle.revision,
@@ -5796,13 +6367,11 @@ mod retained_scroll_update_tests {
         let key = |role| PaintPropertyKey { owner, role };
         let clean =
             || PaintPropertyNodeLifecycle::default().updated(PaintPropertyChangeType::Unchanged);
-        let scroll = Arc::new(ScrollPaintPropertyNode {
+        let scroll = Arc::new(ScrollPaintPropertyNode::new(clean(), 1, ScrollPaintPropertyNodeState {
             compositor: Default::default(),
-            id: 1,
             owner_client_id: 42,
             owner_node_id: 0,
-            lifecycle: clean(),
-            parent: root.transform.scroll.clone(),
+            parent: crate::property_cell::with_access(|a| root.transform.state(a).scroll.clone()).clone(),
             overflow_clip: Some(root.clip.clone()),
             container_rect: PaintRect::default(),
             contents_rect: PaintRect::default(),
@@ -5810,13 +6379,10 @@ mod retained_scroll_update_tests {
             maximum_scroll_offset: Offset { x: 0.0, y: 100.0 },
             user_scrollable_horizontal: false,
             user_scrollable_vertical: true,
-        });
-        let translation = Arc::new(TransformPaintPropertyNode {
+        }));
+        let translation = Arc::new(TransformPaintPropertyNode::new(clean(), 2, TransformPaintPropertyNodeState {
             compositor: Default::default(),
-            geometry_mapper_cache: Default::default(),
             scroll_parent_scroll_translation: None,
-            id: 2,
-            lifecycle: clean(),
             parent: Some(root.transform.clone()),
             matrix: TransformMatrix::default(),
             origin: [0.0; 3],
@@ -5826,13 +6392,10 @@ mod retained_scroll_update_tests {
             scroll: Some(scroll.clone()),
             sticky_constraint: None,
             direct_compositing_reasons: Default::default(),
-        });
-        let child = Arc::new(TransformPaintPropertyNode {
+        }));
+        let child = Arc::new(TransformPaintPropertyNode::new(clean(), 3, TransformPaintPropertyNodeState {
             compositor: Default::default(),
-            geometry_mapper_cache: Default::default(),
             scroll_parent_scroll_translation: None,
-            id: 3,
-            lifecycle: clean(),
             parent: Some(translation.clone()),
             matrix: TransformMatrix::default(),
             origin: [0.0; 3],
@@ -5842,30 +6405,29 @@ mod retained_scroll_update_tests {
             scroll: None,
             sticky_constraint: None,
             direct_compositing_reasons: Default::default(),
-        });
+        }));
         let clip = Arc::new(
-            ClipPaintPropertyNode {
-                geometry_mapper_cache: Default::default(),
-                layout_clip_rects: Default::default(),
-                id: 4,
-                lifecycle: clean().updated(PaintPropertyChangeType::ChangedOnlyValues),
-                parent: Some(root.clip.clone()),
-                local_transform_space: child.clone(),
-                rect: None,
-                radii: PaintCornerRadii::default(),
-                clip_path: None,
-                clip_path_error: None,
-                pixel_moving_filter: None,
-            }
+            ClipPaintPropertyNode::new(
+                clean().updated(PaintPropertyChangeType::ChangedOnlyValues),
+                4,
+                ClipPaintPropertyNodeState {
+                    layout_clip_rects: Default::default(),
+                    parent: Some(root.clip.clone()),
+                    local_transform_space: child.clone(),
+                    rect: None,
+                    radii: PaintCornerRadii::default(),
+                    clip_path: None,
+                    clip_path_error: None,
+                    pixel_moving_filter: None,
+                },
+            )
             .with_layout_clips(),
         );
         let effect = Arc::new(
-            EffectPaintPropertyNode {
+            EffectPaintPropertyNode::new(clean(), 5, EffectPaintPropertyNodeState {
                 compositor: Default::default(),
                 backdrop_filter_bounds: None,
                 self_or_ancestor_participates_in_view_transition: false,
-                id: 5,
-                lifecycle: clean(),
                 parent: Some(root.effect.clone()),
                 local_transform_space: child.clone(),
                 output_clip: Some(clip.clone()),
@@ -5883,15 +6445,13 @@ mod retained_scroll_update_tests {
                 has_mask: false,
                 is_mask: false,
                 direct_compositing_reasons: Default::default(),
-            }
+            })
             .with_inherited_view_transition(),
         );
-        let secondary_scroll = Arc::new(ScrollPaintPropertyNode {
+        let secondary_scroll = Arc::new(ScrollPaintPropertyNode::new(clean(), 6, ScrollPaintPropertyNodeState {
             compositor: Default::default(),
-            id: 6,
             owner_client_id: 43,
             owner_node_id: 0,
-            lifecycle: clean(),
             parent: Some(scroll.clone()),
             overflow_clip: Some(clip.clone()),
             container_rect: PaintRect::default(),
@@ -5900,7 +6460,7 @@ mod retained_scroll_update_tests {
             maximum_scroll_offset: Offset::default(),
             user_scrollable_horizontal: false,
             user_scrollable_vertical: false,
-        });
+        }));
         let mut store = PaintPropertyNodeStore::default();
         // This test bypasses updater() to construct marked resident slots.
         store.change_markers_cleared = false;
@@ -5945,20 +6505,20 @@ mod retained_scroll_update_tests {
             PaintPropertyChangeType::ChangedOnlyValues,
             "clearing published markers leaves the old artifact immutable"
         );
-        assert!(Arc::ptr_eq(
-            cleared_trees.effects[&5].output_clip.as_ref().unwrap(),
+        assert!(crate::property_cell::with_access(|access| Arc::ptr_eq(
+            cleared_trees.effects[&5].OutputClip(access).unwrap(),
             &cleared_trees.clips[&4]
-        ));
+        )));
         assert!(cleared.cleared_change_markers().is_none());
         let offsets = BTreeMap::from([(owner, Offset { x: 0.0, y: 12.5 })]);
         let (updated, trees) = store
             .retained_scroll_update(&offsets, &BTreeMap::new())
             .unwrap();
         assert_eq!(
-            translation.matrix.values[13], 0.0,
+            crate::property_cell::with_access(|a| translation.state(a).matrix.clone()).values[13], 0.0,
             "old snapshot stays immutable"
         );
-        assert_eq!(trees.transforms[&2].matrix.values[13], -12.5);
+        assert_eq!(crate::property_cell::with_access(|a| trees.transforms[&2].state(a).matrix.clone()).values[13], -12.5);
         assert!(trees.transforms[&2]
             .lifecycle
             .same_node(&translation.lifecycle));
@@ -5980,21 +6540,21 @@ mod retained_scroll_update_tests {
             assert_eq!(after.changed, PaintPropertyChangeType::Unchanged);
         }
         assert!(Arc::ptr_eq(
-            trees.transforms[&3].parent.as_ref().unwrap(),
+            crate::property_cell::with_access(|a| trees.transforms[&3].state(a).parent.clone()).as_ref().unwrap(),
             &trees.transforms[&2]
         ));
-        assert!(Arc::ptr_eq(
-            &trees.clips[&4].local_transform_space,
+        assert!(crate::property_cell::with_access(|access| Arc::ptr_eq(
+            trees.clips[&4].LocalTransformSpace(access),
             &trees.transforms[&3]
-        ));
-        assert!(Arc::ptr_eq(
-            trees.effects[&5].output_clip.as_ref().unwrap(),
+        )));
+        assert!(crate::property_cell::with_access(|access| Arc::ptr_eq(
+            trees.effects[&5].OutputClip(access).unwrap(),
             &trees.clips[&4]
-        ));
-        assert!(Arc::ptr_eq(
-            trees.scrolls[&6].overflow_clip.as_ref().unwrap(),
+        )));
+        assert!(crate::property_cell::with_access(|access| Arc::ptr_eq(
+            trees.scrolls[&6].OverflowClipNode(access).unwrap(),
             &trees.clips[&4]
-        ));
+        )));
         assert!(updated.is_scroll_only_update_from(&store));
         assert!(
             trees.transforms.contains_key(&0)
@@ -6004,8 +6564,8 @@ mod retained_scroll_update_tests {
         );
         let (cleared_updated, cleared_trees) = updated.cleared_change_markers().unwrap();
         assert_eq!(
-            cleared_trees.transforms[&2].matrix,
-            trees.transforms[&2].matrix
+            crate::property_cell::with_access(|a| cleared_trees.transforms[&2].state(a).matrix.clone()),
+            crate::property_cell::with_access(|a| trees.transforms[&2].state(a).matrix.clone())
         );
         assert!(cleared_trees.transforms[&2]
             .lifecycle
@@ -6057,15 +6617,16 @@ mod retained_scroll_update_tests {
             }),
             ..Default::default()
         };
-        let sticky_node = Arc::new(TransformPaintPropertyNode {
-            compositor: Default::default(),
-            geometry_mapper_cache: Default::default(),
-            scroll_parent_scroll_translation: None,
-            id: 7,
-            parent: Some(child.clone()),
-            sticky_constraint: Some(constraint),
-            ..(*child).clone()
-        });
+        let mut sticky_node = (*child).clone();
+        sticky_node.id = 7;
+        {
+            let state = sticky_node.state_mut();
+            state.compositor = Default::default();
+            state.scroll_parent_scroll_translation = None;
+            state.parent = Some(child.clone());
+            state.sticky_constraint = Some(constraint);
+        }
+        let sticky_node = Arc::new(sticky_node);
         store.transforms.insert(
             key(PaintPropertyRole::StickyTranslation),
             sticky_node.clone(),
@@ -6079,15 +6640,15 @@ mod retained_scroll_update_tests {
             .current_total_sticky_box_offset = 10.0;
         let mut sticky = BTreeMap::from([(owner, (Offset { x: 0.0, y: 10.0 }, current))]);
         let (_, trees) = store.retained_scroll_update(&offsets, &sticky).unwrap();
-        assert_eq!(trees.transforms[&7].matrix.values[13], 10.0);
-        assert_eq!(trees.transforms[&7].sticky_constraint, Some(current));
-        assert_eq!(sticky_node.matrix.values[13], 0.0);
-        assert_eq!(sticky_node.sticky_constraint, Some(constraint));
+        assert_eq!(crate::property_cell::with_access(|a| trees.transforms[&7].state(a).matrix.clone()).values[13], 10.0);
+        assert_eq!(crate::property_cell::with_access(|a| trees.transforms[&7].state(a).sticky_constraint.clone()), Some(current));
+        assert_eq!(crate::property_cell::with_access(|a| sticky_node.state(a).matrix.clone()).values[13], 0.0);
+        assert_eq!(crate::property_cell::with_access(|a| sticky_node.state(a).sticky_constraint.clone()), Some(constraint));
         assert!(trees.transforms[&7]
             .lifecycle
             .same_node(&sticky_node.lifecycle));
         assert!(Arc::ptr_eq(
-            trees.transforms[&7].parent.as_ref().unwrap(),
+            crate::property_cell::with_access(|a| trees.transforms[&7].state(a).parent.clone()).as_ref().unwrap(),
             &trees.transforms[&3]
         ));
         sticky

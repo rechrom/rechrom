@@ -172,7 +172,7 @@ fn ValidateArtifactGraph(
     if viewport
         .scroll_translation_nodes
         .iter()
-        .any(|node| node.scroll.is_none())
+        .any(|node| paint_model::property_cell::with_access(|access| node.ScrollNode(access).is_none()))
     {
         return Err(PaintInputError::InvalidViewportMetadata {
             reason:
@@ -305,28 +305,41 @@ fn ValidateArtifactGraph(
                 if !seen.insert((0, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if node.RequiresCompositingForStickyPosition()
-                    && node.GetStickyConstraint().is_none()
-                {
+                let (missing_sticky, links) = paint_model::property_cell::with_access(|access| {
+                    let state = node.state(access);
+                    (
+                        state.RequiresCompositingForStickyPosition()
+                            && state.GetStickyConstraint().is_none(),
+                        state.links(),
+                    )
+                });
+                if missing_sticky {
                     return Err(PaintInputError::MissingStickyConstraint { node: node.clone() });
                 }
-                if let Some(parent) = &node.parent {
+                if let Some(parent) = &links.parent {
                     pending.push(Node::Transform(parent.clone()));
                 }
-                if let Some(parent) = &node.scroll_parent_scroll_translation {
+                if let Some(parent) = &links.scroll_parent_scroll_translation {
                     pending.push(Node::Transform(parent.clone()));
                 }
-                if let Some(scroll) = &node.scroll {
-                    if scroll.parent.is_some()
-                        && !scroll.compositor.snap_container_data_absent
-                        && scroll.compositor.snap_container_data.is_none()
-                    {
+                if let Some(scroll) = &links.scroll {
+                    let (missing_snap_data, overflow_clip) =
+                        paint_model::property_cell::with_access(|access| {
+                            let state = scroll.state(access);
+                            (
+                                state.parent.is_some()
+                                    && !state.compositor.snap_container_data_absent
+                                    && state.compositor.snap_container_data.is_none(),
+                                state.overflow_clip.clone(),
+                            )
+                        });
+                    if missing_snap_data {
                         return Err(PaintInputError::MissingScrollCompositorData {
                             node: scroll.clone(),
                         });
                     }
-                    if let Some(clip) = &scroll.overflow_clip {
-                        pending.push(Node::Clip(clip.clone()));
+                    if let Some(clip) = overflow_clip {
+                        pending.push(Node::Clip(clip));
                     }
                 }
             }
@@ -334,46 +347,68 @@ fn ValidateArtifactGraph(
                 if !seen.insert((1, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if let Some(reason) = &node.clip_path_error {
+                let (error, parent, transform, effect) =
+                    paint_model::property_cell::with_access(|access| {
+                        let state = node.state(access);
+                        (
+                            state.clip_path_error.clone(),
+                            state.parent.clone(),
+                            state.local_transform_space.clone(),
+                            state.pixel_moving_filter.clone(),
+                        )
+                    });
+                if let Some(reason) = error {
                     return Err(PaintInputError::ClipPath {
                         node: node.clone(),
-                        reason: reason.clone(),
+                        reason,
                     });
                 }
-                if let Some(parent) = &node.parent {
-                    pending.push(Node::Clip(parent.clone()));
+                if let Some(parent) = parent {
+                    pending.push(Node::Clip(parent));
                 }
-                pending.push(Node::Transform(node.local_transform_space.clone()));
-                if let Some(effect) = &node.pixel_moving_filter {
-                    pending.push(Node::Effect(effect.clone()));
+                pending.push(Node::Transform(transform));
+                if let Some(effect) = effect {
+                    pending.push(Node::Effect(effect));
                 }
             }
             Node::Effect(node) => {
                 if !seen.insert((2, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if node.compositor.canvas_child_state.is_some() && !node.HasCanvasChildState() {
+                let (invalid_canvas_child, blocker, links) =
+                    paint_model::property_cell::with_access(|access| {
+                        let state = node.state(access);
+                        let blocker = [(false, &state.filters), (true, &state.backdrop_filters)]
+                            .into_iter()
+                            .find_map(|(backdrop, filters)| {
+                                filters.blocker().map(|blocker| (backdrop, blocker.clone()))
+                            });
+                        (
+                            state.compositor.canvas_child_state.is_some()
+                                && !state.HasCanvasChildState(),
+                            blocker,
+                            state.links(),
+                        )
+                    });
+                if invalid_canvas_child {
                     return Err(PaintInputError::InvalidCanvasChild { node: node.clone() });
                 }
-                for (backdrop, filters) in [(false, &node.filters), (true, &node.backdrop_filters)]
-                {
-                    if let Some(blocker) = filters.blocker() {
-                        return Err(PaintInputError::EffectFilter {
-                            node: node.clone(),
-                            backdrop,
-                            blocker: blocker.clone(),
-                        });
-                    }
+                if let Some((backdrop, blocker)) = blocker {
+                    return Err(PaintInputError::EffectFilter {
+                        node: node.clone(),
+                        backdrop,
+                        blocker,
+                    });
                 }
-                if let Some(parent) = &node.parent {
-                    pending.push(Node::Effect(parent.clone()));
+                if let Some(parent) = links.parent {
+                    pending.push(Node::Effect(parent));
                 }
-                pending.push(Node::Transform(node.local_transform_space.clone()));
-                if let Some(clip) = &node.output_clip {
-                    pending.push(Node::Clip(clip.clone()));
+                pending.push(Node::Transform(links.local_transform_space));
+                if let Some(clip) = links.output_clip {
+                    pending.push(Node::Clip(clip));
                 }
-                if let Some(clip) = &node.backdrop_filter_clip {
-                    pending.push(Node::Clip(clip.clone()));
+                if let Some(clip) = links.backdrop_filter_clip {
+                    pending.push(Node::Clip(clip));
                 }
             }
         }

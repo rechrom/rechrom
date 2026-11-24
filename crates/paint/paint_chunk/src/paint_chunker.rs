@@ -547,12 +547,9 @@ mod tests {
         };
         let root = PropertyTreeState::default();
         let mut child = root.clone();
-        child.transform = Arc::new(TransformPaintPropertyNode {
+        child.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), 1, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
             compositor: Default::default(),
-            geometry_mapper_cache: Default::default(),
             scroll_parent_scroll_translation: None,
-            lifecycle: Default::default(),
-            id: 1,
             parent: Some(root.transform.clone()),
             matrix: Default::default(),
             origin: [0.0; 3],
@@ -562,7 +559,7 @@ mod tests {
             scroll: None,
             sticky_constraint: None,
             direct_compositing_reasons: Default::default(),
-        });
+        }));
         let outer = id(10, DisplayItemIdType::kLayerChunk, 0);
         let inner = id(20, DisplayItemIdType::kLayerChunk, 3);
         let drawing = id(30, DisplayItemIdType::kBoxDecorationBackground, 4);

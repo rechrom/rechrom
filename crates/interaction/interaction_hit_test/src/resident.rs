@@ -745,7 +745,7 @@ impl<'a> ResidentLayer<'a> {
 }
 impl HitTransform for Arc<TransformPaintPropertyNode> {
     fn MatrixWithOriginApplied(&self) -> gfx::Transform {
-        self.as_ref().MatrixWithOriginApplied()
+        paint::property_cell::with_access(|a| self.as_ref().MatrixWithOriginApplied(a))
     }
 }
 impl LayerTransformNode for Arc<TransformPaintPropertyNode> {
@@ -758,14 +758,14 @@ impl LayerTransformNode for Arc<TransformPaintPropertyNode> {
     }
 }
 impl LayerRadiusClip for ClipPaintPropertyNode {
-    fn LocalTransformSpace(&self) -> &dyn LayerTransformNode {
-        &self.local_transform_space
+    fn LocalTransformSpace(&self) -> Arc<TransformPaintPropertyNode> {
+        paint::property_cell::with_access(|a| ClipPaintPropertyNode::LocalTransformSpace(self, a).clone())
     }
     fn IntersectsQuad(&self, quad: &gfx::QuadF) -> bool {
-        let Some(rect) = self.PaintClipRect() else {
+        let (rect, r) = paint::property_cell::with_access(|a| (self.PaintClipRect(a), self.PaintClipRadii(a)));
+        let Some(rect) = rect else {
             return true;
         };
-        let r = self.PaintClipRadii();
         paint::contoured_rect::FloatRoundedRect::new(
             gfx::RectF::new(
                 gfx::PointF::new(rect.x as f32, rect.y as f32),
@@ -1055,8 +1055,10 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
             if ancestor.lifecycle.same_node(&current.lifecycle) {
                 return true;
             }
-            node = current.parent.as_ref().map(|parent| {
-                paint::paint_property_tree::PropertyNodeResolver::transform(&*trees, parent).clone()
+            node = paint::property_cell::with_access(|a| {
+                current.Parent(a).map(|parent| {
+                    paint::paint_property_tree::PropertyNodeResolver::transform(&*trees, parent).clone()
+                })
             });
         }
         false

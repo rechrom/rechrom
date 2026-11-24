@@ -11,22 +11,32 @@ where
     >,
 {
     fn HasDirectCompositingReasons(&self) -> bool {
-        self.node().HasDirectCompositingReasons()
+        read(|a| {
+            self.node().HasDirectCompositingReasons(a)
+        })
     }
     fn NearestDirectlyCompositedAncestor(&self) -> Option<Self> {
         WithTransformCache(self, |c| c.nearest_directly_composited_ancestor())
     }
     fn RequiresCompositingForFixedPositionOnly(&self) -> bool {
-        self.node().RequiresCompositingForFixedPositionOnly()
+        read(|a| {
+            self.node().RequiresCompositingForFixedPositionOnly(a)
+        })
     }
     fn RequiresCompositingForStickyPositionOnly(&self) -> bool {
-        self.node().RequiresCompositingForStickyPositionOnly()
+        read(|a| {
+            self.node().RequiresCompositingForStickyPositionOnly(a)
+        })
     }
     fn RequiresCompositingForFixedPosition(&self) -> bool {
-        self.node().RequiresCompositingForFixedPosition()
+        read(|a| {
+            self.node().RequiresCompositingForFixedPosition(a)
+        })
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
-        self.node().RequiresCompositingForStickyPosition()
+        read(|a| {
+            self.node().RequiresCompositingForStickyPosition(a)
+        })
     }
     fn ScrollTranslationState(&self) -> Self {
         WithTransformCache(self, |c| c.scroll_translation_state())
@@ -35,7 +45,9 @@ where
         super::clear_transform_changed(self.as_arc(), self.trees(), s)
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
-        CpuCompositingReasons::from_source(&self.node().DirectCompositingReasonsForDebugging())
+        read(|a| {
+            CpuCompositingReasons::from_source(&self.node().DirectCompositingReasonsForDebugging(a))
+        })
     }
 }
 impl<R, B> ArtifactEffectNode<B> for EffectNode<R>
@@ -49,28 +61,44 @@ where
         > + crate::commit::push_properties::PushPropertiesTypes<NodeId = NodeId>,
 {
     fn CanvasChildId(&self) -> NodeId {
-        NodeId(self.node().CanvasChildId())
+        read(|a| {
+            NodeId(self.node().CanvasChildId(a))
+        })
     }
     fn HasCanvasChildState(&self) -> bool {
-        self.node().HasCanvasChildState()
+        read(|a| {
+            self.node().HasCanvasChildState(a)
+        })
     }
     fn CanvasChildContentTransform(&self) -> TransformNode<R> {
-        self.link_transform(self.node().CanvasChildContentTransform())
+        read(|a| {
+            self.link_transform(self.node().CanvasChildContentTransform(a))
+        })
     }
     fn CanvasChildContentClip(&self) -> ClipNode<R> {
-        self.link_clip(self.node().CanvasChildContentClip())
+        read(|a| {
+            self.link_clip(self.node().CanvasChildContentClip(a))
+        })
     }
     fn CanvasChildContentEffect(&self) -> Self {
-        Self::from_arc(self.node().CanvasChildContentEffect().clone())
+        read(|a| {
+            Self::from_arc(self.node().CanvasChildContentEffect(a).clone())
+        })
     }
     fn IsInDrawableCanvasSubtree(&self) -> bool {
-        self.node().IsInDrawableCanvasSubtree()
+        read(|a| {
+            self.node().IsInDrawableCanvasSubtree(a)
+        })
     }
     fn DrawsContent(&self) -> bool {
-        self.node().DrawsContent()
+        read(|a| {
+            self.node().DrawsContent(a)
+        })
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
-        CpuCompositingReasons::from_source(&self.node().direct_compositing_reasons)
+        read(|a| {
+            CpuCompositingReasons::from_source(&self.node().state(a).direct_compositing_reasons)
+        })
     }
 }
 impl<R, B> ArtifactScrollNode<B> for ScrollNode<R>
@@ -79,10 +107,10 @@ where
     B: PaintArtifactCompositorTypes,
 {
     fn UserScrollable(&self) -> bool {
-        self.node().UserScrollable()
+        read(|a| self.node().UserScrollable(a))
     }
     fn CompositedScrollingPreferred(&self) -> bool {
-        self.node().GetCompositedScrollingPreference()
+        read(|a| self.node().GetCompositedScrollingPreference(a))
             == paint_property_tree::PaintCompositedScrollingPreference::Preferred
     }
 }

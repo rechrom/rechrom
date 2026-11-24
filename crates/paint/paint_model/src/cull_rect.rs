@@ -13,6 +13,7 @@ use crate::paint_property_tree::{
     ClipPaintPropertyNode, PaintCompositedScrollingPreference, PropertyTreeState,
     ScrollPaintPropertyNode, TransformPaintPropertyNode,
 };
+use crate::property_cell::PropertyAccess;
 use crate::PaintRect;
 
 pub const SMALL_SCROLLER_AREA: f64 = 100_000.0;
@@ -32,6 +33,7 @@ fn SameClip(a: &ClipPaintPropertyNode, b: &ClipPaintPropertyNode) -> bool {
 }
 
 fn TransformIsAncestor(
+    access: &PropertyAccess,
     ancestor: &TransformPaintPropertyNode,
     descendant: &TransformPaintPropertyNode,
 ) -> bool {
@@ -40,51 +42,62 @@ fn TransformIsAncestor(
         if SameTransform(node, ancestor) {
             return true;
         }
-        current = node.parent.as_deref();
+        current = node.Parent(access).map(|parent| &**parent);
     }
     false
 }
 
-fn ClipIsAncestor(ancestor: &ClipPaintPropertyNode, descendant: &ClipPaintPropertyNode) -> bool {
+fn ClipIsAncestor(
+    access: &PropertyAccess,
+    ancestor: &ClipPaintPropertyNode,
+    descendant: &ClipPaintPropertyNode,
+) -> bool {
     let mut current = Some(descendant);
     while let Some(node) = current {
         if SameClip(node, ancestor) {
             return true;
         }
-        current = node.parent.as_deref();
+        current = node.Parent(access).map(|parent| &**parent);
     }
     false
 }
 
 #[inline]
-fn RequiresCullRectExpansion(transform: &TransformPaintPropertyNode) -> bool {
+fn RequiresCullRectExpansion(access: &PropertyAccess, transform: &TransformPaintPropertyNode) -> bool {
     transform
+        .state(access)
         .direct_compositing_reasons
         .iter_reasons()
         .any(|reason| foundation::CompositingReasonCombos::kRequiresCullRectExpansion.Has(reason))
 }
 
 #[inline]
-fn IsRootScroller(transform: &TransformPaintPropertyNode) -> bool {
+fn IsRootScroller(access: &PropertyAccess, transform: &TransformPaintPropertyNode) -> bool {
     transform
+        .state(access)
         .direct_compositing_reasons
         .Has(foundation::CompositingReason::kRootScroller)
 }
 
-fn IsSmallScrollerTransform(transform: &TransformPaintPropertyNode, expansion_ratio: f64) -> bool {
-    !IsRootScroller(transform)
-        && transform.scroll.as_ref().is_some_and(|scroll| {
-            scroll.ContainerRect().width * scroll.ContainerRect().height
+fn IsSmallScrollerTransform(
+    access: &PropertyAccess,
+    transform: &TransformPaintPropertyNode,
+    expansion_ratio: f64,
+) -> bool {
+    !IsRootScroller(access, transform)
+        && transform.ScrollNode(access).is_some_and(|scroll| {
+            scroll.ContainerRect(access).width * scroll.ContainerRect(access).height
                 <= SMALL_SCROLLER_AREA * expansion_ratio * expansion_ratio
         })
 }
 
 fn LocalPixelDistanceToExpandForTransform(
+    access: &PropertyAccess,
     root: &TransformPaintPropertyNode,
     local: &TransformPaintPropertyNode,
     expansion_ratio: f64,
 ) -> (f64, f64) {
-    let is_small = IsSmallScrollerTransform(local, expansion_ratio);
+    let is_small = IsSmallScrollerTransform(access, local, expansion_ratio);
     let minimum = 2.0 * ChangedEnoughMinimumDistance(is_small, expansion_ratio);
     if is_small {
         return (minimum, minimum);
@@ -186,27 +199,27 @@ impl CullRect {
     }
 
     /// Source: `cull_rect.cc:108-123`.
-    pub fn CanExpandForScroll(scroll: &ScrollPaintPropertyNode) -> bool {
-        scroll.GetCompositedScrollingPreference()
+    pub fn CanExpandForScroll(access: &PropertyAccess, scroll: &ScrollPaintPropertyNode) -> bool {
+        scroll.GetCompositedScrollingPreference(access)
             != PaintCompositedScrollingPreference::NotPreferred
-            && scroll.UserScrollable()
-            && (scroll.ContentsRect().width > scroll.ContainerRect().width
-                || scroll.ContentsRect().height > scroll.ContainerRect().height)
+            && scroll.UserScrollable(access)
+            && (scroll.ContentsRect(access).width > scroll.ContainerRect(access).width
+                || scroll.ContentsRect(access).height > scroll.ContainerRect(access).height)
     }
 
     /// Source: `cull_rect.cc:160-245`.
     fn ApplyScrollTranslation(
         &mut self,
+        access: &PropertyAccess,
         root_transform: &TransformPaintPropertyNode,
         scroll_translation: &TransformPaintPropertyNode,
         expansion_ratio: f64,
     ) -> (bool, bool) {
         let scroll = scroll_translation
-            .scroll
-            .as_ref()
+            .ScrollNode(access)
             .expect("scroll translation owns a ScrollPaintPropertyNode");
-        let container_rect = scroll.ContainerRect();
-        let can_expand = expansion_ratio != 0.0 && Self::CanExpandForScroll(scroll);
+        let container_rect = scroll.ContainerRect(access);
+        let can_expand = expansion_ratio != 0.0 && Self::CanExpandForScroll(access, scroll);
         let Some(rect) = self.0 else {
             return (false, false);
         };
@@ -225,13 +238,14 @@ impl CullRect {
                 return (false, false);
             }
         }
-        self.ApplyTransform(&scroll_translation.matrix);
+        self.ApplyTransform(scroll_translation.Matrix(access));
         if !can_expand {
             return (false, false);
         }
 
-        let contents_rect = scroll.ContentsRect();
+        let contents_rect = scroll.ContentsRect(access);
         let (mut outset_x, minimum) = LocalPixelDistanceToExpandForTransform(
+            access,
             root_transform,
             scroll_translation,
             expansion_ratio,
@@ -295,6 +309,7 @@ impl CullRect {
     /// Source: `cull_rect.cc:275-430`.
     pub fn ApplyPaintProperties(
         &mut self,
+        access: &PropertyAccess,
         root: &PropertyTreeState,
         source: &PropertyTreeState,
         destination: &PropertyTreeState,
@@ -306,12 +321,13 @@ impl CullRect {
             return false;
         }
 
-        let abnormal_hierarchy = !ClipIsAncestor(&source.clip, &destination.clip)
-            || !TransformIsAncestor(&source.transform, &destination.transform);
+        let abnormal_hierarchy = !ClipIsAncestor(access, &source.clip, &destination.clip)
+            || !TransformIsAncestor(access, &source.transform, &destination.transform);
         if abnormal_hierarchy {
             *self = Self::Infinite();
             return root != destination
                 && self.ApplyPaintProperties(
+                    access,
                     root,
                     root,
                     destination,
@@ -327,12 +343,12 @@ impl CullRect {
             if SameTransform(&transform, &source.transform) {
                 break;
             }
-            if transform.scroll.is_some() {
+            if transform.ScrollNode(access).is_some() {
                 scroll_translations.push(transform.clone());
-            } else if RequiresCullRectExpansion(&transform) {
+            } else if RequiresCullRectExpansion(access, &transform) {
                 has_transform_requiring_expansion = true;
             }
-            current = transform.parent.clone();
+            current = transform.Parent(access).cloned();
         }
 
         let mut last_transform = source.transform.clone();
@@ -341,13 +357,12 @@ impl CullRect {
         let effect_root = PropertyTreeState::default().effect;
         for scroll_translation in scroll_translations.into_iter().rev() {
             let Some(overflow_clip) = scroll_translation
-                .scroll
-                .as_ref()
-                .and_then(|scroll| scroll.OverflowClipNode().cloned())
+                .ScrollNode(access)
+                .and_then(|scroll| scroll.OverflowClipNode(access).cloned())
             else {
                 break;
             };
-            let Some(parent_transform) = scroll_translation.parent.clone() else {
+            let Some(parent_transform) = scroll_translation.Parent(access).cloned() else {
                 return false;
             };
             let source_state = PropertyTreeState {
@@ -365,7 +380,7 @@ impl CullRect {
             }
             last_clip = overflow_clip;
             expanded =
-                self.ApplyScrollTranslation(&root.transform, &scroll_translation, expansion_ratio);
+                self.ApplyScrollTranslation(access, &root.transform, &scroll_translation, expansion_ratio);
             last_transform = scroll_translation;
         }
 
@@ -398,9 +413,8 @@ impl CullRect {
 
         let mut expansion_bounds = if expanded.0 || expanded.1 {
             last_transform
-                .scroll
-                .as_ref()
-                .map(|scroll| scroll.ContentsRect())
+                .ScrollNode(access)
+                .map(|scroll| scroll.ContentsRect(access))
         } else {
             None
         };
@@ -423,6 +437,7 @@ impl CullRect {
 
         if expansion_ratio > 0.0 && has_transform_requiring_expansion {
             let pixel_distance = LocalPixelDistanceToExpandForTransform(
+                access,
                 &root.transform,
                 &destination.transform,
                 expansion_ratio,
@@ -445,7 +460,7 @@ impl CullRect {
         }
 
         if let Some(old) = old_cull_rect {
-            let is_small = IsSmallScrollerTransform(&destination.transform, expansion_ratio);
+            let is_small = IsSmallScrollerTransform(access, &destination.transform, expansion_ratio);
             if !self.ChangedEnough(expanded, old, expansion_bounds, is_small, expansion_ratio) {
                 *self = old;
             }
@@ -632,10 +647,10 @@ mod tests {
         let mut node = (**parent).clone();
         node.lifecycle = Default::default();
         node.id = id;
-        node.parent = Some(parent.clone());
-        node.matrix = matrix;
-        node.scroll = scroll;
-        node.direct_compositing_reasons = Default::default();
+        node.state_mut().parent = Some(parent.clone());
+        node.state_mut().matrix = matrix;
+        node.state_mut().scroll = scroll;
+        node.state_mut().direct_compositing_reasons = Default::default();
         Arc::new(node)
     }
 
@@ -648,9 +663,9 @@ mod tests {
         let mut node = (**parent).clone();
         node.lifecycle = Default::default();
         node.id = id;
-        node.parent = Some(parent.clone());
-        node.local_transform_space = transform.clone();
-        node.rect = Some(rect);
+        node.state_mut().parent = Some(parent.clone());
+        node.state_mut().local_transform_space = transform.clone();
+        node.state_mut().rect = Some(rect);
         Arc::new(node.with_layout_clips())
     }
 
@@ -772,7 +787,8 @@ mod tests {
             width: 200.0,
             height: 200.0,
         });
-        assert!(!cull.ApplyPaintProperties(&root, &root, &destination, None, 1.0));
+        assert!(!crate::property_cell::with_access(|access| cull
+            .ApplyPaintProperties(access, &root, &root, &destination, None, 1.0)));
         assert_eq!(
             cull.Rect(),
             Some(PaintRect {
@@ -794,27 +810,31 @@ mod tests {
             height: 100.0,
         };
         let overflow_clip = ChildClip(&root.clip, &root.transform, 1, container);
-        let scroll = Arc::new(ScrollPaintPropertyNode {
-            compositor: Default::default(),
-            lifecycle: Default::default(),
-            id: 1,
-            owner_client_id: 1,
-            owner_node_id: 0,
-            parent: root.transform.scroll.clone(),
-            overflow_clip: Some(overflow_clip.clone()),
-            container_rect: container,
-            contents_rect: PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: 100.0,
-                height: 1000.0,
+        let scroll = Arc::new(ScrollPaintPropertyNode::new(
+            Default::default(),
+            1,
+            crate::paint_property_tree::ScrollPaintPropertyNodeState {
+                compositor: Default::default(),
+                owner_client_id: 1,
+                owner_node_id: 0,
+                parent: crate::property_cell::with_access(|a| root.transform.ScrollNode(a).cloned()),
+                overflow_clip: Some(overflow_clip.clone()),
+                container_rect: container,
+                contents_rect: PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 1000.0,
+                },
+                minimum_scroll_offset: Offset::default(),
+                maximum_scroll_offset: Offset { x: 0.0, y: 900.0 },
+                user_scrollable_horizontal: false,
+                user_scrollable_vertical: true,
             },
-            minimum_scroll_offset: Offset::default(),
-            maximum_scroll_offset: Offset { x: 0.0, y: 900.0 },
-            user_scrollable_horizontal: false,
-            user_scrollable_vertical: true,
-        });
-        assert!(CullRect::CanExpandForScroll(&scroll));
+        ));
+        assert!(crate::property_cell::with_access(|access| CullRect::CanExpandForScroll(
+            access, &scroll
+        )));
         let scroll_translation = ChildTransform(
             &root.transform,
             1,
@@ -827,7 +847,8 @@ mod tests {
             effect: root.effect.clone(),
         };
         let mut cull = CullRect::FromRect(container);
-        assert!(cull.ApplyPaintProperties(&root, &root, &destination, None, 1.0));
+        assert!(crate::property_cell::with_access(|access| cull
+            .ApplyPaintProperties(access, &root, &root, &destination, None, 1.0)));
         assert_eq!(
             cull.Rect(),
             Some(PaintRect {

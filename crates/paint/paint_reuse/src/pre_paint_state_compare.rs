@@ -10,8 +10,11 @@ use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,
         PaintPropertyNodeLifecycle, PropertyTreeState, ScrollPaintPropertyNode,
+        ClipPaintPropertyNodeState, EffectPaintPropertyNodeState, ScrollPaintPropertyNodeState,
+        TransformPaintPropertyNodeState,
         TransformPaintPropertyNode,
     },
+    property_cell::PropertyAccess,
     PaintRect,
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -22,14 +25,19 @@ pub fn SameBuilderState(
     current_keys: &BTreeMap<u64, PaintPropertyKey>,
     prior_keys: &BTreeMap<u64, PaintPropertyKey>,
 ) -> bool {
-    let mut compare = Compare {
-        current_keys,
-        prior_keys,
-        memo: BTreeMap::new(),
-    };
-    compare.transform(&a.transform, &b.transform)
-        && compare.clip(&a.clip, &b.clip)
-        && compare.effect(&a.effect, &b.effect)
+    // One proof for the whole comparison: the compared nodes belong to the
+    // document sequence running PrePaint.
+    paint_model::property_cell::with_access(|access| {
+        let mut compare = Compare {
+            access,
+            current_keys,
+            prior_keys,
+            memo: BTreeMap::new(),
+        };
+        compare.transform(&a.transform, &b.transform)
+            && compare.clip(&a.clip, &b.clip)
+            && compare.effect(&a.effect, &b.effect)
+    })
 }
 
 /// Chromium keeps property nodes in stable mutable owner/role slots. A value
@@ -101,6 +109,7 @@ enum Compared {
 }
 type Pair = (u8, usize, usize);
 struct Compare<'a> {
+    access: &'a PropertyAccess,
     current_keys: &'a BTreeMap<u64, PaintPropertyKey>,
     prior_keys: &'a BTreeMap<u64, PaintPropertyKey>,
     memo: BTreeMap<Pair, Compared>,
@@ -176,12 +185,11 @@ impl Compare<'_> {
         }
         // Exhaustive destructuring makes newly added semantic fields require
         // an explicit comparison here. Raw IDs/lifecycles are handled as slots.
-        let TransformPaintPropertyNode {
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let TransformPaintPropertyNodeState {
             compositor,
-            geometry_mapper_cache: _,
             scroll_parent_scroll_translation,
-            lifecycle,
-            id,
             parent,
             matrix,
             origin,
@@ -191,23 +199,24 @@ impl Compare<'_> {
             scroll,
             sticky_constraint,
             direct_compositing_reasons,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
-            && compositor == &b.compositor
+            && compositor == &bs.compositor
             && matrix.values.iter().all(|v| v.is_finite())
-            && matrix == &b.matrix
+            && matrix == &bs.matrix
             && origin.iter().all(|v| v.is_finite())
-            && origin == &b.origin
-            && flattens_inherited_transform == &b.flattens_inherited_transform
-            && rendering_context_id == &b.rendering_context_id
-            && backface_visibility == &b.backface_visibility
-            && sticky_constraint == &b.sticky_constraint
-            && direct_compositing_reasons == &b.direct_compositing_reasons
-            && self.optional(parent, &b.parent, Self::transform)
-            && self.optional(scroll, &b.scroll, Self::scroll)
+            && origin == &bs.origin
+            && flattens_inherited_transform == &bs.flattens_inherited_transform
+            && rendering_context_id == &bs.rendering_context_id
+            && backface_visibility == &bs.backface_visibility
+            && sticky_constraint == &bs.sticky_constraint
+            && direct_compositing_reasons == &bs.direct_compositing_reasons
+            && self.optional(parent, &bs.parent, Self::transform)
+            && self.optional(scroll, &bs.scroll, Self::scroll)
             && self.optional(
                 scroll_parent_scroll_translation,
-                &b.scroll_parent_scroll_translation,
+                &bs.scroll_parent_scroll_translation,
                 Self::transform,
             );
         self.finish(key, same)
@@ -220,11 +229,10 @@ impl Compare<'_> {
         if let Some(result) = cached {
             return result;
         }
-        let ClipPaintPropertyNode {
-            geometry_mapper_cache: _,
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let ClipPaintPropertyNodeState {
             layout_clip_rects,
-            lifecycle,
-            id,
             parent,
             local_transform_space,
             rect,
@@ -232,19 +240,20 @@ impl Compare<'_> {
             clip_path,
             clip_path_error,
             pixel_moving_filter,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
             && rect.as_ref().is_none_or(finite_rect)
-            && rect == &b.rect
+            && rect == &bs.rect
             && finite_radii(radii)
-            && radii == &b.radii
-            && layout_clip_rects == &b.layout_clip_rects
+            && radii == &bs.radii
+            && layout_clip_rects == &bs.layout_clip_rects
             && clip_path.as_ref().is_none_or(|path| path.is_finite())
-            && clip_path == &b.clip_path
-            && clip_path_error == &b.clip_path_error
-            && self.optional(parent, &b.parent, Self::clip)
-            && self.transform(local_transform_space, &b.local_transform_space)
-            && self.optional(pixel_moving_filter, &b.pixel_moving_filter, Self::effect);
+            && clip_path == &bs.clip_path
+            && clip_path_error == &bs.clip_path_error
+            && self.optional(parent, &bs.parent, Self::clip)
+            && self.transform(local_transform_space, &bs.local_transform_space)
+            && self.optional(pixel_moving_filter, &bs.pixel_moving_filter, Self::effect);
         self.finish(key, same)
     }
     fn effect(
@@ -259,12 +268,12 @@ impl Compare<'_> {
         if let Some(result) = cached {
             return result;
         }
-        let EffectPaintPropertyNode {
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let EffectPaintPropertyNodeState {
             compositor,
             backdrop_filter_bounds,
             self_or_ancestor_participates_in_view_transition,
-            lifecycle,
-            id,
             parent,
             local_transform_space,
             output_clip,
@@ -282,32 +291,33 @@ impl Compare<'_> {
             has_mask,
             is_mask,
             direct_compositing_reasons,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
-            && compositor == &b.compositor
-            && backdrop_filter_bounds == &b.backdrop_filter_bounds
+            && compositor == &bs.compositor
+            && backdrop_filter_bounds == &bs.backdrop_filter_bounds
             && opacity.is_finite()
-            && opacity == &b.opacity
+            && opacity == &bs.opacity
             && self_or_ancestor_participates_in_view_transition
-                == &b.self_or_ancestor_participates_in_view_transition
-            && blend_mode == &b.blend_mode
+                == &bs.self_or_ancestor_participates_in_view_transition
+            && blend_mode == &bs.blend_mode
             && filters.is_finite()
-            && filters == &b.filters
-            && filter_reference_box == &b.filter_reference_box
-            && filter_viewport == &b.filter_viewport
-            && filter_space_origin == &b.filter_space_origin
-            && filter_reference_scale == &b.filter_reference_scale
+            && filters == &bs.filters
+            && filter_reference_box == &bs.filter_reference_box
+            && filter_viewport == &bs.filter_viewport
+            && filter_space_origin == &bs.filter_space_origin
+            && filter_reference_scale == &bs.filter_reference_scale
             && backdrop_filters.is_finite()
-            && backdrop_filters == &b.backdrop_filters
-            && backdrop_filter_has_reference == &b.backdrop_filter_has_reference
-            && self.optional(backdrop_filter_clip, &b.backdrop_filter_clip, Self::clip)
-            && isolates_blending == &b.isolates_blending
-            && has_mask == &b.has_mask
-            && is_mask == &b.is_mask
-            && direct_compositing_reasons == &b.direct_compositing_reasons
-            && self.optional(parent, &b.parent, Self::effect)
-            && self.transform(local_transform_space, &b.local_transform_space)
-            && self.optional(output_clip, &b.output_clip, Self::clip);
+            && backdrop_filters == &bs.backdrop_filters
+            && backdrop_filter_has_reference == &bs.backdrop_filter_has_reference
+            && self.optional(backdrop_filter_clip, &bs.backdrop_filter_clip, Self::clip)
+            && isolates_blending == &bs.isolates_blending
+            && has_mask == &bs.has_mask
+            && is_mask == &bs.is_mask
+            && direct_compositing_reasons == &bs.direct_compositing_reasons
+            && self.optional(parent, &bs.parent, Self::effect)
+            && self.transform(local_transform_space, &bs.local_transform_space)
+            && self.optional(output_clip, &bs.output_clip, Self::clip);
         self.finish(key, same)
     }
     fn scroll(
@@ -322,10 +332,10 @@ impl Compare<'_> {
         if let Some(result) = cached {
             return result;
         }
-        let ScrollPaintPropertyNode {
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let ScrollPaintPropertyNodeState {
             compositor,
-            lifecycle,
-            id,
             owner_client_id,
             owner_node_id,
             parent,
@@ -336,21 +346,22 @@ impl Compare<'_> {
             maximum_scroll_offset,
             user_scrollable_horizontal,
             user_scrollable_vertical,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
-            && compositor == &b.compositor
-            && owner_client_id == &b.owner_client_id
-            && owner_node_id == &b.owner_node_id
+            && compositor == &bs.compositor
+            && owner_client_id == &bs.owner_client_id
+            && owner_node_id == &bs.owner_node_id
             && finite_rect(container_rect)
-            && container_rect == &b.container_rect
+            && container_rect == &bs.container_rect
             && finite_rect(contents_rect)
-            && contents_rect == &b.contents_rect
-            && minimum_scroll_offset == &b.minimum_scroll_offset
-            && maximum_scroll_offset == &b.maximum_scroll_offset
-            && user_scrollable_horizontal == &b.user_scrollable_horizontal
-            && user_scrollable_vertical == &b.user_scrollable_vertical
-            && self.optional(parent, &b.parent, Self::scroll)
-            && self.optional(overflow_clip, &b.overflow_clip, Self::clip);
+            && contents_rect == &bs.contents_rect
+            && minimum_scroll_offset == &bs.minimum_scroll_offset
+            && maximum_scroll_offset == &bs.maximum_scroll_offset
+            && user_scrollable_horizontal == &bs.user_scrollable_horizontal
+            && user_scrollable_vertical == &bs.user_scrollable_vertical
+            && self.optional(parent, &bs.parent, Self::scroll)
+            && self.optional(overflow_clip, &bs.overflow_clip, Self::clip);
         self.finish(key, same)
     }
 }

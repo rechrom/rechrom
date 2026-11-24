@@ -47,19 +47,16 @@ impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
         paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, s, id))
     }
     fn IsRoot(&self) -> bool {
-        self.node().parent.is_none()
+        read(|a| self.node().Parent(a).is_none())
     }
     fn Parent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| self.link_same(p))
+        self.parent_handle()
     }
     fn ContainerRect(&self) -> Rect {
-        rect(self.node().ContainerRect())
+        rect(read(|a| self.node().ContainerRect(a)))
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        let id = self.node().GetCompositorElementId().GetInternalValue();
+        let id = read(|a| self.node().GetCompositorElementId(a)).GetInternalValue();
         if id == 0 {
             ElementId::default()
         } else {
@@ -67,22 +64,22 @@ impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
         }
     }
     fn ScrollingContentsCullRect(&self) -> Rect {
-        rect(self.node().ScrollingContentsCullRect())
+        rect(read(|a| self.node().ScrollingContentsCullRect(a)))
     }
     fn ContentsRect(&self) -> Rect {
-        rect(self.node().ContentsRect())
+        rect(read(|a| self.node().ContentsRect(a)))
     }
     fn UserScrollableHorizontal(&self) -> bool {
-        self.node().UserScrollableHorizontal()
+        read(|a| self.node().UserScrollableHorizontal(a))
     }
     fn UserScrollableVertical(&self) -> bool {
-        self.node().UserScrollableVertical()
+        read(|a| self.node().UserScrollableVertical(a))
     }
     fn PreventViewportScrollingFromInner(&self) -> bool {
-        self.node().PreventViewportScrollingFromInner()
+        read(|a| self.node().PreventViewportScrollingFromInner(a))
     }
     fn MaxScrollOffsetAffectedByPageScale(&self) -> bool {
-        self.node().MaxScrollOffsetAffectedByPageScale()
+        read(|a| self.node().MaxScrollOffsetAffectedByPageScale(a))
     }
     fn OverscrollBehavior(&self) -> OverscrollBehavior {
         let convert = |v| match v {
@@ -91,27 +88,29 @@ impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
             paint::paint_property_tree::LayoutOverscrollBehavior::kContain => Type::kContain,
             paint::paint_property_tree::LayoutOverscrollBehavior::kChain => Type::kChain,
         };
-        let b = self.node().OverscrollBehavior();
+        let b = read(|a| self.node().OverscrollBehavior(a));
         OverscrollBehavior::FromAxes(convert(b[0]), convert(b[1]))
     }
     fn GetSnapContainerData(&self) -> Option<SnapContainerData> {
+        let (is_root, absent, snap) = read(|a| {
+            let state = self.node().state(a);
+            (
+                state.parent.is_none(),
+                state.compositor.snap_container_data_absent,
+                state.compositor.snap_container_data,
+            )
+        });
         assert!(
-            self.node().parent.is_none()
-                || self.node().compositor.snap_container_data_absent
-                || self.node().compositor.snap_container_data.is_some(),
+            is_root || absent || snap.is_some(),
             "PaintInput rejects a non-root scroll node without native snap metadata"
         );
-        self.node()
-            .compositor
-            .snap_container_data
-            .map(scroll_snap_type)
-            .map(SnapContainerData::FromType)
+        snap.map(scroll_snap_type).map(SnapContainerData::FromType)
     }
     fn PreventScrollAxisLocking(&self) -> bool {
-        self.node().PreventScrollAxisLocking()
+        read(|a| self.node().PreventScrollAxisLocking(a))
     }
     fn GetMainThreadRepaintReasons(&self) -> MainThreadRepaintReasons {
-        let bits = self.node().GetMainThreadRepaintReasons();
+        let bits = read(|a| self.node().GetMainThreadRepaintReasons(a));
         let mut result = MainThreadRepaintReasons::new();
         for (i, r) in [
             MainThreadRepaintReason::kHasBackgroundAttachmentFixedObjects,
@@ -129,7 +128,7 @@ impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
         result
     }
     fn CompositedScrollingNotPreferred(&self) -> bool {
-        self.node().GetCompositedScrollingPreference()
+        read(|a| self.node().GetCompositedScrollingPreference(a))
             == paint_property_tree::PaintCompositedScrollingPreference::NotPreferred
     }
 }

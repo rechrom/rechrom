@@ -24,10 +24,12 @@ where
     B: PaintChunksTypes<TransformNode = Self, ScrollNode = ScrollNode<R>>,
 {
     fn ScrollNode(&self) -> Option<ScrollNode<R>> {
-        self.node()
-            .scroll
-            .as_ref()
-            .map(|s| self.link_scroll(s))
+        read(|a| {
+            self.node().state(a)
+                .scroll
+                .as_ref()
+                .map(|s| self.link_scroll(s))
+        })
     }
     fn NearestScrollTranslationNode(&self) -> Self {
         WithTransformCache(self, |c| c.nearest_scroll_translation())
@@ -57,13 +59,10 @@ where
     >,
 {
     fn UnaliasedParent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| self.link_same(p))
+        self.parent_handle()
     }
     fn PaintClipRect(&self) -> RRectF {
-        let r = self.node().PaintClipRadii();
+        let r = read(|a| self.node().PaintClipRadii(a));
         RRectF {
             rect: PendingClipNode::<TransformNode<R>, usize>::PaintClipRectRect(self),
             corner_radii: [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
@@ -71,7 +70,7 @@ where
         }
     }
     fn ClipPath(&self) -> Option<Arc<paint::paint_clip_path::PaintClipPath>> {
-        self.node().ClipPath().cloned()
+        read(|a| self.node().ClipPath(a).cloned())
     }
 }
 impl<R, B> ConversionEffectNode<B> for EffectNode<R>
@@ -84,64 +83,79 @@ where
     >,
 {
     fn UnaliasedParent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|p| self.link_same(p))
+        self.parent_handle()
     }
     fn HasDirectCompositingReasons(&self) -> bool {
-        self.node().HasDirectCompositingReasons()
+        read(|a| {
+            self.node().HasDirectCompositingReasons(a)
+        })
     }
     fn RequiresCompositingForCanvasChild(&self) -> bool {
-        self.node().RequiresCompositingForCanvasChild()
+        read(|a| {
+            self.node().RequiresCompositingForCanvasChild(a)
+        })
     }
     fn HasRealEffects(&self) -> bool {
-        self.node().HasRealEffects()
+        read(|a| {
+            self.node().HasRealEffects(a)
+        })
     }
     fn Filter(&self) -> Option<B::FilterOperations> {
-        self.node().Filter().cloned()
+        read(|a| {
+            self.node().Filter(a).cloned()
+        })
     }
     fn BackdropFilter(&self) -> Option<B::FilterOperations> {
-        self.node().BackdropFilter().cloned()
+        read(|a| {
+            self.node().BackdropFilter(a).cloned()
+        })
     }
     fn BackdropFilterBounds(&self) -> Arc<paint::paint_clip_path::PaintClipPath> {
-        Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
-            self.node()
-                .backdrop_filter_bounds
-                .as_ref()
-                .expect("validated backdrop bounds")
-                .clone(),
-        ))
+        read(|a| {
+            Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
+                self.node().state(a)
+                    .backdrop_filter_bounds
+                    .as_ref()
+                    .expect("validated backdrop bounds")
+                    .clone(),
+            ))
+        })
     }
     fn HasReferenceFilter(&self) -> bool {
-        self.node().HasReferenceFilter()
+        read(|a| {
+            self.node().HasReferenceFilter(a)
+        })
     }
     fn FilterOutputBounds(&self) -> Rect {
-        rect(
-            self.node()
-                .compositor
-                .filter_output_bounds
-                .expect("PaintInput validates reference-filter output bounds"),
-        )
+        read(|a| {
+            rect(
+                self.node().state(a)
+                    .compositor
+                    .filter_output_bounds
+                    .expect("PaintInput validates reference-filter output bounds"),
+            )
+        })
     }
     // Source: effect_paint_property_node.cc:229-237. Preserve reference-filter
     // output bounds rather than assuming a local maximum outset.
     fn MapRect(&self, input: Rect) -> Rect {
-        if !self.node().compositor.has_filter_info {
-            return input;
-        }
-        let ops = self.node().filters.canonical().expect("validated filter");
-        if ops.HasReferenceFilter() {
-            return <Self as ConversionEffectNode<B>>::FilterOutputBounds(self);
-        }
-        let r = ops.MapRect(
-            foundation::gfx::Rect::new(
-                foundation::gfx::Point::new(input.x, input.y),
-                foundation::gfx::Size::new(input.width, input.height),
-            ),
-            None,
-        );
-        Rect::new(r.x(), r.y(), r.width(), r.height())
+        read(|a| {
+            if !self.node().state(a).compositor.has_filter_info {
+                return input;
+            }
+            let ops = self.node().state(a).filters.canonical().expect("validated filter");
+            if ops.HasReferenceFilter() {
+                return <Self as ConversionEffectNode<B>>::FilterOutputBounds(self);
+            }
+            let r = ops.MapRect(
+                foundation::gfx::Rect::new(
+                    foundation::gfx::Point::new(input.x, input.y),
+                    foundation::gfx::Size::new(input.width, input.height),
+                ),
+                None,
+            );
+            Rect::new(r.x(), r.y(), r.width(), r.height())
+        })
     }
 }
 impl<R, B> ConversionScrollNode<B> for ScrollNode<R>
@@ -150,33 +164,28 @@ where
     B: PaintChunksTypes<ScrollNode = Self, ClipNode = ClipNode<R>>,
 {
     fn Parent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|s| self.link_same(s))
+        self.parent_handle()
     }
     fn ContentsRect(&self) -> Rect {
-        rect(self.node().ContentsRect())
+        rect(read(|a| self.node().ContentsRect(a)))
     }
     fn ContainerRect(&self) -> Rect {
-        rect(self.node().ContainerRect())
+        rect(read(|a| self.node().ContainerRect(a)))
     }
     fn UserScrollableHorizontal(&self) -> bool {
-        self.node().UserScrollableHorizontal()
+        read(|a| self.node().UserScrollableHorizontal(a))
     }
     fn PropagatesXScroll(&self) -> bool {
-        self.node().OverscrollBehavior()[0].AllowsScrollChaining()
+        read(|a| self.node().OverscrollBehavior(a))[0].AllowsScrollChaining()
     }
     fn CompositedScrollingNotPreferred(&self) -> bool {
-        self.node().GetCompositedScrollingPreference()
+        read(|a| self.node().GetCompositedScrollingPreference(a))
             == paint_property_tree::PaintCompositedScrollingPreference::NotPreferred
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        element(self.node().GetCompositorElementId())
+        element(read(|a| self.node().GetCompositorElementId(a)))
     }
     fn OverflowClipNode(&self) -> Option<ClipNode<R>> {
-        self.node()
-            .OverflowClipNode()
-            .map(|p| self.link_clip(p))
+        read(|a| self.node().OverflowClipNode(a).map(|p| self.link_clip(p)))
     }
 }

@@ -110,7 +110,7 @@ fn CullAdmission(
         .expect("PrePaint node must own a fragment");
     if fragment.paint.PaintLayerIsFragmented()
         || (fragment.paint.IsLayoutView() && fragment.paint.IsPrinting())
-        || layer.properties.nodes.effect.HasCanvasChildState()
+        || paint_model::property_cell::with_access(|access| layer.properties.nodes.effect.HasCanvasChildState(access))
         || fragment.paint.IsInclusiveDescendantOfUnboundedElement()
     {
         return (
@@ -460,7 +460,9 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         // must retain a property-bearing chunk even if this layer records no
         // drawing. Canvas-child forcing remains a separate unsupported branch.
         if should_paint_content
-            && (self.layer.properties.nodes.effect.HasCanvasChildState()
+            && (paint_model::property_cell::with_access(|access| {
+                self.layer.properties.nodes.effect.HasCanvasChildState(access)
+            })
                 || HasReferenceFilter(self.layer))
         {
             self.context.borrow_mut().EnsureChunk();

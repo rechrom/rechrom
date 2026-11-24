@@ -1,5 +1,5 @@
 //! Actual Paint node projections into the canonical GeometryMapper algorithms.
-use super::{ClipNode, EffectNode, PropertyTreeState, TransformNode};
+use super::{read, ClipNode, EffectNode, PropertyTreeState, TransformNode};
 use crate::{
     adapter::{
         geometry::{Rect, RectF, Vector2dF},
@@ -102,7 +102,7 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> TransformNode<R> {
         let clip = self.resolve_clip(clip);
-        clip.link_transform(clip.node().LocalTransformSpace())
+        read(|a| clip.link_transform(clip.node().LocalTransformSpace(a)))
     }
     fn ClipParent(
         &self,
@@ -124,24 +124,24 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(c.LayoutClipRectExcludingOverlayScrollbars())
+        clip_rect(read(|a| c.LayoutClipRectExcludingOverlayScrollbars(a)))
     }
     fn PreciseLayoutClipRect(
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> FloatClipRect {
-        clip_rect(c.PreciseLayoutClipRect())
+        clip_rect(read(|a| c.PreciseLayoutClipRect(a)))
     }
     fn LayoutClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> FloatClipRect {
-        clip_rect(c.LayoutClipRect())
+        clip_rect(read(|a| c.LayoutClipRect(a)))
     }
     fn PaintClipRect(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> RectF {
-        c.PaintClipRect()
+        read(|a| c.PaintClipRect(a))
             .map(rect)
             .unwrap_or_else(|| *FloatClipRect::default().Rect())
     }
     fn ClipHasPath(&self, c: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> bool {
-        c.ClipPath().is_some()
+        read(|a| c.ClipPath(a).is_some())
     }
     // Source: clip_paint_property_node.h:188-217; this is an exact field query,
     // not a geometric inference about whether a CSS animation is running.
@@ -149,40 +149,40 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> bool {
-        c.IsForCompositeClipPathAnimation()
+        read(|a| c.IsForCompositeClipPathAnimation(a))
     }
     fn PixelMovingFilter(
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> EffectNode<R> {
         let clip = self.resolve_clip(c);
-        clip.link_effect(clip.node().PixelMovingFilter().expect("source PixelMovingFilter"))
+        read(|a| clip.link_effect(clip.node().PixelMovingFilter(a).expect("source PixelMovingFilter")))
     }
     fn FilterLocalTransform(&self, e: &EffectNode<R>) -> TransformNode<R> {
-        e.link_transform(&e.node().local_transform_space)
+        read(|a| e.link_transform(e.node().LocalTransformSpace(a)))
     }
     fn HasActiveFilterAnimation(&self, e: &EffectNode<R>) -> bool {
-        e.node()
-            .direct_compositing_reasons
-            .Has(foundation::CompositingReason::kActiveFilterAnimation)
+        read(|a| e.node().HasActiveFilterAnimation(a))
     }
     fn FilterMapRect(&self, e: &EffectNode<R>, r: Rect) -> Rect {
-        let r = e
-            .node()
-            .filters
-            .canonical()
-            .expect("validated PaintInput native filters")
-            .MapRect(
-                foundation::gfx::Rect::new(
-                    foundation::gfx::Point::new(r.x, r.y),
-                    foundation::gfx::Size::new(r.width, r.height),
-                ),
-                None,
-            );
+        let r = read(|a| {
+            e.node()
+                .state(a)
+                .filters
+                .canonical()
+                .expect("validated PaintInput native filters")
+                .MapRect(
+                    foundation::gfx::Rect::new(
+                        foundation::gfx::Point::new(r.x, r.y),
+                        foundation::gfx::Size::new(r.width, r.height),
+                    ),
+                    None,
+                )
+        });
         Rect::new(r.x(), r.y(), r.width(), r.height())
     }
     fn SelfOrAncestorParticipatesInViewTransition(&self, e: &EffectNode<R>) -> bool {
-        e.node().self_or_ancestor_participates_in_view_transition
+        read(|a| e.node().state(a).self_or_ancestor_participates_in_view_transition)
     }
 }
 impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {

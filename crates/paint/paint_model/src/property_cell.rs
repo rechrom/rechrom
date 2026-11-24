@@ -176,8 +176,14 @@ impl<T> PropertyCell<T> {
     /// sequence identity: nothing else can reach the new value yet.
     #[inline]
     pub fn new(access: &PropertyAccess, value: T) -> Self {
+        Self::with_owner(access.id, value)
+    }
+
+    /// A new cell owned by `owner` (normally [`PaintSequenceId::current`]).
+    #[inline]
+    pub fn with_owner(owner: PaintSequenceId, value: T) -> Self {
         Self {
-            owner: access.id,
+            owner,
             value: UnsafeCell::new(value),
         }
     }
@@ -237,12 +243,24 @@ impl<T> PropertyCell<T> {
 unsafe impl<T: Send> Send for PropertyCell<T> {}
 unsafe impl<T: Send> Sync for PropertyCell<T> {}
 
-impl<T> fmt::Debug for PropertyCell<T> {
+/// Formats the value when the calling thread can read it (owner sequence, no
+/// writer scope active); otherwise only the owner.
+impl<T: fmt::Debug> fmt::Debug for PropertyCell<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PropertyCell")
-            .field("owner", &self.owner)
-            .finish_non_exhaustive()
+        let readable = ACCESS
+            .try_with(|access| match access.try_borrow() {
+                Ok(access) if access.id == self.owner => Some(self.get(&access).fmt(formatter)),
+                _ => None,
+            })
+            .ok()
+            .flatten();
+        match readable {
+            Some(result) => result,
+            None => formatter
+                .debug_struct("PropertyCell")
+                .field("owner", &self.owner)
+                .finish_non_exhaustive(),
+        }
     }
 }
 

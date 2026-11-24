@@ -291,22 +291,22 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
         &self,
         state: &paint::PropertyTreeState<R>,
     ) -> Option<Arc<::paint::paint_property_tree::PaintCanvasChildState>> {
-        state.effect().node().compositor.canvas_child_state.clone()
+        paint_model::property_cell::with_access(|a| {
+            state.effect().node().state(a).compositor.canvas_child_state.clone()
+        })
     }
     fn ScrollContentsRect(&self, state: &paint::PropertyTreeState<R>) -> Option<Rect> {
         use crate::adapter::pending_layer::PendingTransformNode;
-        state
-            .transform()
-            .PropertyTreeNearestScrollTranslationNode()
-            .node()
-            .scroll
-            .as_ref()
-            .map(|s| {
+        let translation = state.transform().PropertyTreeNearestScrollTranslationNode();
+        paint_model::property_cell::with_access(|a| {
+            translation.node().ScrollNode(a).map(|scroll| scroll.ContentsRect(a))
+        })
+            .map(|contents| {
                 crate::adapter::geometry::ToEnclosingRect(RectF::new(
-                    s.contents_rect.x as f32,
-                    s.contents_rect.y as f32,
-                    s.contents_rect.width as f32,
-                    s.contents_rect.height as f32,
+                    contents.x as f32,
+                    contents.y as f32,
+                    contents.width as f32,
+                    contents.height as f32,
                 ))
             })
     }
@@ -651,7 +651,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> crate::adapter::paint_art
         c: &paint::ClipNode<R>,
         previous: &Option<Arc<::paint::paint_clip_path::PaintClipPath>>,
     ) -> bool {
-        c.node().clip_path == *previous
+        paint_model::property_cell::with_access(|a| c.node().ClipPathEquals(a, previous.as_ref()))
     }
 }
 
@@ -793,11 +793,15 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         trace.set("transform_updates", update.transforms.len() as f64);
         trace.set("effect_updates", update.effects.len() as f64);
         if let Some(node) = update.transforms.first() {
-            trace.set("transform_x", node.Matrix().values[12]);
-            trace.set("transform_y", node.Matrix().values[13]);
+            let values = paint_model::property_cell::with_access(|a| node.Matrix(a).values);
+            trace.set("transform_x", values[12]);
+            trace.set("transform_y", values[13]);
         }
         if let Some(node) = update.effects.first() {
-            trace.set("opacity", node.opacity as f64);
+            trace.set(
+                "opacity",
+                paint_model::property_cell::with_access(|a| node.state(a).opacity) as f64,
+            );
         }
         // Per node, as FragmentPaintPropertyTreeBuilder::UpdateTransform /
         // UpdateEffect call PAC: an accepted node becomes
@@ -898,7 +902,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             {
                 if paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a))
                     !=::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues
-                    || !node.HasDirectCompositingReasons()
+                    || !paint_model::property_cell::with_access(|a| node.HasDirectCompositingReasons(a))
                 {
                     continue;
                 }
@@ -997,16 +1001,19 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             .expect("validated native viewport")
             .scroll_translation_nodes
         {
-            let Some(scroll) = &scroll_translation.scroll else {
+            let Some((element, matrix)) = paint_model::property_cell::with_access(|a| {
+                let scroll = scroll_translation.ScrollNode(a)?;
+                Some((scroll.GetCompositorElementId(a), *scroll_translation.Matrix(a)))
+            }) else {
                 continue;
             };
-            let value = scroll.compositor.compositor_element_id.GetInternalValue();
+            let value = element.GetInternalValue();
             if !ElementId::IsValidInternalValue(value) {
                 continue;
             }
             let offset = PointF::new(
-                -scroll_translation.matrix.values[12] as f32,
-                -scroll_translation.matrix.values[13] as f32,
+                -matrix.values[12] as f32,
+                -matrix.values[13] as f32,
             );
             // PaintPropertyTreeBuilder updates the cc transform even when the
             // retained Paint node reports no effective change. This matters
