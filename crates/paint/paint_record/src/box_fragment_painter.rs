@@ -1230,7 +1230,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             )
         {
             let translation = self.node.contents_properties.nodes.transform.clone();
-            if translation.scroll.is_some() {
+            if paint_model::property_cell::with_access(|access| translation.ScrollNode(access).is_some()) {
                 let opaqueness = GetHitTestOpaqueness(fragment);
                 self.context.borrow_mut().RecordScrollHitTestData(
                     self.node,

@@ -183,7 +183,7 @@ fn ScrollElementIdForStickyClient(
     let mut transform = Some(parent.clone());
     while let Some(node) = transform {
         let found = paint_model::property_cell::with_access(|access| {
-            let mut scroll = node.scroll.as_ref();
+            let mut scroll = node.ScrollNode(access);
             while let Some(candidate) = scroll {
                 let state = candidate.state(access);
                 if state.owner_client_id == owner_client_id {
@@ -196,7 +196,7 @@ fn ScrollElementIdForStickyClient(
         if let Some(element_id) = found {
             return element_id;
         }
-        transform = node.parent.clone();
+        transform = paint_model::property_cell::with_access(|access| node.Parent(access).cloned());
     }
     Default::default()
 }
@@ -205,17 +205,20 @@ fn StickyElementIdForClient(
     parent: &Arc<TransformPaintPropertyNode>,
     owner_client_id: u64,
 ) -> foundation::CompositorElementId {
-    let mut transform = Some(parent.clone());
-    while let Some(node) = transform {
-        if node
-            .sticky_constraint
-            .is_some_and(|constraint| constraint.owner_client_id == owner_client_id)
-        {
-            return node.compositor.compositor_element_id;
+    paint_model::property_cell::with_access(|access| {
+        let mut transform = Some(parent);
+        while let Some(node) = transform {
+            let state = node.state(access);
+            if state
+                .sticky_constraint
+                .is_some_and(|constraint| constraint.owner_client_id == owner_client_id)
+            {
+                return state.compositor.compositor_element_id;
+            }
+            transform = state.parent.as_ref();
         }
-        transform = node.parent.clone();
-    }
-    Default::default()
+        Default::default()
+    })
 }
 
 fn BuildCompositorStickyConstraint(
@@ -1779,11 +1782,15 @@ impl PrePaintTreeWalk {
         if let Some((_, world)) = self.transform_world_memo.get(&key) {
             return *world;
         }
-        let parent_world = match node.parent.as_ref() {
+        let (parent, matrix) = paint_model::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (state.parent.clone(), state.matrix)
+        });
+        let parent_world = match parent.as_ref() {
             Some(parent) => self.TransformWorld(parent),
             None => TransformMatrix::default(),
         };
-        let world = MultiplyTransforms(&parent_world, &node.matrix);
+        let world = MultiplyTransforms(&parent_world, &matrix);
         self.transform_world_memo.insert(key, (Arc::clone(node), world));
         world
     }
@@ -5082,15 +5089,16 @@ impl<'a> OwnNodeRebase<'a> {
         }
         let mut value = (**node).clone();
         value.lifecycle = Default::default();
-        value.parent = match &node.parent {
+        let links = value.state_mut().links();
+        value.state_mut().parent = match &links.parent {
             Some(parent) => Some(self.transform(parent)?),
             None => None,
         };
-        value.scroll = match &node.scroll {
+        value.state_mut().scroll = match &links.scroll {
             Some(scroll) => Some(self.scroll(scroll)?),
             None => None,
         };
-        value.scroll_parent_scroll_translation = match &node.scroll_parent_scroll_translation {
+        value.state_mut().scroll_parent_scroll_translation = match &links.scroll_parent_scroll_translation {
             Some(translation) => Some(self.transform(translation)?),
             None => None,
         };
@@ -7668,13 +7676,16 @@ impl PrePaintTreeWalk {
         // LayoutView's actual ScrollTranslation while restoring the fixed
         // context's pre-scroll transform; this non-owning source-node reference
         // is represented by an immutable source Arc lease.
-        let mut scroll_translation = Some(base.properties.nodes.transform.clone());
-        while let Some(node) = &scroll_translation {
-            if node.scroll.is_some() && node.id != 0 {
-                break;
+        let scroll_translation = paint_model::property_cell::with_access(|access| {
+            let mut scroll_translation = Some(&base.properties.nodes.transform);
+            while let Some(node) = scroll_translation {
+                if node.ScrollNode(access).is_some() && node.id != 0 {
+                    break;
+                }
+                scroll_translation = node.Parent(access);
             }
-            scroll_translation = node.parent.clone();
-        }
+            scroll_translation.cloned()
+        });
         let mut properties = base.properties.clone();
         let (offset, paint_space, transforms) = if self.local_frame_depth != 0 {
             // Fixed descendants are rooted in this LocalFrame's pre-scroll
@@ -8330,8 +8341,8 @@ impl PrePaintTreeWalk {
                     rejection = 2;
                     break;
                 };
-                if !current.HasActiveTransformAnimation()
-                    || current.direct_compositing_reasons
+                if !paint_model::property_cell::with_access(|access| current.HasActiveTransformAnimation(access))
+                    || paint_model::property_cell::with_access(|access| current.state(access).direct_compositing_reasons)
                         != CompositingReasonFinder::TransformReasons(fragment, role, false)
                 {
                     rejection = 3;
@@ -8441,12 +8452,9 @@ impl PrePaintTreeWalk {
             self.property_node_store
                 .PublishDirectTransformSnapshot(key, snapshot.clone(), change);
             update.transforms.push(snapshot);
-            let element_id = update
-                .transforms
-                .last()
-                .unwrap()
-                .compositor
-                .compositor_element_id;
+            let element_id = paint_model::property_cell::with_access(|access| {
+                update.transforms.last().unwrap().state(access).compositor.compositor_element_id
+            });
             if foundation::CompositorElementId::IsValidInternalValue(element_id.GetInternalValue())
             {
                 update.bindings.push(CompositedAnimationPropertyBinding {
@@ -8510,14 +8518,16 @@ impl PrePaintTreeWalk {
     ) -> Vec<CompositedAnimationPropertyBinding> {
         fn collect_transform(
             node_id: u64,
-            mut node: Option<&Arc<TransformPaintPropertyNode>>,
+            node: Option<&Arc<TransformPaintPropertyNode>>,
             seen: &mut HashSet<u64>,
             output: &mut Vec<CompositedAnimationPropertyBinding>,
         ) {
+            paint_model::property_cell::with_access(|access| {
+            let mut node = node;
             while let Some(current) = node {
-                let element_id = current.compositor.compositor_element_id;
+                let element_id = current.state(access).compositor.compositor_element_id;
                 let internal = element_id.GetInternalValue();
-                if current.HasActiveTransformAnimation()
+                if current.HasActiveTransformAnimation(access)
                     && foundation::CompositorElementId::IsValidInternalValue(internal)
                     && seen.insert(internal)
                 {
@@ -8527,8 +8537,9 @@ impl PrePaintTreeWalk {
                         element_id,
                     });
                 }
-                node = current.parent.as_ref();
+                node = current.Parent(access);
             }
+            })
         }
 
         fn collect_effect(
@@ -8581,11 +8592,9 @@ impl PrePaintTreeWalk {
                         ("applies_opacity", node.applies_opacity as u8 as f64),
                         (
                             "active_transform",
-                            node.properties
-                                .nodes
-                                .transform
-                                .HasActiveTransformAnimation() as u8
-                                as f64,
+                            paint_model::property_cell::with_access(|access| {
+                                node.properties.nodes.transform.HasActiveTransformAnimation(access)
+                            }) as u8 as f64,
                         ),
                         (
                             "active_opacity",

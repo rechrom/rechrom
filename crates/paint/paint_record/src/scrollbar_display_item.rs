@@ -103,11 +103,8 @@ mod tests {
     };
 
     fn transform() -> Arc<TransformPaintPropertyNode> {
-        Arc::new(TransformPaintPropertyNode {
+        Arc::new(TransformPaintPropertyNode::new(PaintPropertyNodeLifecycle::default(), 1, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
             compositor: TransformCompositorState::default(),
-            geometry_mapper_cache: Default::default(),
-            lifecycle: PaintPropertyNodeLifecycle::default(),
-            id: 1,
             parent: None,
             matrix: Default::default(),
             origin: [0.0; 3],
@@ -118,7 +115,7 @@ mod tests {
             scroll_parent_scroll_translation: None,
             sticky_constraint: None,
             direct_compositing_reasons: Default::default(),
-        })
+        }))
     }
 
     fn item(

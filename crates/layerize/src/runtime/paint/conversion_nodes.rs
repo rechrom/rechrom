@@ -24,10 +24,12 @@ where
     B: PaintChunksTypes<TransformNode = Self, ScrollNode = ScrollNode<R>>,
 {
     fn ScrollNode(&self) -> Option<ScrollNode<R>> {
-        self.node()
-            .scroll
-            .as_ref()
-            .map(|s| self.link_scroll(s))
+        read(|a| {
+            self.node().state(a)
+                .scroll
+                .as_ref()
+                .map(|s| self.link_scroll(s))
+        })
     }
     fn NearestScrollTranslationNode(&self) -> Self {
         WithTransformCache(self, |c| c.nearest_scroll_translation())

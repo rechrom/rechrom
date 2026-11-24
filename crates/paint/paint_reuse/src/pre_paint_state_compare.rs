@@ -11,6 +11,7 @@ use paint_model::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,
         PaintPropertyNodeLifecycle, PropertyTreeState, ScrollPaintPropertyNode,
         ClipPaintPropertyNodeState, EffectPaintPropertyNodeState, ScrollPaintPropertyNodeState,
+        TransformPaintPropertyNodeState,
         TransformPaintPropertyNode,
     },
     property_cell::PropertyAccess,
@@ -184,12 +185,11 @@ impl Compare<'_> {
         }
         // Exhaustive destructuring makes newly added semantic fields require
         // an explicit comparison here. Raw IDs/lifecycles are handled as slots.
-        let TransformPaintPropertyNode {
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let TransformPaintPropertyNodeState {
             compositor,
-            geometry_mapper_cache: _,
             scroll_parent_scroll_translation,
-            lifecycle,
-            id,
             parent,
             matrix,
             origin,
@@ -199,23 +199,24 @@ impl Compare<'_> {
             scroll,
             sticky_constraint,
             direct_compositing_reasons,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
-            && compositor == &b.compositor
+            && compositor == &bs.compositor
             && matrix.values.iter().all(|v| v.is_finite())
-            && matrix == &b.matrix
+            && matrix == &bs.matrix
             && origin.iter().all(|v| v.is_finite())
-            && origin == &b.origin
-            && flattens_inherited_transform == &b.flattens_inherited_transform
-            && rendering_context_id == &b.rendering_context_id
-            && backface_visibility == &b.backface_visibility
-            && sticky_constraint == &b.sticky_constraint
-            && direct_compositing_reasons == &b.direct_compositing_reasons
-            && self.optional(parent, &b.parent, Self::transform)
-            && self.optional(scroll, &b.scroll, Self::scroll)
+            && origin == &bs.origin
+            && flattens_inherited_transform == &bs.flattens_inherited_transform
+            && rendering_context_id == &bs.rendering_context_id
+            && backface_visibility == &bs.backface_visibility
+            && sticky_constraint == &bs.sticky_constraint
+            && direct_compositing_reasons == &bs.direct_compositing_reasons
+            && self.optional(parent, &bs.parent, Self::transform)
+            && self.optional(scroll, &bs.scroll, Self::scroll)
             && self.optional(
                 scroll_parent_scroll_translation,
-                &b.scroll_parent_scroll_translation,
+                &bs.scroll_parent_scroll_translation,
                 Self::transform,
             );
         self.finish(key, same)

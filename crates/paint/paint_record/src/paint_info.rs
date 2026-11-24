@@ -189,7 +189,9 @@ impl<'c, 'o> PaintInfo<'c, 'o> {
     }
 
     pub fn TransformCullRect(&mut self, transform: &TransformPaintPropertyNode) {
-        self.cull_rect.ApplyTransform(&transform.matrix);
+        paint_model::property_cell::with_access(|access| {
+            self.cull_rect.ApplyTransform(transform.Matrix(access))
+        });
     }
 
     pub fn IsPaintingBackgroundInContentsSpace(&self) -> bool {

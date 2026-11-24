@@ -264,11 +264,16 @@ impl Page {
         self.frame
             .as_ref()
             .and_then(|frame| frame.display_items.compositor_viewport.as_ref())
-            .and_then(|viewport| viewport.visual_scroll_translation.scroll.as_deref())
-            .is_some_and(|scroll| {
-                paint::property_cell::with_access(|access| scroll.GetCompositorElementId(access))
-                    .GetInternalValue()
-                    == element.GetInternalValue()
+            .is_some_and(|viewport| {
+                paint::property_cell::with_access(|access| {
+                    viewport
+                        .visual_scroll_translation
+                        .ScrollNode(access)
+                        .is_some_and(|scroll| {
+                            scroll.GetCompositorElementId(access).GetInternalValue()
+                                == element.GetInternalValue()
+                        })
+                })
             })
     }
     fn ApplyCompositorScrollOffset(

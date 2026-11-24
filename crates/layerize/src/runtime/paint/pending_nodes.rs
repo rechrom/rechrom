@@ -60,7 +60,9 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
         paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, s, id))
     }
     fn IsRoot(&self) -> bool {
-        self.node().parent.is_none()
+        read(|a| {
+            self.node().state(a).parent.is_none()
+        })
     }
     fn UnaliasedParent(&self) -> Option<Self> {
         self.parent_handle()
@@ -69,65 +71,99 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
         self.UnaliasedParent().expect("source parent")
     }
     fn IsIdentityOr2dTranslation(&self) -> bool {
-        self.node().IsIdentityOr2dTranslation()
+        read(|a| {
+            self.node().IsIdentityOr2dTranslation(a)
+        })
     }
     fn HasScrollNode(&self) -> bool {
-        self.node().ScrollNode().is_some()
+        read(|a| {
+            self.node().ScrollNode(a).is_some()
+        })
     }
     fn HasDirectCompositingReasonsOtherThan3dTransform(&self) -> bool {
-        self.node()
-            .HasDirectCompositingReasonsOtherThan3dTransform()
+        read(|a| {
+            self.node()
+                .HasDirectCompositingReasonsOtherThan3dTransform(a)
+        })
     }
     fn FlattensInheritedTransformSameAsParent(&self) -> bool {
-        self.parent_handle().is_none_or(|p| {
-            p.node().FlattensInheritedTransform() == self.node().FlattensInheritedTransform()
+        read(|a| {
+            self.parent_handle().is_none_or(|p| {
+                p.node().FlattensInheritedTransform(a) == self.node().FlattensInheritedTransform(a)
+            })
         })
     }
     fn BackfaceVisibilitySameAsParent(&self) -> bool {
-        let Some(parent) = self.UnaliasedParent() else {
-            return true;
-        };
-        self.DelegatesToParentForBackface()
-            || self.node().backface_visibility == parent.node().backface_visibility
-            || self.IsBackfaceHidden() == parent.IsBackfaceHidden()
+        read(|a| {
+            let Some(parent) = self.UnaliasedParent() else {
+                return true;
+            };
+            self.DelegatesToParentForBackface()
+                || self.node().state(a).backface_visibility == parent.node().state(a).backface_visibility
+                || self.IsBackfaceHidden() == parent.IsBackfaceHidden()
+        })
     }
     fn HasStickyConstraint(&self) -> bool {
-        self.node().GetStickyConstraint().is_some()
+        read(|a| {
+            self.node().GetStickyConstraint(a).is_some()
+        })
     }
     fn HasAnchorPositionScrollData(&self) -> bool {
-        self.node().GetAnchorPositionScrollData().is_some()
+        read(|a| {
+            self.node().GetAnchorPositionScrollData(a).is_some()
+        })
     }
     fn IsAffectedByOuterViewportBoundsDelta(&self) -> bool {
-        self.node().IsAffectedByOuterViewportBoundsDelta()
+        read(|a| {
+            self.node().IsAffectedByOuterViewportBoundsDelta(a)
+        })
     }
     fn IsAffectedBySafeAreaBottom(&self) -> bool {
-        self.node().IsAffectedBySafeAreaBottom()
+        read(|a| {
+            self.node().IsAffectedBySafeAreaBottom(a)
+        })
     }
     fn IsInSubtreeOfPageScale(&self) -> bool {
-        self.node().IsInSubtreeOfPageScale()
+        read(|a| {
+            self.node().IsInSubtreeOfPageScale(a)
+        })
     }
     fn RequiresCompositingForFixedToViewport(&self) -> bool {
-        self.node().RequiresCompositingForFixedToViewport()
+        read(|a| {
+            self.node().RequiresCompositingForFixedToViewport(a)
+        })
     }
     fn FlattensInheritedTransform(&self) -> bool {
-        self.node().FlattensInheritedTransform()
+        read(|a| {
+            self.node().FlattensInheritedTransform(a)
+        })
     }
     fn RenderingContextId(&self) -> i32 {
-        self.node().RenderingContextId() as i32
+        read(|a| {
+            self.node().RenderingContextId(a) as i32
+        })
     }
     fn DelegatesToParentForBackface(&self) -> bool {
-        self.node().DelegatesToParentForBackface()
+        read(|a| {
+            self.node().DelegatesToParentForBackface(a)
+        })
     }
     fn RequiresCompositingForWillChangeTransform(&self) -> bool {
-        self.node().RequiresCompositingForWillChangeTransform()
+        read(|a| {
+            self.node().RequiresCompositingForWillChangeTransform(a)
+        })
     }
     fn IsForSVGChild(&self) -> bool {
-        self.node().IsForSVGChild()
+        read(|a| {
+            self.node().IsForSVGChild(a)
+        })
     }
     fn ScrollParentScrollTranslation(&self) -> Option<Self> {
-        self.node()
-            .ScrollParentScrollTranslation()
-            .map(|n| self.link_same(n))
+        read(|a| {
+            self.node()
+                .ScrollParentScrollTranslation(a)
+                .map(|n| self.link_same(n))
+        })
     }
     fn PropertyTreeNearestScrollTranslationNode(&self) -> Self {
         crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache(self,|c|c.nearest_scroll_translation())
@@ -135,90 +171,109 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
     fn GetStickyConstraint(
         &self,
     ) -> Option<crate::cc::trees::sticky_position_constraint::StickyPositionConstraint> {
-        self.node().GetStickyConstraint().map(|v| {
-            let r = |p: paint::paint_engine::PaintRect| {
-                RectF::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32)
-            };
-            crate::cc::trees::sticky_position_constraint::StickyPositionConstraint {
-                is_anchored_left: v.anchored[0],
-                is_anchored_right: v.anchored[1],
-                is_anchored_top: v.anchored[2],
-                is_anchored_bottom: v.anchored[3],
-                left_offset: v.offsets[0],
-                right_offset: v.offsets[1],
-                top_offset: v.offsets[2],
-                bottom_offset: v.offsets[3],
-                constraint_box_rect: r(v.constraint_box_rect),
-                scroll_container_relative_sticky_box_rect: r(v.sticky_box_rect),
-                scroll_container_relative_containing_block_rect: r(v.containing_block_rect),
-                pixel_snap_offset: Vector2dF::new(v.pixel_snap_offset[0], v.pixel_snap_offset[1]),
-                x_scroll_ancestor_element_id: element(v.x_scroll_ancestor),
-                y_scroll_ancestor_element_id: element(v.y_scroll_ancestor),
-                nearest_element_shifting_sticky_box: element(v.nearest_shifting_sticky_box),
-                nearest_element_shifting_containing_block: element(
-                    v.nearest_shifting_containing_block,
-                ),
-            }
+        read(|a| {
+            self.node().GetStickyConstraint(a).map(|v| {
+                let r = |p: paint::paint_engine::PaintRect| {
+                    RectF::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32)
+                };
+                crate::cc::trees::sticky_position_constraint::StickyPositionConstraint {
+                    is_anchored_left: v.anchored[0],
+                    is_anchored_right: v.anchored[1],
+                    is_anchored_top: v.anchored[2],
+                    is_anchored_bottom: v.anchored[3],
+                    left_offset: v.offsets[0],
+                    right_offset: v.offsets[1],
+                    top_offset: v.offsets[2],
+                    bottom_offset: v.offsets[3],
+                    constraint_box_rect: r(v.constraint_box_rect),
+                    scroll_container_relative_sticky_box_rect: r(v.sticky_box_rect),
+                    scroll_container_relative_containing_block_rect: r(v.containing_block_rect),
+                    pixel_snap_offset: Vector2dF::new(v.pixel_snap_offset[0], v.pixel_snap_offset[1]),
+                    x_scroll_ancestor_element_id: element(v.x_scroll_ancestor),
+                    y_scroll_ancestor_element_id: element(v.y_scroll_ancestor),
+                    nearest_element_shifting_sticky_box: element(v.nearest_shifting_sticky_box),
+                    nearest_element_shifting_containing_block: element(
+                        v.nearest_shifting_containing_block,
+                    ),
+                }
+            })
         })
     }
     fn GetAnchorPositionScrollData(
         &self,
     ) -> Option<crate::cc::trees::property_tree::AnchorPositionScrollData> {
-        self.node().GetAnchorPositionScrollData().map(|v| {
-            crate::cc::trees::property_tree::AnchorPositionScrollData {
-                adjustment_container_ids: v
-                    .adjustment_container_ids
-                    .iter()
-                    .copied()
-                    .map(element)
-                    .collect(),
-                accumulated_scroll_origin: crate::adapter::geometry::Vector2d::new(
-                    v.accumulated_scroll_origin[0],
-                    v.accumulated_scroll_origin[1],
-                ),
-                needs_scroll_adjustment_in_x: v.needs_scroll_adjustment_in_x,
-                needs_scroll_adjustment_in_y: v.needs_scroll_adjustment_in_y,
-            }
+        read(|a| {
+            self.node().GetAnchorPositionScrollData(a).map(|v| {
+                crate::cc::trees::property_tree::AnchorPositionScrollData {
+                    adjustment_container_ids: v
+                        .adjustment_container_ids
+                        .iter()
+                        .copied()
+                        .map(element)
+                        .collect(),
+                    accumulated_scroll_origin: crate::adapter::geometry::Vector2d::new(
+                        v.accumulated_scroll_origin[0],
+                        v.accumulated_scroll_origin[1],
+                    ),
+                    needs_scroll_adjustment_in_x: v.needs_scroll_adjustment_in_x,
+                    needs_scroll_adjustment_in_y: v.needs_scroll_adjustment_in_y,
+                }
+            })
         })
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        element(self.node().GetCompositorElementId())
+        read(|a| {
+            element(self.node().GetCompositorElementId(a))
+        })
     }
     fn GetVisibleFrameElementId(&self) -> ElementId {
-        element(self.node().GetVisibleFrameElementId())
+        read(|a| {
+            element(self.node().GetVisibleFrameElementId(a))
+        })
     }
     fn IsFramePaintOffsetTranslation(&self) -> bool {
-        self.node().IsFramePaintOffsetTranslation()
+        read(|a| {
+            self.node().IsFramePaintOffsetTranslation(a)
+        })
     }
     fn IsBackfaceHidden(&self) -> bool {
         crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache(self,|c|c.is_backface_hidden())
     }
     fn HasActiveTransformAnimation(&self) -> bool {
-        self.node().HasActiveTransformAnimation()
+        read(|a| {
+            self.node().HasActiveTransformAnimation(a)
+        })
     }
     fn TransformAnimationIsAxisAligned(&self) -> bool {
-        self.node().TransformAnimationIsAxisAligned()
+        read(|a| {
+            self.node().TransformAnimationIsAxisAligned(a)
+        })
     }
     fn PropertyTreeLowestCommonAncestor(&self, other: &Self) -> Self {
         self.lowest_common_ancestor(other)
     }
     fn Get2dTranslation(&self) -> Vector2dF {
-        let translation = self.node().Get2dTranslation();
-        Vector2dF::new(translation[0], translation[1])
+        read(|a| {
+            let translation = self.node().Get2dTranslation(a);
+            Vector2dF::new(translation[0], translation[1])
+        })
     }
     fn Matrix(&self) -> Self::Matrix {
         crate::adapter::paint_geometry::GeometryMapperNode::Matrix(self)
     }
     fn Origin(&self) -> crate::adapter::geometry::Point3F {
-        let o = self.node().Origin();
-        crate::adapter::geometry::Point3F::new(o[0] as f32, o[1] as f32, o[2] as f32)
+        read(|a| {
+            let o = self.node().Origin(a);
+            crate::adapter::geometry::Point3F::new(o[0] as f32, o[1] as f32, o[2] as f32)
+        })
     }
     fn NodeChanged(&self) -> PaintPropertyChange {
         paint_model::property_cell::with_access(|a| self.node().lifecycle.node_changed(a))
     }
     fn ScrollCompositorElementId(&self) -> ElementId {
-        let scroll = self.node().ScrollNode().expect("source ScrollNode");
-        element(paint_model::property_cell::with_access(|a| scroll.GetCompositorElementId(a)))
+        element(read(|a| {
+            self.node().ScrollNode(a).expect("source ScrollNode").GetCompositorElementId(a)
+        }))
     }
     fn ScrollContainerRect(&self) -> crate::adapter::geometry::Rect {
         crate::adapter::paint_geometry::GeometryMapperNode::ScrollContainerRect(self)

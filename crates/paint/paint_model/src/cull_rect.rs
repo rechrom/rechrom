@@ -33,6 +33,7 @@ fn SameClip(a: &ClipPaintPropertyNode, b: &ClipPaintPropertyNode) -> bool {
 }
 
 fn TransformIsAncestor(
+    access: &PropertyAccess,
     ancestor: &TransformPaintPropertyNode,
     descendant: &TransformPaintPropertyNode,
 ) -> bool {
@@ -41,7 +42,7 @@ fn TransformIsAncestor(
         if SameTransform(node, ancestor) {
             return true;
         }
-        current = node.parent.as_deref();
+        current = node.Parent(access).map(|parent| &**parent);
     }
     false
 }
@@ -62,16 +63,18 @@ fn ClipIsAncestor(
 }
 
 #[inline]
-fn RequiresCullRectExpansion(transform: &TransformPaintPropertyNode) -> bool {
+fn RequiresCullRectExpansion(access: &PropertyAccess, transform: &TransformPaintPropertyNode) -> bool {
     transform
+        .state(access)
         .direct_compositing_reasons
         .iter_reasons()
         .any(|reason| foundation::CompositingReasonCombos::kRequiresCullRectExpansion.Has(reason))
 }
 
 #[inline]
-fn IsRootScroller(transform: &TransformPaintPropertyNode) -> bool {
+fn IsRootScroller(access: &PropertyAccess, transform: &TransformPaintPropertyNode) -> bool {
     transform
+        .state(access)
         .direct_compositing_reasons
         .Has(foundation::CompositingReason::kRootScroller)
 }
@@ -81,8 +84,8 @@ fn IsSmallScrollerTransform(
     transform: &TransformPaintPropertyNode,
     expansion_ratio: f64,
 ) -> bool {
-    !IsRootScroller(transform)
-        && transform.scroll.as_ref().is_some_and(|scroll| {
+    !IsRootScroller(access, transform)
+        && transform.ScrollNode(access).is_some_and(|scroll| {
             scroll.ContainerRect(access).width * scroll.ContainerRect(access).height
                 <= SMALL_SCROLLER_AREA * expansion_ratio * expansion_ratio
         })
@@ -213,8 +216,7 @@ impl CullRect {
         expansion_ratio: f64,
     ) -> (bool, bool) {
         let scroll = scroll_translation
-            .scroll
-            .as_ref()
+            .ScrollNode(access)
             .expect("scroll translation owns a ScrollPaintPropertyNode");
         let container_rect = scroll.ContainerRect(access);
         let can_expand = expansion_ratio != 0.0 && Self::CanExpandForScroll(access, scroll);
@@ -236,7 +238,7 @@ impl CullRect {
                 return (false, false);
             }
         }
-        self.ApplyTransform(&scroll_translation.matrix);
+        self.ApplyTransform(scroll_translation.Matrix(access));
         if !can_expand {
             return (false, false);
         }
@@ -320,7 +322,7 @@ impl CullRect {
         }
 
         let abnormal_hierarchy = !ClipIsAncestor(access, &source.clip, &destination.clip)
-            || !TransformIsAncestor(&source.transform, &destination.transform);
+            || !TransformIsAncestor(access, &source.transform, &destination.transform);
         if abnormal_hierarchy {
             *self = Self::Infinite();
             return root != destination
@@ -341,12 +343,12 @@ impl CullRect {
             if SameTransform(&transform, &source.transform) {
                 break;
             }
-            if transform.scroll.is_some() {
+            if transform.ScrollNode(access).is_some() {
                 scroll_translations.push(transform.clone());
-            } else if RequiresCullRectExpansion(&transform) {
+            } else if RequiresCullRectExpansion(access, &transform) {
                 has_transform_requiring_expansion = true;
             }
-            current = transform.parent.clone();
+            current = transform.Parent(access).cloned();
         }
 
         let mut last_transform = source.transform.clone();
@@ -355,13 +357,12 @@ impl CullRect {
         let effect_root = PropertyTreeState::default().effect;
         for scroll_translation in scroll_translations.into_iter().rev() {
             let Some(overflow_clip) = scroll_translation
-                .scroll
-                .as_ref()
+                .ScrollNode(access)
                 .and_then(|scroll| scroll.OverflowClipNode(access).cloned())
             else {
                 break;
             };
-            let Some(parent_transform) = scroll_translation.parent.clone() else {
+            let Some(parent_transform) = scroll_translation.Parent(access).cloned() else {
                 return false;
             };
             let source_state = PropertyTreeState {
@@ -412,8 +413,7 @@ impl CullRect {
 
         let mut expansion_bounds = if expanded.0 || expanded.1 {
             last_transform
-                .scroll
-                .as_ref()
+                .ScrollNode(access)
                 .map(|scroll| scroll.ContentsRect(access))
         } else {
             None
@@ -647,10 +647,10 @@ mod tests {
         let mut node = (**parent).clone();
         node.lifecycle = Default::default();
         node.id = id;
-        node.parent = Some(parent.clone());
-        node.matrix = matrix;
-        node.scroll = scroll;
-        node.direct_compositing_reasons = Default::default();
+        node.state_mut().parent = Some(parent.clone());
+        node.state_mut().matrix = matrix;
+        node.state_mut().scroll = scroll;
+        node.state_mut().direct_compositing_reasons = Default::default();
         Arc::new(node)
     }
 
@@ -817,7 +817,7 @@ mod tests {
                 compositor: Default::default(),
                 owner_client_id: 1,
                 owner_node_id: 0,
-                parent: root.transform.scroll.clone(),
+                parent: crate::property_cell::with_access(|a| root.transform.ScrollNode(a).cloned()),
                 overflow_clip: Some(overflow_clip.clone()),
                 container_rect: container,
                 contents_rect: PaintRect {

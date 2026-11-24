@@ -130,6 +130,7 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
     // This ownership test models a new property snapshot only; it invokes no
     // source identity, layout or recording algorithm.
     Arc::make_mut(&mut updated.chunks[0].properties.transform)
+        .state_mut()
         .matrix
         .values[13] = -12.0;
     assert!(
@@ -141,11 +142,10 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
         !old.chunks.PtrEq(&scrolling.chunks),
         "only the changed chunk directory detaches"
     );
-    assert_eq!(old.chunks[0].properties.transform.matrix.values[13], 0.0);
-    assert_eq!(
-        scrolling.chunks[0].properties.transform.matrix.values[13],
-        -12.0
-    );
+    paint_model::property_cell::with_access(|a| {
+        assert_eq!(old.chunks[0].properties.transform.Matrix(a).values[13], 0.0);
+        assert_eq!(scrolling.chunks[0].properties.transform.Matrix(a).values[13], -12.0);
+    });
     Arc::make_mut(&mut Arc::make_mut(&mut scrolling).items)[0]
         .rect
         .x = 9.0;
@@ -517,8 +517,17 @@ fn CollectCompositedAnimationPropertyUpdate(
             {
                 return;
             }
-            if node.HasActiveTransformAnimation() {
-                let element_id = node.compositor.compositor_element_id;
+            let (active, element_id, has_direct_reasons, parent) =
+                paint_model::property_cell::with_access(|a| {
+                    let state = node.state(a);
+                    (
+                        state.HasActiveTransformAnimation(),
+                        state.compositor.compositor_element_id,
+                        state.HasDirectCompositingReasons(),
+                        state.parent.clone(),
+                    )
+                });
+            if active {
                 let internal = element_id.GetInternalValue();
                 if foundation::CompositorElementId::IsValidInternalValue(internal)
                     && self.seen_transform_bindings.insert(internal)
@@ -535,9 +544,7 @@ fn CollectCompositedAnimationPropertyUpdate(
                     PaintPropertyChangeType::ChangedOnlyCompositedValues => {
                         self.transforms.push(node.clone());
                     }
-                    PaintPropertyChangeType::ChangedOnlySimpleValues
-                        if node.HasDirectCompositingReasons() =>
-                    {
+                    PaintPropertyChangeType::ChangedOnlySimpleValues if has_direct_reasons => {
                         self.transforms.push(node.clone());
                     }
                     change => {
@@ -547,7 +554,7 @@ fn CollectCompositedAnimationPropertyUpdate(
                     }
                 }
             }
-            if let Some(parent) = &node.parent {
+            if let Some(parent) = &parent {
                 self.transform(node_id, parent);
             }
         }

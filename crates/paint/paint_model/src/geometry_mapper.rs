@@ -103,20 +103,22 @@ fn TransformToRoot<R: PropertyNodeResolver + ?Sized>(
     resolver: &R,
     node: &TransformPaintPropertyNode,
 ) -> TransformMatrix {
+    crate::property_cell::with_access(|access| {
     let mut path: Vec<&TransformPaintPropertyNode> = Vec::new();
     let mut current = Some(node);
     while let Some(value) = current {
         path.push(value);
-        current = value.parent.as_ref().map(|parent| &**resolver.transform(parent));
+        current = value.state(access).parent.as_ref().map(|parent| &**resolver.transform(parent));
     }
     let mut result = TransformMatrix::default();
     for value in path.into_iter().rev() {
-        if value.flattens_inherited_transform {
+        if value.state(access).flattens_inherited_transform {
             FlattenTransform(&mut result);
         }
-        result = MultiplyTransforms(&result, &value.matrix);
+        result = MultiplyTransforms(&result, &value.state(access).matrix);
     }
     result
+    })
 }
 
 /// Source: `gfx::Transform::Flatten()`, used by GeometryMapper's screen
@@ -137,6 +139,7 @@ fn TransformToAncestor<R: PropertyNodeResolver + ?Sized>(
     descendant: &TransformPaintPropertyNode,
     ancestor: &TransformPaintPropertyNode,
 ) -> Option<TransformMatrix> {
+    crate::property_cell::with_access(|access| {
     if SameTransform(descendant, ancestor) {
         return Some(TransformMatrix::default());
     }
@@ -146,17 +149,18 @@ fn TransformToAncestor<R: PropertyNodeResolver + ?Sized>(
         if SameTransform(value, ancestor) {
             let mut result = TransformMatrix::default();
             for node in path.into_iter().rev() {
-                if node.flattens_inherited_transform {
+                if node.state(access).flattens_inherited_transform {
                     FlattenTransform(&mut result);
                 }
-                result = MultiplyTransforms(&result, &node.matrix);
+                result = MultiplyTransforms(&result, &node.state(access).matrix);
             }
             return Some(result);
         }
         path.push(value);
-        current = value.parent.as_ref().map(|parent| &**resolver.transform(parent));
+        current = value.state(access).parent.as_ref().map(|parent| &**resolver.transform(parent));
     }
     None
+    })
 }
 
 #[inline]
@@ -182,6 +186,7 @@ pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
     source: &TransformPaintPropertyNode,
     destination: &TransformPaintPropertyNode,
 ) -> Option<TransformMatrix> {
+    crate::property_cell::with_access(|access| {
     if SameTransform(source, destination) {
         return Some(TransformMatrix::default());
     }
@@ -189,21 +194,19 @@ pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
     // consulting an unrelated singular ancestor and preserve the exact local
     // matrix for the overwhelmingly common property-tree mapping.
     if source
-        .parent
-        .as_ref()
+        .Parent(access)
         .is_some_and(|parent| SameTransform(resolver.transform(parent), destination))
-        && IsIdentityOr2dTranslation(&source.matrix)
-        && source.origin == [0.0; 3]
+        && IsIdentityOr2dTranslation(&source.state(access).matrix)
+        && source.state(access).origin == [0.0; 3]
     {
-        return Some(source.matrix);
+        return Some(source.state(access).matrix);
     }
     if destination
-        .parent
-        .as_ref()
+        .Parent(access)
         .is_some_and(|parent| SameTransform(resolver.transform(parent), source))
-        && IsIdentityOr2dTranslation(&destination.matrix)
+        && IsIdentityOr2dTranslation(&destination.state(access).matrix)
     {
-        return InvertTransform(&destination.matrix);
+        return InvertTransform(&destination.state(access).matrix);
     }
 
     // Source: geometry_mapper.cc:144-170. An ancestor/descendant pair is
@@ -225,6 +228,7 @@ pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
         &InvertTransform(&destination_to_root)?,
         &source_to_root,
     ))
+    })
 }
 
 pub fn SourceToDestinationRect(

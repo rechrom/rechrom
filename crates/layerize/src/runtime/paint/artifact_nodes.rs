@@ -11,22 +11,32 @@ where
     >,
 {
     fn HasDirectCompositingReasons(&self) -> bool {
-        self.node().HasDirectCompositingReasons()
+        read(|a| {
+            self.node().HasDirectCompositingReasons(a)
+        })
     }
     fn NearestDirectlyCompositedAncestor(&self) -> Option<Self> {
         WithTransformCache(self, |c| c.nearest_directly_composited_ancestor())
     }
     fn RequiresCompositingForFixedPositionOnly(&self) -> bool {
-        self.node().RequiresCompositingForFixedPositionOnly()
+        read(|a| {
+            self.node().RequiresCompositingForFixedPositionOnly(a)
+        })
     }
     fn RequiresCompositingForStickyPositionOnly(&self) -> bool {
-        self.node().RequiresCompositingForStickyPositionOnly()
+        read(|a| {
+            self.node().RequiresCompositingForStickyPositionOnly(a)
+        })
     }
     fn RequiresCompositingForFixedPosition(&self) -> bool {
-        self.node().RequiresCompositingForFixedPosition()
+        read(|a| {
+            self.node().RequiresCompositingForFixedPosition(a)
+        })
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
-        self.node().RequiresCompositingForStickyPosition()
+        read(|a| {
+            self.node().RequiresCompositingForStickyPosition(a)
+        })
     }
     fn ScrollTranslationState(&self) -> Self {
         WithTransformCache(self, |c| c.scroll_translation_state())
@@ -35,7 +45,9 @@ where
         super::clear_transform_changed(self.as_arc(), self.trees(), s)
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
-        CpuCompositingReasons::from_source(&self.node().DirectCompositingReasonsForDebugging())
+        read(|a| {
+            CpuCompositingReasons::from_source(&self.node().DirectCompositingReasonsForDebugging(a))
+        })
     }
 }
 impl<R, B> ArtifactEffectNode<B> for EffectNode<R>

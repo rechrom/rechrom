@@ -93,11 +93,12 @@ impl OverriddenCullRectScope {
             // source.cc:454-486: a viewport-fixed paint-offset translation
             // uses the viewport clip, ignoring movable non-container clips.
             if fragment.paint.Position() == Position::kFixed
-                && node
-                    .paint_offset_translation
-                    .as_ref()
-                    .and_then(|translation| translation.parent.as_ref())
-                    .is_some_and(|parent| Arc::ptr_eq(parent, &root.transform))
+                && paint_model::property_cell::with_access(|access| {
+                    node.paint_offset_translation
+                        .as_ref()
+                        .and_then(|translation| translation.Parent(access))
+                        .is_some_and(|parent| Arc::ptr_eq(parent, &root.transform))
+                })
             {
                 local_state.clip = view_contents_clip.clone();
                 parent = root;

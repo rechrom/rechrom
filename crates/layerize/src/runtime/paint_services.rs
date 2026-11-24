@@ -297,14 +297,11 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
     }
     fn ScrollContentsRect(&self, state: &paint::PropertyTreeState<R>) -> Option<Rect> {
         use crate::adapter::pending_layer::PendingTransformNode;
-        state
-            .transform()
-            .PropertyTreeNearestScrollTranslationNode()
-            .node()
-            .scroll
-            .as_ref()
-            .map(|s| {
-                let contents = paint_model::property_cell::with_access(|a| s.ContentsRect(a));
+        let translation = state.transform().PropertyTreeNearestScrollTranslationNode();
+        paint_model::property_cell::with_access(|a| {
+            translation.node().ScrollNode(a).map(|scroll| scroll.ContentsRect(a))
+        })
+            .map(|contents| {
                 crate::adapter::geometry::ToEnclosingRect(RectF::new(
                     contents.x as f32,
                     contents.y as f32,
@@ -796,8 +793,9 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         trace.set("transform_updates", update.transforms.len() as f64);
         trace.set("effect_updates", update.effects.len() as f64);
         if let Some(node) = update.transforms.first() {
-            trace.set("transform_x", node.Matrix().values[12]);
-            trace.set("transform_y", node.Matrix().values[13]);
+            let values = paint_model::property_cell::with_access(|a| node.Matrix(a).values);
+            trace.set("transform_x", values[12]);
+            trace.set("transform_y", values[13]);
         }
         if let Some(node) = update.effects.first() {
             trace.set(
@@ -904,7 +902,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             {
                 if paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a))
                     !=::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues
-                    || !node.HasDirectCompositingReasons()
+                    || !paint_model::property_cell::with_access(|a| node.HasDirectCompositingReasons(a))
                 {
                     continue;
                 }
@@ -1003,17 +1001,19 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             .expect("validated native viewport")
             .scroll_translation_nodes
         {
-            let Some(scroll) = &scroll_translation.scroll else {
+            let Some((element, matrix)) = paint_model::property_cell::with_access(|a| {
+                let scroll = scroll_translation.ScrollNode(a)?;
+                Some((scroll.GetCompositorElementId(a), *scroll_translation.Matrix(a)))
+            }) else {
                 continue;
             };
-            let value = paint_model::property_cell::with_access(|a| scroll.GetCompositorElementId(a))
-                .GetInternalValue();
+            let value = element.GetInternalValue();
             if !ElementId::IsValidInternalValue(value) {
                 continue;
             }
             let offset = PointF::new(
-                -scroll_translation.matrix.values[12] as f32,
-                -scroll_translation.matrix.values[13] as f32,
+                -matrix.values[12] as f32,
+                -matrix.values[13] as f32,
             );
             // PaintPropertyTreeBuilder updates the cc transform even when the
             // retained Paint node reports no effective change. This matters

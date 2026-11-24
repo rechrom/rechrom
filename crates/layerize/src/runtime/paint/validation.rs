@@ -172,7 +172,7 @@ fn ValidateArtifactGraph(
     if viewport
         .scroll_translation_nodes
         .iter()
-        .any(|node| node.scroll.is_none())
+        .any(|node| paint_model::property_cell::with_access(|access| node.ScrollNode(access).is_none()))
     {
         return Err(PaintInputError::InvalidViewportMetadata {
             reason:
@@ -305,18 +305,24 @@ fn ValidateArtifactGraph(
                 if !seen.insert((0, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if node.RequiresCompositingForStickyPosition()
-                    && node.GetStickyConstraint().is_none()
-                {
+                let (missing_sticky, links) = paint_model::property_cell::with_access(|access| {
+                    let state = node.state(access);
+                    (
+                        state.RequiresCompositingForStickyPosition()
+                            && state.GetStickyConstraint().is_none(),
+                        state.links(),
+                    )
+                });
+                if missing_sticky {
                     return Err(PaintInputError::MissingStickyConstraint { node: node.clone() });
                 }
-                if let Some(parent) = &node.parent {
+                if let Some(parent) = &links.parent {
                     pending.push(Node::Transform(parent.clone()));
                 }
-                if let Some(parent) = &node.scroll_parent_scroll_translation {
+                if let Some(parent) = &links.scroll_parent_scroll_translation {
                     pending.push(Node::Transform(parent.clone()));
                 }
-                if let Some(scroll) = &node.scroll {
+                if let Some(scroll) = &links.scroll {
                     let (missing_snap_data, overflow_clip) =
                         paint_model::property_cell::with_access(|access| {
                             let state = scroll.state(access);

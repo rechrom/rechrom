@@ -30,7 +30,7 @@ pub fn TransformChangedIn<R: PropertyNodeResolver + ?Sized>(
         if node.lifecycle.node_changed(access) >= change {
             return true;
         }
-        current = node.parent.as_ref().map(|parent| &**resolver.transform(parent));
+        current = node.Parent(access).map(|parent| &**resolver.transform(parent));
     }
     TransformChangedIn(
         access,

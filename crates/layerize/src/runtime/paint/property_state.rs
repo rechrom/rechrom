@@ -52,18 +52,18 @@ fn nearest_composited_scroll_translation<R: PaintSkiaBackend>(
 }
 
 fn requires_compositing_for_fixed_position_only<R>(node: &TransformNode<R>) -> bool {
-    node.node().RequiresCompositingForFixedPositionOnly()
+    super::read(|a| node.node().RequiresCompositingForFixedPositionOnly(a))
 }
 
 fn requires_compositing_for_sticky_position_only<R>(node: &TransformNode<R>) -> bool {
-    node.node().RequiresCompositingForStickyPositionOnly()
+    super::read(|a| node.node().RequiresCompositingForStickyPositionOnly(a))
 }
 
 fn can_merge_for_fixed_position<R: PaintSkiaBackend>(
     first: &TransformNode<R>,
     second: &TransformNode<R>,
 ) -> bool {
-    first.node().CanMergeForFixedPosition(second.node())
+    super::read(|a| first.node().CanMergeForFixedPosition(a, second.node()))
 }
 
 fn source_rect(value: paint::paint_engine::PaintRect) -> Rect {
@@ -110,11 +110,13 @@ fn can_merge_for_sticky_position<R: PaintSkiaBackend>(
     };
 
     let scroll_translation = first.PropertyTreeNearestScrollTranslationNode();
-    let scroll_node = scroll_translation
-        .node()
-        .scroll
-        .as_ref()
-        .expect("source sticky nearest scroll translation");
+    let scroll_node = super::read(|a| {
+        scroll_translation
+            .node()
+            .ScrollNode(a)
+            .expect("source sticky nearest scroll translation")
+            .clone()
+    });
     let scroll_element = scroll_translation.ScrollCompositorElementId();
     let can_use_scroll_range = |first: ElementId, second: ElementId| {
         first == second && (!first.IsValid() || first == scroll_element)

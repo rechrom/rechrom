@@ -72,22 +72,22 @@ impl<F: LayerizeFamily> PropertyTreeManagerTypes for F {
         paint::PropertyTreeState::<Sk<F>>::default().effect()
     }
     fn RootScrollNode() -> paint::ScrollNode<Sk<F>> {
-        paint::ScrollNode::from_arc(
+        paint::ScrollNode::from_arc(paint_model::property_cell::with_access(|a| {
             ::paint::paint_property_tree::PropertyTreeState::default()
                 .transform
-                .scroll
-                .as_ref()
+                .ScrollNode(a)
                 .expect("native ScrollRoot")
-                .clone(),
-        )
+                .clone()
+        }))
     }
     fn ScrollNodeForTransform(
         t: &paint::TransformNode<Sk<F>>,
     ) -> Option<paint::ScrollNode<Sk<F>>> {
-        t.node()
-            .scroll
-            .as_ref()
-            .map(|s| paint::ScrollNode::from_arc(s.clone()))
+        paint_model::property_cell::with_access(|a| {
+            t.node()
+                .ScrollNode(a)
+                .map(|s| paint::ScrollNode::from_arc(s.clone()))
+        })
     }
     fn UniformScaleTransform(scale: f32) -> Transform<Sk<F>> {
         let mut t = Transform::default();

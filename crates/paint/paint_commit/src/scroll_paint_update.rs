@@ -172,13 +172,16 @@ fn world_transform(
     if let Some(matrix) = worlds.get(&node.id) {
         return *matrix;
     }
-    let parent = node
-        .parent
+    let (parent_link, local) = paint_model::property_cell::with_access(|access| {
+        let state = node.state(access);
+        (state.parent.clone(), state.matrix)
+    });
+    let parent = parent_link
         .as_ref()
         .map_or_else(TransformMatrix::default, |parent| {
             world_transform(resolver, resolver.transform(parent), worlds)
         });
-    let matrix = MultiplyTransforms(&parent, &node.matrix);
+    let matrix = MultiplyTransforms(&parent, &local);
     worlds.insert(node.id, matrix);
     matrix
 }

@@ -460,9 +460,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         PaintBackfaceVisibility::Inherited
                     };
                 self.walk.RegisterProperty(fragment, *role, id);
-                let transform_node = Arc::new(TransformPaintPropertyNode {
+                let transform_node = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                     compositor,
-                    geometry_mapper_cache: Default::default(),
                     scroll_parent_scroll_translation: if *role
                         == PaintPropertyRole::PaintOffsetTranslation
                         && fragment.paint.FixedToView()
@@ -474,8 +473,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     } else {
                         None
                     },
-                    lifecycle: Default::default(),
-                    id,
                     parent: Some(parent_transform),
                     matrix: property_matrix,
                     origin: [0.0; 3],
@@ -485,7 +482,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     scroll: None,
                     sticky_constraint,
                     direct_compositing_reasons: reasons,
-                });
+                }));
                 if *role == PaintPropertyRole::PaintOffsetTranslation {
                     node.paint_offset_translation = Some(transform_node.clone());
                 }
@@ -1833,7 +1830,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let mut child_transforms: Vec<TransformMatrix> = node.transforms.to_vec();
         let preserves_3d = style.is_some_and(|style| style.preserves_3d());
         let mut child_rendering_context_id = if preserves_3d {
-            node.properties.nodes.transform.rendering_context_id
+            node.properties.nodes.transform.RenderingContextId(self.access)
         } else {
             0
         };
@@ -1870,12 +1867,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk.next_property_id += 1;
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::Perspective, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(fragment, PaintPropertyRole::Perspective),
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(child_properties.nodes.transform.clone()),
                 matrix,
                 origin: [0.0; 3],
@@ -1885,7 +1879,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 scroll: None,
                 sticky_constraint: None,
                 direct_compositing_reasons: Default::default(),
-            });
+            }));
             child_properties.transform_id = id;
             child_transforms.push(matrix);
             // Chromium's perspective node itself must not flatten, otherwise
@@ -1900,15 +1894,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk.next_property_id += 1;
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::ReplacedContentTransform, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(
                     fragment,
                     PaintPropertyRole::ReplacedContentTransform,
                 ),
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(child_properties.nodes.transform.clone()),
                 matrix,
                 origin: [0.0; 3],
@@ -1918,7 +1909,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 scroll: None,
                 sticky_constraint: None,
                 direct_compositing_reasons: Default::default(),
-            });
+            }));
             child_properties.transform_id = id;
             child_should_flatten = true;
             child_rendering_context_id = 0;
@@ -1934,15 +1925,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk.next_property_id += 1;
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::ScrollTranslation, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(
                     fragment,
                     PaintPropertyRole::ScrollTranslation,
                 ),
-                geometry_mapper_cache: Default::default(),
                 scroll_parent_scroll_translation: None,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(child_properties.nodes.transform.clone()),
                 matrix: TranslationTransform(-scroll_position.x, -scroll_position.y),
                 origin: [0.0; 3],
@@ -1956,7 +1944,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     PaintPropertyRole::ScrollTranslation,
                     false,
                 ),
-            });
+            }));
             child_properties.transform_id = id;
             child_transforms.push(TranslationTransform(-scroll_position.x, -scroll_position.y));
         }

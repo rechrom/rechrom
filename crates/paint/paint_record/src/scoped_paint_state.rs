@@ -139,7 +139,9 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
             && node.paint_offset_translation.is_some()
             && paint_info.context.borrow().InDrawingRecorder();
         if paint_offset_translation_as_drawing {
-            let translation = node.paint_offset_translation.as_ref().unwrap().matrix;
+            let translation = paint_model::property_cell::with_access(|access| {
+                *node.paint_offset_translation.as_ref().unwrap().Matrix(access)
+            });
             paint_info.context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kSave,

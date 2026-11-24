@@ -745,7 +745,7 @@ impl<'a> ResidentLayer<'a> {
 }
 impl HitTransform for Arc<TransformPaintPropertyNode> {
     fn MatrixWithOriginApplied(&self) -> gfx::Transform {
-        self.as_ref().MatrixWithOriginApplied()
+        paint::property_cell::with_access(|a| self.as_ref().MatrixWithOriginApplied(a))
     }
 }
 impl LayerTransformNode for Arc<TransformPaintPropertyNode> {
@@ -1055,8 +1055,10 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
             if ancestor.lifecycle.same_node(&current.lifecycle) {
                 return true;
             }
-            node = current.parent.as_ref().map(|parent| {
-                paint::paint_property_tree::PropertyNodeResolver::transform(&*trees, parent).clone()
+            node = paint::property_cell::with_access(|a| {
+                current.Parent(a).map(|parent| {
+                    paint::paint_property_tree::PropertyNodeResolver::transform(&*trees, parent).clone()
+                })
             });
         }
         false
