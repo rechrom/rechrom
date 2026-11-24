@@ -75,7 +75,15 @@ pub trait CompositorRasterProvider: Send + Sync {
     fn Shutdown(&self) -> io::Result<()>;
 }
 
-pub struct CompositorExecutors {
+/// The services the embedding injects into `CompositorEngine::new`: the impl
+/// sequence's task runner and clock, the raster worker executor and the
+/// raster/UI resource backends (Chromium's LayerTreeHostImpl receives its
+/// TaskRunnerProvider, RasterContextProvider and TaskGraphRunner the same
+/// way, cc/trees/layer_tree_host_impl.cc Create). Presentation stays with
+/// the embedding: it receives the move-only frames of `CompositorOutput`
+/// and returns acknowledgements, presentation feedback and resources.
+#[derive(Clone)]
+pub struct CompositorServices {
     pub compositor: Arc<dyn CompositorExecutor>,
     pub raster: Arc<dyn CompositorExecutor>,
     pub raster_provider: Arc<dyn CompositorRasterProvider>,
@@ -306,13 +314,9 @@ pub enum CompositorMainThreadEffect {
         reason: CommitDeferralReason,
     },
     ScrollAnimationCompleted(scroll_animation::compositor_mutation::ScrollAnimationCompletion),
-    GestureDisposition {
-        dispatch_id: u64,
-        handled: bool,
-    },
-    WheelRequiresDOMAcknowledgement {
-        request: u64,
-    },
+    /// InputHandlerProxy's main-thread hit-test request
+    /// (`CompositorInputEffect::WheelRequiresMainThreadHitTest`), which the
+    /// main thread answers with `CompositorInput::ContinueWheelScroll`.
     WheelRequiresMainThreadHitTest {
         request: u64,
         position: PointF,
@@ -370,19 +374,62 @@ pub enum CompositorMainThreadEffect {
     ScrollbarPaintFallback {
         element: ElementId,
     },
-    WheelDisposition {
-        compositor_owned: bool,
+}
+
+/// The InputHandlerProxy results of one impl input call, returned to the
+/// input owner that made it (content/renderer/input/input_handler_proxy.cc:
+/// the event disposition callback, DidHandleInputEventAndOverscroll, and
+/// the main-thread hit-test / blocking-wheel continuations). They are
+/// produced synchronously by the input call and are not ProxyMain tasks.
+#[derive(Clone, Copy, Debug)]
+pub enum CompositorInputEffect {
+    /// A gesture's InputHandlerProxy disposition (consumed or not).
+    GestureDisposition { dispatch_id: u64, handled: bool },
+    /// The raw wheel's disposition: the impl InputHandler owns its scroll.
+    WheelDisposition { compositor_owned: bool },
+    /// A blocking wheel waits for the canonical DOM dispatch's
+    /// acknowledgement (`CompositorInput::WheelDOMAcknowledgement`).
+    WheelRequiresDOMAcknowledgement { request: u64 },
+    /// ScrollBegin needs the main thread's hit test
+    /// (InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest).
+    WheelRequiresMainThreadHitTest { request: u64, position: PointF },
+}
+
+/// The Rechrom impl -> main notifications without a ProxyMain method
+/// (`layerize::commit::proxy::ProxyTypes::EmbedderNotification`).
+#[derive(Clone, Debug)]
+pub enum CompositorEmbedderNotification {
+    /// ReportTimeSwapPromise::DidSwap (cc/trees/swap_promise.h).
+    PresentationPromiseSwapped {
+        request: u64,
+        frame_token: u32,
+        swap_time: TimeTicks,
     },
+    /// ReportTimeSwapPromise::DidNotSwap.
+    PresentationPromiseDidNotSwap { request: u64, failure_time: TimeTicks },
+    /// LayerTreeFrameSink::DidNotProduceFrame.
+    FrameNotProduced {
+        ack: crate::adapter::scheduler_host::BeginFrameAck,
+        reason: crate::cc::scheduler::scheduler::FrameSkippedReason,
+    },
+    /// The video frame provider's BeginFrame (VideoFrameSubmitter).
+    VideoBeginFrame { controller: u64, args: BeginFrameArgs },
+    VideoNeedsBeginFrames { needs: bool },
+    /// LayerTreeHostClient custom tracker metrics.
+    CompositorMetrics { results: CustomTrackerResults },
 }
 
 /// Move-only frame output: no separate raster bundle or resource snapshot.
+/// Impl -> main notifications are not part of it: they are ProxyImpl ->
+/// ProxyMain tasks on the `to_main` queue, except the synchronous results
+/// of an input call (`input_effects`).
 pub struct CompositorOutput {
     pub frame: Option<CompositorFrameSubmission>,
     /// The frame was drawn from the source frame consumed by the most recent
     /// Scheduler COMMIT. This is false for an old active-tree frame submitted
     /// just before a newly committed pending tree activates in the same turn.
     pub frame_matches_latest_commit: bool,
-    pub main_thread_effects: Vec<CompositorMainThreadEffect>,
+    pub input_effects: Vec<CompositorInputEffect>,
     pub needs_begin_frames: bool,
     /// Typed impl tasks remain queued and require another owner-sequence turn.
     pub work_pending: bool,
@@ -609,11 +656,11 @@ impl CompositorEngine {
     /// (proxy_main.cc:80-89) from the values ProxyMain::Start posted.
     pub fn new(
         config: CompositorConfig,
-        executors: CompositorExecutors,
+        services: CompositorServices,
         init: Box<ProxyImplInit>,
         to_main: layerize::commit::proxy::ProxyTaskQueue<ImplToMainTask>,
     ) -> Result<Self, CompositorError> {
-        crate::runtime::engine_factory::CreateImpl(config, executors, init, to_main)
+        crate::runtime::engine_factory::CreateImpl(config, services, init, to_main)
             .map(|assembly| Self { assembly })
     }
     /// ProxyMain::Stop -> DestroyProxyImplOnImplThread.

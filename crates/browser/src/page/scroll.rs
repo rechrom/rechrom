@@ -49,7 +49,7 @@ impl PageState {
         // Local pipelines use the identical mapping owned by their executor.
         let now = std::time::Instant::now();
         let timestamp = self.external_compositor_clock.borrow().map_or_else(
-            || self.rendering.borrow().impl_half.executor.TimeTicks(now),
+            || self.compositor_executor.TimeTicks(now),
             |mapping| mapping.TimeTicks(now),
         );
         let mut gesture = WebGestureEvent::GenerateInjectedScrollbarGestureScroll(
@@ -135,8 +135,6 @@ impl Page {
         // on the Page-owned compositor before input; repeated commits of the
         // same artifact are admitted by PageRendering's presentable fast path.
         self.state
-            .rendering
-            .borrow_mut()
             .CommitArtifact(&artifact, width, height, scale)
     }
     fn ScrollableContainerAt(
@@ -369,9 +367,7 @@ impl Page {
                 CompositorMainThreadEffect::MainFrameCommitCompleted { commit_finish_time } => {
                     let time = self
                         .state
-                        .rendering
-                        .borrow()
-                        .PresentationClockMapping()
+                        .CompositorClock()
                         .Instant(commit_finish_time);
                     if let Some(time) = time {
                         self.EventTimingDidCommit(time);
@@ -391,7 +387,9 @@ impl Page {
                     // fallback hit test in Blink's CSS viewport coordinates,
                     // so cross back through the same current active-artifact
                     // scale before borrowing Interaction's resident cursor.
-                    let widget_scale = f64::from(self.state.rendering.borrow().InputWidgetScale());
+                    let widget_scale = f64::from(super::compositor_input::InputWidgetScale(
+                        self.state.SynchronousPresenterInputScale(),
+                    ));
                     let scroll_element_id = self.ScrollableContainerAt(Offset {
                         x: f64::from(position.x()) / widget_scale,
                         y: f64::from(position.y()) / widget_scale,
@@ -400,11 +398,6 @@ impl Page {
                         request,
                         scroll_element_id,
                     })?;
-                }
-                CompositorMainThreadEffect::WheelRequiresDOMAcknowledgement { .. } => {
-                    return Err(io::Error::other(
-                        "wheel acknowledgement must retain its original host event",
-                    ));
                 }
                 CompositorMainThreadEffect::ViewportScaleChanged {
                     delta,
@@ -703,7 +696,7 @@ impl Page {
         if self.external_compositor {
             return Ok(());
         }
-        // The native embedding posts PageRenderPipeline::Pump to the Page's
+        // The native embedding posts an impl Pump to the Page's
         // impl sequence whenever cc leaves an immediately runnable owner turn.
         // The internal/offscreen presenter has no separate impl task runner,
         // so the explicit synchronous default-action entry must execute those
@@ -718,8 +711,10 @@ impl Page {
         //
         // Source: content/renderer/input/input_handler_proxy.cc;
         //         cc/trees/proxy_impl.cc ProcessScheduledActions.
-        if self.state.rendering.borrow().NeedsPump() {
-            let result = self.state.rendering.borrow_mut().Pump()?;
+        if self.state.SynchronousPresenterNeedsPump() {
+            let result = self
+                .state
+                .WithResidentSynchronousPresenter(|presenter, main| presenter.Pump(main))?;
             self.ApplyCompositorWheelEffects(result.effects)?;
             if result.submitted {
                 self.PresentCompositorOnlyFrame();
@@ -763,7 +758,9 @@ impl Page {
                 "external wheel default requires its original compositor acknowledgement",
             ));
         }
-        let result = self.state.rendering.borrow_mut().Wheel(wheel)?;
+        let result = self
+            .state
+            .WithResidentSynchronousPresenter(|presenter, main| presenter.Wheel(main, wheel))?;
         if let Some(request) = result.dom_ack {
             self.RouteWheelCompositorInput(CompositorInput::WheelDOMAcknowledgement {
                 request,
@@ -797,8 +794,6 @@ impl Page {
         }
         let result = self
             .state
-            .rendering
-            .borrow_mut()
             .ContinueCompositorMutation(mutation)?;
         assert!(
             result.dom_ack.is_none(),

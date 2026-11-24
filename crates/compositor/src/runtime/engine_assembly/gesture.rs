@@ -29,7 +29,7 @@ impl EngineAssembly {
             return Ok(CompositorOutput {
                 frame: None,
                 frame_matches_latest_commit: false,
-                main_thread_effects: std::mem::take(&mut self.core.effects),
+                input_effects: std::mem::take(&mut self.core.input_effects),
                 needs_begin_frames: self.needs_begin_frames,
                 work_pending: false,
                 main_commit_pending: self.core.HasReadyCommit(),
@@ -276,15 +276,15 @@ impl EngineAssembly {
                 self.RetainWheelInput(event, PendingWheelStage::MainThreadHitTest(reasons));
             self.waiting_wheel_hit_test = Some(request);
             self.core
-                .effects
-                .push(CompositorMainThreadEffect::WheelRequiresMainThreadHitTest {
+                .input_effects
+                .push(CompositorInputEffect::WheelRequiresMainThreadHitTest {
                     request,
                     position: gesture.position,
                 });
         } else {
             self.core
-                .effects
-                .push(CompositorMainThreadEffect::GestureDisposition {
+                .input_effects
+                .push(CompositorInputEffect::GestureDisposition {
                     dispatch_id,
                     handled,
                 });
@@ -295,11 +295,11 @@ impl EngineAssembly {
         if let Some(error) = self.core.failure.take() {
             return Err(error);
         }
-        let mut effects = std::mem::take(&mut self.core.effects);
+        let mut effects = std::mem::take(&mut self.core.input_effects);
         Ok(CompositorOutput {
             frame: None,
             frame_matches_latest_commit: false,
-            main_thread_effects: effects,
+            input_effects: effects,
             needs_begin_frames: true,
             work_pending: true,
             main_commit_pending: self.core.HasReadyCommit(),
