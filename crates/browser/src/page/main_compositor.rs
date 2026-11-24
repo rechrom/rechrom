@@ -375,8 +375,8 @@ impl PageDomainServices {
     }
 
     /// The main-thread compositor mutations
-    /// (`CompositorMutation::IsMainThreadMutation`): LayerTreeHost setters,
-    /// PaintArtifactCompositor direct updates and the main AnimationHost.
+    /// (`CompositorMutation::IsMainThreadMutation`): LayerTreeHost setters
+    /// and frame-lifecycle deferrals queued by input routing.
     pub(super) fn MutateMainCompositor(&self, mutation: CompositorMutation) -> io::Result<()> {
         use compositor::FrameLifecycleMutation;
         match mutation {
@@ -469,27 +469,6 @@ impl PageDomainServices {
                     }
                 }
             }
-            // PaintArtifactCompositor::DirectlyUpdate{Transform,Compositing}
-            // (paint_artifact_compositor.cc), then LayerTreeHost::
-            // SetNeedsCommit; the commit follows in the next BeginMainFrame.
-            CompositorMutation::CompositedAnimationProperties(update) => {
-                if !self.HasResidentPaintArtifact() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "composited animation requires a resident paint artifact",
-                    ));
-                }
-                if !self
-                    .MainLayerize()
-                    .borrow_mut()
-                    .ApplyCompositedAnimationProperties(&update)
-                {
-                    return Err(io::Error::other(
-                        "resident compositor property mapping is unavailable",
-                    ));
-                }
-                self.SetNeedsMainCompositorCommit();
-            }
             CompositorMutation::ScrollbarPaint(mutation) => {
                 let applied = self.MainLayerize().borrow_mut().ApplyScrollbarPaintMutation(
                     mutation.element,
@@ -505,10 +484,6 @@ impl PageDomainServices {
                     );
                 }
             }
-            CompositorMutation::PropertyAnimation(mutation) => self
-                .MainLayerize()
-                .borrow_mut()
-                .ApplySourcePropertyAnimation(mutation),
             CompositorMutation::ScrollAnimation(mutation) => self
                 .MainLayerize()
                 .borrow_mut()

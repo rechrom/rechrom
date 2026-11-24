@@ -6082,13 +6082,7 @@ impl Page {
         for input in pending {
             match input {
                 PageBrowserInput::Compositor(mutation) if mutation.IsMainThreadMutation() => {
-                    match main.MutateMainCompositor(mutation) {
-                        Ok(()) => {}
-                        // The first artifact has not reached PAC yet; the
-                        // next Paint carries the values.
-                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                        Err(error) => return Err(error),
-                    }
+                    main.MutateMainCompositor(mutation)?
                 }
                 input => retained.push(input),
             }

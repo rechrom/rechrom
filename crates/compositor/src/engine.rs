@@ -256,18 +256,15 @@ pub struct ScrollbarPaintMutation {
     pub thumb_width: i32,
     pub needs_repaint: bool,
 }
-/// Ordered Page-to-compositor commands; curves retain the canonical shared
-/// value type while raw input keeps its original Copy event semantics.
+/// Ordered Page-to-compositor commands; raw input keeps its original Copy
+/// event semantics. PAC direct property updates and main AnimationHost
+/// KeyframeModels are synchronous calls on the Page's own LayerizeEngine
+/// (S1b-8), not mutations.
 #[derive(Clone, Debug)]
 pub enum CompositorMutation {
     FrameLifecycle(FrameLifecycleMutation),
     Input(CompositorInput),
-    /// Blink's deferred transform/opacity property-node update. The values
-    /// retain Paint's canonical node identities and update the resident PAC;
-    /// no replacement PaintArtifact crosses this boundary.
-    CompositedAnimationProperties(paint::CompositedAnimationPropertyUpdate),
     ScrollbarPaint(ScrollbarPaintMutation),
-    PropertyAnimation(compositor_animation::compositor_mutation::PropertyAnimationMutation),
     ScrollAnimation(scroll_animation::compositor_mutation::ScrollAnimationMutation),
 }
 /// A backend can acknowledge a buffer without knowing a display time.
@@ -772,9 +769,7 @@ impl CompositorMutation {
         match self {
             Self::Input(input) => mutation_is_main_input(input),
             Self::FrameLifecycle(_)
-            | Self::CompositedAnimationProperties(_)
             | Self::ScrollbarPaint(_)
-            | Self::PropertyAnimation(_)
             | Self::ScrollAnimation(_) => true,
         }
     }
