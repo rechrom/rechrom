@@ -407,92 +407,53 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
     }
 }
 
+
 #[cfg(test)]
-mod published_tree_cache_tests {
+mod live_node_cache_tests {
     use super::*;
-    use crate::geometry_mapper_source::geometry_mapper_transform_cache::{
-        ClearTransformCaches, WithTransformCache,
-    };
+    use crate::geometry_mapper_source::geometry_mapper_transform_cache::WithTransformCache;
     use paint_property_tree::{
         PaintPropertyKey, PaintPropertyNodeStore, PaintPropertyOwner, PaintPropertyRole,
         PropertyTreeState, TransformPaintPropertyNode,
     };
-    use std::collections::BTreeMap;
 
-    fn raw(
-        id: u64,
-        parent: Arc<TransformPaintPropertyNode>,
-        y: f64,
-    ) -> Arc<TransformPaintPropertyNode> {
-        let mut node = (*PropertyTreeState::default().transform).clone();
-        node.lifecycle = Default::default();
-        node.id = id;
-        node.state_mut().parent = Some(parent);
-        node.state_mut().matrix.values[13] = y;
-        Arc::new(node)
-    }
     fn key(client: u64) -> PaintPropertyKey {
         PaintPropertyKey {
             owner: PaintPropertyOwner::Fragment { client, fragment: 0 },
             role: PaintPropertyRole::Transform,
         }
     }
-    fn publish(
+    fn update(
         store: &mut PaintPropertyNodeStore,
-        keys: &BTreeMap<u64, PaintPropertyKey>,
-        prior: &BTreeMap<u64, PaintPropertyKey>,
-        states: &mut [PropertyTreeState],
-    ) {
-        let effects = BTreeMap::new();
-        let mut updater = store.updater(keys, prior, &effects);
-        for state in states.iter_mut() {
-            updater.state(state);
-        }
-        updater.finish();
-        store.invalidate_published();
-    }
-    fn state(transform: Arc<TransformPaintPropertyNode>) -> PropertyTreeState {
-        PropertyTreeState { transform, ..PropertyTreeState::default() }
-    }
-
-    /// A scroll republishes a moved ancestor while an unchanged descendant
-    /// keeps its snapshot, so consecutive published trees share that
-    /// descendant and its one cache slot. A query through the previous tree
-    /// (the compositor still maps it) must not leave values computed against
-    /// its ancestors for a query through the current tree, nor a link that
-    /// dies with the previous tree.
-    #[test]
-    fn shared_node_cache_is_scoped_to_its_published_tree() {
-        let mut store = PaintPropertyNodeStore::default();
-        let first_keys = BTreeMap::from([(101, key(1)), (102, key(2))]);
+        key: PaintPropertyKey,
+        parent: Arc<TransformPaintPropertyNode>,
+        y: f64,
+    ) -> Arc<TransformPaintPropertyNode> {
         let root = PropertyTreeState::default().transform;
-        let mut first = [state(raw(102, raw(101, root.clone(), 10.0), 0.0))];
-        publish(&mut store, &first_keys, &BTreeMap::new(), &mut first);
-        let first_child = first[0].transform.clone();
-        // The compositor commit of the first tree clears its change markers.
-        crate::property_cell::with_access(|a| first_child.ClearChangedToRoot(a, 1));
-        let first_trees = Some(store.published_trees());
+        let mut state = crate::property_cell::with_access(|a| root.state(a).clone());
+        state.parent = Some(parent);
+        state.matrix.values[13] = y;
+        let node = TransformPaintPropertyNode::new(Default::default(), store.SlotId(Some(key)), state);
+        crate::property_cell::with_writer(|w| store.UpdateTransform(w, Some(key), node).0)
+    }
 
-        // Paint rebuilds the moved parent; the clean child subtree is retained
-        // as recorded, still linking the parent's previous snapshot.
-        let second_keys = BTreeMap::from([(201, key(1))]);
-        let mut second = [state(raw(201, root, 50.0)), first[0].clone()];
-        publish(&mut store, &second_keys, &first_keys, &mut second);
-        let second_child = second[1].transform.clone();
-        let second_trees = Some(store.published_trees());
-        assert!(
-            Arc::ptr_eq(&first_child, &second_child),
-            "the unchanged child keeps one snapshot across both trees"
-        );
-
-        ClearTransformCaches();
-        let to_root = |trees: &NativeTrees| {
-            let node = NativeTransformNode::from_arc_in(second_child.clone(), trees.clone());
+    /// Chromium's GeometryMapperTransformCache::ClearCache: an in-place
+    /// update of an ancestor bumps the sequence's generation, so the cache of
+    /// an unchanged descendant (the same resident node) is recomputed.
+    #[test]
+    fn ancestor_update_in_place_invalidates_descendant_cache() {
+        let mut store = PaintPropertyNodeStore::default();
+        let root = PropertyTreeState::default().transform;
+        let parent = update(&mut store, key(1), root.clone(), 10.0);
+        let child = update(&mut store, key(2), parent.clone(), 0.0);
+        let trees = Some(store.published_trees());
+        let to_root = || {
+            let node = NativeTransformNode::from_arc_in(child.clone(), trees.clone());
             WithTransformCache(&node, |cache| cache.to_2d_translation_root().y())
         };
-        assert_eq!(to_root(&first_trees), 10.0);
-        drop(first_trees);
-        drop(first_child);
-        assert_eq!(to_root(&second_trees), 50.0);
+        assert_eq!(to_root(), 10.0);
+        let moved = update(&mut store, key(1), root, 50.0);
+        assert!(Arc::ptr_eq(&moved, &parent));
+        assert_eq!(to_root(), 50.0);
     }
 }

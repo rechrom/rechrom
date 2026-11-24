@@ -10,7 +10,7 @@ use paint_model::{
     geometry_mapper::{MapRectToRoot, MapRectWithTransforms, MultiplyTransforms},
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyNodeStore, PaintPropertyOwner,
-        PaintPropertyTrees, PropertyTreeState, TransformPaintPropertyNode,
+        PropertyTreeState, TransformPaintPropertyNode,
     },
     PaintRect,
 };
@@ -879,47 +879,6 @@ fn contains(outer: PaintRect, inner: PaintRect, roundoff: Offset) -> bool {
             && inner.y + inner.height <= outer.y + outer.height + roundoff.y)
 }
 
-fn refreshed(
-    state: &PropertyTreeState,
-    trees: &mut PaintPropertyTrees,
-) -> Option<PropertyTreeState> {
-    if trees.transform_for(&state.transform).is_none()
-        || trees.clip_for(&state.clip).is_none()
-        || trees.effect_for(&state.effect).is_none()
-    {
-        // Fresh property nodes without source-owner slots still belong to the
-        // retained graph. Rebind their actual ancestors through the updated
-        // scroll snapshots; do not mistake an incomplete directory for loss.
-        let mut referenced = state.clone();
-        trees.clear_state_change_markers(&mut referenced);
-    }
-    let transform = trees.transform_for(&state.transform)?.clone();
-    let clip = trees.clip_for(&state.clip)?.clone();
-    let effect = trees.effect_for(&state.effect)?.clone();
-    (transform.lifecycle.same_node(&state.transform.lifecycle)
-        && clip.lifecycle.same_node(&state.clip.lifecycle)
-        && effect.lifecycle.same_node(&state.effect.lifecycle))
-    .then_some(PropertyTreeState {
-        transform,
-        clip,
-        effect,
-    })
-}
-
-fn refreshed_cached<'a>(
-    state: &PropertyTreeState,
-    trees: &mut PaintPropertyTrees,
-    cache: &'a mut HashMap<(usize, usize, usize), PropertyTreeState>,
-) -> Option<&'a PropertyTreeState> {
-    let key = state_cache_key(state);
-    // Coverage only reads the mapped state. Clone its three Arc references
-    // once when publishing a chunk, rather than for every fragment validation.
-    Some(match cache.entry(key) {
-        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(refreshed(state, trees)?),
-    })
-}
-
 fn state_cache_key(state: &PropertyTreeState) -> (usize, usize, usize) {
     (
         Arc::as_ptr(&state.transform) as usize,
@@ -1056,15 +1015,23 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         browser_tracing::instant("paint_reuse", "ScrollPaintReuseRejected", &[("stage", 4.0)]);
         return Err(FragmentChanged);
     }
-    let property_trace = browser_tracing::span("prepaint", "ScrollPaint.RebindPropertyTrees");
-    let (updated_store, mut trees) = prepaint
+    let property_trace = browser_tracing::span("prepaint", "ScrollPaint.UpdateScrollTranslations");
+    let updates = prepaint
         .property_node_store
         .retained_scroll_update(&offsets, &sticky)
         .ok_or_else(|| {
             browser_tracing::instant("paint_reuse", "ScrollPaintReuseRejected", &[("stage", 5.0)]);
             PropertyChanged
         })?;
+    // Chromium's PrePaint updates the ScrollTranslation and StickyTranslation
+    // nodes in place before Paint decides what to repaint. The coverage
+    // proofs below map the current (updated) nodes against the recorded world
+    // values captured with the retained state; a rejection is followed by the
+    // ordinary lifecycle, which computes these same values.
+    let store = &mut prepaint.property_node_store;
+    paint_model::property_cell::with_writer(|writer| store.ApplyRetainedScrollUpdate(writer, &updates));
     drop(property_trace);
+    let viewport_clip = prepaint.property_node_store.viewport_clip().cloned();
     let artifact_to_device_scale = fragments
         .Cursor()
         .DocumentResources()
@@ -1075,12 +1042,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     let mut worlds = BTreeMap::new();
     let mut masks = BTreeMap::new();
     for mask in &retained.masks {
-        let transform = trees
-            .transform_for(&mask.transform)
-            .ok_or(PropertyChanged)?;
-        if !transform.lifecycle.same_node(&mask.transform.lifecycle) {
-            return Err(PropertyChanged);
-        }
+        let transform = &mask.transform;
         let world = world_transform(&paint_model::paint_property_tree::LinkedProperties, transform, &mut worlds);
         let (rect, _) = rebase_rect(mask.recorded_rect, &mask.recorded_world, &world)
             .ok_or(UnsupportedTransform)?;
@@ -1088,9 +1050,6 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     }
     let mut mask_cache = BTreeMap::new();
     let mut clip_cache = BTreeMap::new();
-    // Fragments and chunks often share the exact immutable state. Retain one
-    // frame-local mapping, including the lifecycle checks, for both consumers.
-    let mut refreshed_states = HashMap::new();
     // A cull rect only proves coverage for records that Paint actually
     // emitted. Layout ink outside the old cull has no backing display item;
     // once scrolling exposes it, recording a normal Paint artifact is the
@@ -1100,9 +1059,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         let Some(local_rect) = old.unrecorded_visual_rect else {
             continue;
         };
-        let state = refreshed_cached(&old.properties, &mut trees, &mut refreshed_states)
-            .ok_or(PropertyChanged)?
-            .clone();
+        let state = &old.properties.clone();
         let world = property_world(&paint_model::paint_property_tree::LinkedProperties, &state, &mut worlds).ok_or(UnsupportedTransform)?;
         let rect =
             MapRectWithTransforms(local_rect, &[world], false).ok_or(UnsupportedTransform)?;
@@ -1111,7 +1068,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             &state,
             &masks,
             &mut mask_cache,
-            updated_store.viewport_clip(),
+            viewport_clip.as_ref(),
             &mut worlds,
             &mut clip_cache,
             0.0,
@@ -1137,16 +1094,14 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         .sum();
     let mut coverage_trace = browser_tracing::span("paint_reuse", "ScrollPaint.ValidateCoverage");
     for group in &retained.coverage_groups {
-        let state = refreshed_cached(&group.properties, &mut trees, &mut refreshed_states)
-            .ok_or(PropertyChanged)?
-            .clone();
+        let state = &group.properties.clone();
         let world = property_world(&paint_model::paint_property_tree::LinkedProperties, &state, &mut worlds).ok_or(UnsupportedTransform)?;
         let exact = visible_output(
             &paint_model::paint_property_tree::LinkedProperties,
             &state,
             &masks,
             &mut mask_cache,
-            updated_store.viewport_clip(),
+            viewport_clip.as_ref(),
             &mut worlds,
             &mut clip_cache,
             0.0,
@@ -1158,7 +1113,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             &state,
             &masks,
             &mut mask_cache,
-            updated_store.viewport_clip(),
+            viewport_clip.as_ref(),
             &mut worlds,
             &mut clip_cache,
             (1.0 / artifact_to_device_scale).max(1.0),
@@ -1195,23 +1150,6 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     coverage_trace.set("property_states", retained.coverage_groups.len() as f64);
     coverage_trace.set("recorded_spaces", retained.coverage_groups.len() as f64);
     drop(coverage_trace);
-    // Many semantic chunks share the exact immutable property snapshots. Map
-    // those snapshots once, including the lifecycle checks. Arc addresses are
-    // only frame-local memo keys: the artifact holds every source snapshot live.
-    // They do not become persistent property or chunk identities.
-    let chunks_trace = browser_tracing::span("paint_chunk", "ScrollPaint.MapChunkProperties");
-    let properties: Vec<_> = artifact.chunks.iter().enumerate().map(|(index, chunk)| {
-        let state = &chunk.properties;
-        let properties = refreshed_cached(state, &mut trees, &mut refreshed_states).ok_or_else(|| {
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                eprintln!("scroll-paint-reject stage=chunk-property-map index={} id={:?} transform={} clip={} effect={}",
-                    index, chunk.id, chunk.properties.transform.id, chunk.properties.clip.id, chunk.properties.effect.id);
-            }
-            PropertyChanged
-        })?;
-        Ok(properties.clone())
-    }).collect::<Result<_, _>>()?;
-    drop(chunks_trace);
 
     // Scrollbar thumb geometry is real scroll-dependent recorded content.
     // Re-record only overflow controls, retaining every other drawing record.
@@ -1278,8 +1216,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                 // It may remain unrecorded only while it cannot be displayed.
                 let original_root = MapRectToRoot(record.visual_rect, &geometry.transforms)
                     .ok_or(UnsupportedTransform)?;
-                let state = refreshed_cached(&old.properties, &mut trees, &mut refreshed_states)
-                    .ok_or(PropertyChanged)?;
+                let state = &old.properties;
                 let current_world =
                     property_world(&paint_model::paint_property_tree::LinkedProperties, state, &mut worlds).ok_or(UnsupportedTransform)?;
                 let (rect, _) = rebase_rect(original_root, &old.recorded_world, &current_world)
@@ -1289,7 +1226,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                     state,
                     &masks,
                     &mut mask_cache,
-                    updated_store.viewport_clip(),
+                    viewport_clip.as_ref(),
                     &mut worlds,
                     &mut clip_cache,
                     0.0,
@@ -1326,20 +1263,11 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     drop(scrollbar_trace);
     let publish_trace = browser_tracing::span("paint_commit", "ScrollPaint.PublishProperties");
     let mut result = ScrollPropertyUpdate::default();
-    for (chunk, properties) in artifact.chunks.iter_mut().zip(properties) {
-        if !std::sync::Arc::ptr_eq(&chunk.properties.transform, &properties.transform)
-            || !std::sync::Arc::ptr_eq(&chunk.properties.clip, &properties.clip)
-            || !std::sync::Arc::ptr_eq(&chunk.properties.effect, &properties.effect)
-        {
-            result.updated_chunks += 1;
-        }
-        chunk.properties = properties;
+    // Chunk property states, display-item scroll translations and the
+    // compositor viewport name the resident nodes updated in place above;
+    // only the cached-subsequence flag changes.
+    for chunk in artifact.chunks.iter_mut() {
         chunk.is_moved_from_cached_subsequence = true;
-    }
-    for record in &mut artifact.display_items {
-        if let Some(old) = record.scroll_translation.as_ref() {
-            record.scroll_translation = trees.transform_for(old).cloned();
-        }
     }
     for (index, ops, scrollbar) in replacements {
         let record = &mut artifact.display_items[index];
@@ -1363,38 +1291,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     if result.updated_scrollbar_records != 0 {
         artifact.recording_revision = foundation::NewUniqueObjectId();
     }
-    if let Some(viewport) = artifact.compositor_viewport.as_mut() {
-        viewport.viewport_clip = updated_store
-            .viewport_clip()
-            .expect("source retained viewport clip")
-            .clone();
-        viewport.overscroll_elasticity_transform = updated_store
-            .overscroll_elasticity_transform()
-            .expect("source retained overscroll elasticity transform")
-            .clone();
-        viewport.page_scale = updated_store
-            .page_scale()
-            .expect("source retained page scale")
-            .clone();
-        viewport.visual_scroll_translation = updated_store
-            .visual_viewport_scroll_translation()
-            .expect("source retained visual viewport scroll")
-            .clone();
-        if let Some(old) = &viewport.layout_scroll_translation {
-            viewport.layout_scroll_translation = Some(
-                trees
-                    .transform_for(old)
-                    .expect("source retained layout scroll slot")
-                    .clone(),
-            );
-        }
-        viewport.scroll_translation_nodes = updated_store
-            .compositor_scroll_translations()
-            .cloned()
-            .collect();
-    }
     let retained_fragment_count = retained.fragments.len();
-    prepaint.CommitDirectScrollPropertySnapshots(updated_store, &mut trees);
     drop(publish_trace);
     // This path's own scrollbar re-recording is not a full Paint: the
     // retained coverage stays the baseline for the next scroll.
