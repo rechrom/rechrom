@@ -39,12 +39,7 @@ impl PaintRecording {
                     {
                         return true;
                     }
-                    transform = node.Parent(access).map(|parent| {
-                        &**paint_model::paint_property_tree::PropertyNodeResolver::transform(
-                            &chunk.property_trees.0,
-                            parent,
-                        )
-                    });
+                    transform = node.Parent(access).map(|parent| &**parent);
                 }
                 false
             });

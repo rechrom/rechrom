@@ -23,13 +23,10 @@ impl<R: PaintSkiaBackend> TransformCacheNode for TransformNode<R> {
         self.as_arc().clone()
     }
     fn Linked(&self, node: Arc<paint_property_tree::TransformPaintPropertyNode>) -> Self {
-        Self::from_arc_in(node, self.trees().clone())
+        Self::from_arc(node)
     }
-    fn CacheSlot(&self) -> &paint::opaque_paint_cache_slot::OpaquePaintCacheSlot {
-        &self.node().geometry_mapper_cache
-    }
-    fn Trees(&self) -> &super::HandleTrees {
-        self.trees()
+    fn Node(&self) -> &paint_property_tree::TransformPaintPropertyNode {
+        self.node()
     }
     fn IsRoot(&self) -> bool {
         read(|a| {
@@ -73,7 +70,7 @@ impl<R: PaintSkiaBackend> TransformCacheNode for TransformNode<R> {
             self.node().state(a)
                 .scroll_parent_scroll_translation
                 .as_ref()
-                .map(|n| self.link_same(n))
+                .map(|n| Self::from_arc(n.clone()))
         })
     }
     fn HasDirectCompositingReasons(&self) -> bool {
@@ -163,8 +160,7 @@ impl<R: PaintSkiaBackend> GeometryMapperState for PropertyTreeState<R> {
         &self.effect_
     }
     fn SetClip(&mut self, clip: Arc<paint_property_tree::ClipPaintPropertyNode>) {
-        let trees = self.transform_.trees().clone();
-        self.set_clip(super::ClipNode::from_arc_in(clip, trees));
+        self.set_clip(super::ClipNode::from_arc(clip));
     }
     fn SetEffect(&mut self, effect: Self::Effect) {
         self.set_effect(effect);

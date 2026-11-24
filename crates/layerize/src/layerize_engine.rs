@@ -223,9 +223,8 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         artifact: Arc<PaintArtifact>,
         state: &::paint::paint_property_tree::PropertyTreeState,
     ) -> CpuPaintRecord<F::Skia> {
-        let trees = artifact.property_trees.clone();
         let chunks = PaintChunkSubset::from_artifact(artifact);
-        let state = PropertyTreeState::<F::Skia>::from_source_in(state, trees);
+        let state = PropertyTreeState::<F::Skia>::from_source(state);
         paint_chunks_to_cc_layer::Convert::<F>(&chunks, &state, None, self.paint.as_ref())
     }
 

@@ -340,23 +340,18 @@ impl<'a> ResidentPaintHitTest<'a> {
     /// 2363-2385. Read the committed effect ancestry, including inherited
     /// effects, rather than reconstructing effective opacity from CSS.
     pub fn HasNonZeroEffectiveOpacity(self) -> bool {
-        use paint_model::paint_property_tree::PropertyNodeResolver;
         paint_model::property_cell::with_access(|access| {
             let mut effect = Some(self.node.properties.nodes.effect.as_ref());
             while let Some(current) = effect {
                 if current.state(access).opacity == 0.0 {
                     return false;
                 }
-                effect = current.Parent(access).map(|parent| &**self.slots.effect(parent));
+                effect = current.Parent(access).map(|parent| &**parent);
             }
             true
         })
     }
 
-    /// The published property trees this node's states resolve through.
-    pub fn PublishedTrees(self) -> std::sync::Arc<paint_model::paint_property_tree::FrozenPropertyTrees> {
-        self.slots.published_trees()
-    }
 
     pub fn HasPaintProperties(self) -> bool {
         self.node.HasOwnPaintProperties()
@@ -396,11 +391,7 @@ impl<'a> ResidentPaintHitTest<'a> {
         ] {
             if let Some(clip) = self.Clip(role) {
                 return paint_model::property_cell::with_access(|access| {
-                    paint_model::paint_property_tree::PropertyNodeResolver::clip(
-                        self.slots,
-                        clip.Parent(access).expect("non-root own clip has parent"),
-                    )
-                    .clone()
+                    clip.Parent(access).expect("non-root own clip has parent").clone()
                 });
             }
         }
@@ -410,11 +401,7 @@ impl<'a> ResidentPaintHitTest<'a> {
         for role in [PaintPropertyRole::Effect, PaintPropertyRole::Filter] {
             if let Some(effect) = self.slots.EffectForKey(self.Key(role)) {
                 return paint_model::property_cell::with_access(|access| {
-                    paint_model::paint_property_tree::PropertyNodeResolver::effect(
-                        self.slots,
-                        effect.Parent(access).expect("non-root own effect has parent"),
-                    )
-                    .clone()
+                    effect.Parent(access).expect("non-root own effect has parent").clone()
                 });
             }
         }

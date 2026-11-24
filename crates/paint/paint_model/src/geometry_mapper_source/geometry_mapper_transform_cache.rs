@@ -8,15 +8,14 @@
 // `CachedNode::Owner` for the node that owns this cache, which an Arc cannot
 // hold without a cycle. The actual Paint node owns the cache allocation.
 use super::matrix::{GeometryMapperMatrix, SharedGeometryTransform};
-use crate::geometry_mapper_source::native::NativeTrees;
-use crate::paint_property_tree::{FrozenPropertyTrees, TransformPaintPropertyNode};
+use crate::paint_property_tree::TransformPaintPropertyNode;
 use crate::{
     geometry_mapper_source::traits::TransformCacheNode,
     source_geometry::{Transform, Vector2dF},
     source_transform::PropertyTransform,
     source_transform::PropertyTreeTransform,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 // Source: geometry_mapper_transform_cache.h:55-57 `s_global_generation`, kept
 // per document sequence (paint_model::property_cell).
 fn global_generation() -> u32 {
@@ -74,7 +73,7 @@ impl<M: Default> Default for ScreenTransform<M> {
     }
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:25-32,161-172,247-265.
-struct NativeGeometryMapperTransformCache {
+pub(crate) struct NativeGeometryMapperTransformCache {
     to_2d_translation_root_: Vector2dF,
     root_of_2d_translation_: Option<CachedNode>,
     plane_root_transform_: Option<Box<PlaneRootTransform>>,
@@ -86,29 +85,6 @@ struct NativeGeometryMapperTransformCache {
     is_backface_hidden_: bool,
     screen_transform_updated_: bool,
     cache_generation_: u32,
-    /// The published property trees this cache was computed in.
-    tree_scope_: CacheTreeScope,
-}
-/// Which published property trees a geometry cache was computed in. Blink has
-/// one live property tree, so the generation alone proves validity there.
-/// Here an unchanged node is shared by consecutive published trees (a scroll
-/// publishes a new one while the compositor still maps the previous one), and
-/// one shared cache slot must not hand values computed against one tree's
-/// ancestors to a query in the other. The Weak only names the tree; it pins
-/// the allocation, so the address cannot be reused while it is compared.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct CacheTreeScope(Option<std::sync::Weak<FrozenPropertyTrees>>);
-impl CacheTreeScope {
-    pub(crate) fn of(trees: &NativeTrees) -> Self {
-        Self(trees.as_ref().map(Arc::downgrade))
-    }
-    pub(crate) fn is(&self, trees: &NativeTrees) -> bool {
-        match (&self.0, trees) {
-            (None, None) => true,
-            (Some(scope), Some(trees)) => std::ptr::eq(scope.as_ptr(), Arc::as_ptr(trees)),
-            _ => false,
-        }
-    }
 }
 impl Default for NativeGeometryMapperTransformCache {
     fn default() -> Self {
@@ -124,7 +100,6 @@ impl Default for NativeGeometryMapperTransformCache {
             is_backface_hidden_: false,
             screen_transform_updated_: false,
             cache_generation_: global_generation().wrapping_sub(1),
-            tree_scope_: CacheTreeScope::default(),
         }
     }
 }
@@ -142,7 +117,7 @@ impl NativeGeometryMapperTransformCache {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:44-58.
     pub fn UpdateIfNeeded<N: TransformCacheNode>(&mut self, node: &N) {
-        if self.cache_generation_ != global_generation() || !self.tree_scope_.is(node.Trees()) {
+        if self.cache_generation_ != global_generation() {
             self.Update(node);
         }
         debug_assert_eq!(self.cache_generation_, global_generation());
@@ -263,7 +238,6 @@ impl NativeGeometryMapperTransformCache {
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.cc:26-133.
     fn Update<N: TransformCacheNode>(&mut self, node: &N) {
         self.cache_generation_ = global_generation();
-        self.tree_scope_ = CacheTreeScope::of(node.Trees());
         if node.IsRoot() {
             debug_assert!(node.IsIdentity());
             self.to_2d_translation_root_ = Vector2dF::default();
@@ -400,21 +374,21 @@ impl NativeGeometryMapperTransformCache {
         });
     }
 }
-/// Source: third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h:472-485. One allocation in the real
-/// node, recomputed by the source generation check. A call-scoped lock lends
-/// that same cache; it never clones a mutable cache or retains an owner/facade.
+/// Source: third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h:472-485
+/// `GetTransformCache`: the node's `mutable` cache member, allocated lazily
+/// and recomputed by the source generation check. The scoped `&mut` replaces
+/// C++'s mutable reference; a cache update reaches only other nodes' caches.
 pub fn WithTransformCache<N: TransformCacheNode, R>(
     node: &N,
     callback: impl FnOnce(&mut GeometryMapperTransformCache<'_, N>) -> R,
 ) -> R {
-    let allocation = node
-        .CacheSlot()
-        .get_or_init(|| Mutex::new(NativeGeometryMapperTransformCache::default()));
-    let mut data = allocation.lock().expect("Paint transform cache poisoned");
-    data.UpdateIfNeeded(node);
-    callback(&mut GeometryMapperTransformCache {
-        data: &mut data,
-        node,
+    crate::property_cell::with_access(|access| {
+        node.Node().geometry_mapper_cache.with_mut(access, |slot| {
+            let data: &mut NativeGeometryMapperTransformCache =
+                slot.get_or_insert_with(Default::default);
+            data.UpdateIfNeeded(node);
+            callback(&mut GeometryMapperTransformCache { data, node })
+        })
     })
 }
 
@@ -436,7 +410,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         NativeGeometryMapperTransformCache::ClearCache();
     }
     pub fn IsValid(&self) -> bool {
-        self.data.IsValid() && self.data.tree_scope_.is(self.node.Trees())
+        self.data.IsValid()
     }
     pub fn UpdateIfNeeded(&mut self, node: &N) {
         self.data.UpdateIfNeeded(node);

@@ -42,7 +42,7 @@ where
         WithTransformCache(self, |c| c.scroll_translation_state())
     }
     fn ClearChangedToRoot(&self, s: i32) {
-        super::clear_transform_changed(self.as_arc(), self.trees(), s)
+        super::clear_transform_changed(self.as_arc(), s)
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
         read(|a| {
@@ -72,12 +72,12 @@ where
     }
     fn CanvasChildContentTransform(&self) -> TransformNode<R> {
         read(|a| {
-            self.link_transform(self.node().CanvasChildContentTransform(a))
+            super::TransformNode::from_arc(self.node().CanvasChildContentTransform(a).clone())
         })
     }
     fn CanvasChildContentClip(&self) -> ClipNode<R> {
         read(|a| {
-            self.link_clip(self.node().CanvasChildContentClip(a))
+            super::ClipNode::from_arc(self.node().CanvasChildContentClip(a).clone())
         })
     }
     fn CanvasChildContentEffect(&self) -> Self {

@@ -12,7 +12,7 @@ use crate::{
     third_party::blink::renderer::platform::graphics::paint::{
         float_clip_rect::{FloatClipRect, InfiniteLooseFloatClipRect},
         geometry_mapper::GeometryMapper,
-        geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCacheBy},
+        geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCache},
     },
 };
 use paint::paint_property_tree;
@@ -20,10 +20,6 @@ use std::{marker::PhantomData, sync::Arc};
 pub struct CpuGeometryMapper<R: PaintSkiaBackend> {
     pub(super) tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
     singular_transform_fix: bool,
-    /// The published property trees of the states this context maps; bare
-    /// clip links handed to it resolve through them. Set per mapping call
-    /// with `with_trees`, from the states being mapped.
-    trees: super::HandleTrees,
     marker: PhantomData<fn() -> R>,
 }
 impl<R: PaintSkiaBackend> CpuGeometryMapper<R> {
@@ -37,27 +33,14 @@ impl<R: PaintSkiaBackend> CpuGeometryMapper<R> {
         Self {
             tracking,
             singular_transform_fix,
-            trees: None,
             marker: PhantomData,
         }
-    }
-    /// This context resolving links through `trees`.
-    pub fn with_trees(&self, trees: super::HandleTrees) -> Self {
-        Self {
-            tracking: self.tracking.clone(),
-            singular_transform_fix: self.singular_transform_fix,
-            trees,
-            marker: PhantomData,
-        }
-    }
-    fn property_trees(&self) -> super::HandleTrees {
-        self.trees.clone()
     }
     fn resolve_clip(
         &self,
         link: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> ClipNode<R> {
-        ClipNode::from_arc_in(link.clone(), self.property_trees()).link_same(link)
+        ClipNode::from_arc(link.clone())
     }
 }
 fn rect(r: paint::paint_engine::PaintRect) -> RectF {
@@ -75,9 +58,6 @@ fn clip_rect(r: paint_property_tree::ClipLayoutRect) -> FloatClipRect {
 }
 impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
     type State = PropertyTreeState<R>;
-    fn Trees(&self) -> &super::HandleTrees {
-        &self.trees
-    }
     fn SingularTransformFixEnabled(&self) -> bool {
         self.singular_transform_fix
     }
@@ -90,7 +70,7 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         clip: Arc<paint_property_tree::ClipPaintPropertyNode>,
         effect: EffectNode<R>,
     ) -> Self::State {
-        let clip = ClipNode::from_arc_in(clip, transform.trees().clone());
+        let clip = ClipNode::from_arc(clip);
         PropertyTreeState {
             transform_: transform,
             clip_: clip,
@@ -102,7 +82,7 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> TransformNode<R> {
         let clip = self.resolve_clip(clip);
-        read(|a| clip.link_transform(clip.node().LocalTransformSpace(a)))
+        read(|a| super::TransformNode::from_arc(clip.node().LocalTransformSpace(a).clone()))
     }
     fn ClipParent(
         &self,
@@ -156,10 +136,10 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> EffectNode<R> {
         let clip = self.resolve_clip(c);
-        read(|a| clip.link_effect(clip.node().PixelMovingFilter(a).expect("source PixelMovingFilter")))
+        read(|a| super::EffectNode::from_arc(clip.node().PixelMovingFilter(a).expect("source PixelMovingFilter").clone()))
     }
     fn FilterLocalTransform(&self, e: &EffectNode<R>) -> TransformNode<R> {
-        read(|a| e.link_transform(e.node().LocalTransformSpace(a)))
+        read(|a| super::TransformNode::from_arc(e.node().LocalTransformSpace(a).clone()))
     }
     fn HasActiveFilterAnimation(&self, e: &EffectNode<R>) -> bool {
         read(|a| e.node().HasActiveFilterAnimation(a))
@@ -215,17 +195,7 @@ impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
         b: &Self::PropertyTreeState,
     ) -> bool {
         let nearest = |clip: &ClipNode<R>| {
-            let trees = clip.trees().clone();
-            WithClipCacheBy(
-                clip.as_arc(),
-                &trees,
-                &|c| {
-                    ClipNode::<R>::from_arc_in(c.clone(), trees.clone())
-                        .parent_handle()
-                        .map(|parent| parent.as_arc().clone())
-                },
-                |c| c.NearestPixelMovingFilterClip(clip.as_arc()),
-            )
+            WithClipCache(clip.as_arc(), |c| c.NearestPixelMovingFilterClip(clip.as_arc()))
         };
         let a = nearest(&a.clip_);
         let b = nearest(&b.clip_);
@@ -266,7 +236,7 @@ impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
         b: &Self::PropertyTreeState,
     ) -> FloatClipRect {
         GeometryMapper::<Self>::LocalToAncestorClipRect(
-            &self.with_trees(a.transform_.trees().clone()),
+            self,
             a,
             b,
             OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
@@ -279,7 +249,7 @@ impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
         r: &mut FloatClipRect,
     ) {
         GeometryMapper::<Self>::LocalToAncestorVisualRect(
-            &self.with_trees(a.transform_.trees().clone()),
+            self,
             a,
             b,
             r,

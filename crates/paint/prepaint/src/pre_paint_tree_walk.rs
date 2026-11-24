@@ -5946,10 +5946,6 @@ fn ArtifactViewport(resources: Option<&PaintResources>) -> Option<PaintRect> {
 }
 
 impl PrePaintTreeWalk {
-    /// The persisted property trees as published with this pass's artifact.
-    pub fn PublishedTrees(&mut self) -> Arc<paint_model::paint_property_tree::FrozenPropertyTrees> {
-        self.property_node_store.published_trees()
-    }
     pub fn IntersectionObservationState(
         &self,
     ) -> foundation::intersection_observation_state::IntersectionObservationState {

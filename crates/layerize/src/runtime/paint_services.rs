@@ -516,7 +516,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> crate::adapter::paint_chu
 impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> PendingLayerGeometry<F> for CpuMainPaintServices<R> {
     fn VisibilityLimit(&self, s: &paint::PropertyTreeState<R>) -> Option<RectF> {
         GeometryMapper::<CpuGeometryMapper<R>>::VisibilityLimit(
-            &self.mapper.with_trees(s.transform().trees().clone()),
+            &self.mapper,
             s,
         )
     }
@@ -528,7 +528,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> PendingLayerGeometry<F> f
         sb: &paint::PropertyTreeState<R>,
     ) -> bool {
         GeometryMapper::<CpuGeometryMapper<R>>::MightOverlapForCompositing(
-            &self.mapper.with_trees(sa.transform().trees().clone()),
+            &self.mapper,
             &a,
             sa,
             &b,
@@ -543,7 +543,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> PendingLayerGeometry<F> f
     ) -> PendingMappedVisualRect {
         let mut value = FloatClipRect::FromRect(r);
         GeometryMapper::<CpuGeometryMapper<R>>::LocalToAncestorVisualRect(
-            &self.mapper.with_trees(s.transform().trees().clone()),
+            &self.mapper,
             s,
             d,
             &mut value,
@@ -878,6 +878,11 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                 services: self,
                 property_tree_sequence_number: sequence,
             };
+        // A compositor scroll translation whose simple-values change the
+        // direct update below did not absorb (no direct compositing reasons
+        // or rejected by PAC): Chromium's builder then keeps the change and
+        // requests the full update (paint_property_tree_builder.cc:3798-3827).
+        let mut unabsorbed_scroll_offset_change = false;
         if previous_artifact.is_some() {
             // PaintPropertyTreeBuilder::UpdateScrollAndScrollTranslation pushes
             // a composited scroll offset straight into the resident cc
@@ -912,6 +917,17 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                     direct_scroll_updates += 1;
                 }
             }
+            unabsorbed_scroll_offset_change = input
+                .artifact()
+                .compositor_viewport
+                .as_ref()
+                .expect("validated native viewport")
+                .scroll_translation_nodes
+                .iter()
+                .any(|node| {
+                    paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a))
+                        == ::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues
+                });
             browser_tracing::instant(
                 "compositor.layerize",
                 "Layerize.DirectScrollOffsetUpdate",
@@ -938,38 +954,18 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                     .display_items
                     .iter()
                     .filter_map(|item| item.scrollbar.as_ref()));
-            // Blink's LocalFrameView/PaintArtifactCompositor owner calls
-            // SetNeedsUpdate before SetNeedsUpdateAfterRepaint when the paint
-            // property trees changed. Page publishes both immutable artifacts
-            // here, so compare their resident node identities directly and
-            // preserve that caller contract. Otherwise PAC treats this known
-            // lifecycle change as an under-invalidation and builds a full
-            // crash-key dump before falling back to the same full update.
-            //
-            // Source: local_frame_view.cc:3545-3563;
-            // paint_artifact_compositor.cc:468-515,646-671.
-            // LocalFrameView also reports an in-place value change on any
-            // ancestor of a chunk's direct property state. Comparing only the
-            // direct state values misses that case: retained nodes keep their
-            // identity while their shared lifecycle marker is raised. This is
-            // the same ChangedToRoot threshold asserted by PAC's fast path.
-            let changed_to_root = input.artifact().chunks.iter().any(|chunk| {
-                paint_model::property_cell::with_access(|a| {
-                    ::paint::property_node_geometry::PropertyStateChanged(
-                        a,
-                        &chunk.properties,
-                    ::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
-                    &::paint::paint_property_tree::PropertyTreeState::default(),
-                    )
-                })
-            });
-            let property_trees_changed = changed_to_root
-                || (previous.chunks.len() == input.artifact().chunks.len()
-                    && previous
-                        .chunks
-                        .iter()
-                        .zip(&input.artifact().chunks)
-                        .any(|(old, new)| !old.properties.same_nodes(&new.properties)));
+            // Blink's PrePaint calls LocalFrameView::
+            // SetPaintArtifactCompositorNeedsUpdate when a property node
+            // changed beyond composited values, before LocalFrameView calls
+            // SetNeedsUpdateAfterRepaint (local_frame_view.cc:3545-3563;
+            // paint_artifact_compositor.cc:468-515,646-671). PrePaint's typed
+            // value for that request is the artifact's update generation; the
+            // live nodes themselves are shared by both artifacts. Same
+            // artifact contents with changed properties therefore still
+            // reach the full update.
+            let property_trees_changed = previous.property_tree_update_generation
+                != input.artifact().property_tree_update_generation
+                || unabsorbed_scroll_offset_change;
             if property_trees_changed || scrollbar_inputs_changed {
                 pac.SetNeedsUpdate();
             } else {

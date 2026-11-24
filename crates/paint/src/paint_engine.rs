@@ -705,7 +705,7 @@ fn RecordPaint(
         lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
     }
     let mut output = PaintRecording::default();
-    output.property_trees = Some(pre_paint.PublishedTrees());
+
     output.compositor_viewport = pre_paint.ExportCompositorViewport(&fragments);
     output.resources = fragments.Cursor().DocumentResources().cloned();
     // Same-Page LocalFrames record into this controller. Their immutable
@@ -885,55 +885,11 @@ fn RecordPaint(
         ],
     );
     drop(context);
-    // Source: PaintController::CommitNewDisplayItems,
-    // PaintController::AppendSubsequenceByMoving and ObjectPaintProperties.
-    // Cached source objects keep pointers to nodes that Chromium updates in
-    // place. Publish their immutable Rust equivalents against this pass's
-    // current owner slots, including wrapper ancestry and transform sidecars.
-    if reuse.reused != 0
-        || output
-            .chunks
-            .iter()
-            .any(|chunk| chunk.is_moved_from_cached_subsequence)
-    {
-        let _trace = browser_tracing::span("paint_commit", "PaintCommit.RebindPropertyStates");
-        let mut rebinder = paint_model::paint_property_tree::ArtifactPropertyStateRebinder::new(
-            &pre_paint.property_node_store,
-        );
-        for chunk in &mut output.chunks {
-            // Current/home chunks can share an owner node whose immutable
-            // payload still points at an earlier ancestor revision, while the
-            // layer also contains a moved/guest chunk. Canonicalize both sides
-            // of that ancestry comparison in this publication pass.
-            rebinder.RebindState(&mut chunk.properties);
-            if let Some(scroll_translation) = chunk
-                .compositor
-                .as_mut()
-                .and_then(|data| data.hit_test_data.as_mut())
-                .and_then(|data| data.scroll_translation.as_mut())
-            {
-                *scroll_translation = rebinder.RebindTransform(scroll_translation);
-            }
-        }
-        // Individual cached drawings are moved without a moved-subsequence
-        // marker. Their DisplayItem-owned scroll translation still observes
-        // ObjectPaintProperties in place in Chromium.
-        for item in &mut output.display_items {
-            if let Some(scroll_translation) = item.scroll_translation.as_mut() {
-                *scroll_translation = rebinder.RebindTransform(scroll_translation);
-            }
-        }
-    }
-    {
-        // The persisted trees this pass's chunk states name, frozen once and
-        // shared by every chunk and by the published artifact.
-        let trees = pre_paint.PublishedTrees();
-        for chunk in output.chunks.iter_mut() {
-            chunk.property_trees =
-                paint_model::paint_property_tree::PublishedTrees(Some(trees.clone()));
-        }
-        output.property_trees = Some(trees);
-    }
+    // Source: PaintController::CommitNewDisplayItems and
+    // PaintController::AppendSubsequenceByMoving. Cached chunks and display
+    // items keep references to the live ObjectPaintProperties nodes, which
+    // PrePaint updated in place, so they observe current values and parents
+    // without any rebinding.
     let record = paint_record::PaintRecordMetrics {
         paint_ops: output.items.len(),
         display_items: output.display_items.len(),
@@ -1459,22 +1415,8 @@ impl PaintEngine {
                 .expect("Paint must complete before commit"),
         );
         let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
-        let trees = match &artifact.property_trees {
-            Some(trees) => trees.clone(),
-            None => self.pre_paint.PublishedTrees(),
-        };
-        if browser_tracing::enabled() {
-            let mut seen = std::collections::HashSet::new();
-            let mut coverage = paint_model::paint_property_tree::FrozenTreeCoverage::default();
-            for chunk in artifact.chunks.iter() {
-                trees.verify_state(&chunk.properties, &mut seen, &mut coverage);
-            }
-            trace.set("frozen_nodes", trees.len() as f64);
-            trace.set("frozen_reached", coverage.nodes as f64);
-            trace.set("frozen_unresolved", coverage.unresolved as f64);
-            trace.set("frozen_unkeyed", coverage.unkeyed as f64);
-        }
-        artifact.property_trees = Some(trees);
+        artifact.property_tree_update_generation =
+            self.pre_paint.property_node_store.CompositorUpdateGeneration();
         self.performance.commit = paint_commit::PaintCommitMetrics {
             clients: clients.len(),
             recording_revision: artifact.recording_revision,
@@ -1525,6 +1467,12 @@ impl PaintEngine {
             &mut self.retained_scroll_state_initialized,
         );
         trace.set("records_reused", result.is_ok() as u8 as f64);
+        if result.is_ok() {
+            if let Some(artifact) = self.persistent_data.GetPaintArtifactMut() {
+                Arc::make_mut(artifact).property_tree_update_generation =
+                    self.pre_paint.property_node_store.CompositorUpdateGeneration();
+            }
+        }
         if let Ok(update) = &result {
             trace.set("updated_chunks", update.updated_chunks as f64);
             trace.set(

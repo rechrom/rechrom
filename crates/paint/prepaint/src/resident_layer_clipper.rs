@@ -69,21 +69,16 @@ impl PrePaintTreeWalk {
         fragment: ResidentPaintHitTest<'_>,
         options: ResidentLayerClipOptions,
     ) -> ResidentLayerClipRects {
-        let trees = Some(layer.PublishedTrees());
         let mapper = NativeGeometryMapperContext {
             singular_transform_fix: options.singular_transform_fix,
-            trees: trees.clone(),
         };
         let layer_offset = if options.same_root_layer {
             PhysicalOffset::default()
         } else {
             let matrix =
                 GeometryMapper::<NativeGeometryMapperContext>::SourceToDestinationProjection(
-                    &NativeTransformNode::from_arc_in(fragment.PreTransform().clone(), trees.clone()),
-                    &NativeTransformNode::from_arc_in(
-                        root.LocalBorderBoxProperties().transform.clone(),
-                        trees.clone(),
-                    ),
+                    &NativeTransformNode::from_arc(fragment.PreTransform().clone()),
+                    &NativeTransformNode::from_arc(root.LocalBorderBoxProperties().transform.clone()),
                 );
             let offset = fragment.PaintOffset();
             let point = matrix.as_source().MapPoint(gfx::PointF::new(
@@ -101,14 +96,11 @@ impl PrePaintTreeWalk {
             );
         let mut background = ResidentLayerClipRect::from_float(FloatClipRect::default());
         if !options.same_root_layer || options.respect_root_clip {
-            let local =
-                NativeGeometryState::from_state_in(fragment.LocalBorderBoxProperties(), trees.clone());
-            let mut destination =
-                NativeGeometryState::from_state_in(root.LocalBorderBoxProperties(), trees.clone());
+            let local = NativeGeometryState::from_state(fragment.LocalBorderBoxProperties());
+            let mut destination = NativeGeometryState::from_state(root.LocalBorderBoxProperties());
             if options.respect_root_clip {
                 destination.SetClip(root.PreClip());
-                destination
-                    .SetEffect(NativeEffectNode::from_arc_in(root.PreEffect(), trees.clone()));
+                destination.SetEffect(NativeEffectNode::from_arc(root.PreEffect()));
             } else {
                 destination.SetClip(root.ContentsProperties().clip.clone());
             }

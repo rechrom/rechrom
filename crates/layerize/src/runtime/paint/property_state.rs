@@ -210,7 +210,7 @@ fn clip_chain_in_transform_compositing_boundary<R: PaintSkiaBackend>(
 ) -> bool {
     let mut current = node.clone();
     while current != *ancestor {
-        let local = super::read(|a| current.link_transform(current.node().LocalTransformSpace(a)));
+        let local = super::read(|a| super::TransformNode::from_arc(current.node().LocalTransformSpace(a).clone()));
         if in_same_transform_compositing_boundary(
             transform,
             &local,
@@ -242,7 +242,7 @@ impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
         super::read(|a| self.effect_.node().RequiresCompositingForCanvasChild(a))
     }
     fn ChangedToRoot(&self, change: Self::PaintPropertyChange) -> bool {
-        paint_model::property_cell::with_access(|a| self.as_source().ChangedToRootIn(a, self.transform_.trees(), change))
+        paint_model::property_cell::with_access(|a| self.as_source().ChangedToRoot(a, change))
     }
     fn SameEffectNode(&self, other: &Self) -> bool {
         self.effect_ == other.effect_

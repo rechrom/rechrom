@@ -162,7 +162,7 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
         read(|a| {
             self.node()
                 .ScrollParentScrollTranslation(a)
-                .map(|n| self.link_same(n))
+                .map(|n| Self::from_arc(n.clone()))
         })
     }
     fn PropertyTreeNearestScrollTranslationNode(&self) -> Self {
@@ -303,7 +303,7 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
         read(|a| {
-            self.link_transform(self.node().LocalTransformSpace(a))
+            super::TransformNode::from_arc(self.node().LocalTransformSpace(a).clone())
         })
     }
     fn BlendMode(&self) -> BlendMode {
@@ -383,7 +383,7 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
             self.node().state(a)
                 .output_clip
                 .as_ref()
-                .map(|c| self.link_clip(c))
+                .map(|c| super::ClipNode::from_arc(c.clone()))
         })
     }
     fn GetCompositorElementId(&self) -> ElementId {
@@ -472,7 +472,7 @@ impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<
         self.parent_handle().expect("source clip parent")
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        read(|a| self.link_transform(self.node().LocalTransformSpace(a)))
+        read(|a| super::TransformNode::from_arc(self.node().LocalTransformSpace(a).clone()))
     }
     fn PaintClipRectRect(&self) -> RectF {
         read(|a| self.node().PaintClipRect(a)).map(|r|RectF::new(r.x as f32,r.y as f32,r.width as f32,r.height as f32)).unwrap_or_else(||*crate::third_party::blink::renderer::platform::graphics::paint::float_clip_rect::FloatClipRect::default().Rect())
@@ -503,6 +503,6 @@ impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<
         read(|a| self.node().ClipPath(a).is_some())
     }
     fn PixelMovingFilter(&self) -> Option<EffectNode<R>> {
-        read(|a| self.node().PixelMovingFilter(a).map(|e| self.link_effect(e)))
+        read(|a| self.node().PixelMovingFilter(a).map(|e| super::EffectNode::from_arc(e.clone())))
     }
 }
