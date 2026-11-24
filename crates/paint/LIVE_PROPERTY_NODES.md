@@ -1,7 +1,8 @@
 # S2 design: live paint property nodes
 
-Status: written 2026-11-23 at main `7f978395`; S2-1 and the first part of
-S2-3 are implemented (see "As implemented" below).
+Status: written 2026-11-23 at main `7f978395`; S2-1 and S2-3 (markers and
+node values sequence-confined) are implemented, S2-4 onwards are not (see
+"As implemented" below).
 Stage S2 of the live-property-tree plan (S0 map, S1 split
 LayerizeEngine from CompositorEngine, **S2 live nodes**, S3 delete the
 snapshot machinery, S4 contract/guards, S5 verification).
@@ -17,7 +18,7 @@ numbers refer to `7f978395`. Chromium paths are abbreviated:
 `pgc/` = `third_party/blink/renderer/platform/graphics/compositing/`,
 `core/paint/` = `third_party/blink/renderer/core/paint/`.
 
-## As implemented (2026-11-24, on main `a6d70d05`)
+## As implemented (2026-11-24; S2-1 and S2-3 first part on main `a6d70d05`, node values on top of `a8122ce9`)
 
 Decisions D1-D6 were fixed before implementation (D1 per-call `with_access`
 in layerize handles, explicit proof elsewhere; D2 builder-context OOF parent;
@@ -52,23 +53,65 @@ Landed:
   the proof per call (D1). Private `PaintPropertyNodeLifecycle::updated`
   takes it per call too; it is deleted by S2-4.
 
-Not landed (stopped here): the rest of S2-3 (node values into
-`PropertyCell<State>`, identity by `Arc::ptr_eq`, typed caches replacing
-`OpaquePaintCacheSlot` / per-node `Mutex`, `CacheTreeScope` removal), S2-4,
-S2-5, S2-6. Moving node values behind the proof changes every node field read
-in `paint_*`, `prepaint`, `layerize`, `interaction_hit_test` and
-`compositor_layerize` (about 68k lines of affected files) and is the
-prerequisite of in-place `Update`; it was not attempted in this session. D2
-was therefore not reached: the deferred reparent phase
-(`RebindLogicalEffectState`, `RestoreLogicalOutOfFlowParents`) is unchanged.
-`CacheTreeScope` must stay until S2-6 because snapshot nodes are still
-resolved through different `FrozenPropertyTrees`.
+- **S2-3, node values** (four commits, one per node type in link order:
+  scroll, clip, effect, transform; each compiles on its own). Every node is
+  now `{ lifecycle, id, [geometry_mapper_cache,] state: PropertyCell<
+  *PaintPropertyNodeState> }`; the `State` struct holds Chromium's
+  `Node::State` fields plus the `parent` link (and Rechrom's Layout
+  association fields) under the same names. `Node::new(lifecycle, id,
+  state)` replaces struct literals; `state(&a)` reads, `state_mut()` edits a
+  snapshot that is not shared yet (no proof needed: `&mut` is exclusive).
+  The Chromium-named predicates (`Matrix`, `ScrollNode`, `HasRealEffects`,
+  `PaintClipRect`, ...) are implemented on the `State` and exposed on the
+  node through `state_getters!` wrappers that take `&PropertyAccess`; every
+  node has `Parent(&a)`. `PaintPropertyNodeGeometry::Parent` takes the
+  proof. `PropertyCell::with_owner` was added (no new `unsafe`);
+  `PropertyCell`'s `Debug` prints the value only on its owner sequence.
+  Proof plumbing: explicit in `PaintPropertyTreeBuilder` (a field set at its
+  one construction site), `CullRect::ApplyPaintProperties` and its helpers,
+  `property_node_geometry`, `pre_paint_state_compare` (one `with_access` per
+  comparison); per call (`with_access`) in the native GeometryMapper handles
+  and context, layerize handles (`runtime::paint::read`), the snapshot store
+  and rebinders, the PrePaint reparent / direct-animation / resident hit-test
+  helpers, Paint recording, interaction hit test and the Page.
 
-Runtime facts this part changes: a read of a node marker or cc id from a
-thread other than the one that created the node now panics (previously a
-relaxed atomic race); `PropertyTreeState::default()` on a second thread yields
-that thread's own roots. After S1b-7 all such readers run on the Page
-document thread.
+Deviations and open points of S2-3:
+
+- Snapshot semantics are unchanged on purpose: node `Clone` copies the state
+  (one `with_access`), `PartialEq` still compares lifecycle, id and state
+  values, and identity is still the lifecycle `Arc`, not `Arc::ptr_eq` on the
+  node. Identity by pointer only becomes true with in-place `Update` (S2-4);
+  doing it now would change behaviour of the snapshot store.
+- The typed caches (`OpaquePaintCacheSlot` / per-node `Mutex` replacement)
+  and `CacheTreeScope` removal are not done: snapshot nodes are still
+  resolved through different `FrozenPropertyTrees` until S2-6.
+- D1 in GeometryMapper is only partly explicit: the source GeometryMapper is
+  generic over the handle traits it shares with layerize
+  (`TransformCacheNode`, `GeometryMapperNode`, `GeometryMapperContext`), so
+  its native handles take the proof per call. Making it explicit means
+  threading `&PropertyAccess` through those trait methods (or carrying it in
+  the context) and should be decided on PrePaint / Layerize p50 evidence.
+- S2-4 hazard: the per-call `with_access` sites inside PrePaint
+  (`pre_paint_tree_walk.rs` reparent, rebase, direct-animation collection,
+  `resident_hit_test.rs`, `cull_rect_updater.rs`) would panic once the walk
+  runs under `with_writer`; S2-4 must route them through the walk's proof.
+- Tests: `paint_model`, `paint` and `layerize` test targets compile;
+  `prepaint` tests remain broken as on main (their builder fixtures call
+  `PaintPropertyTreeBuilder::new` without the new proof argument too).
+
+Not landed (stopped here): S2-4, S2-5, S2-6. D2 was not reached: the deferred
+reparent phase (`RebindLogicalEffectState`, `RestoreLogicalOutOfFlowParents`)
+is unchanged apart from reading nodes through the proof.
+
+Runtime facts this part changes: a read of a node marker, cc id or node
+value from a thread other than the one that created the node now panics
+(previously a relaxed atomic race or an unchecked shared read); this includes
+node `Clone` and `PartialEq` (and so `PartialEq` of any type holding a node
+`Arc`, which delegates to the node). `Debug` does not panic.
+`PropertyTreeState::default()` on a second thread yields that thread's own
+roots. After S1b-7 all such readers run on the Page document thread; raster
+threads replay only `PaintRecording::items` and the impl-side commit
+vocabulary (`layerize::commit`) names no paint property node.
 
 ## 0. Target in one paragraph
 
