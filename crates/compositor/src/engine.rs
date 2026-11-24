@@ -538,31 +538,27 @@ pub type MainFamily = crate::runtime::types::CpuCompositorTypes<crate::runtime::
 pub type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
 /// ProxyImpl -> ProxyMain task of this family.
 pub type ImplToMainTask = layerize::commit::proxy::ImplToMain<MainFamily>;
-/// ProxyMain::BeginMainFrame's answer for this family.
-pub type MainFrameResult = layerize::runtime::proxy_main::MainFrameResult;
 /// The posted BeginMainFrameAndCommitState of this family.
 pub type BeginMainFrameState = layerize::commit::proxy::BeginMainFrameAndCommitState<MainFamily>;
-/// The main half of a Page compositor: Blink's LayerTreeView role.
-pub type MainLayerize = layerize::LayerizeEngine<MainFamily>;
-pub type MainProxy = layerize::runtime::proxy_main::ProxyMain<MainFamily>;
 pub type ProxyImplInit = crate::runtime::engine_factory::ProxyImplInit<crate::runtime::skia::SkRegion>;
 /// The main half's PropertyTreeFeatures (draw_property_utils /
 /// LayerTreeHost::UpdateLayers inputs), built from the same settings as the
 /// impl half's.
 pub type MainPropertyTreeFeatures = crate::runtime::render::RenderServices;
+/// The AnimationHost instance type of this family (the LayerTreeHost
+/// MutatorHost; AnimationHost::CreateMainInstance / CreateImplInstance).
+pub type MainAnimationHost = crate::runtime::animation_host::AnimationHostOwner;
 
-// Compile-time thread-safety of the main-half values that cross to, or are
-// read by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the
-// main LayerTreeHost (lent inside the protected sequence), its
-// ThreadUnsafeCommitState (read by FinishCommit), the moved CommitState and
-// the posted Proxy tasks.
+// Compile-time thread-safety of the commit values that cross to, or are read
+// by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the main
+// LayerTreeHost's ThreadUnsafeCommitState (read by FinishCommit), the moved
+// CommitState and the posted Proxy tasks. The lent main LayerTreeHost itself
+// is asserted where the Page constructs it (browser `page::main_compositor`).
 #[allow(dead_code)]
 const _: () = {
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
-    fn assert_send_ref<T: Send + ?Sized>(_: &T) {}
-    fn assertions(engine: &layerize::LayerizeEngine<MainFamily>) {
-        assert_send_ref(engine.Main());
+    fn assertions() {
         assert_sync::<layerize::commit::commit_state::ThreadUnsafeCommitState<MainFamily>>();
         assert_send::<layerize::commit::commit_state::CommitState<MainFamily>>();
         assert_send::<MainToImplTask>();
@@ -570,58 +566,44 @@ const _: () = {
     }
 };
 
-/// Creates the main half of one Page compositor on the calling (document)
-/// thread: the main LayerTreeHost, PaintArtifactCompositor and main
-/// AnimationHost (`layerize::LayerizeEngine`, Blink's LayerTreeView) and its
-/// ProxyMain over `to_impl`. Returns the ProxyImpl construction values that
-/// `ProxyMain::Start` posts with Initialize (proxy_main.cc:80-89,898-914),
-/// from which the impl thread builds its `CompositorEngine`. `main_tasks`
-/// runs the main LayerTreeHost's posted main-thread callbacks.
-pub fn CreateMainHalf(
-    config: CompositorConfig,
-    to_impl: layerize::commit::proxy::ProxyTaskQueue<MainToImplTask>,
-    main_tasks: layerize::commit::main_callbacks::TaskRunner,
-) -> Result<(MainLayerize, MainProxy, MainPropertyTreeFeatures, Box<ProxyImplInit>), CompositorError>
-{
-    let parts = crate::runtime::engine_factory::MainHalfParts::new(&config)?;
-    let in_process = to_impl.IsInProcess();
-    let endpoint = layerize::runtime::proxy_main::ProxyMainEndpoint::new(
-        to_impl,
-        main_tasks,
-        parts.CommitRequestTrace(),
-    );
-    let layerize = layerize::LayerizeEngine::<MainFamily>::new(
-        parts.paint_features,
-        parts.paint_diagnostics,
-        layerize::commit::main_effects::MainHostInit {
-            id: parts.owner,
-            owner: crate::adapter::property_tree::PropertyTreesOwnerId::FromOwnerValue(parts.owner),
-            mutator: parts.main_animations.clone(),
-            settings: parts.settings.clone(),
-            threaded: false,
-            // Chromium's WebLayerTreeView forwards the embedder background
-            // color to LayerTreeHost. An alpha-zero root keeps popup Pages
-            // compositable over the document.
-            background_color: config.transparent_background.then_some(
-                crate::adapter::layer_tree_impl::Color4f {
-                    red: 0.0,
-                    green: 0.0,
-                    blue: 0.0,
-                    alpha: 0.0,
-                },
-            ),
-            // A single-sequence embedding drains both queues itself; its
-            // protected-sequence waits return immediately
-            // (layer_tree_host.cc:521-522).
-            impl_on_owner_sequence: in_process,
-            sink: endpoint.clone() as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
-        },
-    )
-    .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))?;
-    let proxy = layerize::runtime::proxy_main::ProxyMain::new(endpoint, parts.owner + 1);
-    let init = Box::new(parts.ImplInit(layerize.PaintValues()));
-    let features = parts.features;
-    Ok((layerize, proxy, features, init))
+/// The construction values of one Page compositor's main half, from the same
+/// settings policy as its impl half: Blink's LayerTreeView::Initialize inputs
+/// (GenerateLayerTreeSettings, third_party/blink/renderer/platform/widget/
+/// compositing/layer_tree_settings.cc; the main
+/// AnimationHost::CreateMainInstance, cc/animation/animation_host.cc:55-57)
+/// and the Blink paint feature state of its PaintArtifactCompositor. These
+/// are plain values: the Page constructs the main LayerTreeHost
+/// (`layerize::LayerizeEngine`) and its ProxyMain from them itself
+/// (LayerTreeHost::CreateThreaded, cc/trees/layer_tree_host.cc), and
+/// ProxyMain::Start posts the `ProxyImplInit` made from them with Initialize
+/// (cc/trees/proxy_main.cc:80-89,898-914).
+pub struct MainHostParams {
+    /// LayerTreeHost::id_; also the PropertyTrees owner and the ProxyImpl
+    /// identity. The factory owns identity generation; Page never invents IDs.
+    pub id: u64,
+    /// The first property-tree owner value ProxyMain allocates (the identity
+    /// reserved after `id`).
+    pub first_property_owner: u64,
+    /// LayerTreeHost::InitParams::settings.
+    pub settings: layerize::commit::layer_tree_settings::LayerTreeSettings,
+    pub paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
+    pub paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
+    /// LayerTreeHost::InitParams::mutator_host: the main AnimationHost
+    /// instance. ProxyImpl's impl instance is created from it
+    /// (`ProxyImplInit::new`).
+    pub animation_host: MainAnimationHost,
+    /// Chromium's WebLayerTreeView forwards the embedder background color to
+    /// LayerTreeHost. An alpha-zero root keeps popup Pages compositable over
+    /// the document.
+    pub background_color: Option<crate::adapter::layer_tree_impl::Color4f>,
+    pub property_tree_features: MainPropertyTreeFeatures,
+    /// The `compositor.main` SetNeedsCommit trace of the ProxyMain endpoint.
+    pub commit_request_trace: Arc<dyn Fn(bool) + Send + Sync>,
+}
+
+/// The main-half construction values of one Page compositor for `config`.
+pub fn CreateMainHostParams(config: &CompositorConfig) -> Result<MainHostParams, CompositorError> {
+    crate::runtime::engine_factory::MainHostParamsFor(config)
 }
 
 /// The impl half of one Page compositor (cc LayerTreeHostImpl, Scheduler,

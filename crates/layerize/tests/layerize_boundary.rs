@@ -19,16 +19,6 @@ const PAINT_PROPERTY_NODES: &[&str] = &[
 /// Do not add entries.
 const PROPERTY_NODE_ALLOWED: &[&str] = &[];
 
-/// Temporary (until S1b-9): since S1b-7 the main half runs on the document
-/// thread, but its constructor (`compositor::CreateMainHalf`) and the family
-/// aliases the Page names (`MainLayerize`, `MainProxy`, `MainFrameResult`)
-/// still live in the compositor facade, because the main LayerTreeHost
-/// settings, the main AnimationHost instance and the family binding are
-/// compositor types. Do not add entries.
-const LAYERIZE_ENGINE_ALLOWED: &[&str] = &["crates/compositor/src/engine.rs"];
-/// Main-half names the hosting files above may use until S1b-9.
-const MAIN_HALF_PREFIXES: &[&str] = &["layerize::LayerizeEngine", "layerize::runtime::proxy_main"];
-
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -97,11 +87,7 @@ fn compositor_names_only_the_commit_vocabulary() {
                     .chars()
                     .next_back()
                     .is_some_and(|c| c.is_alphanumeric() || c == '_');
-                if !preceded
-                    && !line[index..].starts_with("layerize::commit")
-                    && !(MAIN_HALF_PREFIXES.iter().any(|p| line[index..].starts_with(p))
-                        && LAYERIZE_ENGINE_ALLOWED.contains(&relative.as_str()))
-                {
+                if !preceded && !line[index..].starts_with("layerize::commit") {
                     violations.push(format!("{relative}:{}: {}", number + 1, line.trim()));
                 }
             }

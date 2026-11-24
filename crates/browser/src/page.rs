@@ -676,11 +676,11 @@ struct PageDomainServices {
     // The cc main half on this thread (S1b-7, `main_compositor`): ProxyMain
     // (stopped before the LayerTreeHost shuts down), its Send + Sync request
     // endpoint, the LayerizeEngine and its PropertyTreeFeatures.
-    proxy_main: std::cell::OnceCell<RefCell<compositor::MainProxy>>,
+    proxy_main: std::cell::OnceCell<RefCell<main_compositor::MainProxy>>,
     proxy_main_endpoint: std::cell::OnceCell<
         Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<compositor::MainFamily>>,
     >,
-    layerize: std::cell::OnceCell<RefCell<compositor::MainLayerize>>,
+    layerize: std::cell::OnceCell<RefCell<main_compositor::MainLayerize>>,
     main_property_tree_features: std::cell::OnceCell<compositor::MainPropertyTreeFeatures>,
     main_compositor_shut_down: Cell<bool>,
     // A visibility change made inside ProxyMain::BeginMainFrame (the Page
@@ -4928,7 +4928,7 @@ mod programmatic_scroll;
 mod scripting;
 mod scroll;
 pub(crate) mod main_compositor;
-pub use main_compositor::{ImplToMainQueue, MainToImplQueue};
+pub use main_compositor::{ImplToMainQueue, MainFrameResult, MainToImplQueue};
 pub(crate) mod synchronous_presenter;
 pub(crate) mod compositor_input;
 pub use compositor_input::{
@@ -5997,7 +5997,7 @@ impl Page {
         height: u32,
         scale: f64,
         before_lifecycle: &mut dyn FnMut(&mut Page),
-    ) -> io::Result<compositor::MainFrameResult> {
+    ) -> io::Result<MainFrameResult> {
         // The domain outlives a document replacement inside the lifecycle.
         let main = self.state.domain.clone();
         if !main.HasMainCompositor() {

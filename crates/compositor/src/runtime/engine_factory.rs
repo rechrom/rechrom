@@ -48,7 +48,6 @@ use crate::{
     adapter::{
         layer_tree_host_impl::*,
         layer_tree_impl::{Color4f, LayerTreeHostId},
-        property_tree::PropertyTreesOwnerId,
     },
     cc::{
         metrics::compositor_timing_history::UMACategory,
@@ -133,60 +132,65 @@ pub struct ProxyImplInit<R: crate::runtime::types::CpuSkiaBackend> {
     pub(crate) paint_values: Arc<dyn layerize::commit::paint::CpuPaintValueServices<R>>,
 }
 
-/// The main half's construction values (LayerTreeHost::InitParams and the
-/// Blink paint feature state), from the same settings policy as the impl.
-pub(crate) struct MainHalfParts {
-    pub(crate) owner: u64,
-    pub(crate) settings: LayerTreeSettings,
-    pub(crate) paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
-    pub(crate) paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
-    pub(crate) main_animations: AnimationHostOwner,
-    pub(crate) features: RenderServices,
-    events: Arc<dyn EventSink>,
-}
-impl MainHalfParts {
-    pub(crate) fn new(config: &CompositorConfig) -> Result<Self, CompositorError> {
-        if config.thread {
-            return Err(CompositorError::UnsupportedExecutionConfiguration {
-                reason: "CompositorConfig::thread is not a supported mode",
-            });
-        }
-        // The factory owns identity generation; Page never passes internal IDs.
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let owner = NEXT.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            owner < i32::MAX as u64,
-            "capabilities engine identity exhausted"
-        );
-        let options = FactoryOptions::cpu_default(config);
-        Ok(Self {
-            owner,
-            settings: options.settings.clone(),
-            paint_features: DefaultPaintFeatures(),
-            paint_diagnostics: DefaultPaintDiagnostics(),
-            // Source: cc/animation/animation_host.cc:55-57. The main instance
-            // is owned by the main half (LayerizeEngine).
-            main_animations: AnimationHostOwner::CreateMainInstance(),
-            features: RenderServices::new(options.render, options.events.clone()),
-            events: options.events,
-        })
-    }
-    pub(crate) fn CommitRequestTrace(&self) -> Arc<dyn Fn(bool) + Send + Sync> {
-        let events = self.events.clone();
-        Arc::new(move |urgent| {
-            events.Emit("compositor.main", format!("SetNeedsCommit urgent={urgent}"))
-        })
-    }
-    pub(crate) fn ImplInit(
-        &self,
+impl ProxyImplInit<SkRegion> {
+    /// The values ProxyMain::Start posts with Initialize: the main host's
+    /// `id`, the impl AnimationHost created from its main instance
+    /// (LayerTreeHost::CreateLayerTreeHostImpl ->
+    /// mutator_host_->CreateImplInstance(), cc/trees/layer_tree_host.cc;
+    /// animation_host.cc:74-79) and the main half's shared paint value
+    /// capability.
+    pub fn new(
+        id: u64,
+        main_animation_host: &AnimationHostOwner,
         paint_values: Arc<dyn layerize::commit::paint::CpuPaintValueServices<SkRegion>>,
-    ) -> ProxyImplInit<SkRegion> {
-        ProxyImplInit {
-            owner: self.owner,
-            impl_animations: self.main_animations.CreateImplInstance(),
+    ) -> Self {
+        Self {
+            owner: id,
+            impl_animations: main_animation_host.CreateImplInstance(),
             paint_values,
         }
     }
+}
+
+/// The main half's construction values (LayerTreeHost::InitParams and the
+/// Blink paint feature state), from the same settings policy as the impl.
+pub(crate) fn MainHostParamsFor(
+    config: &CompositorConfig,
+) -> Result<crate::engine::MainHostParams, CompositorError> {
+    if config.thread {
+        return Err(CompositorError::UnsupportedExecutionConfiguration {
+            reason: "CompositorConfig::thread is not a supported mode",
+        });
+    }
+    // The factory owns identity generation; Page never passes internal IDs.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let owner = NEXT.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        owner < i32::MAX as u64,
+        "capabilities engine identity exhausted"
+    );
+    let options = FactoryOptions::cpu_default(config);
+    let events = options.events.clone();
+    Ok(crate::engine::MainHostParams {
+        id: owner,
+        first_property_owner: owner + 1,
+        settings: options.settings.clone(),
+        paint_features: DefaultPaintFeatures(),
+        paint_diagnostics: DefaultPaintDiagnostics(),
+        // Source: cc/animation/animation_host.cc:55-57. The main instance
+        // is owned by the main half (LayerizeEngine).
+        animation_host: AnimationHostOwner::CreateMainInstance(),
+        background_color: config.transparent_background.then_some(Color4f {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        }),
+        property_tree_features: RenderServices::new(options.render, options.events),
+        commit_request_trace: Arc::new(move |urgent| {
+            events.Emit("compositor.main", format!("SetNeedsCommit urgent={urgent}"))
+        }),
+    })
 }
 
 /// ProxyImpl construction on the impl thread (proxy_main.cc:80-89 ->
