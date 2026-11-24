@@ -530,7 +530,7 @@ fn CollectCompositedAnimationPropertyUpdate(
                             element_id,
                         });
                 }
-                match node.lifecycle.node_changed() {
+                match paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a)) {
                     PaintPropertyChangeType::Unchanged => {}
                     PaintPropertyChangeType::ChangedOnlyCompositedValues => {
                         self.transforms.push(node.clone());
@@ -573,7 +573,7 @@ fn CollectCompositedAnimationPropertyUpdate(
                             element_id,
                         });
                 }
-                match node.lifecycle.node_changed() {
+                match paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a)) {
                     PaintPropertyChangeType::Unchanged
                     | PaintPropertyChangeType::ChangedOnlyCompositedValues => {}
                     PaintPropertyChangeType::ChangedOnlySimpleValues

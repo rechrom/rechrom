@@ -450,7 +450,7 @@ mod published_tree_cache_tests {
         publish(&mut store, &first_keys, &BTreeMap::new(), &mut first);
         let first_child = first[0].transform.clone();
         // The compositor commit of the first tree clears its change markers.
-        first_child.ClearChangedToRoot(1);
+        crate::property_cell::with_access(|a| first_child.ClearChangedToRoot(a, 1));
         let first_trees = Some(store.published_trees());
 
         // Paint rebuilds the moved parent; the clean child subtree is retained

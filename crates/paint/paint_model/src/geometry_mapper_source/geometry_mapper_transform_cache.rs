@@ -16,13 +16,11 @@ use crate::{
     source_transform::PropertyTransform,
     source_transform::PropertyTreeTransform,
 };
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc, Mutex,
-};
-static S_GLOBAL_GENERATION: AtomicU32 = AtomicU32::new(1);
+use std::sync::{Arc, Mutex};
+// Source: geometry_mapper_transform_cache.h:55-57 `s_global_generation`, kept
+// per document sequence (paint_model::property_cell).
 fn global_generation() -> u32 {
-    S_GLOBAL_GENERATION.load(Ordering::Relaxed)
+    crate::property_cell::TransformCacheGeneration()
 }
 /// A cached Member<const TransformPaintPropertyNode>: the node owning this
 /// cache, or another node (a transform- or scroll-tree ancestor) it keeps
@@ -137,7 +135,7 @@ pub fn ClearTransformCaches() {
 impl NativeGeometryMapperTransformCache {
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.cc:18-24.
     pub fn ClearCache() {
-        S_GLOBAL_GENERATION.fetch_add(1, Ordering::Relaxed);
+        crate::property_cell::ClearTransformCache();
     }
     pub fn IsValid(&self) -> bool {
         self.cache_generation_ == global_generation()

@@ -245,35 +245,40 @@ impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         chunk: &PaintChunk,
         layer: &PropertyTreeState<R>,
     ) -> bool {
-        paint::property_node_geometry::PropertyStateChanged(
-            &chunk.properties,
-            paint_property_tree::PaintPropertyChangeType::ChangedOnlyCompositedValues,
-            &layer.as_source(),
-        )
+        paint_model::property_cell::with_access(|a| {
+            paint::property_node_geometry::PropertyStateChanged(
+                a,
+                &chunk.properties,
+                paint_property_tree::PaintPropertyChangeType::ChangedOnlyCompositedValues,
+                &layer.as_source(),
+            )
+        })
     }
     fn EffectChangedOnlySimple(
         &self,
         state: &PropertyTreeState<R>,
         layer: &PropertyTreeState<R>,
     ) -> bool {
-        paint::property_node_geometry::EffectChanged(
+        paint_model::property_cell::with_access(|access| paint::property_node_geometry::EffectChanged(
+            access,
             state.effect_.node(),
             paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
             &layer.as_source(),
             Some(state.transform_.node()),
-        )
+        ))
     }
     fn ClipChangedOnlySimple(
         &self,
         state: &PropertyTreeState<R>,
         layer: &PropertyTreeState<R>,
     ) -> bool {
-        paint::property_node_geometry::ClipChanged(
+        paint_model::property_cell::with_access(|access| paint::property_node_geometry::ClipChanged(
+            access,
             state.clip_.node(),
             paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
             &layer.as_source(),
             Some(state.transform_.node()),
-        )
+        ))
     }
     fn TransformApproximatelyEqual(
         &self,
