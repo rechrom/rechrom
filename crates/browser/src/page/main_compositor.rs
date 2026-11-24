@@ -137,6 +137,25 @@ impl PageDomainServices {
             .get()
             .is_some_and(|layerize| layerize.borrow().HasResidentPaintArtifact())
     }
+    /// PaintArtifactCompositor::DirectlyUpdateTransform /
+    /// DirectlyUpdateCompositedOpacityValue on the main half, synchronously
+    /// in the lifecycle task (paint_property_tree_builder.cc; PAC
+    /// paint_artifact_compositor.cc:1458-1469,1479-1495). Each accepted node
+    /// calls LayerTreeHost::SetNeedsCommit (property_tree_manager.cc:
+    /// 120-136,179-206), which inside ProxyMain::BeginMainFrame only raises
+    /// the final pipeline stage to COMMIT (proxy_main.cc:741-756), so this
+    /// main frame's own commit carries the values. `false` when a node was
+    /// rejected: the caller runs the full Paint, as Blink does.
+    pub(super) fn DirectlyUpdateCompositedAnimationProperties(
+        &self,
+        update: &paint::CompositedAnimationPropertyUpdate,
+    ) -> bool {
+        self.HasResidentPaintArtifact()
+            && self
+                .MainLayerize()
+                .borrow_mut()
+                .ApplyCompositedAnimationProperties(update)
+    }
     /// The layout zoom of the artifact last pushed to the main half (the
     /// impl side's InputRouter widget scale).
     pub(super) fn MainCompositorInputScale(&self) -> f64 {

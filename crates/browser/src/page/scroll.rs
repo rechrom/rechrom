@@ -805,6 +805,20 @@ impl Page {
         }
         Ok(())
     }
+    /// The tail of synchronous main-half calls made by the Page (PAC direct
+    /// updates, main AnimationHost KeyframeModels, scrollbar layers). The
+    /// internal presenter runs the in-process Proxy tasks they posted and
+    /// the Page applies the main-half effects, in ContinueCompositorMutation's
+    /// order. The external runtime's ProxyMain posts to the compositor thread
+    /// itself; its effects are taken after the lifecycle
+    /// (`ApplyPendingMainCompositorMutations`).
+    pub(super) fn DidMutateMainCompositor(&mut self) -> io::Result<()> {
+        if self.external_compositor {
+            return Ok(());
+        }
+        let effects = self.state.DidMutateMainCompositor()?;
+        self.ApplyCompositorWheelEffects(effects)
+    }
     pub fn TakePendingBrowserInputs(&self) -> Vec<PageBrowserInput> {
         std::mem::take(&mut *self.state.pending_compositor_mutations.borrow_mut())
     }

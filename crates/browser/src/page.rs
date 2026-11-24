@@ -8380,7 +8380,23 @@ impl Page {
                     )
                 }
             };
-            if let Some(update) = update {
+            // PaintArtifactCompositor::DirectlyUpdate* in this lifecycle task,
+            // on the main half (S1b-8). A rejected node is not an error: as in
+            // Blink, it keeps kChangedOnlySimpleValues and this lifecycle's
+            // full Paint updates PAC (paint_property_tree_builder.cc;
+            // local_frame_view.cc:2965-2975,3348).
+            let directly_updated = update.as_ref().is_some_and(|update| {
+                self.state
+                    .DirectlyUpdateCompositedAnimationProperties(update)
+            });
+            if update.is_some() {
+                self.DidMutateMainCompositor()?;
+                trace.set(
+                    "composited_animation_direct_update_rejected",
+                    (!directly_updated) as u8 as f64,
+                );
+            }
+            if let Some(update) = update.filter(|_| directly_updated) {
                 trace.set("composited_animation_property_update", 1.0);
                 // Blink snapshots eligible keyframes once, binds them to the
                 // compositor element id published by PrePaint, and lets cc
@@ -8594,14 +8610,6 @@ impl Page {
                 }
                 install_trace.set("mutations", animation_mutations.len() as f64);
                 install_trace.set("installed", installed.len() as f64);
-                // Publish the property-tree element mapping before its
-                // KeyframeModel can tick. Chromium transfers both in one
-                // commit; this ordering is the package-boundary equivalent
-                // and prevents an installation-triggered commit from racing
-                // ahead with the preceding property tree during startup.
-                self.RouteCompositorMutation(
-                    compositor::CompositorMutation::CompositedAnimationProperties(update),
-                )?;
                 for mutation in animation_mutations {
                     self.RouteCompositorMutation(
                         compositor::CompositorMutation::PropertyAnimation(mutation),

@@ -771,8 +771,15 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor::new(callbacks,c,self)
     }
     /// Source: PaintArtifactCompositor::DirectlyUpdateTransform and
-    /// DirectlyUpdateCompositedOpacityValue. Page has already run Blink's
-    /// deferred property builder and admitted only simple animated values.
+    /// DirectlyUpdateCompositedOpacityValue (paint_artifact_compositor.cc:
+    /// 1458-1469,1479-1495), called per node as in
+    /// paint_property_tree_builder.cc (FragmentPaintPropertyTreeBuilder::
+    /// UpdateTransform / UpdateEffect; CompositorSimpleValuesUpdated,
+    /// paint_property_node.h:82-85). Page has already run Blink's deferred
+    /// property builder and admitted only simple animated values. Returns
+    /// whether every node was updated directly; otherwise the caller runs
+    /// the full Paint, whose PaintArtifactCompositor::Update rewrites the
+    /// rejected nodes (local_frame_view.cc:2965-2975,3348).
     pub fn ApplyCompositedAnimationProperties<F: LayerizeFamily<Skia = R>>(
         &self,
         pac: &crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<F>,
@@ -792,28 +799,31 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         if let Some(node) = update.effects.first() {
             trace.set("opacity", node.opacity as f64);
         }
+        // Per node, as FragmentPaintPropertyTreeBuilder::UpdateTransform /
+        // UpdateEffect call PAC: an accepted node becomes
+        // kChangedOnlyCompositedValues; a rejected one keeps
+        // kChangedOnlySimpleValues and reaches PAC's full Update through the
+        // same lifecycle's Paint.
+        let mut rejected = 0usize;
         for node in &update.transforms {
             let transform = paint::TransformNode::<R>::from_arc(node.clone());
-            if !pac.DirectlyUpdateTransform(&transform, context) {
-                trace.set("applied", 0.0);
-                return false;
+            if pac.DirectlyUpdateTransform(&transform, context) {
+                node.lifecycle.CompositorSimpleValuesUpdated();
+            } else {
+                rejected += 1;
             }
         }
         for node in &update.effects {
             let effect = paint::EffectNode::<R>::from_arc(node.clone());
-            if !pac.DirectlyUpdateCompositedOpacityValue(&effect, context) {
-                trace.set("applied", 0.0);
-                return false;
+            if pac.DirectlyUpdateCompositedOpacityValue(&effect, context) {
+                node.lifecycle.CompositorSimpleValuesUpdated();
+            } else {
+                rejected += 1;
             }
         }
-        for node in &update.transforms {
-            node.lifecycle.CompositorSimpleValuesUpdated();
-        }
-        for node in &update.effects {
-            node.lifecycle.CompositorSimpleValuesUpdated();
-        }
-        trace.set("applied", 1.0);
-        true
+        trace.set("rejected", rejected as f64);
+        trace.set("applied", (rejected == 0) as u8 as f64);
+        rejected == 0
     }
 
     pub fn ApplyScrollbarPaintMutation<F: LayerizeFamily<Skia = R>>(
