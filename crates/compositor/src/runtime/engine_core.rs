@@ -21,7 +21,7 @@ use crate::{
         scheduler::draw_result::DrawResult,
         trees::{client_layer_tree_host_impl::ClientLayerTreeHostImpl, frame_data::FrameData},
     },
-    engine::{CompositorError, CompositorMainThreadEffect},
+    engine::{CompositorError, CompositorInputEffect},
     performance::{CompositorPackage, Span},
     CompositorFrameSubmission,
 };
@@ -45,7 +45,8 @@ pub(crate) struct EngineCore {
     // an old-active-tree frame drawn immediately before pending-tree
     // activation from the frame produced by the latest commit.
     pub(crate) last_committed_source_frame_number: Option<i32>,
-    pub(crate) effects: Vec<CompositorMainThreadEffect>,
+    // The synchronous InputHandlerProxy results of the current input call.
+    pub(crate) input_effects: Vec<CompositorInputEffect>,
     pub(crate) failure: Option<CompositorError>,
 }
 impl EngineCore {
@@ -83,7 +84,7 @@ impl EngineCore {
             scheduler_queries,
             frame_sink,
             last_committed_source_frame_number: None,
-            effects: Vec::new(),
+            input_effects: Vec::new(),
             failure: None,
         })
     }
@@ -456,8 +457,10 @@ impl crate::cc::scheduler::scheduler::SchedulerClient for EngineCore {
             });
     }
     fn DidChangeBeginFrameSourcePaused(&mut self, paused: bool, _scheduler: &mut Scheduler) {
-        self.effects
-            .push(CompositorMainThreadEffect::BeginFrameSourcePaused { paused });
+        // ProxyImpl -> ProxyMain::DidChangeBeginFrameSourcePaused.
+        self.proxy_impl.PostToMain(
+            layerize::commit::proxy::ImplToMain::DidChangeBeginFrameSourcePaused(paused),
+        );
     }
     // Source: cc/trees/proxy_impl.h:219 is an empty inline override.
     fn FrameIntervalUpdated(

@@ -45,7 +45,7 @@ pub mod engine;
 pub use engine::{
     CommitDeferralReason, CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
 
-    CompositorExecutors, CompositorInput, CompositorMainThreadEffect, CompositorMutation,
+    CompositorServices, CompositorInput, CompositorInputEffect, CompositorEmbedderNotification, CompositorMainThreadEffect, CompositorMutation,
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
     PresentationUnavailableReason, BeginMainFrameState, ImplToMainTask, MainFamily, MainFrameResult,

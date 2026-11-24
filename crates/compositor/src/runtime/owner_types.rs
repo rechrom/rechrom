@@ -28,9 +28,8 @@ use crate::{
 };
 
 // The impl-built payloads of the ProxyMain/ProxyImpl messages
-// (layerize::commit::proxy, S1B_PROXY_DESIGN.md 1.1). ProxyImplInit, the
-// presentation feedback and the queued DrawImage are not posted before the
-// thread move (S1b-7) and stay unit values until then.
+// (layerize::commit::proxy, S1B_PROXY_DESIGN.md 1.1). The queued DrawImage
+// is not posted yet and stays a unit value.
 impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
     // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
     type ProxySwapPromise = Box<super::host_owners::SwapPromise<R>>;
@@ -38,8 +37,12 @@ impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTyp
     type LayerTreeMutator = super::host_owners::LayerTreeMutator;
     // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
     type ImplInit = Box<super::engine_factory::ProxyImplInit<R>>;
-    type PresentationFeedback = ();
+    // ProxyMain::DidPresentCompositorFrame's viz::FrameTimingDetails
+    // (cc/trees/proxy_main.h:71-78); the presentation callback lists already
+    // ran on the impl sequence (LayerTreeHost.cc:998-1003 order).
+    type PresentationFeedback = super::metadata::FrameTimingDetails;
     type ProxyDrawImage = ();
+    type EmbedderNotification = crate::engine::CompositorEmbedderNotification;
 }
 
 // The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h). The

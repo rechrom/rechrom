@@ -42,9 +42,7 @@ impl Page {
             0,
             0,
             self.state
-                .rendering
-                .borrow()
-                .InputTimeForInstant(completed_at),
+                .CompositorClock().InputTime(completed_at),
             interaction::input::ui::base::mojom::menu_source_type::MenuSourceType::kNone,
             pointer_id,
         );
@@ -123,9 +121,7 @@ impl Page {
             0,
             modifiers,
             self.state
-                .rendering
-                .borrow()
-                .InputTimeForInstant(observed_at),
+                .CompositorClock().InputTime(observed_at),
             interaction::input::ui::base::mojom::menu_source_type::MenuSourceType::kNone,
             0,
         );

@@ -157,20 +157,18 @@ impl PageState {
         recording: paint::drag_image::DragImageRecording,
         opacity: f32,
     ) -> io::Result<Option<Arc<DragImageBitmap>>> {
-        let (record, raster) = {
-            let pipeline = self.rendering.borrow();
-            // The recording conversion is main-side (S1b-6: the main part).
-            let compositor = pipeline.Main().ok_or_else(|| {
-                io::Error::other("drag image requires the Page compositor's Paint services")
-            })?;
-            (
-                compositor.ConvertPaintArtifactSubsetToRecord(
-                    recording.artifact,
-                    &recording.border_box_properties,
-                ),
-                pipeline.impl_half.raster_engine.clone(),
+        // The recording conversion is main-side (the LayerizeEngine's Paint
+        // services); the raster engine is the document sequence's.
+        let (record, raster) = (
+            self.ConvertPaintArtifactSubsetToRecord(
+                recording.artifact,
+                &recording.border_box_properties,
             )
-        };
+            .ok_or_else(|| {
+                io::Error::other("drag image requires the Page compositor's Paint services")
+            })?,
+            self.raster_engine.clone(),
+        );
         let snapshots = self.SnapshotCanvasCustomData(|visitor| record.VisitCustomData(visitor));
         // Page's VisualViewport scale is currently 1; device scale is already
         // represented by its source Layout/Paint coordinate contract.
@@ -353,9 +351,6 @@ impl PageMouseFrameGeometry {
         let scale = state.constraints.borrow().device_pixel_ratio as f32;
         let image = source::CreateLinkDragImage(&DragFontContext(&state), url, label, scale)?;
         let result = state
-            .rendering
-            .borrow()
-            .impl_half
             .raster_engine
             .RasterizeLinkDragImage(image.size, scale, &image.text)
             .map(|image| image.map(Packet));

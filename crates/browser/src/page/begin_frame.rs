@@ -128,21 +128,6 @@ impl Page {
         result
     }
 
-    fn AdvanceCompositorBeginFrame(&mut self, args: BeginFrameArgs) -> io::Result<()> {
-        let output = {
-            let mut rendering = self.state.rendering.borrow_mut();
-            if !rendering.NeedsBeginFrames() {
-                return Ok(());
-            }
-            rendering.BeginPhysicalFrame(args)?
-        };
-        self.ApplyCompositorWheelEffects(output.effects)?;
-        if output.submitted {
-            self.PresentCompositorOnlyFrame();
-        }
-        Ok(())
-    }
-
     pub fn SetBeginFrameSource(&mut self, source: Option<Arc<dyn BeginFrameSource>>) {
         *self.state.begin_frame_source.borrow_mut() = source.clone();
         self.state.has_begin_frame_source.set(source.is_some());
@@ -289,7 +274,7 @@ impl Page {
         // in-Page compositor needs this document-side forwarding path.
         let compositor_demand = !self.external_compositor
             && self.frame.is_some()
-            && self.state.rendering.borrow().NeedsBeginFrames();
+            && self.state.SynchronousPresenterNeedsBeginFrames();
         let demand = compositor_demand
             || (self.IsRenderingReady()
                 && (self.begin_frame.inputs.NeedsBeginFrame()
@@ -432,7 +417,9 @@ impl Page {
             }
             let initial_done = profile.map(|start| start.elapsed());
             self.DrainFrameInputs()?;
-            self.AdvanceCompositorBeginFrame(args)?;
+            // Physical BeginFrames reach only the external impl runner; the
+            // internal presenter drives its scheduler with manual BeginFrames
+            // (CommitArtifact, input frames).
             // Source: ProgrammaticScrollAnimator::TickAnimation. Smooth CSSOM
             // viewport scrolling samples on the rendering opportunity before
             // scroll events and requestAnimationFrame observe the new offset.
@@ -457,10 +444,7 @@ impl Page {
             if autoscroll_active {
                 let compositor_now = self
                     .state
-                    .rendering
-                    .borrow()
-                    .impl_half.executor
-                    .TimeTicks(args.frame_time);
+                    .compositor_executor.TimeTicks(args.frame_time);
                 // Preserve the compositor clock origin while crossing into
                 // Blink's independent source input timestamp value type.
                 let autoscroll_now =

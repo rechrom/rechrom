@@ -17,11 +17,13 @@ use crate::{
         trees::layer_tree_host_impl::WithCpuTileManagerContext,
     },
     engine::{
-        CompositorError, CompositorInput, CompositorMainThreadEffect, CompositorOutput,
+        CompositorEmbedderNotification, CompositorError, CompositorInput, CompositorInputEffect,
+        CompositorOutput,
         CompositorViewportState,
     },
     performance::{CompositorPackage, Span},
 };
+use layerize::commit::proxy::ImplToMain;
 use std::sync::Arc;
 
 // InputHandlerProxy owns the exact scroll begin while a source DOM ack or
@@ -228,8 +230,8 @@ impl EngineAssembly {
                 "source input never draws"
             );
             output
-                .main_thread_effects
-                .append(&mut next.main_thread_effects);
+                .input_effects
+                .append(&mut next.input_effects);
             output.needs_begin_frames |= next.needs_begin_frames;
             output.work_pending |= next.work_pending;
             output.main_commit_pending |= next.main_commit_pending;
@@ -298,7 +300,7 @@ impl EngineAssembly {
                 }
                 if default_prevented {
                     return Ok(self.WaitingWheelOutput(
-                        CompositorMainThreadEffect::WheelDisposition {
+                        CompositorInputEffect::WheelDisposition {
                             compositor_owned: false,
                         },
                     ));
@@ -326,12 +328,12 @@ impl EngineAssembly {
                 let Some(id) = scroll_element_id else {
                     let effect = match pending.input {
                         CompositorInput::ScrollGesture(gesture) => {
-                            CompositorMainThreadEffect::GestureDisposition {
+                            CompositorInputEffect::GestureDisposition {
                                 dispatch_id: gesture.dispatch_id,
                                 handled: false,
                             }
                         }
-                        _ => CompositorMainThreadEffect::WheelDisposition {
+                        _ => CompositorInputEffect::WheelDisposition {
                             compositor_owned: false,
                         },
                     };
@@ -415,7 +417,7 @@ impl EngineAssembly {
                     let request =
                         self.RetainWheelInput(input, PendingWheelStage::DOMAcknowledgement);
                     return Ok(self.WaitingWheelOutput(
-                        CompositorMainThreadEffect::WheelRequiresDOMAcknowledgement { request },
+                        CompositorInputEffect::WheelRequiresDOMAcknowledgement { request },
                     ));
                 }
             }
@@ -425,7 +427,7 @@ impl EngineAssembly {
                 .push_back((input, dom_acknowledged));
             drop(query);
             return Ok(
-                self.WaitingWheelOutput(CompositorMainThreadEffect::WheelDisposition {
+                self.WaitingWheelOutput(CompositorInputEffect::WheelDisposition {
                     compositor_owned: false,
                 }),
             );
@@ -566,12 +568,12 @@ impl EngineAssembly {
                     input_trace.set("compositor_owned", compositor_owned as u8 as f64);
                     input_trace.set("queued_for_begin_frame", 1.0);
                     self.core
-                        .effects
-                        .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
+                        .input_effects
+                        .push(CompositorInputEffect::WheelDisposition { compositor_owned });
                     return Ok(CompositorOutput {
                         frame: None,
                         frame_matches_latest_commit: false,
-                        main_thread_effects: std::mem::take(&mut self.core.effects),
+                        input_effects: std::mem::take(&mut self.core.input_effects),
                         needs_begin_frames: true,
                         work_pending: true,
                         main_commit_pending: self.core.HasReadyCommit(),
@@ -813,8 +815,8 @@ impl EngineAssembly {
         if let Some(compositor_owned) = compositor_owned {
             input_trace.set("compositor_owned", compositor_owned as u8 as f64);
             self.core
-                .effects
-                .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
+                .input_effects
+                .push(CompositorInputEffect::WheelDisposition { compositor_owned });
         }
         drop(query);
         if let Some(reasons) = hit_test_reasons {
@@ -825,8 +827,8 @@ impl EngineAssembly {
                 self.RetainWheelInput(input, PendingWheelStage::MainThreadHitTest(reasons));
             self.waiting_wheel_hit_test = Some(request);
             self.core
-                .effects
-                .push(CompositorMainThreadEffect::WheelRequiresMainThreadHitTest {
+                .input_effects
+                .push(CompositorInputEffect::WheelRequiresMainThreadHitTest {
                     request,
                     position,
                 });
@@ -847,7 +849,7 @@ impl EngineAssembly {
         if let Some(error) = self.core.failure.take() {
             return Err(error);
         }
-        let mut effects = std::mem::take(&mut self.core.effects);
+        let mut effects = std::mem::take(&mut self.core.input_effects);
         // InputHandlerProxy returns after mutating the active tree and posts
         // the resulting scheduler work back to the impl task runner. Running
         // Poll here would drain tile, raster and scheduler commands inside the
@@ -860,7 +862,7 @@ impl EngineAssembly {
         Ok(CompositorOutput {
             frame: None,
             frame_matches_latest_commit: false,
-            main_thread_effects: effects,
+            input_effects: effects,
             needs_begin_frames: true,
             work_pending: true,
             main_commit_pending: self.core.HasReadyCommit(),
@@ -975,14 +977,16 @@ impl EngineAssembly {
                 self.latency_monitors.Remove(id);
             }
 
-            EngineTask::DidNotProduceFrame { ack, reason } => self
-                .core
-                .effects
-                .push(CompositorMainThreadEffect::FrameNotProduced { ack, reason }),
+            EngineTask::DidNotProduceFrame { ack, reason } => self.core.proxy_impl.PostToMain(
+                ImplToMain::EmbedderNotification(
+                    CompositorEmbedderNotification::FrameNotProduced { ack, reason },
+                ),
+            ),
+            // ProxyImpl -> ProxyMain::DidChangeBeginFrameSourcePaused.
             EngineTask::BeginFrameSourcePaused { paused } => self
                 .core
-                .effects
-                .push(CompositorMainThreadEffect::BeginFrameSourcePaused { paused }),
+                .proxy_impl
+                .PostToMain(ImplToMain::DidChangeBeginFrameSourcePaused(paused)),
 
             EngineTask::CheckerNeedsInvalidation { delegate: _ } => {
                 drop(query);
@@ -1186,14 +1190,14 @@ impl EngineAssembly {
                 speculative,
                 succeeded,
                 ..
-            } => self
-                .core
-                .effects
-                .push(CompositorMainThreadEffect::ImageDecodeFinished {
+            // ProxyImpl::NotifyImageDecodeRequestFinished posts to ProxyMain.
+            } => self.core.proxy_impl.PostToMain(
+                ImplToMain::NotifyImageDecodeRequestFinished {
                     request_id,
                     speculative,
-                    succeeded,
-                }),
+                    decode_succeeded: succeeded,
+                },
+            ),
             // Preserve the original typed effect until its actual destination
             // is wired; never silently acknowledge an unimplemented callback.
             pending => {
@@ -1222,31 +1226,30 @@ impl EngineAssembly {
                 request,
                 frame_token,
                 swap_time,
-            } => self
-                .core
-                .effects
-                .push(CompositorMainThreadEffect::PresentationPromiseSwapped {
+            } => self.core.proxy_impl.PostToMain(ImplToMain::EmbedderNotification(
+                CompositorEmbedderNotification::PresentationPromiseSwapped {
                     request,
                     frame_token,
                     swap_time,
-                }),
+                },
+            )),
             ResourceEffect::ReportTimeDidNotSwap {
                 request,
                 failure_time,
-            } => {
-                self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::PresentationPromiseDidNotSwap {
-                        request,
-                        failure_time,
-                    })
-            }
+            } => self.core.proxy_impl.PostToMain(ImplToMain::EmbedderNotification(
+                CompositorEmbedderNotification::PresentationPromiseDidNotSwap {
+                    request,
+                    failure_time,
+                },
+            )),
             ResourceEffect::DidLoseLayerTreeFrameSink { delegate: target } => {
                 assert_eq!(target, delegate);
                 self.scheduler.DidLoseLayerTreeFrameSink(&mut self.core);
+                // ProxyImpl::DidLoseLayerTreeFrameSinkOnImplThread posts
+                // ProxyMain::DidLoseLayerTreeFrameSink (proxy_impl.cc).
                 self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::LayerTreeFrameSinkLost);
+                    .proxy_impl
+                    .PostToMain(ImplToMain::DidLoseLayerTreeFrameSink);
             }
             ResourceEffect::CanDrawStateChanged {
                 delegate: target,
@@ -1270,26 +1273,28 @@ impl EngineAssembly {
             }
             ResourceEffect::PageScaleAnimationCompleted { delegate: target } => {
                 assert_eq!(target, delegate);
+                // ProxyImpl::DidCompletePageScaleAnimationOnImplThread posts
+                // ProxyMain::DidCompletePageScaleAnimation (proxy_impl.cc).
                 self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::PageScaleAnimationCompleted);
+                    .proxy_impl
+                    .PostToMain(ImplToMain::DidCompletePageScaleAnimation);
             }
             ResourceEffect::VideoBeginFrame { controller, args } => {
-                self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::VideoBeginFrame {
+                self.core.proxy_impl.PostToMain(ImplToMain::EmbedderNotification(
+                    CompositorEmbedderNotification::VideoBeginFrame {
                         controller: controller.0,
                         args,
-                    });
+                    },
+                ));
             }
             ResourceEffect::VideoNeedsBeginFrames {
                 delegate: target,
                 needs,
             } => {
                 assert_eq!(target, delegate);
-                self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::VideoNeedsBeginFrames { needs });
+                self.core.proxy_impl.PostToMain(ImplToMain::EmbedderNotification(
+                    CompositorEmbedderNotification::VideoNeedsBeginFrames { needs },
+                ));
             }
             ResourceEffect::Presented {
                 delegate: target,
@@ -1306,12 +1311,14 @@ impl EngineAssembly {
                     callback(&details);
                 }
                 // LayerTreeHost.cc:998-1003: client notification follows
-                // the source main-thread presentation callback lists.
+                // the source main-thread presentation callback lists; it is
+                // ProxyMain::DidPresentCompositorFrame (proxy_impl.cc
+                // DidPresentCompositorFrameOnImplThread).
                 self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::FramePresented {
+                    .proxy_impl
+                    .PostToMain(ImplToMain::DidPresentCompositorFrame {
                         frame_token: token,
-                        details: details.clone(),
+                        feedback: details.clone(),
                     });
             }
             ResourceEffect::TransitionFinished {
@@ -1334,9 +1341,9 @@ impl EngineAssembly {
                 results,
             } => {
                 assert_eq!(target, delegate);
-                self.core
-                    .effects
-                    .push(CompositorMainThreadEffect::CompositorMetrics { results });
+                self.core.proxy_impl.PostToMain(ImplToMain::EmbedderNotification(
+                    CompositorEmbedderNotification::CompositorMetrics { results },
+                ));
             }
         }
     }
@@ -1472,7 +1479,7 @@ impl EngineAssembly {
         if let Some(error) = self.core.failure.take() {
             return Err(error);
         }
-        let mut effects = std::mem::take(&mut self.core.effects);
+        let mut effects = std::mem::take(&mut self.core.input_effects);
         let work_pending = self.deferred.is_some()
             || !self.commands.IsEmpty()
             || !self.lifecycle.IsEmpty()
@@ -1486,7 +1493,7 @@ impl EngineAssembly {
         Ok(CompositorOutput {
             frame,
             frame_matches_latest_commit,
-            main_thread_effects: effects,
+            input_effects: effects,
             needs_begin_frames: self.needs_begin_frames,
             work_pending,
             main_commit_pending: self.core.HasReadyCommit(),
@@ -1532,12 +1539,12 @@ impl EngineAssembly {
             .insert(self.next_wheel_request, PendingWheelInput { input, stage });
         self.next_wheel_request
     }
-    fn WaitingWheelOutput(&mut self, effect: CompositorMainThreadEffect) -> CompositorOutput {
-        self.core.effects.push(effect);
+    fn WaitingWheelOutput(&mut self, effect: CompositorInputEffect) -> CompositorOutput {
+        self.core.input_effects.push(effect);
         CompositorOutput {
             frame: None,
             frame_matches_latest_commit: false,
-            main_thread_effects: std::mem::take(&mut self.core.effects),
+            input_effects: std::mem::take(&mut self.core.input_effects),
             needs_begin_frames: self.needs_begin_frames,
             work_pending: false,
             main_commit_pending: self.core.HasReadyCommit(),

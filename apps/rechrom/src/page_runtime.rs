@@ -13,7 +13,7 @@ use crate::{
 };
 use browser::page::{
     CompositorMainThreadEffect, CompositorWheelResult, PageChildCompositorFrame,
-    PageRenderPipeline, PageReturnedResource,
+    PageReturnedResource,
 };
 use browser::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
@@ -178,7 +178,6 @@ pub(crate) enum Command {
         requests: Vec<u64>,
         swap_time: Instant,
     },
-    EventTimingDidCommit(Instant),
     EventTimingDidPresent(browser::page::PageFramePresentationFeedback),
     Visibility {
         visible: bool,
@@ -827,7 +826,25 @@ struct ImplPresentation {
         interaction::input::platform::widget::input::cursor_control_handler::CursorControlHandler,
     gestures: GestureEventQueue,
     gesture_touch_action: Option<GestureTouchActionFilterHandle>,
-    pipeline: PageRenderPipeline,
+    /// The impl compositor half (cc ProxyImpl, LayerTreeHostImpl,
+    /// Scheduler), created by ProxyMain's posted Initialize
+    /// (proxy_main.cc:80-89) from `services`.
+    compositor: Option<compositor::CompositorEngine>,
+    services: compositor::CompositorServices,
+    /// The injected impl task runner's TimeTicks domain.
+    clock: browser::page::PageCompositorClockMapping,
+    /// Move-only frames cc submitted to this Page's LayerTreeFrameSink.
+    outbound_frames: VecDeque<compositor::CompositorFrameSubmission>,
+    /// InputHandlerProxy results of outputs not returned to an input call.
+    input_effects: Vec<compositor::CompositorInputEffect>,
+    needs_begin_frames: bool,
+    work_pending: bool,
+    /// A budget-limited Poll left runnable typed impl tasks
+    /// (`CompositorOutput::work_pending`, the owner-turn contract).
+    owner_turn_pending: bool,
+    /// The layout zoom of the active tree's artifact (InputRouter's widget
+    /// scale), received with each main frame.
+    input_scale: f64,
     frames: mpsc::Sender<window_runtime::Command>,
     document: Document,
     document_sender: mpsc::Sender<Command>,
@@ -851,7 +868,8 @@ struct ImplPresentation {
 
 impl ImplPresentation {
     fn new(
-        pipeline: PageRenderPipeline,
+        services: compositor::CompositorServices,
+        clock: browser::page::PageCompositorClockMapping,
         frames: mpsc::Sender<window_runtime::Command>,
         document: Document,
         document_sender: mpsc::Sender<Command>,
@@ -868,7 +886,15 @@ impl ImplPresentation {
             gestures: GestureEventQueue::default(),
             gesture_touch_action: None,
             presentation_feedback,
-            pipeline,
+            compositor: None,
+            services,
+            clock,
+            outbound_frames: VecDeque::new(),
+            input_effects: Vec::new(),
+            needs_begin_frames: false,
+            work_pending: false,
+            owner_turn_pending: false,
+            input_scale: 1.0,
             frames,
             document,
             document_sender,
@@ -881,6 +907,261 @@ impl ImplPresentation {
             pending_resize: None,
             visual_properties_ack,
         }
+    }
+
+    // --- The impl compositor half (CompositorEngine) on this sequence. ---
+
+    fn input_time(&self, instant: Instant) -> interaction::input::base::time::time::TimeTicks {
+        self.clock.InputTime(instant)
+    }
+
+    /// ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
+    fn initialize_impl(
+        &mut self,
+        viewport: Viewport,
+        transparent: bool,
+        init: Box<compositor::ProxyImplInit>,
+        to_main: browser::page::ImplToMainQueue,
+    ) -> io::Result<()> {
+        assert!(self.compositor.is_none());
+        let config = browser::page::EmbedderCompositorConfig(
+            viewport.width,
+            viewport.height,
+            viewport.scale,
+            transparent,
+        )?;
+        let compositor =
+            compositor::CompositorEngine::new(config, self.services.clone(), init, to_main)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+        self.compositor = Some(compositor);
+        Ok(())
+    }
+
+    /// ProxyMain::Stop -> DestroyProxyImplOnImplThread.
+    fn stop_impl(&mut self) {
+        if let Some(mut compositor) = self.compositor.take() {
+            compositor.Shutdown();
+        }
+    }
+
+    /// Accepts the engine's output: its frames move into the FrameSink
+    /// queue, which acknowledges each submission (Chromium acknowledges at
+    /// this boundary, before Viz draws the frame). Returns whether a frame
+    /// was submitted.
+    fn accept_output(&mut self, first: compositor::CompositorOutput) -> io::Result<bool> {
+        let mut pending = VecDeque::from([first]);
+        let mut submitted = false;
+        let mut turns = 0usize;
+        while let Some(mut output) = pending.pop_front() {
+            turns += 1;
+            if turns > 64 {
+                return Err(io::Error::other(
+                    "compositor output did not reach a stable frame boundary",
+                ));
+            }
+            // Each output reports the engine's current subscription state.
+            // Ack outputs later in this queue supersede earlier values.
+            self.needs_begin_frames = output.needs_begin_frames;
+            self.work_pending = output.work_pending;
+            self.input_effects.append(&mut output.input_effects);
+            let Some(frame) = output.frame else {
+                continue;
+            };
+            submitted = true;
+            self.outbound_frames.push_back(frame);
+            let compositor = self.compositor.as_mut().expect("initialized compositor");
+            pending.push_back(
+                compositor
+                    .DidReceiveFrameAck()
+                    .map_err(|error| io::Error::other(error.to_string()))?,
+            );
+        }
+        self.owner_turn_pending |= self.work_pending;
+        Ok(submitted)
+    }
+
+    /// The input results accumulated since the last call, sorted for the
+    /// input owner.
+    fn take_input_result(&mut self, submitted: bool) -> CompositorWheelResult {
+        let mut result = CompositorWheelResult {
+            submitted,
+            ..Default::default()
+        };
+        for effect in self.input_effects.drain(..) {
+            result.AddInputEffect(effect);
+        }
+        result
+    }
+
+    fn output_result(
+        &mut self,
+        output: compositor::CompositorOutput,
+    ) -> io::Result<CompositorWheelResult> {
+        let submitted = self.accept_output(output)?;
+        Ok(self.take_input_result(submitted))
+    }
+
+    /// A ProxyMain -> ProxyImpl task.
+    fn run_main_thread_task(
+        &mut self,
+        task: compositor::MainToImplTask,
+    ) -> io::Result<CompositorWheelResult> {
+        let Some(compositor) = self.compositor.as_mut() else {
+            // The impl half is gone (stopped); the task's lease and
+            // completion guards release the main thread when dropped.
+            return Ok(CompositorWheelResult::default());
+        };
+        let output = compositor
+            .RunMainThreadTask(task)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.output_result(output)
+    }
+
+    fn begin_physical_frame(
+        &mut self,
+        args: foundation::begin_frame::BeginFrameArgs,
+    ) -> io::Result<CompositorWheelResult> {
+        use compositor::adapter::begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId};
+        let Some(compositor) = self.compositor.as_mut() else {
+            return Ok(CompositorWheelResult::default());
+        };
+        let mut trace = browser_tracing::span("compositor", "PageCompositor.PhysicalBeginFrame");
+        trace.set("source_id", args.source_id as f64);
+        trace.set("sequence", args.sequence_number as f64);
+        let interval = compositor::adapter::time::TimeDelta::Microseconds(
+            args.interval.as_micros().min(i64::MAX as u128) as i64,
+        );
+        let output = compositor
+            .BeginFrame(BeginFrameArgs {
+                frame_time: self.clock.TimeTicks(args.frame_time),
+                deadline: self.clock.TimeTicks(args.deadline),
+                interval,
+                unthrottled_interval: interval,
+                frame_id: BeginFrameId {
+                    source_id: args.source_id,
+                    sequence_number: args.sequence_number,
+                },
+                trace_id: args.sequence_number.min(i64::MAX as u64) as i64,
+                dispatch_time: self.clock.TimeTicks(Instant::now()),
+                client_arrival_time: self.clock.TimeTicks(Instant::now()),
+                type_: BeginFrameArgsType::NORMAL,
+                ..BeginFrameArgs::default()
+            })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.output_result(output)
+    }
+
+    /// Runs work posted to cc's injected task runner on this impl sequence.
+    fn pump(&mut self) -> io::Result<CompositorWheelResult> {
+        let Some(compositor) = self.compositor.as_mut() else {
+            return Ok(CompositorWheelResult::default());
+        };
+        let output = compositor
+            .Poll()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let result = self.output_result(output)?;
+        self.owner_turn_pending = self.work_pending;
+        Ok(result)
+    }
+
+    fn needs_pump(&self) -> bool {
+        // Keep posting owner turns only when an actual Poll exhausted its
+        // budget with runnable typed tasks left.
+        self.owner_turn_pending
+    }
+
+    fn reclaim_resources(&mut self, resources: Vec<PageReturnedResource>) -> io::Result<()> {
+        if resources.is_empty() {
+            return Ok(());
+        }
+        let Some(compositor) = self.compositor.as_mut() else {
+            return Ok(());
+        };
+        let output = compositor
+            .ReclaimResources(resources)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.accept_output(output)?;
+        Ok(())
+    }
+
+    /// Produces a new frame from cc's resident active tree.
+    fn request_redraw(&mut self) -> io::Result<()> {
+        let output = self
+            .compositor
+            .as_mut()
+            .ok_or_else(|| io::Error::other("redraw requires a presentable compositor tree"))?
+            .RequestRedraw()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.accept_output(output)?;
+        Ok(())
+    }
+
+    fn receive_presentation_feedback(
+        &mut self,
+        feedback: browser::page::PageFramePresentationFeedback,
+    ) -> io::Result<CompositorWheelResult> {
+        let (frame_token, details) =
+            match browser::page::PresentationFeedbackDetails(feedback, self.clock) {
+                Ok(details) => details,
+                Err(effect) => {
+                    return Ok(CompositorWheelResult {
+                        effects: vec![effect],
+                        ..Default::default()
+                    })
+                }
+            };
+        let output = self
+            .compositor
+            .as_mut()
+            .ok_or_else(|| io::Error::other("presentation feedback requires a compositor"))?
+            .DidPresentFrame(frame_token, details)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.output_result(output)
+    }
+
+    /// InputHandlerProxy routing of an impl-side compositor mutation.
+    fn compositor_input(
+        &mut self,
+        input: compositor::CompositorMutation,
+    ) -> io::Result<CompositorWheelResult> {
+        let output = self
+            .compositor
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::other("wheel input requires a committed resident compositor")
+            })?
+            .Mutate(input)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        // External presentation receives its next frame opportunity from
+        // the host's BeginFrames.
+        self.output_result(output)
+    }
+
+    fn wheel(&mut self, wheel: &WheelEvent) -> io::Result<CompositorWheelResult> {
+        let timestamp = self
+            .clock
+            .TimeTicks(wheel.timestamp.unwrap_or_else(Instant::now));
+        let (input, _) = browser::page::WheelCompositorInput(
+            wheel,
+            timestamp,
+            browser::page::InputWidgetScale(self.input_scale),
+        );
+        self.compositor_input(compositor::CompositorMutation::Input(input))
+    }
+
+    /// A mutation continued from the document's source owner (main-thread
+    /// hit test, DOM wheel acknowledgement, scrollbar gestures).
+    fn continue_compositor_mutation(
+        &mut self,
+        mutation: compositor::CompositorMutation,
+    ) -> io::Result<CompositorWheelResult> {
+        if self.compositor.is_none() {
+            return Err(io::Error::other("external Page compositor is not started"));
+        }
+        if mutation.IsMainThreadMutation() {
+            return Err(io::Error::other("main compositor mutation on the impl side"));
+        }
+        self.compositor_input(mutation)
     }
 
     fn event_timing_did_not_swap(&mut self) {
@@ -897,7 +1178,6 @@ impl ImplPresentation {
         effects: Vec<CompositorMainThreadEffect>,
         main: &mpsc::Sender<Command>,
     ) {
-        self.observe_main_thread_effects(&effects);
         if !effects.is_empty() {
             let _ = main.send(Command::CompositorEffects { effects });
         }
@@ -918,20 +1198,21 @@ impl ImplPresentation {
                             continue;
                         }
                     }
-                    let now = self.pipeline.InputTimeForInstant(Instant::now());
+                    let now = self.input_time(Instant::now());
                     if let Some(dispatch) = self.gestures.DebounceOrForwardEvent(gesture, (), now) {
                         self.forward_gesture(dispatch, main)?;
                     }
                 }
                 GeneratedFlingEvent::Wheel(event) => {
-                    let (mut wheel, result) = self.pipeline.CanonicalFlingWheel(&event)?;
+                    let (mut wheel, input) = browser::page::CanonicalFlingWheelInput(&event);
+                    let result =
+                        self.compositor_input(compositor::CompositorMutation::Input(input))?;
                     wheel.compositor_owned = result.compositor_owned;
                     wheel.compositor_nonblocking = result.dom_ack.is_none();
                     if let Some(request) = result.dom_ack {
                         wheel.compositor_ack.push(request);
                     }
                     self.gesture_acks(&result.gesture_acks, main);
-                    self.observe_main_thread_effects(&result.effects);
                     let _ = main.send(Command::ExternalCanonicalWheel {
                         document_generation: self.input_document_generation,
                         event,
@@ -1000,9 +1281,11 @@ impl ImplPresentation {
             None => {}
         }
         if dispatch.event.IsScrollEvent() {
-            let result = self
-                .pipeline
-                .GestureWithDispatchId(&dispatch.event, dispatch.dispatch_id)?;
+            let input = browser::page::GestureCompositorInputWithDispatchId(
+                &dispatch.event,
+                dispatch.dispatch_id,
+            )?;
+            let result = self.compositor_input(compositor::CompositorMutation::Input(input))?;
             self.gesture_acks(&result.gesture_acks, main);
             self.deliver_input_effects(result.effects, main);
         } else {
@@ -1030,10 +1313,6 @@ impl ImplPresentation {
         Ok(())
     }
 
-    fn observe_main_thread_effects(&mut self, _effects: &[CompositorMainThreadEffect]) {
-        self.send_event_timing_commit_finishes();
-    }
-
     /// The document thread finished ProxyMain::BeginMainFrame. Its
     /// provenance, delegated video frames and input scale belong to the main
     /// frame (S1B_PROXY_DESIGN.md B2: they ride with the commit).
@@ -1045,7 +1324,11 @@ impl ImplPresentation {
         redraw: bool,
     ) -> Result<(), RuntimeFailure> {
         self.queue_child_frames(child_frames);
-        self.pipeline.SetInputScale(input_scale);
+        // The external impl side learns the active artifact's layout zoom
+        // with each main frame.
+        if input_scale.is_finite() && input_scale > 0.0 {
+            self.input_scale = input_scale;
+        }
         merge_resize(&mut self.pending_resize, content.resize.take());
         content.resize = self.pending_resize.take();
         self.content = Some(content);
@@ -1054,17 +1337,9 @@ impl ImplPresentation {
         // retained; a browser-owned embedder revision likewise needs a new
         // frame carrying it (the old revision_redraw path).
         if redraw || std::mem::take(&mut self.copy_output_redraw_pending) {
-            self.pipeline.RequestRedraw()?;
+            self.request_redraw()?;
         }
         Ok(())
-    }
-
-    fn send_event_timing_commit_finishes(&mut self) {
-        for commit_finish_time in self.pipeline.TakeCommitFinishTimes() {
-            let _ = self
-                .document_sender
-                .send(Command::EventTimingDidCommit(commit_finish_time));
-        }
     }
 
     fn observe_resize(&mut self, resize: Option<ResizeProvenance>) {
@@ -1088,22 +1363,18 @@ impl ImplPresentation {
         }
     }
     fn flush_frames(&mut self) -> Result<bool, RuntimeFailure> {
-        // Completion originates at cc's FinishCommit, including asynchronous
-        // commits progressed by Pump. Preserve its timestamp and send it
-        // before any swap notification for frames produced in the same turn.
-        self.send_event_timing_commit_finishes();
+        // Commit completion (cc's FinishCommit) reaches the document as
+        // ProxyMain::DidCompleteCommit, posted before this turn's frames.
         let Some(content) = self.content else {
             return Ok(false);
         };
-        let frames = self.pipeline.TakeFrames();
+        let frames = self.outbound_frames.drain(..).collect::<Vec<_>>();
         if frames.is_empty() {
             // Child SurfaceDrawQuads are published atomically with the next
             // parent CompositorFrame. Do not drain their move-only resources
             // while no parent can carry the reference into external Viz.
             return Ok(false);
         }
-        let pipeline_child_frames = self.pipeline.TakeChildFrames();
-        self.queue_child_frames(pipeline_child_frames);
         let mut child_frames = self.pending_child_frames.drain(..).collect::<Vec<_>>();
         let mut submitted = false;
         for (index, frame) in frames.into_iter().enumerate() {
@@ -1248,11 +1519,12 @@ fn run_impl(
         pump_generation.clone(),
         "RasterExecutor.Task",
     ));
-    let pipeline =
-        PageRenderPipeline::new_external(compositor_executor, raster_executor, transparent);
-    let _ = main.send(Command::BindCompositorPresentationClock(
-        pipeline.PresentationClockMapping(),
-    ));
+    // The services CompositorEngine::new is constructed with when
+    // ProxyMain's Initialize arrives; external Pages stop at
+    // CompositorFrame and submit into the window-owned shared Viz service.
+    let (services, clock) =
+        browser::page::NewCompositorServices(compositor_executor, raster_executor);
+    let _ = main.send(Command::BindCompositorPresentationClock(clock));
     // ProxyImpl -> ProxyMain: the posted tasks reach the document queue; a
     // BeginMainFrame becomes its rendering opportunity with the physical
     // frame that produced it.
@@ -1292,7 +1564,8 @@ fn run_impl(
         let _ = presentation_sender.send(ImplCommand::PresentationFeedback(feedback));
     });
     let mut presentation = ImplPresentation::new(
-        pipeline,
+        services,
+        clock,
         frames,
         document,
         main.clone(),
@@ -1309,7 +1582,7 @@ fn run_impl(
     'commands: loop {
         if queued_commands.is_empty() {
             let command = if let Some(deadline) = presentation.gestures.NextDebounceDeadline() {
-                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let now = presentation.input_time(Instant::now());
                 let delay = Duration::from_micros(
                     deadline
                         .ToInternalValue()
@@ -1332,7 +1605,7 @@ fn run_impl(
         while let Ok(command) = receiver.try_recv() {
             queued_commands.push_back(command);
         }
-        let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+        let now = presentation.input_time(Instant::now());
         presentation.expire_gesture_debounce(now, &main)?;
 
         // Source: cc/scheduler/compositor_priority_experiments.h and
@@ -1463,7 +1736,7 @@ fn run_impl(
                 );
             }
             ImplCommand::DebounceExpired => {
-                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let now = presentation.input_time(Instant::now());
                 presentation.expire_gesture_debounce(now, &main)?;
                 let _ = presentation.flush_frames()?;
             }
@@ -1477,14 +1750,14 @@ fn run_impl(
                 }
             }
             ImplCommand::StopFling => {
-                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let now = presentation.input_time(Instant::now());
                 let output = presentation.gestures.StopFling(now);
                 presentation.deliver_fling_output(output, &main)?;
                 let _ = presentation.flush_frames()?;
             }
             ImplCommand::Stop => {
                 presentation.event_timing_did_not_swap();
-                presentation.pipeline.StopImpl();
+                presentation.stop_impl();
                 break 'commands;
             }
             ImplCommand::EventTimingRequests { requests } => {
@@ -1498,10 +1771,9 @@ fn run_impl(
                 match task {
                     // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
                     compositor::MainToImplTask::Initialize { completion, init } => {
-                        presentation.pipeline.InitializeImpl(
-                            viewport.width,
-                            viewport.height,
-                            viewport.scale,
+                        presentation.initialize_impl(
+                            viewport,
+                            transparent,
                             init,
                             to_main.clone(),
                         )?;
@@ -1511,11 +1783,11 @@ fn run_impl(
                     // (proxy_main.cc:916-946).
                     compositor::MainToImplTask::Stop { completion } => {
                         presentation.event_timing_did_not_swap();
-                        presentation.pipeline.StopImpl();
+                        presentation.stop_impl();
                         completion.Signal();
                     }
                     task => {
-                        let result = presentation.pipeline.RunMainThreadTask(task)?;
+                        let result = presentation.run_main_thread_task(task)?;
                         presentation.gesture_acks(&result.gesture_acks, &main);
                         presentation.deliver_input_effects(result.effects, &main);
                         let _ = presentation.flush_frames()?;
@@ -1537,7 +1809,7 @@ fn run_impl(
                 // coalesces origin-sequence wakeups and posts one follow-up
                 // only when work arrived after the drain began.
                 let observed_generation = pump_generation.load(Ordering::Acquire);
-                let result = presentation.pipeline.Pump()?;
+                let result = presentation.pump()?;
                 presentation.gesture_acks(&result.gesture_acks, &main);
                 presentation.deliver_input_effects(result.effects, &main);
                 let _ = presentation.flush_frames()?;
@@ -1562,26 +1834,24 @@ fn run_impl(
                 // intact. WidgetPresentationTiming, on the document owner,
                 // resolves only valid successful presentation feedback.
                 let _ = main.send(Command::EventTimingDidPresent(feedback));
-                let result = presentation
-                    .pipeline
-                    .ReceivePresentationFeedback(feedback)?;
+                let result = presentation.receive_presentation_feedback(feedback)?;
                 presentation.gesture_acks(&result.gesture_acks, &main);
                 presentation.deliver_input_effects(result.effects, &main);
                 let _ = presentation.flush_frames()?;
             }
             ImplCommand::Reclaim(resources) => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Reclaim");
-                presentation.pipeline.ReclaimResources(resources)?;
+                presentation.reclaim_resources(resources)?;
                 let _ = presentation.flush_frames()?;
             }
             ImplCommand::Tick(frame) => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Tick");
                 *last_tick.lock().unwrap() = Some(frame);
-                let now = presentation.pipeline.InputTimeForInstant(frame.frame_time);
+                let now = presentation.input_time(frame.frame_time);
                 let output = presentation.gestures.ProgressFling(now, None);
                 presentation.deliver_fling_output(output, &main)?;
-                if presentation.pipeline.NeedsBeginFrames() {
-                    let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
+                if presentation.needs_begin_frames {
+                    let result = presentation.begin_physical_frame(frame.args)?;
                     presentation.gesture_acks(&result.gesture_acks, &main);
                     presentation.deliver_input_effects(result.effects, &main);
                 }
@@ -1599,7 +1869,7 @@ fn run_impl(
                     Instant::now(),
                     &[("samples", samples as f64)],
                 );
-                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let now = presentation.input_time(Instant::now());
                 let output = presentation.gestures.PassToFlingController(
                     &gesture,
                     now,
@@ -1619,13 +1889,12 @@ fn run_impl(
                 let _ = presentation.flush_frames()?;
             }
             ImplCommand::InputContinuation(input) => {
-                let result = presentation.pipeline.ContinueCompositorMutation(input)?;
+                let result = presentation.continue_compositor_mutation(input)?;
                 assert!(
                     result.dom_ack.is_none(),
                     "source continuation cannot redispatch its DOM wheel"
                 );
                 presentation.gesture_acks(&result.gesture_acks, &main);
-                presentation.observe_main_thread_effects(&result.effects);
                 if !result.effects.is_empty() {
                     let _ = main.send(Command::CompositorEffects {
                         effects: result.effects,
@@ -1667,7 +1936,7 @@ fn run_impl(
                         WheelPhase::kCancelled => 4.0,
                     },
                 );
-                let result = presentation.pipeline.Wheel(&wheel)?;
+                let result = presentation.wheel(&wheel)?;
                 input_trace.set("compositor_owned", result.compositor_owned as u8 as f64);
                 input_trace.set("submitted", result.submitted as u8 as f64);
                 wheel.compositor_owned = result.compositor_owned;
@@ -1679,7 +1948,6 @@ fn run_impl(
                 // gesture and any main-thread hit-test callback return to this
                 // same impl InputHandler; no main-thread offset fallback runs.
                 presentation.gesture_acks(&result.gesture_acks, &main);
-                presentation.observe_main_thread_effects(&result.effects);
                 let _ = main.send(Command::ExternalWheel {
                     document_generation: presentation.input_document_generation,
                     wheel,
@@ -1703,19 +1971,21 @@ fn run_impl(
                 let _ = presentation.flush_frames()?;
             }
         }
-        let effects = presentation.pipeline.TakeMainThreadEffects();
-        presentation.deliver_input_effects(effects, &main);
-        if presentation.pipeline.NeedsPump()
+        // Main-thread hit-test requests of outputs not returned to an input
+        // call (the ProxyImpl -> ProxyMain notifications are posted tasks).
+        let leftover = presentation.take_input_result(false);
+        presentation.deliver_input_effects(leftover.effects, &main);
+        if presentation.needs_pump()
             && !pump_pending.swap(true, Ordering::AcqRel)
             && self_sender.send(ImplCommand::Pump).is_err()
         {
             pump_pending.store(false, Ordering::Release);
         }
-        if presentation.pipeline.NeedsBeginFrames() || presentation.gestures.fling_in_progress() {
+        if presentation.needs_begin_frames || presentation.gestures.fling_in_progress() {
             source.request_begin_frame();
         }
     }
-    presentation.pipeline.StopImpl();
+    presentation.stop_impl();
     Ok(())
 }
 // Each Page has its own instance of the existing task-selection engine.
@@ -2565,9 +2835,6 @@ fn run_document(
                 requests,
                 swap_time,
             }) => page.EventTimingDidNotSwap(requests, swap_time),
-            Ok(Command::EventTimingDidCommit(commit_finish_time)) => {
-                page.EventTimingDidCommit(commit_finish_time)
-            }
             Ok(Command::EventTimingDidPresent(feedback)) => page.EventTimingDidPresent(feedback),
             Ok(Command::Visibility {
                 visible,

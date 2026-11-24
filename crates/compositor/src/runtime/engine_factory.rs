@@ -54,7 +54,7 @@ use crate::{
         metrics::compositor_timing_history::UMACategory,
         trees::layer_tree_settings::LayerTreeSettings,
     },
-    engine::{CompositorConfig, CompositorError, CompositorExecutors},
+    engine::{CompositorConfig, CompositorError, CompositorServices},
     CompositorTypes,
 };
 use std::sync::{Arc, Mutex};
@@ -193,7 +193,7 @@ impl MainHalfParts {
 /// proxy_impl.cc:65-137): LayerTreeHostImpl, Scheduler and their services.
 pub(crate) fn CreateImpl(
     config: CompositorConfig,
-    executors: CompositorExecutors,
+    injected: CompositorServices,
     init: Box<ProxyImplInit<SkRegion>>,
     to_main: layerize::commit::proxy::ProxyTaskQueue<crate::engine::ImplToMainTask>,
 ) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
@@ -219,7 +219,7 @@ pub(crate) fn CreateImpl(
         resources.clone(),
     )));
     let runners = Arc::new(TaskRunnerServices::new_threaded_on_single_executor(
-        executors.compositor.clone(),
+        injected.compositor.clone(),
     ));
     // The impl half receives only the shared paint value capability for
     // tiles and images.
@@ -228,7 +228,7 @@ pub(crate) fn CreateImpl(
     let scheduler_effects = SchedulerEffects::default();
     let scheduler_host = Arc::new(EngineSchedulerHost::new(
         owner,
-        executors.compositor.clone(),
+        injected.compositor.clone(),
         commands.clone(),
         scheduler_effects.clone(),
         options.events.clone(),
@@ -236,7 +236,7 @@ pub(crate) fn CreateImpl(
     ));
     let timing = Arc::new(TimingHistory::new(
         UMACategory::RENDERER_UMA,
-        executors.compositor.clone(),
+        injected.compositor.clone(),
         options.events.clone(),
     ));
     let checker = Arc::new(CheckerDelivery {
@@ -256,9 +256,9 @@ pub(crate) fn CreateImpl(
     let images = CpuImageServices::new(caches, checker);
     let tile_execution = Arc::new(Mutex::new(TileExecution::new(
         images,
-        executors.raster_provider.clone(),
-        executors.compositor.clone(),
-        executors.raster,
+        injected.raster_provider.clone(),
+        injected.compositor.clone(),
+        injected.raster,
         commands.clone(),
         options.events.clone(),
         config.raster_worker_limit,
@@ -267,7 +267,7 @@ pub(crate) fn CreateImpl(
     let capabilities = Arc::new(FactoryCapabilities {
         tree_environment: options.tree_environment,
         rendering_stats: stats.clone(),
-        ui_raster: executors.ui_raster,
+        ui_raster: injected.ui_raster,
         diagnostics: options.diagnostics.clone(),
         frame_trace_categories: options.frame_trace_categories.clone(),
         events: options.events.clone(),
@@ -289,7 +289,7 @@ pub(crate) fn CreateImpl(
     let core_owners = HostCoreOwners::new(
         MetricsServices::new(options.metrics, options.events.clone()),
         impl_animations.clone(),
-        TaskRunnerServices::new_threaded_on_single_executor(executors.compositor.clone()),
+        TaskRunnerServices::new_threaded_on_single_executor(injected.compositor.clone()),
         commands.clone(),
         Arc::new(ImageAnimationDelivery(commands.clone())),
         Arc::new(OsSurfaceTokenSource),
@@ -300,7 +300,7 @@ pub(crate) fn CreateImpl(
         resources.clone(),
         options.picture.clone(),
         options.core,
-        executors.compositor.clone(),
+        injected.compositor.clone(),
         options.events.clone(),
         stats,
         Box::new(CpuNoGpuCapabilities { sink: sink_id }),
@@ -345,7 +345,7 @@ pub(crate) fn CreateImpl(
         )),
         picture_registration_services: Box::new(ScrollbarRegistrationServices {
             animations: impl_animations.clone(),
-            executor: executors.compositor.clone(),
+            executor: injected.compositor.clone(),
             commands: commands.clone(),
             events: options.events.clone(),
         }),
@@ -376,7 +376,7 @@ pub(crate) fn CreateImpl(
         )),
         scrollbar_registration: Box::new(ScrollbarRegistrationServices {
             animations: impl_animations.clone(),
-            executor: executors.compositor.clone(),
+            executor: injected.compositor.clone(),
             commands: commands.clone(),
             events: options.events.clone(),
         }),
@@ -396,7 +396,7 @@ pub(crate) fn CreateImpl(
             options.metadata,
         )),
         task_runners: Box::new(TaskRunnerServices::new_threaded_on_single_executor(
-            executors.compositor.clone(),
+            injected.compositor.clone(),
         )),
         resource_returns: Box::new(g()),
         frame_sink_callbacks: Box::new(g()),
@@ -407,7 +407,7 @@ pub(crate) fn CreateImpl(
     let scheduler_settings = settings.ToSchedulerSettings(options.picture.as_ref());
     let image_worker_task_runner: <CompositorTypes as HostImplTypes>::ImageWorkerTaskRunner =
         Arc::new(super::execution::EngineSequencedTaskRunner::new(
-            executors.compositor.clone(),
+            injected.compositor.clone(),
             commands.clone(),
         ));
     let init = HostInit {

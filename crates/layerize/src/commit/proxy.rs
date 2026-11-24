@@ -143,6 +143,14 @@ pub trait ProxyTypes: LayerizeFamily {
     type PresentationFeedback: Send;
     /// The std::unique_ptr<DrawImage> of ProxyImpl::QueueImageDecodeOnImpl.
     type ProxyDrawImage: Send;
+    /// Rechrom: the impl notifications Chromium delivers to the main thread
+    /// outside ProxyMain (ReportTimeSwapPromise's posted callbacks,
+    /// cc/trees/swap_promise.h; LayerTreeFrameSink DidNotProduceFrame; the
+    /// video frame provider's BeginFrames for VideoFrameSubmitter; custom
+    /// tracker metrics). They share the ProxyImpl -> ProxyMain queue as
+    /// `ImplToMain::EmbedderNotification`, so CompositorEngine's outputs
+    /// carry no main-thread effects.
+    type EmbedderNotification: Send;
 }
 
 /// cc::MutatorEvents: the animation events of the impl AnimationHost for the
@@ -322,8 +330,11 @@ pub enum ImplToMain<F: ProxyTypes> {
         frame_token: u32,
         feedback: F::PresentationFeedback,
     },
+    /// Source: cc/trees/proxy_main.h NotifyImageDecodeRequestFinished
+    /// (request_id, speculative, decode_succeeded).
     NotifyImageDecodeRequestFinished {
         request_id: i32,
+        speculative: bool,
         decode_succeeded: bool,
     },
     NotifyTransitionRequestFinished {
@@ -335,4 +346,6 @@ pub enum ImplToMain<F: ProxyTypes> {
     BeginMainFrameNotExpectedSoon,
     BeginMainFrameNotExpectedUntil(TimeTicks),
     DidLoseLayerTreeFrameSink,
+    /// Rechrom: see `ProxyTypes::EmbedderNotification`.
+    EmbedderNotification(F::EmbedderNotification),
 }

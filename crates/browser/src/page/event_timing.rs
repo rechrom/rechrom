@@ -111,7 +111,7 @@ impl PageState {
             document: Rc::downgrade(document),
             frame,
             identity: document.borrow().GetDocument().RootHandle(),
-            clock: self.rendering.borrow().impl_half.executor.clone(),
+            clock: self.compositor_executor.clone(),
             widget: Rc::downgrade(&self.event_timing_widget),
         });
         if let Some(performance) = timing.ExistingEventTimingSource() {
@@ -119,10 +119,7 @@ impl PageState {
         } else {
             use interaction::adapter::host_event_clock::HostInputClock;
             let origin = self
-                .rendering
-                .borrow()
-                .impl_half.executor
-                .TimeForInstant(timing.MonotonicOrigin());
+                .compositor_executor.TimeForInstant(timing.MonotonicOrigin());
             timing.BindEventTimingEnvironment(
                 self.InteractionEventClock(),
                 environment,
@@ -157,7 +154,7 @@ impl PageState {
 }
 impl Page {
     pub fn EventTimingDidCommit(&self, time: std::time::Instant) {
-        let time = self.state.rendering.borrow().InputTimeForInstant(time);
+        let time = self.state.CompositorClock().InputTime(time);
         self.state
             .window_performance_timing
             .EventTimingSource()
@@ -173,14 +170,14 @@ impl Page {
         frame_token: u32,
         swap_time: std::time::Instant,
     ) {
-        let time = self.state.rendering.borrow().InputTimeForInstant(swap_time);
+        let time = self.state.CompositorClock().InputTime(swap_time);
         let mut widget = self.state.event_timing_widget.timing.borrow_mut();
         for request in requests {
             widget.DidSwap(request, frame_token, time);
         }
     }
     pub fn EventTimingDidNotSwap(&self, requests: Vec<u64>, time: std::time::Instant) {
-        let time = self.state.rendering.borrow().InputTimeForInstant(time);
+        let time = self.state.CompositorClock().InputTime(time);
         let callbacks = {
             let mut widget = self.state.event_timing_widget.timing.borrow_mut();
             requests
@@ -197,7 +194,7 @@ impl Page {
             return;
         };
         let details = PresentationTimingDetails {
-            timestamp: self.state.rendering.borrow().InputTimeForInstant(timestamp),
+            timestamp: self.state.CompositorClock().InputTime(timestamp),
             actual_frame_source_id: feedback.frame_id.source_id,
             manual_begin_frame: false,
             actual_source_is_manual: false,

@@ -778,3 +778,38 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
     commit (asserted off). Tests touching the removed APIs were deleted
     (page_runtime) or not updated (browser/compositor unit tests). Not run:
     Matrix, Scroll set, rollback cases, browser tests.
+- **S1b-7 follow-ups done (no wrapper types).** `PageRenderPipeline`,
+  `PageImplCompositor` and `page::main_compositor::MainCompositor` are
+  deleted. The Page domain (`PageDomainServices`) holds the main half
+  directly (`layerize: RefCell<MainLayerize>`, `proxy_main`, its endpoint
+  and features, plus the LocalFrameView/WebFrameWidget state: PAC sequence,
+  parent LocalSurfaceId allocator, page scale limits, pushed-artifact key,
+  input scale), the compositor clock/executors, the document-sequence
+  RasterEngine (drag images, video resources) and VideoFrameSubmitter state
+  (video SurfaceLayers, child frames); `page/main_compositor.rs` holds their
+  entry points. The impl half is held directly by its owner:
+  `run_impl`'s `ImplPresentation` (`compositor: Option<CompositorEngine>`,
+  outbound frames, BeginFrame/pump state) on the compositor thread, or the
+  Page's `page/synchronous_presenter.rs` (`SynchronousPresenter`: the
+  in-process embedding with its Viz/Renderer and in-process queues) for
+  headless `PaintInto` and tests. Input conversions shared by both owners
+  are free functions in `page/compositor_input.rs`.
+  `CompositorServices` (formerly `CompositorExecutors`) is the injected
+  services value of `CompositorEngine::new`; `browser::page::
+  NewCompositorServices` builds it for an embedding. `CompositorOutput`
+  carries `input_effects: Vec<CompositorInputEffect>` (gesture/wheel
+  disposition, DOM-ack and main-thread hit-test requests) and no
+  main-thread effects: the other impl notifications are posted
+  `ImplToMain` tasks (`DidPresentCompositorFrame` with FrameTimingDetails,
+  `NotifyImageDecodeRequestFinished`, `DidCompletePageScaleAnimation`,
+  `DidChangeBeginFrameSourcePaused`, `DidLoseLayerTreeFrameSink`, and the
+  Rechrom `EmbedderNotification` for swap-promise results,
+  DidNotProduceFrame, video BeginFrames and custom metrics), which ProxyMain
+  forwards to the Page. The synchronous presenter delivers them at the
+  output that produced them (SingleThreadProxy shape), so its effect order
+  is unchanged. Kept: `ProxyMain::BeginMainFrame` still takes
+  `&RefCell<LayerizeEngine>` (the Page lifecycle reaches the engine from
+  arbitrary code during UpdateRendering). Ordering difference: in the
+  external runtime the non-input notifications now reach the document as
+  `Command::ProxyMain` when posted, instead of one `CompositorEffects`
+  batch (or the `ExternalWheel` effects) after the impl command.
