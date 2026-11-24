@@ -8,7 +8,7 @@
 //         cc/input/scroll_velocity_tracker.cc:1-18,72.
 // Rust module/imports replace headers/exports/namespaces. VecDeque supplies the
 // circular-deque dependency; automatic destruction is the defaulted destructor.
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::input_geometry::Vector2dF;
 use std::collections::VecDeque;
 

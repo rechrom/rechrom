@@ -117,14 +117,15 @@ impl<F: LayerizeFamily> Drop for ProtectedCommitLease<F> {
 // (ProxyImpl -> ProxyMain). Values that only the impl half can construct are
 // named through `ProxyTypes`, which the compositor implements for its family.
 
-pub use compositor_scheduler::commit_earlyout_reason::CommitEarlyOutReason;
+pub use compositor_values::commit_earlyout_reason::CommitEarlyOutReason;
 use crate::commit::{
     commit_state::{CommitState, CommitTimestamps},
     compositor_commit_data::CompositorCommitData,
     geometry::Rect,
     main_effects::LocalSurfaceId,
 };
-use compositor_scheduler::{begin_frame::BeginFrameArgs, TimeTicks};
+use compositor_values::begin_frame::BeginFrameArgs;
+use scroll_animation::TimeTicks;
 
 /// The impl-provided payload types of the Proxy messages. Main code treats
 /// them as opaque values (it moves them, never inspects them), except where

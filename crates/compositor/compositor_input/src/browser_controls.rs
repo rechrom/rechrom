@@ -1,7 +1,7 @@
 //! Host-service boundary for browser-controls input policy.
 
 use crate::browser_controls_state::BrowserControlsState;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrowserControlsFeature {

@@ -1,15 +1,11 @@
-//! Pending/active compositor tree vocabulary and synchronization algorithms.
-//!
-//! Tree owners stay private to the compositor pipeline; this package exposes
-//! no Page, Paint, Viz, renderer, or platform owner.
+//! cc property trees and their nodes, ids and shared tree values
+//! (cc/trees/property_tree.cc and friends), named by both the main and the
+//! impl side. Impl-only pending/active synchronization lives in
+//! `compositor_tree_sync`. This package owns no lifecycle or engine state.
 
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
-pub mod activation;
 pub mod clip_node;
-pub mod clip_tree_update;
-pub mod commit_properties;
-pub mod commit_sync;
 pub mod commit_types;
 pub mod damage_reason;
 pub mod effect_node;
@@ -17,19 +13,14 @@ pub mod effect_tree_update;
 pub mod enum_set;
 pub mod geometry;
 pub mod input_geometry;
-pub mod layer_collections;
 pub mod math_util;
 pub mod property_ids;
-pub mod property_push;
 pub mod property_tree;
-pub mod property_tree_update;
 pub mod property_types;
 pub mod region;
 pub mod region_backend;
 pub mod render_surface_lifecycle;
-pub mod render_target_update;
 pub mod scroll_delta_collection;
-pub mod scrollbar_opacity_sync;
 pub mod snap_geometry;
 pub mod sticky_position_constraint;
 pub mod subnormal_float;

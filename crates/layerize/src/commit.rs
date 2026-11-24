@@ -7,7 +7,6 @@
 pub mod color_space;
 pub mod commit_state;
 pub mod completion_event;
-mod float_clip_rect_transform;
 pub mod geometry;
 pub mod layer_impl_factory;
 pub mod layer_tree_debug_state;
@@ -37,7 +36,8 @@ pub mod skia_filters;
 pub mod skia_region;
 pub mod skia_value_backend;
 pub mod surface_range;
-pub mod transform;
+// gfx::Transform lives in the cc shared root (both halves name it).
+pub use compositor_values::transform;
 pub mod values;
 pub mod viz_metadata;
 
@@ -50,8 +50,8 @@ pub mod viz_metadata;
 //         cc/input/{scroll_snap_data,overscroll_behavior,
 //         main_thread_scrolling_reason}.h.
 pub use compositor_animation::property_animation_state;
-pub use compositor_draw::damage_reason;
-pub use compositor_input::{
+pub use compositor_tree::damage_reason;
+pub use compositor_values::{
     browser_controls_params, compositor_commit_data, event_listener_properties, input_types,
     layer_selection_bound, main_thread_scrolling_reason, overscroll_behavior, page_scale_animation,
     scroll_snap_data, scroll_source_type,
@@ -66,8 +66,8 @@ pub use commit_state::{CommitStateTypes, CommitTypes, PropertyTreesFor};
 // Shared cc/gfx values named by cc/paint on both threads.
 // Source: cc/tiles/prioritized_tile.h (ScrollOffsetMap);
 //         ui/gfx/display_color_spaces.h (ContentColorUsage).
-pub use compositor_frame::surface_id::ContentColorUsage;
-pub use compositor_tile::prioritized_tile_types::ScrollOffsetMap;
+pub use compositor_values::surface_id::ContentColorUsage;
+pub use compositor_values::prioritized_tile::ScrollOffsetMap;
 
 // Main cc::Layer owners and their type families. LayerTreeHostImpl::
 // FinishCommit reads them inside the protected sequence

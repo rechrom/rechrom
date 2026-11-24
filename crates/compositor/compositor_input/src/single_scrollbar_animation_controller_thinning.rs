@@ -15,7 +15,7 @@ use crate::{
         ScrollbarInitializationClient, ScrollbarTransform,
     },
 };
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::geometry::{cpp_clamp, PointF, Rect, RectF};
 
 // Source: cc/input/single_scrollbar_animation_controller_thinning.cc:20-41

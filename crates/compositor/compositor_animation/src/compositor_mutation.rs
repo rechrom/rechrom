@@ -2,7 +2,7 @@ use crate::{
     gfx_keyframe_model::{Direction, FillMode},
     keyframe_model::CompositorAnimationCurve,
 };
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::ElementId;
 
 /// Blink CompositorAnimation -> cc AnimationHost command. Curves are already

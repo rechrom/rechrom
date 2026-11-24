@@ -17,7 +17,7 @@ pub mod quads;
 pub mod render_frame_metadata;
 pub mod render_metadata;
 pub mod submit_info;
-pub mod surface_id;
+pub use compositor_values::surface_id;
 pub mod swap_promise;
 pub mod unbounded;
 pub mod unbounded_frame_sink_handler;

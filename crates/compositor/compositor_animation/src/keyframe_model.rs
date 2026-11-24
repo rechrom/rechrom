@@ -3,7 +3,7 @@
 // Source: cc/animation/keyframe_model.cc:1-216
 use super::animation_events::AnimationEventCurve;
 use crate::gfx_keyframe_model as gfx;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::{geometry::PointF, ElementId};
 pub use gfx::{Direction, FillMode, LimitDirection, Phase, RunState};
 #[cfg(debug_assertions)]

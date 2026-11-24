@@ -10,7 +10,7 @@ use super::display_item_list_types::{
 use crate::commit::{
     geometry::Rect, input_types::ElementId, rtree::RTree, ContentColorUsage, ScrollOffsetMap,
 };
-use compositor_draw::Color4f;
+use compositor_values::color4f::Color4f;
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
 // Source: cc/paint/display_item_list.h:44-50,215-287.

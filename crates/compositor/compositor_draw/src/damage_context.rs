@@ -15,6 +15,17 @@ pub trait DamageTransform: Transform + PropertyTreeTransform {
     fn ToFlattenedSkMatrix(&self) -> SkMatrix;
 }
 
+// Moved from layerize::commit::transform with the shared gfx::Transform.
+impl<R: compositor_values::transform::RoundedRectTransformBackend> DamageTransform
+    for compositor_values::transform::Transform<R>
+{
+    fn ToFlattenedSkMatrix(&self) -> SkMatrix {
+        SkMatrix {
+            values: self.FlattenedSkMatrix(),
+        }
+    }
+}
+
 pub trait DamageLayer<T: DamageTransform, S: Copy + Eq> {
     type Trees;
     fn id(&self) -> i32;

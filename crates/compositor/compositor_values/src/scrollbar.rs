@@ -1,6 +1,6 @@
 //! Scrollbar input vocabulary shared by viewport and scrollbar controllers.
 
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 
 // Source: cc/input/scrollbar.h:15-27.
 pub const kAutoscrollMultiplier: f32 = 20.;

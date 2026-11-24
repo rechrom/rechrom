@@ -33,12 +33,12 @@ pub(crate) mod layer_tree_host_impl {
 }
 pub(crate) mod layer_tree_impl {
     pub use crate::commit::{values::UIResourceId, PropertyTreesFor};
-    pub use compositor_input::layer_selection_bound::SelectionBoundType;
+    pub use compositor_values::layer_selection_bound::SelectionBoundType;
     pub use compositor_animation::ElementListType;
-    pub use compositor_draw::Color4f;
+    pub use compositor_values::color4f::Color4f;
 }
 pub(crate) mod occlusion {
-    pub use compositor_draw::occlusion_context::SkBlendMode;
+    pub use compositor_tree::property_types::BlendMode as SkBlendMode;
 }
 pub(crate) mod prioritized_tile {
     pub use crate::commit::ScrollOffsetMap;

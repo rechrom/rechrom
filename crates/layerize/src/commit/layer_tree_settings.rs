@@ -3,12 +3,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 // Source: cc/trees/layer_tree_settings.h:1-253; cc/trees/layer_tree_settings.cc:1-14.
-use compositor_resource::managed_memory_policy::ManagedMemoryPolicy;
-use compositor_resource::PriorityCutoff;
-use compositor_scheduler::{scheduler_settings::SchedulerSettings, settings::LayerTreeSettingsFeatures};
-use compositor_tile::tile_manager_settings::TileManagerSettings;
+use compositor_values::managed_memory_policy::ManagedMemoryPolicy;
+use compositor_values::gpu_memory_allocation::PriorityCutoff;
+use compositor_values::{
+    layer_tree_settings_features::LayerTreeSettingsFeatures, scheduler_settings::SchedulerSettings,
+};
+use compositor_values::tile_manager_settings::TileManagerSettings;
 use super::{geometry::Size, layer_tree_debug_state::LayerTreeDebugState};
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 // Source: cc/trees/layer_tree_settings.h:68-73.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollbarAnimator {

@@ -447,7 +447,7 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
         device_scale_factor: f32,
         local_surface_id_from_parent: LocalSurfaceId,
     ) {
-        use compositor_frame::unbounded::LocalSurfaceId as _;
+        use compositor_values::local_surface_id::LocalSurfaceId as _;
 
         let previous_local_surface_id = self.pending.local_surface_id_from_parent;
         self.SetLocalSurfaceIdFromParent(local_surface_id_from_parent);

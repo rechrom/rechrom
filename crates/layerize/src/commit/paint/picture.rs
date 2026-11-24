@@ -18,7 +18,7 @@ use crate::{
     cc::layers::recording_source::RecordingSource,
     commit::skia_value_backend::PaintSkiaBackend,
 };
-use compositor_tile::picture_layer_tiling_types::TilingRasterSource;
+use compositor_values::raster_source::TilingRasterSource;
 use std::{
     marker::PhantomData,
     ops::Deref,

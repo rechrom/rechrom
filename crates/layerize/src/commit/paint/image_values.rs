@@ -139,7 +139,7 @@ impl CpuPaintImage {
                     .iter()
                     .map(|frame| super::image_metadata::FrameMetadata {
                         complete: true,
-                        duration: compositor_scheduler::TimeDelta::Microseconds(
+                        duration: scroll_animation::TimeDelta::Microseconds(
                             frame.duration.as_micros().min(i64::MAX as u128) as i64,
                         ),
                     })

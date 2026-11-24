@@ -7,7 +7,7 @@
 // stores only the host identity. Every operation that would dereference the
 // source host receives its live call-scoped context explicitly.
 
-use compositor_scheduler::TimeTicks;
+use scroll_animation::TimeTicks;
 use compositor_tree::ElementId;
 use std::collections::HashMap;
 

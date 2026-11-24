@@ -8,7 +8,7 @@ use crate::commit::{
     input_types::ElementId,
     ContentColorUsage, ScrollOffsetMap,
 };
-use compositor_draw::Color4f;
+use compositor_values::color4f::Color4f;
 
 // Source dependency: cc/paint/directly_composited_image_info.h:14-19.
 #[derive(Clone, Copy)]

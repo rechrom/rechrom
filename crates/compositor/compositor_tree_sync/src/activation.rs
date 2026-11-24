@@ -56,7 +56,7 @@ pub struct ActivationStats {
 /// order.  Adapter methods perform only the concrete resident-object mutation
 /// associated with a stage; this function owns all cross-stage decisions.
 pub fn ActivateSyncTree<C: ActivationContext>(context: &mut C) -> ActivationStats {
-    let mut trace = browser_tracing::span("compositor.tree", "Compositor.Tree.ActivateSyncTree");
+    let mut trace = browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.ActivateSyncTree");
     context.trace_source_activation();
 
     let activated_pending_tree = context.has_pending_tree();

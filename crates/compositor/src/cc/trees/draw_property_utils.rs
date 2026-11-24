@@ -756,7 +756,7 @@ struct RenderTargetUpdateAdapter<'a, C: DrawContext> {
     p: &'a mut DrawPropertyTrees<C>,
 }
 
-impl<C: DrawContext> compositor_tree::render_target_update::RenderTargetUpdateContext
+impl<C: DrawContext> compositor_tree_sync::render_target_update::RenderTargetUpdateContext
     for RenderTargetUpdateAdapter<'_, C>
 {
     type Layer = C::Layer;
@@ -789,11 +789,11 @@ impl<C: DrawContext> compositor_tree::render_target_update::RenderTargetUpdateCo
     fn parent_target_state(
         &self,
         id: i32,
-    ) -> compositor_tree::render_target_update::ParentTargetState {
+    ) -> compositor_tree_sync::render_target_update::ParentTargetState {
         let tree = self.p.effect_tree();
         let node = tree.Node(id);
         let parent = tree.parent(node);
-        compositor_tree::render_target_update::ParentTargetState {
+        compositor_tree_sync::render_target_update::ParentTargetState {
             parent_id: node.parent_id,
             parent_has_render_surface: parent.HasRenderSurface(),
             parent_target_id: parent.target_id,
@@ -852,14 +852,14 @@ impl<C: DrawContext> compositor_tree::render_target_update::RenderTargetUpdateCo
 // Source: cc/trees/draw_property_utils.cc:781-856.
 fn UpdateRenderTarget<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
     let mut adapter = RenderTargetUpdateAdapter { context, p };
-    compositor_tree::render_target_update::UpdateRenderTargets(&mut adapter);
+    compositor_tree_sync::render_target_update::UpdateRenderTargets(&mut adapter);
 }
 // Source: cc/trees/draw_property_utils.cc:858-885.
 struct ClipTreeUpdateAdapter<'a, C: DrawContext> {
     p: &'a mut DrawPropertyTrees<C>,
 }
 
-impl<C: DrawContext> compositor_tree::clip_tree_update::ClipTreeUpdateContext
+impl<C: DrawContext> compositor_tree_sync::clip_tree_update::ClipTreeUpdateContext
     for ClipTreeUpdateAdapter<'_, C>
 {
     fn needs_update(&self) -> bool {
@@ -923,7 +923,7 @@ impl<C: DrawContext> compositor_tree::clip_tree_update::ClipTreeUpdateContext
 pub(crate) fn ComputeClips<C: DrawContext>(p: &mut DrawPropertyTrees<C>) {
     debug_assert!(!p.transform_tree().needs_update());
     let mut adapter = ClipTreeUpdateAdapter::<C> { p };
-    compositor_tree::clip_tree_update::UpdateClipTree(&mut adapter);
+    compositor_tree_sync::clip_tree_update::UpdateClipTree(&mut adapter);
 }
 // Source: cc/trees/draw_property_utils.cc:887-907.
 fn ComputeSurfaceDrawProperties<C: DrawContext>(p: &mut DrawPropertyTrees<C>, surface_id: i32) {
@@ -1877,7 +1877,7 @@ struct PropertyTreeUpdateAdapter<'a, C: DrawContext> {
     p: &'a mut DrawPropertyTrees<C>,
 }
 
-impl<C: DrawContext> compositor_tree::property_tree_update::PropertyTreeUpdateContext
+impl<C: DrawContext> compositor_tree_sync::property_tree_update::PropertyTreeUpdateContext
     for PropertyTreeUpdateAdapter<'_, C>
 {
     fn transform_tree_needs_update(&self) -> bool {
@@ -1913,7 +1913,7 @@ impl<C: DrawContext> compositor_tree::property_tree_update::PropertyTreeUpdateCo
 
 pub fn UpdatePropertyTrees<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
     let mut adapter = PropertyTreeUpdateAdapter::<C> { context, p };
-    compositor_tree::property_tree_update::UpdatePropertyTrees(&mut adapter, false);
+    compositor_tree_sync::property_tree_update::UpdatePropertyTrees(&mut adapter, false);
 }
 // Source: cc/trees/draw_property_utils.cc:1607-1621.
 pub fn UpdatePropertyTreesAndRenderSurfaces<C: DrawContext>(
@@ -1921,7 +1921,7 @@ pub fn UpdatePropertyTreesAndRenderSurfaces<C: DrawContext>(
     p: &mut DrawPropertyTrees<C>,
 ) {
     let mut adapter = PropertyTreeUpdateAdapter::<C> { context, p };
-    compositor_tree::property_tree_update::UpdatePropertyTrees(&mut adapter, true);
+    compositor_tree_sync::property_tree_update::UpdatePropertyTrees(&mut adapter, true);
 }
 // Source: cc/trees/draw_property_utils.h:61-63; cc/trees/draw_property_utils.cc:1623-1636.
 pub fn DrawTransform<C: DrawContext>(

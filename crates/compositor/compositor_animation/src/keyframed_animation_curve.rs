@@ -7,7 +7,7 @@ use crate::{
     cubic_bezier::CubicBezier,
     gfx_keyframe_model::{AnimationCurve, LimitDirection},
 };
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 
 #[derive(Clone, Debug)]
 pub enum TimingFunction {

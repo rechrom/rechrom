@@ -30,7 +30,7 @@ pub mod tile_assignment;
 pub mod tile_draw_info;
 pub mod tile_manager_client;
 pub mod tile_manager_policy;
-pub mod tile_manager_settings;
+pub use compositor_values::tile_manager_settings;
 pub mod tile_priority;
 pub mod tile_size_calculator;
 pub mod tile_task_manager;
@@ -44,30 +44,10 @@ pub mod tiling_set_eviction_queue;
 pub mod tiling_set_raster_queue_all;
 pub mod tiling_set_raster_queue_required;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TileMemoryLimitPolicy {
-    ALLOW_NOTHING = 0,
-    ALLOW_ABSOLUTE_MINIMUM = 1,
-    ALLOW_PREPAINT_ONLY = 2,
-    ALLOW_ANYTHING = 3,
-}
-
-pub fn TileMemoryLimitPolicyToString(policy: TileMemoryLimitPolicy) -> &'static str {
-    match policy {
-        TileMemoryLimitPolicy::ALLOW_NOTHING => "ALLOW_NOTHING",
-        TileMemoryLimitPolicy::ALLOW_ABSOLUTE_MINIMUM => "ALLOW_ABSOLUTE_MINIMUM",
-        TileMemoryLimitPolicy::ALLOW_PREPAINT_ONLY => "ALLOW_PREPAINT_ONLY",
-        TileMemoryLimitPolicy::ALLOW_ANYTHING => "ALLOW_ANYTHING",
-    }
-}
-
-pub fn IsTileMemoryLimitPolicyMoreRestictive(
-    policy1: TileMemoryLimitPolicy,
-    policy2: TileMemoryLimitPolicy,
-) -> bool {
-    policy1 < policy2
-}
+// Source: cc/tiles/tile_priority.h:66-80 (shared with ManagedMemoryPolicy).
+pub use compositor_values::tile_priority::{
+    IsTileMemoryLimitPolicyMoreRestictive, TileMemoryLimitPolicy, TileMemoryLimitPolicyToString,
+};
 
 // Source: cc/tiles/tile_priority.h:86-93.
 #[repr(u8)]

@@ -1,7 +1,7 @@
 // Translation status: complete
 // Source: cc/animation/animation_events.h:1-104
 // Source: cc/animation/animation_events.cc:1-99
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 // Source: cc/animation/animation_events.h:19-27
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaybackType {

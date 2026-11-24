@@ -51,7 +51,7 @@ pub struct CommitPropertyStats {
 
 pub fn PullCommitProperties<C: CommitPropertyContext>(context: &mut C) -> CommitPropertyStats {
     let mut trace =
-        browser_tracing::span("compositor.tree", "Compositor.Tree.PullCommitProperties");
+        browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.PullCommitProperties");
     let preserve_full_tree_sync =
         context.trees_in_viz_client_process() && context.current_needs_full_tree_sync();
     context

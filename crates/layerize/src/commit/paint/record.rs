@@ -13,7 +13,7 @@ use crate::commit::{
     transform::Transform,
     ContentColorUsage, ScrollOffsetMap,
 };
-use compositor_draw::Color4f;
+use compositor_values::color4f::Color4f;
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 // Source: cc/paint/paint_flags.h:75-82. This is the full native cc quality
 // vocabulary; layout InterpolationQuality is a distinct producer enum.

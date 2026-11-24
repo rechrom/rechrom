@@ -9,7 +9,7 @@ pub use compositor_tree::transform::PropertyTreeTransform;
 /// External paint operations; implementation belongs to the paint backend.
 pub use compositor_tree::effect_node::EffectTreeFilters as PropertyTreeFilters;
 // Canonical native value owner; no duplicate flags representation.
-pub use compositor_draw::render_surface_policy::RenderSurfacePropertyChangedFlags;
+pub use compositor_values::render_surface_flags::RenderSurfacePropertyChangedFlags;
 pub trait PropertyTreeRenderSurface {
     fn id(&self) -> super::input_types::ElementId;
     fn set_effect_tree_index(&mut self, id: i32);

@@ -36,7 +36,7 @@ pub enum PacScrollEffect {
 }
 
 /// viz::LocalSurfaceId, carried by the LayerTreeHost -> Proxy requests below.
-pub use compositor_frame::surface_id::LocalSurfaceId;
+pub use compositor_values::surface_id::LocalSurfaceId;
 
 /// Proxy calls from LayerTreeHost (cc/trees/layer_tree_host.cc:321-337,
 /// 520-547,835-849,877-880), not copied commit/tree state. They are posted in
@@ -76,7 +76,7 @@ pub struct MainHostInit<M> {
     pub mutator: M,
     pub settings: super::layer_tree_settings::LayerTreeSettings,
     pub threaded: bool,
-    pub background_color: Option<compositor_draw::Color4f>,
+    pub background_color: Option<compositor_values::color4f::Color4f>,
     /// The impl half runs on the same sequence as this host (in-process
     /// Proxy transport, S1B_PROXY_DESIGN.md D1): protected-sequence waits
     /// return immediately, as for CompositorMode::SINGLE_THREADED.

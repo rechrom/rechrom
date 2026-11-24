@@ -2,7 +2,7 @@
 //! FrameMetadata, AnimatedImageMetadata), shared by recording on the main
 //! thread and image decode/animation on the impl thread.
 use crate::commit::input_types::ElementId;
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 use std::collections::{BTreeMap, BTreeSet};
 // Source dependency: cc/paint/paint_image.h:177-186; paint_image.cc:45-46.
 pub use paint::paint_engine::PaintImageResourceId as PaintImageId;

@@ -17,7 +17,7 @@ use crate::commit::{
         FilterOperations, PropertyPath, PropertyTrace, PropertyTransform, TracedValueJSON,
     },
 };
-use compositor_input::scroll_decision::DecideScrollBy;
+use compositor_values::scroll_decision::DecideScrollBy;
 use compositor_tree::effect_node::{
     EffectiveOpacity as EffectiveOpacityPolicy,
     PropagateEffectChanged as PropagateEffectChangedPolicy, SurfaceContentsScaleInputs,

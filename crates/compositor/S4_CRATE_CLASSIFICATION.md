@@ -1,7 +1,30 @@
 # S4 design: classify the compositor packages and layerize's dependencies
 
-Status: design only, nothing implemented. Written 2026-11-23 against main
-`7f978395`. Stage S4 of the live-property-tree plan. `MAIN_IMPL_SPLIT.md`
+Status: implemented (S4-1..S4-5, 2026-11-24, on top of `5245ff02`) with the
+recommended decisions S4-D1 (b) `compositor_values`, S4-D2
+`compositor_tree_sync`, S4-D3 keep `compositor_layerize`, S4-D4 move
+`gfx::Transform` (no SkRegion was dragged along, so no fallback), S4-D5 roots
+under `crates/compositor/`. Changes against the plan below:
+
+- `compositor_input` also dropped `compositor_scheduler` in S4-2 (all its
+  uses were base time); the facade is the only `compositor_tree_sync`
+  importer, so `compositor_tree` keeps no stubs for the moved modules.
+- S4-4a kept layerize's `compositor_input` edge until S4-4c, because the
+  ScrollbarTransform facet impl moved with `gfx::Transform`.
+  `TilingRasterSource` moved in S4-4b with the other values.
+- Extra cuts the plan did not list: `TraceValue` (and its `From<TimeDelta>`),
+  base `SourceLocation` (carried by `BeginFrameArgs`), `MemoryAllocation`,
+  `TileMemoryLimitPolicy` (named by `ManagedMemoryPolicy`), the full
+  `surface_id` module, and `FloatClipRectTransform`'s impl for
+  `gfx::Transform`. The `SharedImageFormat` `RasterFormat` impl moved to
+  `compositor_raster` (coherence).
+- The moved tree-sync spans use category `compositor.tree_sync` and names
+  `Compositor.TreeSync.*`; the facade's `Compositor.Tree.Commit` /
+  `Activate` spans are unchanged.
+- Test G (`layerize_names_only_shared_modules`) existed S4-1..S4-4b and was
+  deleted in S4-4c; both allowance constants are empty and removed in S4-5.
+
+Written 2026-11-23 against main `7f978395`. Stage S4 of the live-property-tree plan. `MAIN_IMPL_SPLIT.md`
 ("Compositor sub-crate items used by layerize (decide in S4)") lists the
 items that need a decision. This document turns that list into a
 classification of every package, a move plan, the AGENTS.md wording, and a

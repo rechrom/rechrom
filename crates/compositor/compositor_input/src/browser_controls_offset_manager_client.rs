@@ -8,7 +8,7 @@
 // protected virtual destructor. Mutation callbacks use an explicit mutable
 // live facade; the manager never retains a self-reference to its owner.
 use crate::browser_controls::{BrowserControlsEnvironment, BrowserControlsReadEnvironment};
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 use compositor_tree::input_geometry::PointF;
 /// Source const client queries, split so a getter can borrow live fields shared.
 pub trait BrowserControlsOffsetManagerQueries: BrowserControlsReadEnvironment {

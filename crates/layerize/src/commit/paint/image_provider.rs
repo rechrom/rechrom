@@ -2,7 +2,7 @@
 //! DecodedDrawImage) through which raster playback reaches decoded images.
 use super::{CpuDrawImage, CpuFilterQuality, CpuPaintRecord, CpuWorkletInput};
 use crate::commit::skia_value_backend::PaintSkiaBackend;
-use compositor_resource::resource_types::SharedImageFormat;
+use compositor_values::shared_image_format::SharedImageFormat;
 
 pub trait CpuDecodedImageLease: Send {
     fn size(&self) -> crate::commit::geometry::Size;

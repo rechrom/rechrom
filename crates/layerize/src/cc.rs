@@ -4,14 +4,14 @@
 //! protected sequence of LayerTreeHostImpl::FinishCommit.
 
 pub mod input {
-    pub(crate) use compositor_input::{
+    pub(crate) use compositor_values::{
         hit_test_opaqueness, layer_selection_bound, main_thread_scrolling_reason,
         overscroll_behavior, scroll_snap_data, touch_action,
     };
     pub mod scrollbar;
 }
 pub mod layers {
-    pub(crate) use compositor_input::scroll_hit_test_rect;
+    pub(crate) use compositor_values::scroll_hit_test_rect;
     pub(crate) use compositor_layerize::content_layer_client;
     pub mod layer;
     pub mod layer_list_iterator;

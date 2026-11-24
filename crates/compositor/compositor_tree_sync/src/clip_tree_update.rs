@@ -24,7 +24,7 @@ pub fn UpdateClipTree<C: ClipTreeUpdateContext>(context: &mut C) -> ClipTreeUpda
     if !context.needs_update() {
         return ClipTreeUpdateStats::default();
     }
-    let mut trace = browser_tracing::span("compositor.tree", "Compositor.Tree.UpdateClips");
+    let mut trace = browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.UpdateClips");
     let first = context.first_node_id();
     let end = context.node_count();
     let mut stats = ClipTreeUpdateStats {

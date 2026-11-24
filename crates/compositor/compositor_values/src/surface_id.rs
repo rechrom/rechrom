@@ -22,7 +22,7 @@ pub struct SurfaceRange {
     pub start: Option<SurfaceId>,
     pub end: SurfaceId,
 }
-impl crate::unbounded::LocalSurfaceId for LocalSurfaceId {
+impl crate::local_surface_id::LocalSurfaceId for LocalSurfaceId {
     fn is_valid(&self) -> bool {
         self.parent_sequence_number != 0
             && self.child_sequence_number != 0

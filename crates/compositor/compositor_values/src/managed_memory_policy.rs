@@ -1,7 +1,7 @@
 //! Resource-budget policy chosen by the compositor host.
 
-use crate::{MemoryAllocation, PriorityCutoff};
-use compositor_tile::TileMemoryLimitPolicy;
+use crate::gpu_memory_allocation::{MemoryAllocation, PriorityCutoff};
+use crate::tile_priority::TileMemoryLimitPolicy;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ManagedMemoryPolicy {

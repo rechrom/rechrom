@@ -5,27 +5,22 @@ edition = "2021"
 publish = false
 
 # Main-thread compositor half (Blink PaintArtifactCompositor and the cc
-# LayerTreeHost side). It must never depend on the `compositor` facade; the
-# impl half depends on `layerize::commit` only. See
-# crates/compositor/MAIN_IMPL_SPLIT.md.
+# LayerTreeHost side). It depends only on the cc shared roots, never on the
+# `compositor` facade or an impl package; the impl half depends on
+# `layerize::commit` only. See crates/compositor/MAIN_IMPL_SPLIT.md and
+# S4_CRATE_CLASSIFICATION.md (guard: tests/layerize_boundary.rs).
 [dependencies]
 compositor_tree = { path = "../compositor/compositor_tree" }
-compositor_input = { path = "../compositor/compositor_input" }
-compositor_draw = { path = "../compositor/compositor_draw" }
+# cc shared values (cc/input, LayerTreeSettings fields, viz, gfx) named by
+# both sides.
+compositor_values = { path = "../compositor/compositor_values" }
 compositor_animation = { path = "../compositor/compositor_animation" }
 # The main AnimationHost mutations (ScrollAnimationMutation and its
-# completions) the main half applies (commit::main_mutator).
+# completions) the main half applies (commit::main_mutator), and base time.
 scroll_animation = { path = "../compositor/scroll_animation" }
-compositor_scheduler = { path = "../compositor/compositor_scheduler" }
-# cc value roots shared with the impl half: ScrollOffsetMap (cc/tiles/
-# prioritized_tile.h) and gfx::ContentColorUsage (viz surface values).
-compositor_tile = { path = "../compositor/compositor_tile" }
-compositor_frame = { path = "../compositor/compositor_frame" }
-# SharedImageFormat of decoded image leases (cc/paint/decoded_draw_image.h).
-compositor_resource = { path = "../compositor/compositor_resource" }
 skia = { path = "../skia" }
 # Blink ContentLayerClient (PictureLayer client) and PAC layerization policy.
-compositor_layerize = { path = "../compositor/compositor_layerize" }
+compositor_layerize = { path = "compositor_layerize" }
 # cc::FilterOperations (cc/paint) for the shared filter facets; the main half
 # also reads PaintArtifact once PAC moves here.
 paint = { path = "../paint" }

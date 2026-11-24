@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::TraceValue;
+use crate::traced_value::TraceValue;
 use std::collections::BTreeMap;
 
 // Source: cc/scheduler/scheduler_settings.h:20-73

@@ -4,7 +4,7 @@
 
 use crate::input_types::{ElementId, InputLayerId, InputScrollNodeId};
 use crate::scrollbar::{ScrollbarOrientation, ScrollbarPart};
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 use compositor_tree::geometry::{self, PointF, Rect, SizeF, Vector2dF};
 use std::sync::Weak;
 
@@ -12,6 +12,23 @@ pub trait ScrollbarTransform: geometry::Transform + Clone + Default {
     fn GetInverse(&self, result: &mut Self) -> bool;
     fn ProjectPoint(&self, point: PointF, clipped: &mut bool) -> PointF;
     fn MapClippedRect(&self, rect: geometry::RectF) -> geometry::RectF;
+}
+
+// The scrollbar facet of the shared gfx::Transform. Moved from
+// layerize::commit::transform with that value (coherence: the facet is this
+// package's).
+impl<R: compositor_values::transform::RoundedRectTransformBackend> ScrollbarTransform
+    for compositor_values::transform::Transform<R>
+{
+    fn GetInverse(&self, result: &mut Self) -> bool {
+        compositor_values::transform::Transform::GetInverse(self, result)
+    }
+    fn ProjectPoint(&self, point: PointF, clipped: &mut bool) -> PointF {
+        compositor_tree::math_util::MathUtil::ProjectPoint(self, point, clipped)
+    }
+    fn MapClippedRect(&self, rect: geometry::RectF) -> geometry::RectF {
+        compositor_tree::math_util::MathUtil::MapClippedRect(self, rect)
+    }
 }
 pub trait ScrollbarLayerAccess {
     type Transform: ScrollbarTransform;

@@ -37,13 +37,7 @@ pub mod tree_draw_update;
 
 pub type ViewTransitionToken = [u64; 2];
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Color4f {
-    pub red: f32,
-    pub green: f32,
-    pub blue: f32,
-    pub alpha: f32,
-}
+pub use compositor_values::color4f::Color4f;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]

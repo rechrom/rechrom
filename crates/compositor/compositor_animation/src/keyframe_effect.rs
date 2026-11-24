@@ -6,7 +6,7 @@ use super::{
     keyframe_model::{KeyframeCurve, KeyframeModel, RunState},
 };
 use crate::gfx_keyframe_effect as gfx;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::{geometry::PointF, ElementId};
 use std::sync::Arc;
 /// Native ElementAnimations allocation: each bound effect retains the same

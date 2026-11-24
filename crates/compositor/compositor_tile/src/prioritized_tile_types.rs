@@ -5,11 +5,9 @@ use crate::{
     tile::Tile,
     tile_types::{PictureLayerTilingId, TileId, TileTraceContext, TileTypes},
 };
-use compositor_tree::{geometry::PointF, property_types::PropertyTrace, ElementId};
-use std::collections::BTreeMap;
+use compositor_tree::property_types::PropertyTrace;
 use std::sync::Arc;
-/// Source value: cc/paint/scroll_offset_map.h:14 (ordered flat_map).
-pub type ScrollOffsetMap = BTreeMap<ElementId, PointF>;
+pub use compositor_values::prioritized_tile::ScrollOffsetMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RasterSourceTraceId(pub usize);
 pub trait PrioritizedTileTraceContext: TileTraceContext {

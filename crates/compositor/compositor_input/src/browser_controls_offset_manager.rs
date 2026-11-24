@@ -21,7 +21,7 @@ use crate::browser_controls_state::BrowserControlsState;
 use crate::offset_tag::BrowserControlsOffsetTagModifications;
 use crate::offset_tag::OffsetTag;
 use crate::scroll_velocity_tracker::ScrollVelocityTracker;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::input_geometry::Vector2dF;
 
 // Source: cc/input/browser_controls_offset_manager.cc:33-54.

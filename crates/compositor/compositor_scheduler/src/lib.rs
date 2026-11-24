@@ -5,7 +5,6 @@
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-pub mod begin_frame;
 pub mod begin_frame_policy;
 pub mod begin_frame_tracker;
 pub mod compositor_timing_history;
@@ -14,10 +13,8 @@ pub mod micro_benchmark;
 pub mod rolling_time_delta_history;
 pub mod scheduler;
 pub mod scheduler_host;
-pub mod scheduler_settings;
 pub mod scheduler_state_machine;
 pub mod services;
-pub mod settings;
 pub mod slim_scheduler_state_machine;
 pub mod throttle_decider;
 pub mod trace_sink;
@@ -34,16 +31,12 @@ pub(crate) mod adapter {
     pub use crate::TraceValue;
 }
 
-use std::collections::BTreeMap;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum TraceValue {
-    Bool(bool),
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Dictionary(BTreeMap<String, TraceValue>),
-}
+// Shared cc values named by both proxies and the main side, re-exported
+// under their old paths.
+pub use compositor_values::{
+    begin_frame, commit_earlyout_reason, layer_tree_settings_features as settings,
+    scheduler_settings, traced_value::TraceValue,
+};
 
 pub fn GetThrottlingFactor(
     consecutive_no_damage_main_frames: i32,
@@ -67,35 +60,3 @@ pub fn GetThrottlingFactor(
 
 pub use scroll_animation::{TimeDelta, TimeTicks};
 
-pub mod commit_earlyout_reason {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum CommitEarlyOutReason {
-        kAbortedNotVisible,
-        kAbortedDeferredMainFrameUpdate,
-        kAbortedDeferredCommit,
-        kFinishedNoUpdates,
-        kNoEarlyOut,
-    }
-
-    impl CommitEarlyOutReason {
-        pub const kMaxValue: Self = Self::kNoEarlyOut;
-    }
-
-    pub fn CommitEarlyOutReasonToString(reason: CommitEarlyOutReason) -> &'static str {
-        match reason {
-            CommitEarlyOutReason::kAbortedNotVisible => "CommitEarlyOutReason::kAbortedNotVisible",
-            CommitEarlyOutReason::kAbortedDeferredMainFrameUpdate => {
-                "CommitEarlyOutReason::kAbortedDeferredMainFrameUpdate"
-            }
-            CommitEarlyOutReason::kAbortedDeferredCommit => {
-                "CommitEarlyOutReason::kAbortedDeferredCommit"
-            }
-            CommitEarlyOutReason::kFinishedNoUpdates => "CommitEarlyOutReason::kFinishedNoUpdates",
-            CommitEarlyOutReason::kNoEarlyOut => "CommitEarlyOutReason::kNoEarlyOut",
-        }
-    }
-
-    pub fn MainFrameAppliedDeltas(reason: CommitEarlyOutReason) -> bool {
-        reason == CommitEarlyOutReason::kFinishedNoUpdates
-    }
-}

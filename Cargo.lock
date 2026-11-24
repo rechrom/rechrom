@@ -481,12 +481,12 @@ dependencies = [
  "compositor_draw",
  "compositor_frame",
  "compositor_input",
- "compositor_layerize",
  "compositor_raster",
  "compositor_resource",
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_tree_sync",
  "foundation",
  "getrandom 0.4.3",
  "layerize",
@@ -504,7 +504,6 @@ name = "compositor_animation"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "compositor_scheduler",
  "compositor_tree",
  "scroll_animation",
 ]
@@ -515,6 +514,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "compositor_tree",
+ "compositor_values",
 ]
 
 [[package]]
@@ -527,6 +527,7 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
  "image_resource",
 ]
 
@@ -536,8 +537,9 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "compositor_animation",
- "compositor_scheduler",
  "compositor_tree",
+ "compositor_values",
+ "scroll_animation",
  "scroll_snap",
 ]
 
@@ -554,6 +556,7 @@ name = "compositor_raster"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "compositor_values",
 ]
 
 [[package]]
@@ -565,6 +568,7 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
 ]
 
 [[package]]
@@ -575,6 +579,7 @@ dependencies = [
  "compositor_draw",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
  "scroll_animation",
 ]
 
@@ -586,6 +591,7 @@ dependencies = [
  "compositor_draw",
  "compositor_raster",
  "compositor_tree",
+ "compositor_values",
 ]
 
 [[package]]
@@ -594,6 +600,25 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "paint_model",
+ "scroll_snap",
+]
+
+[[package]]
+name = "compositor_tree_sync"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+]
+
+[[package]]
+name = "compositor_values"
+version = "0.0.1"
+dependencies = [
+ "compositor_animation",
+ "compositor_tree",
+ "foundation",
+ "paint_model",
+ "scroll_animation",
  "scroll_snap",
 ]
 
@@ -2290,14 +2315,9 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "compositor_animation",
- "compositor_draw",
- "compositor_frame",
- "compositor_input",
  "compositor_layerize",
- "compositor_resource",
- "compositor_scheduler",
- "compositor_tile",
  "compositor_tree",
+ "compositor_values",
  "foundation",
  "getrandom 0.4.3",
  "paint",

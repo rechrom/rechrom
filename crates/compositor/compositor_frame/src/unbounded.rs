@@ -1,9 +1,7 @@
 //! Live Viz/frame-sink transport services. ClientIdentity replaces the source
 //! implicit `this` address, registered by the owner and stable across Rust moves.
 use compositor_tree::{geometry::Size, transform::PropertyTreeTransform};
-pub trait LocalSurfaceId: Default + Clone + PartialEq {
-    fn is_valid(&self) -> bool;
-}
+pub use compositor_values::local_surface_id::LocalSurfaceId;
 pub trait CompositorFrame<R> {
     fn render_pass_list_is_empty(&self) -> bool;
     fn SetLastRenderPassOutputSize(&mut self, size: Size);

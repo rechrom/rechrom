@@ -27,8 +27,8 @@ use super::{
     },
     viewport_property_ids::ViewportPropertyIds,
 };
-use compositor_draw::Color4f;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use compositor_values::color4f::Color4f;
+use scroll_animation::{TimeDelta, TimeTicks};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The cc value types a commit carries from LayerTreeHost to

@@ -9,13 +9,27 @@ Each same-stem Chromium `.h`/`.cc` pair maps to one Rust file with the same
 relative directory and stem. Every translated declaration and implementation
 block records the original relative path and line interval.
 
-The compositor package family owns compositor state, Blink PaintArtifact
-layerization, cc layers, picture-layer tilings, tile priority and lifecycle,
-raster-task selection and playback orchestration, scheduling, tree activation,
-damage, draw-property calculation, and impl scrolling. Its public input accepts
-PaintEngine's immutable `PaintArtifact` directly. It does not own PaintArtifact
-production, a concrete pixel backend, Viz aggregation, render targets,
-presentation, platform graphics APIs, or OS threads.
+This directory holds cc's impl side (`compositor` facade and impl packages)
+and the cc shared roots both sides name. The main side (Blink PaintArtifact
+layerization, cc main layers, `LayerTreeHost`, `ProxyMain`) is `layerize`
+with `compositor_layerize` under `crates/layerize/`; the impl side receives
+its commits only through `layerize::commit`. The impl side owns impl layer
+trees, picture-layer tilings, tile priority and lifecycle, raster-task
+selection and playback orchestration, scheduling, tree activation, damage,
+draw-property calculation, and impl scrolling. It does not own PaintArtifact
+production or layerization, a concrete pixel backend, Viz aggregation, render
+targets, presentation, platform graphics APIs, or OS threads.
+
+Package classes (`S4_CRATE_CLASSIFICATION.md`, guarded by
+`crates/layerize/tests/layerize_boundary.rs`):
+
+- cc shared roots: `scroll_snap`, `scroll_animation`, `compositor_tree` (cc
+  property trees), `compositor_animation` (cc/animation, main and impl
+  AnimationHost instances), `compositor_values` (cc input, settings, viz and
+  gfx values, including `gfx::Transform`). They depend only on each other and
+  on value crates; Layerize and crates outside this family may use them.
+- impl packages: every other package here. Only the `compositor` facade and
+  other impl packages may depend on them.
 
 ## Responsibility packages and performance attribution
 
@@ -35,8 +49,8 @@ expose accidental reverse dependencies. The external command/effect protocol and
 
 | Package | Owns | Primary performance evidence |
 | --- | --- | --- |
-| `compositor_layerize` | PaintArtifact chunk grouping, layer split/merge/promotion and compositing reasons; emits layer descriptions and property references | chunks visited/merged, layers produced/reused, split/squash reasons, invalidations, duration |
-| `compositor_tree` | retained layer/property-tree topology, pending/active synchronization, commit and activation | nodes synchronized, changed nodes, activation wait, property-tree update duration |
+| `compositor_tree` (shared) | cc property trees, nodes, ids and their shared update helpers | property-tree update duration |
+| `compositor_tree_sync` | pending/active synchronization: commit into the sync tree, activation, property pushes, impl property-tree, clip and render-target updates | nodes synchronized, changed nodes, activation wait, duration |
 | `compositor_tile` | tilings, tile size/lifecycle/coverage/priority and raster-work selection | visible/required tiles, selection queue depth, reuse/drop counts, duration |
 | `compositor_raster` | raster capabilities, task graphs, paint-op playback execution and completion | graph nodes/edges, queued/running/completed tasks, pixels/bytes, wait and worker duration |
 | `compositor_draw` | draw properties, damage, visibility, occlusion, culling, surfaces and quad/render-pass content | visited/culled layers, damage area, surfaces/quads, duration |
@@ -44,10 +58,12 @@ expose accidental reverse dependencies. The external command/effect protocol and
 | `compositor_resource` | resource IDs, budgets, pools, leases, allocation/reuse, export/return and actual reclamation | live/available bytes, allocation/reuse/reclamation/return counts, duration |
 | `compositor_scheduler` | BeginFrame/deadline state machine, action selection and compositor throttling | actions, deadline misses, throttling/defer reasons, duration |
 | `compositor_input` | hit testing/routing, scroll latching/snap, browser controls and interaction-driven viewport changes | event route/disposition, scroll/pinch/snap work, main-thread fallback, input-to-mutation duration |
-| `compositor_animation` | timelines/keyframes and tick-time property evaluation | active/ticked animations, property evaluations, promoted/fallback counts, duration |
+| `compositor_animation` (shared) | timelines/keyframes and tick-time property evaluation | active/ticked animations, property evaluations, promoted/fallback counts, duration |
+| `compositor_values` (shared) | cc values named by both sides; no hot algorithm | none (values only) |
 
-Trace categories use the exact package names (`compositor.layerize`,
-`compositor.tree`, and so on). Cross-package calls are nested, so a trace can
+Trace categories use the exact package names (`compositor.tree`,
+`compositor.tree_sync`, and so on; the moved `compositor_layerize` keeps
+`compositor.layerize`). Cross-package calls are nested, so a trace can
 separate inclusive facade latency from the exclusive cost of each owner. Work
 counts must be recorded by the package that owns the underlying collection;
 the facade may aggregate those values but must not reconstruct them by walking

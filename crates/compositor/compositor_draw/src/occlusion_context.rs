@@ -17,6 +17,23 @@ pub trait OcclusionTransform: BaseOcclusionTransform + Transform + PropertyTreeT
     fn ToString(&self) -> String;
 }
 
+// Moved from layerize::commit::transform with the shared gfx::Transform.
+impl<R: compositor_values::transform::RoundedRectTransformBackend> OcclusionTransform
+    for compositor_values::transform::Transform<R>
+{
+    fn NonDegeneratePreserves2dAxisAlignment(&self) -> bool {
+        self.as_source().NonDegeneratePreserves2dAxisAlignment()
+    }
+    fn Multiply(&self, other: &Self) -> Self {
+        let mut result = self.clone();
+        result.transform_mut().PreConcat(other.as_source());
+        result
+    }
+    fn ToString(&self) -> String {
+        format!("{:?}", self.as_source())
+    }
+}
+
 pub use compositor_tree::property_types::BlendMode as SkBlendMode;
 
 pub trait OcclusionLayerTree<S: Copy + Eq> {

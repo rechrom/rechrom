@@ -5,8 +5,10 @@ Status: S1a, S1b (S1b-1..S1b-9) and S1c done; see `S1B_PROXY_DESIGN.md`
 and its `ProxyMain`) is constructed and run by the Page on its document
 thread from the plain `compositor::MainHostParams` values; the impl half
 (`compositor::CompositorEngine`) is built by its owner from the posted
-`ProxyImplInit`. `crates/layerize/tests/layerize_boundary.rs` has no
-exceptions. The sections below are the historical plan and per-stage notes.
+`ProxyImplInit`. S4 (package classification, `S4_CRATE_CLASSIFICATION.md`)
+is done: `layerize` and `compositor_layerize` depend only on the cc shared
+roots. `crates/layerize/tests/layerize_boundary.rs` has no exceptions. The
+sections below are the historical plan and per-stage notes.
 
 ## Chromium reference
 
@@ -283,11 +285,20 @@ Done:
 - `LayerImplTypes` names `LayerTreeTypes` explicitly. It used to reach it only
   through `MainLayerTypes`.
 
-### Compositor sub-crate items used by layerize (decide in S4)
+### Compositor sub-crate items used by layerize (decided in S4)
 
-These are compositor-engine packages. In S4, each used item is either
-classified as a shared cc value root (like Layout's shared roots) or moved into
-`layerize::commit`. Nothing is changed yet.
+S4 resolution (`S4_CRATE_CLASSIFICATION.md`, done): `compositor_tree`
+(without the impl tree-sync modules, now `compositor_tree_sync`),
+`compositor_animation`, `scroll_snap`, `scroll_animation` and the new
+`compositor_values` are cc shared roots. The items below that lived in impl
+packages (`compositor_input` values, `compositor_draw` `Color4f` /
+`SkMatrix` / render-surface flags, `compositor_scheduler`, `compositor_tile`,
+`compositor_frame` and `compositor_resource` settings and viz values) moved
+to `compositor_values` with re-exports under their old paths;
+`gfx::Transform` moved there from `layerize::commit::transform`, and the impl
+packages implement their own occlusion, damage and scrollbar facets for it.
+`compositor_layerize` moved to `crates/layerize/`. layerize depends on no
+impl package. The list below is the pre-S4 inventory.
 
 - `compositor_tree`: `geometry::*` (gfx value types); `property_types` (trace
   vocabulary, `FilterOperations`, `MaskFilterInfo`, `BlendMode`,

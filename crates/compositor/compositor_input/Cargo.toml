@@ -6,7 +6,8 @@ publish = false
 
 [dependencies]
 scroll_snap = { path = "../scroll_snap" }
+scroll_animation = { path = "../scroll_animation" }
 browser_tracing = { path = "../../tracing" }
 compositor_animation = { path = "../compositor_animation" }
-compositor_scheduler = { path = "../compositor_scheduler" }
 compositor_tree = { path = "../compositor_tree" }
+compositor_values = { path = "../compositor_values" }
