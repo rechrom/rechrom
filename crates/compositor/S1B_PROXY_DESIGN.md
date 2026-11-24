@@ -813,3 +813,22 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   external runtime the non-input notifications now reach the document as
   `Command::ProxyMain` when posted, instead of one `CompositorEffects`
   batch (or the `ExternalWheel` effects) after the impl command.
+- **S1b-9 done (cleanup and contract).** `compositor::CreateMainHalf` and
+  the `MainLayerize` / `MainProxy` / `MainFrameResult` facade aliases are
+  deleted; no file in `crates/compositor` names `layerize::LayerizeEngine`
+  or `layerize::runtime::proxy_main`. The Page constructs the main half
+  itself in `page/main_compositor.rs` `CreateMainCompositor`
+  (LayerTreeHost::CreateThreaded order: ProxyMainEndpoint, LayerizeEngine,
+  ProxyMain, then the `ProxyImplInit` that `ProxyMain::Start` posts) from
+  `compositor::CreateMainHostParams(&config) -> MainHostParams`: plain
+  values from the same settings policy as the impl half (identity `id` and
+  `first_property_owner`, `LayerTreeSettings`, Blink paint features and
+  diagnostics, the main `AnimationHost` instance, the background color,
+  the main PropertyTreeFeatures, the `compositor.main` commit-request
+  trace). `ProxyImplInit::new(id, &main AnimationHost, paint values)`
+  creates the impl AnimationHost from the main instance
+  (LayerTreeHost::CreateLayerTreeHostImpl). `MainFamily` stays in
+  `compositor`; the lent-main-host `Send` assertion moved to the browser.
+  `layerize_boundary.rs` has no exceptions (`LAYERIZE_ENGINE_ALLOWED` and
+  `MAIN_HALF_PREFIXES` removed). D4 applied: AGENTS.md 1.2 boundary 5 and
+  1.3 Compositor describe the final contract.
