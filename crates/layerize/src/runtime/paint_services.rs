@@ -302,11 +302,12 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
             .scroll
             .as_ref()
             .map(|s| {
+                let contents = paint_model::property_cell::with_access(|a| s.ContentsRect(a));
                 crate::adapter::geometry::ToEnclosingRect(RectF::new(
-                    s.contents_rect.x as f32,
-                    s.contents_rect.y as f32,
-                    s.contents_rect.width as f32,
-                    s.contents_rect.height as f32,
+                    contents.x as f32,
+                    contents.y as f32,
+                    contents.width as f32,
+                    contents.height as f32,
                 ))
             })
     }
@@ -1000,7 +1001,8 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             let Some(scroll) = &scroll_translation.scroll else {
                 continue;
             };
-            let value = scroll.compositor.compositor_element_id.GetInternalValue();
+            let value = paint_model::property_cell::with_access(|a| scroll.GetCompositorElementId(a))
+                .GetInternalValue();
             if !ElementId::IsValidInternalValue(value) {
                 continue;
             }

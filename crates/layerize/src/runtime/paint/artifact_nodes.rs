@@ -79,10 +79,10 @@ where
     B: PaintArtifactCompositorTypes,
 {
     fn UserScrollable(&self) -> bool {
-        self.node().UserScrollable()
+        read(|a| self.node().UserScrollable(a))
     }
     fn CompositedScrollingPreferred(&self) -> bool {
-        self.node().GetCompositedScrollingPreference()
+        read(|a| self.node().GetCompositedScrollingPreference(a))
             == paint_property_tree::PaintCompositedScrollingPreference::Preferred
     }
 }

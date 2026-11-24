@@ -1594,7 +1594,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         .height
                         .max(precise_layout_clip.height),
                 });
-                scroll_node = Some(Arc::new(ScrollPaintPropertyNode {
+                scroll_node = Some(Arc::new(ScrollPaintPropertyNode::new(
+                    Default::default(),
+                    node.properties.scroll_id,
+                    paint_model::paint_property_tree::ScrollPaintPropertyNodeState {
                     // Source: core/paint/paint_property_tree_builder.cc:3570-3648,
                     // 4611-4628. A non-none source scroll-snap payload remains
                     // unsupported; PaintInput rejects it rather than inventing one.
@@ -1685,8 +1688,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         }
                         state
                     },
-                    lifecycle: Default::default(),
-                    id: node.properties.scroll_id,
                     owner_client_id: fragment.paint.DisplayItemClientId(),
                     owner_node_id: u64::try_from(fragment.paint.DisplayItemClientOwnerNodeId())
                         .unwrap_or_default(),
@@ -1729,7 +1730,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         },
                         |scroll| scroll.user_scrollable_vertical,
                     ),
-                }));
+                })));
             }
         }
 

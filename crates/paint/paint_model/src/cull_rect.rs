@@ -13,6 +13,7 @@ use crate::paint_property_tree::{
     ClipPaintPropertyNode, PaintCompositedScrollingPreference, PropertyTreeState,
     ScrollPaintPropertyNode, TransformPaintPropertyNode,
 };
+use crate::property_cell::PropertyAccess;
 use crate::PaintRect;
 
 pub const SMALL_SCROLLER_AREA: f64 = 100_000.0;
@@ -71,20 +72,25 @@ fn IsRootScroller(transform: &TransformPaintPropertyNode) -> bool {
         .Has(foundation::CompositingReason::kRootScroller)
 }
 
-fn IsSmallScrollerTransform(transform: &TransformPaintPropertyNode, expansion_ratio: f64) -> bool {
+fn IsSmallScrollerTransform(
+    access: &PropertyAccess,
+    transform: &TransformPaintPropertyNode,
+    expansion_ratio: f64,
+) -> bool {
     !IsRootScroller(transform)
         && transform.scroll.as_ref().is_some_and(|scroll| {
-            scroll.ContainerRect().width * scroll.ContainerRect().height
+            scroll.ContainerRect(access).width * scroll.ContainerRect(access).height
                 <= SMALL_SCROLLER_AREA * expansion_ratio * expansion_ratio
         })
 }
 
 fn LocalPixelDistanceToExpandForTransform(
+    access: &PropertyAccess,
     root: &TransformPaintPropertyNode,
     local: &TransformPaintPropertyNode,
     expansion_ratio: f64,
 ) -> (f64, f64) {
-    let is_small = IsSmallScrollerTransform(local, expansion_ratio);
+    let is_small = IsSmallScrollerTransform(access, local, expansion_ratio);
     let minimum = 2.0 * ChangedEnoughMinimumDistance(is_small, expansion_ratio);
     if is_small {
         return (minimum, minimum);
@@ -186,17 +192,18 @@ impl CullRect {
     }
 
     /// Source: `cull_rect.cc:108-123`.
-    pub fn CanExpandForScroll(scroll: &ScrollPaintPropertyNode) -> bool {
-        scroll.GetCompositedScrollingPreference()
+    pub fn CanExpandForScroll(access: &PropertyAccess, scroll: &ScrollPaintPropertyNode) -> bool {
+        scroll.GetCompositedScrollingPreference(access)
             != PaintCompositedScrollingPreference::NotPreferred
-            && scroll.UserScrollable()
-            && (scroll.ContentsRect().width > scroll.ContainerRect().width
-                || scroll.ContentsRect().height > scroll.ContainerRect().height)
+            && scroll.UserScrollable(access)
+            && (scroll.ContentsRect(access).width > scroll.ContainerRect(access).width
+                || scroll.ContentsRect(access).height > scroll.ContainerRect(access).height)
     }
 
     /// Source: `cull_rect.cc:160-245`.
     fn ApplyScrollTranslation(
         &mut self,
+        access: &PropertyAccess,
         root_transform: &TransformPaintPropertyNode,
         scroll_translation: &TransformPaintPropertyNode,
         expansion_ratio: f64,
@@ -205,8 +212,8 @@ impl CullRect {
             .scroll
             .as_ref()
             .expect("scroll translation owns a ScrollPaintPropertyNode");
-        let container_rect = scroll.ContainerRect();
-        let can_expand = expansion_ratio != 0.0 && Self::CanExpandForScroll(scroll);
+        let container_rect = scroll.ContainerRect(access);
+        let can_expand = expansion_ratio != 0.0 && Self::CanExpandForScroll(access, scroll);
         let Some(rect) = self.0 else {
             return (false, false);
         };
@@ -230,8 +237,9 @@ impl CullRect {
             return (false, false);
         }
 
-        let contents_rect = scroll.ContentsRect();
+        let contents_rect = scroll.ContentsRect(access);
         let (mut outset_x, minimum) = LocalPixelDistanceToExpandForTransform(
+            access,
             root_transform,
             scroll_translation,
             expansion_ratio,
@@ -295,6 +303,7 @@ impl CullRect {
     /// Source: `cull_rect.cc:275-430`.
     pub fn ApplyPaintProperties(
         &mut self,
+        access: &PropertyAccess,
         root: &PropertyTreeState,
         source: &PropertyTreeState,
         destination: &PropertyTreeState,
@@ -312,6 +321,7 @@ impl CullRect {
             *self = Self::Infinite();
             return root != destination
                 && self.ApplyPaintProperties(
+                    access,
                     root,
                     root,
                     destination,
@@ -343,7 +353,7 @@ impl CullRect {
             let Some(overflow_clip) = scroll_translation
                 .scroll
                 .as_ref()
-                .and_then(|scroll| scroll.OverflowClipNode().cloned())
+                .and_then(|scroll| scroll.OverflowClipNode(access).cloned())
             else {
                 break;
             };
@@ -365,7 +375,7 @@ impl CullRect {
             }
             last_clip = overflow_clip;
             expanded =
-                self.ApplyScrollTranslation(&root.transform, &scroll_translation, expansion_ratio);
+                self.ApplyScrollTranslation(access, &root.transform, &scroll_translation, expansion_ratio);
             last_transform = scroll_translation;
         }
 
@@ -400,7 +410,7 @@ impl CullRect {
             last_transform
                 .scroll
                 .as_ref()
-                .map(|scroll| scroll.ContentsRect())
+                .map(|scroll| scroll.ContentsRect(access))
         } else {
             None
         };
@@ -423,6 +433,7 @@ impl CullRect {
 
         if expansion_ratio > 0.0 && has_transform_requiring_expansion {
             let pixel_distance = LocalPixelDistanceToExpandForTransform(
+                access,
                 &root.transform,
                 &destination.transform,
                 expansion_ratio,
@@ -445,7 +456,7 @@ impl CullRect {
         }
 
         if let Some(old) = old_cull_rect {
-            let is_small = IsSmallScrollerTransform(&destination.transform, expansion_ratio);
+            let is_small = IsSmallScrollerTransform(access, &destination.transform, expansion_ratio);
             if !self.ChangedEnough(expanded, old, expansion_bounds, is_small, expansion_ratio) {
                 *self = old;
             }
@@ -772,7 +783,8 @@ mod tests {
             width: 200.0,
             height: 200.0,
         });
-        assert!(!cull.ApplyPaintProperties(&root, &root, &destination, None, 1.0));
+        assert!(!crate::property_cell::with_access(|access| cull
+            .ApplyPaintProperties(access, &root, &root, &destination, None, 1.0)));
         assert_eq!(
             cull.Rect(),
             Some(PaintRect {
@@ -794,27 +806,31 @@ mod tests {
             height: 100.0,
         };
         let overflow_clip = ChildClip(&root.clip, &root.transform, 1, container);
-        let scroll = Arc::new(ScrollPaintPropertyNode {
-            compositor: Default::default(),
-            lifecycle: Default::default(),
-            id: 1,
-            owner_client_id: 1,
-            owner_node_id: 0,
-            parent: root.transform.scroll.clone(),
-            overflow_clip: Some(overflow_clip.clone()),
-            container_rect: container,
-            contents_rect: PaintRect {
-                x: 0.0,
-                y: 0.0,
-                width: 100.0,
-                height: 1000.0,
+        let scroll = Arc::new(ScrollPaintPropertyNode::new(
+            Default::default(),
+            1,
+            crate::paint_property_tree::ScrollPaintPropertyNodeState {
+                compositor: Default::default(),
+                owner_client_id: 1,
+                owner_node_id: 0,
+                parent: root.transform.scroll.clone(),
+                overflow_clip: Some(overflow_clip.clone()),
+                container_rect: container,
+                contents_rect: PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 1000.0,
+                },
+                minimum_scroll_offset: Offset::default(),
+                maximum_scroll_offset: Offset { x: 0.0, y: 900.0 },
+                user_scrollable_horizontal: false,
+                user_scrollable_vertical: true,
             },
-            minimum_scroll_offset: Offset::default(),
-            maximum_scroll_offset: Offset { x: 0.0, y: 900.0 },
-            user_scrollable_horizontal: false,
-            user_scrollable_vertical: true,
-        });
-        assert!(CullRect::CanExpandForScroll(&scroll));
+        ));
+        assert!(crate::property_cell::with_access(|access| CullRect::CanExpandForScroll(
+            access, &scroll
+        )));
         let scroll_translation = ChildTransform(
             &root.transform,
             1,
@@ -827,7 +843,8 @@ mod tests {
             effect: root.effect.clone(),
         };
         let mut cull = CullRect::FromRect(container);
-        assert!(cull.ApplyPaintProperties(&root, &root, &destination, None, 1.0));
+        assert!(crate::property_cell::with_access(|access| cull
+            .ApplyPaintProperties(access, &root, &root, &destination, None, 1.0)));
         assert_eq!(
             cull.Rect(),
             Some(PaintRect {

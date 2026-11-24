@@ -1,5 +1,5 @@
 //! Thin resident-node reads for the canonical GeometryMapper caches.
-use super::{PropertyTreeState, TransformNode};
+use super::{read, PropertyTreeState, TransformNode};
 use crate::{
     adapter::{
         geometry::{Rect, RectF, ToEnclosingRect, Vector2dF},
@@ -112,30 +112,16 @@ impl<R: PaintSkiaBackend> GeometryMapperNode for TransformNode<R> {
         crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache(&parent,|cache|cache.nearest_scroll_translation())
     }
     fn ScrollContentsRect(&self) -> Rect {
-        rect(
-            self.node()
-                .scroll
-                .as_ref()
-                .expect("source ScrollNode")
-                .ContentsRect(),
-        )
+        let scroll = self.node().scroll.as_ref().expect("source ScrollNode");
+        rect(read(|a| scroll.ContentsRect(a)))
     }
     fn ScrollContainerRect(&self) -> Rect {
-        rect(
-            self.node()
-                .scroll
-                .as_ref()
-                .expect("source ScrollNode")
-                .ContainerRect(),
-        )
+        let scroll = self.node().scroll.as_ref().expect("source ScrollNode");
+        rect(read(|a| scroll.ContainerRect(a)))
     }
     fn ScrollOverflowClip(&self) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
-        self.node()
-            .scroll
-            .as_ref()
-            .expect("source ScrollNode")
-            .OverflowClipNode()
-            .cloned()
+        let scroll = self.node().scroll.as_ref().expect("source ScrollNode");
+        read(|a| scroll.OverflowClipNode(a).cloned())
     }
 }
 impl<R: PaintSkiaBackend> GeometryMapperState for PropertyTreeState<R> {

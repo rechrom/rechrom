@@ -55,7 +55,11 @@ impl PaintRecording {
                         .layout_scroll_translation
                         .as_ref()
                         .and_then(|node| node.scroll.as_ref())
-                        .and_then(|scroll| scroll.overflow_clip.clone())
+                        .and_then(|scroll| {
+                            paint_model::property_cell::with_access(|access| {
+                                scroll.OverflowClipNode(access).cloned()
+                            })
+                        })
                         .unwrap_or_else(|| viewport.viewport_clip.clone()),
                     ..root.clone()
                 }
@@ -120,7 +124,7 @@ mod tests {
         scroll.parent = Some(root.transform.clone());
         scroll.matrix = TranslationTransform(0.0, -20.0);
         let mut scroll_node = scroll.scroll.as_ref().unwrap().as_ref().clone();
-        scroll_node.overflow_clip = Some(viewport_clip.clone());
+        scroll_node.state_mut().overflow_clip = Some(viewport_clip.clone());
         scroll.scroll = Some(Arc::new(scroll_node));
         let scroll = Arc::new(scroll);
         let mut clip = root.clip.as_ref().clone();

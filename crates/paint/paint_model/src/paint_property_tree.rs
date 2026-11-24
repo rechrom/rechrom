@@ -7,7 +7,7 @@
 use foundation::{TrustedIdentityHashMap, TrustedIdentityHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use crate::property_cell::{MutableCell, PaintSequenceId, PropertyAccess};
+use crate::property_cell::{MutableCell, PaintSequenceId, PropertyAccess, PropertyCell};
 use std::sync::Arc;
 
 use crate::paint_clip_path::PaintClipPath;
@@ -292,6 +292,11 @@ pub struct TransformAnimationState {
 }
 
 impl TransformPaintPropertyNode {
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, _access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.parent.as_ref()
+    }
     fn ResolvedMatrix(&self) -> foundation::gfx::Transform {
         foundation::gfx::Transform::ColMajor(&self.matrix.values)
     }
@@ -683,6 +688,11 @@ pub struct ClipPaintPropertyNode {
 }
 
 impl ClipPaintPropertyNode {
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, _access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.parent.as_ref()
+    }
     /// Source: clip_paint_property_node.h:88-99,110-125. Normal source clip
     /// creation supplies equal precise/paint input until the builder supplies
     /// its unsnapped layout value or an explicit animation expansion.
@@ -984,6 +994,11 @@ pub struct PaintCanvasChildState {
 pub use foundation::canvas_child_paint_state::CanvasChildPaintState;
 
 impl EffectPaintPropertyNode {
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, _access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.parent.as_ref()
+    }
     /// Current producer publishes FilterInfo only at its actual nonempty filter
     /// construction sites; retain this ownership fact on the published node.
     pub fn with_filter_presence(mut self) -> Self {
@@ -1403,11 +1418,22 @@ impl EffectPaintPropertyNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Source: scroll_paint_property_node.h:52-83,231-233. Dump id and lifecycle
+/// identity are plain fields; the node `State` (with the parent link,
+/// paint_property_node.h:232) is confined to the document sequence that
+/// created the node and read through a `PropertyAccess`.
+#[derive(Debug)]
 pub struct ScrollPaintPropertyNode {
-    pub compositor: ScrollCompositorState,
     pub lifecycle: PaintPropertyNodeLifecycle,
     pub id: u64,
+    state: PropertyCell<ScrollPaintPropertyNodeState>,
+}
+
+/// Source: scroll_paint_property_node.h:52-83 `ScrollPaintPropertyNode::State`,
+/// plus the parent link and Rechrom's Layout association fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScrollPaintPropertyNodeState {
+    pub compositor: ScrollCompositorState,
     /// Stable source owner identity used to connect Layout's sticky scroll
     /// ancestor to this Paint property node without exposing either owner.
     pub owner_client_id: u64,
@@ -1415,7 +1441,7 @@ pub struct ScrollPaintPropertyNode {
     /// Coordinator uses this retained source identity when reflecting an impl
     /// scroll; it must not depend on optional PaintController debug records.
     pub owner_node_id: u64,
-    pub parent: Option<Arc<Self>>,
+    pub parent: Option<Arc<ScrollPaintPropertyNode>>,
     pub overflow_clip: Option<Arc<ClipPaintPropertyNode>>,
     pub container_rect: PaintRect,
     pub contents_rect: PaintRect,
@@ -1494,54 +1520,111 @@ impl Default for ScrollCompositorState {
     }
 }
 
+impl Clone for ScrollPaintPropertyNode {
+    /// A snapshot copy (S2-4 replaces copies with in-place `Update`).
+    fn clone(&self) -> Self {
+        Self::new(
+            self.lifecycle.clone(),
+            self.id,
+            crate::property_cell::with_access(|access| self.state(access).clone()),
+        )
+    }
+}
+impl PartialEq for ScrollPaintPropertyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.lifecycle == other.lifecycle
+            && self.id == other.id
+            && crate::property_cell::with_access(|access| {
+                self.state(access) == other.state(access)
+            })
+    }
+}
+
 impl ScrollPaintPropertyNode {
+    /// Source: scroll_paint_property_node.h:99-106 `Create`. The node belongs
+    /// to the calling document sequence.
+    pub fn new(
+        lifecycle: PaintPropertyNodeLifecycle,
+        id: u64,
+        state: ScrollPaintPropertyNodeState,
+    ) -> Self {
+        Self {
+            lifecycle,
+            id,
+            state: PropertyCell::with_owner(PaintSequenceId::current(), state),
+        }
+    }
+    #[inline]
+    pub fn state<'a>(&'a self, access: &'a PropertyAccess) -> &'a ScrollPaintPropertyNodeState {
+        self.state.get(access)
+    }
+    /// Exclusive access to a snapshot that is not shared yet.
+    #[inline]
+    pub fn state_mut(&mut self) -> &mut ScrollPaintPropertyNodeState {
+        self.state.get_mut()
+    }
+    /// Source: paint_property_node.h:116-119 `Parent`.
+    #[inline]
+    pub fn Parent<'a>(&'a self, access: &'a PropertyAccess) -> Option<&'a Arc<Self>> {
+        self.state(access).parent.as_ref()
+    }
+
     // Source: scroll_paint_property_node.h:127-211. Both referenced runtime
     // features are stable at the pinned Chromium revision, so ContentsRect and
     // ScrollingContentsCullRect use their enabled source branches.
-    pub fn OverscrollBehavior(&self) -> [LayoutOverscrollBehavior; 2] {
-        self.compositor.overscroll_behavior
+    pub fn OverscrollBehavior(&self, access: &PropertyAccess) -> [LayoutOverscrollBehavior; 2] {
+        self.state(access).compositor.overscroll_behavior
     }
-    pub fn ContainerRect(&self) -> PaintRect {
-        self.container_rect
+    pub fn ContainerRect(&self, access: &PropertyAccess) -> PaintRect {
+        self.state(access).container_rect
     }
-    pub fn ContentsRect(&self) -> PaintRect {
-        self.contents_rect
+    pub fn ContentsRect(&self, access: &PropertyAccess) -> PaintRect {
+        self.state(access).contents_rect
     }
-    pub fn OverflowClipNode(&self) -> Option<&Arc<ClipPaintPropertyNode>> {
-        self.overflow_clip.as_ref()
+    pub fn OverflowClipNode<'a>(
+        &'a self,
+        access: &'a PropertyAccess,
+    ) -> Option<&'a Arc<ClipPaintPropertyNode>> {
+        self.state(access).overflow_clip.as_ref()
     }
-    pub fn UserScrollableHorizontal(&self) -> bool {
-        self.user_scrollable_horizontal
+    pub fn UserScrollableHorizontal(&self, access: &PropertyAccess) -> bool {
+        self.state(access).user_scrollable_horizontal
     }
-    pub fn UserScrollableVertical(&self) -> bool {
-        self.user_scrollable_vertical
+    pub fn UserScrollableVertical(&self, access: &PropertyAccess) -> bool {
+        self.state(access).user_scrollable_vertical
     }
-    pub fn UserScrollable(&self) -> bool {
-        self.UserScrollableHorizontal() || self.UserScrollableVertical()
+    pub fn UserScrollable(&self, access: &PropertyAccess) -> bool {
+        self.UserScrollableHorizontal(access) || self.UserScrollableVertical(access)
     }
-    pub fn PreventViewportScrollingFromInner(&self) -> bool {
-        self.compositor.prevent_viewport_scrolling_from_inner
+    pub fn PreventViewportScrollingFromInner(&self, access: &PropertyAccess) -> bool {
+        self.state(access).compositor.prevent_viewport_scrolling_from_inner
     }
-    pub fn MaxScrollOffsetAffectedByPageScale(&self) -> bool {
-        self.compositor.max_scroll_offset_affected_by_page_scale
+    pub fn MaxScrollOffsetAffectedByPageScale(&self, access: &PropertyAccess) -> bool {
+        self.state(access).compositor.max_scroll_offset_affected_by_page_scale
     }
-    pub fn PreventScrollAxisLocking(&self) -> bool {
-        self.compositor.prevent_scroll_axis_locking
+    pub fn PreventScrollAxisLocking(&self, access: &PropertyAccess) -> bool {
+        self.state(access).compositor.prevent_scroll_axis_locking
     }
-    pub fn GetCompositedScrollingPreference(&self) -> PaintCompositedScrollingPreference {
-        self.compositor.composited_scrolling_preference
+    pub fn GetCompositedScrollingPreference(
+        &self,
+        access: &PropertyAccess,
+    ) -> PaintCompositedScrollingPreference {
+        self.state(access).compositor.composited_scrolling_preference
     }
-    pub fn GetMainThreadRepaintReasons(&self) -> u8 {
-        self.compositor.main_thread_repaint_reasons
+    pub fn GetMainThreadRepaintReasons(&self, access: &PropertyAccess) -> u8 {
+        self.state(access).compositor.main_thread_repaint_reasons
     }
-    pub fn RequiresMainThreadForBackgroundAttachmentFixed(&self) -> bool {
-        self.GetMainThreadRepaintReasons() & 1 != 0
+    pub fn RequiresMainThreadForBackgroundAttachmentFixed(&self, access: &PropertyAccess) -> bool {
+        self.GetMainThreadRepaintReasons(access) & 1 != 0
     }
-    pub fn GetCompositorElementId(&self) -> foundation::CompositorElementId {
-        self.compositor.compositor_element_id
+    pub fn GetCompositorElementId(
+        &self,
+        access: &PropertyAccess,
+    ) -> foundation::CompositorElementId {
+        self.state(access).compositor.compositor_element_id
     }
-    pub fn ScrollingContentsCullRect(&self) -> PaintRect {
-        self.compositor.scrolling_contents_cull_rect
+    pub fn ScrollingContentsCullRect(&self, access: &PropertyAccess) -> PaintRect {
+        self.state(access).compositor.scrolling_contents_cull_rect
     }
 
     /// Source: scroll_paint_property_node.h:199-204. Direct cull-rect updates
@@ -1550,7 +1633,7 @@ impl ScrollPaintPropertyNode {
         self.lifecycle = self
             .lifecycle
             .updated(PaintPropertyChangeType::ChangedOnlySimpleValues);
-        self.compositor.scrolling_contents_cull_rect = rect;
+        self.state_mut().compositor.scrolling_contents_cull_rect = rect;
     }
 
     /// Source: scroll_paint_property_node.h:109-120. Layout-only association
@@ -1561,11 +1644,12 @@ impl ScrollPaintPropertyNode {
         parent: Arc<ScrollPaintPropertyNode>,
         mut state: ScrollPaintPropertyNode,
     ) -> PaintPropertyChangeType {
-        state.parent = Some(parent);
+        state.state_mut().parent = Some(parent);
         let change = scroll_state_change(self, &state);
-        let auxiliary_changed = self.owner_client_id != state.owner_client_id
-            || self.minimum_scroll_offset != state.minimum_scroll_offset
-            || self.maximum_scroll_offset != state.maximum_scroll_offset;
+        let (old, new) = (self.state.get_mut(), state.state.get_mut());
+        let auxiliary_changed = old.owner_client_id != new.owner_client_id
+            || old.minimum_scroll_offset != new.minimum_scroll_offset
+            || old.maximum_scroll_offset != new.maximum_scroll_offset;
         if change != PaintPropertyChangeType::Unchanged || auxiliary_changed {
             let lifecycle = if change == PaintPropertyChangeType::Unchanged {
                 self.lifecycle.clone()
@@ -1597,7 +1681,7 @@ impl ScrollPaintPropertyNode {
                 break;
             }
             node.lifecycle.clear_changed(access, sequence_number);
-            current = node.parent.as_ref().map(|parent| &**resolver.scroll(parent));
+            current = node.Parent(access).map(|parent| &**resolver.scroll(parent));
         }
     }
 
@@ -1605,6 +1689,9 @@ impl ScrollPaintPropertyNode {
     /// intentionally absent until the producer can publish the complete cc
     /// value; supported non-root snapshots prove that absence explicitly.
     pub fn ToJSON(&self) -> serde_json::Value {
+        crate::property_cell::with_access(|access| self.ToJSONIn(access))
+    }
+    fn ToJSONIn(&self, access: &PropertyAccess) -> serde_json::Value {
         fn rect_string(rect: PaintRect) -> String {
             format!("{},{} {}x{}", rect.x, rect.y, rect.width, rect.height)
         }
@@ -1630,28 +1717,28 @@ impl ScrollPaintPropertyNode {
             .join(", ")
         }
 
-        let mut json = PaintPropertyNodeToJSON(self.parent.as_ref(), &self.lifecycle);
-        if self.ContainerRect().width != 0.0 && self.ContainerRect().height != 0.0 {
+        let mut json = PaintPropertyNodeToJSON(self.Parent(access), &self.lifecycle);
+        if self.ContainerRect(access).width != 0.0 && self.ContainerRect(access).height != 0.0 {
             json.insert(
                 "containerRect".into(),
-                serde_json::Value::String(rect_string(self.ContainerRect())),
+                serde_json::Value::String(rect_string(self.ContainerRect(access))),
             );
         }
-        if self.ContentsRect().width != 0.0 && self.ContentsRect().height != 0.0 {
+        if self.ContentsRect(access).width != 0.0 && self.ContentsRect(access).height != 0.0 {
             json.insert(
                 "contentsRect".into(),
-                serde_json::Value::String(rect_string(self.ContentsRect())),
+                serde_json::Value::String(rect_string(self.ContentsRect(access))),
             );
         }
-        if let Some(clip) = self.OverflowClipNode() {
+        if let Some(clip) = self.OverflowClipNode(access) {
             json.insert(
                 "overflowClipNode".into(),
                 serde_json::Value::String(format!("{:p}", Arc::as_ptr(clip))),
             );
         }
-        if self.UserScrollable() {
-            let value = if self.UserScrollableHorizontal() {
-                if self.UserScrollableVertical() {
+        if self.UserScrollable(access) {
+            let value = if self.UserScrollableHorizontal(access) {
+                if self.UserScrollableVertical(access) {
                     "both"
                 } else {
                     "horizontal"
@@ -1664,26 +1751,26 @@ impl ScrollPaintPropertyNode {
                 serde_json::Value::String(value.into()),
             );
         }
-        if self.GetMainThreadRepaintReasons() != 0 {
+        if self.GetMainThreadRepaintReasons(access) != 0 {
             json.insert(
                 "mainThreadReasons".into(),
-                serde_json::Value::String(repaint_reasons(self.GetMainThreadRepaintReasons())),
+                serde_json::Value::String(repaint_reasons(self.GetMainThreadRepaintReasons(access))),
             );
         }
-        if self.MaxScrollOffsetAffectedByPageScale() {
+        if self.MaxScrollOffsetAffectedByPageScale(access) {
             json.insert(
                 "maxScrollOffsetAffectedByPageScale".into(),
                 serde_json::Value::String("true".into()),
             );
         }
-        let compositor_id = self.GetCompositorElementId().GetInternalValue();
+        let compositor_id = self.GetCompositorElementId(access).GetInternalValue();
         if compositor_id != 0 {
             json.insert(
                 "compositorElementId".into(),
                 serde_json::Value::String(format!("({compositor_id})")),
             );
         }
-        let overscroll = self.OverscrollBehavior();
+        let overscroll = self.OverscrollBehavior(access);
         if overscroll[0] != LayoutOverscrollBehavior::kAuto {
             json.insert(
                 "overscroll-behavior-x".into(),
@@ -1696,14 +1783,14 @@ impl ScrollPaintPropertyNode {
                 serde_json::Value::String(overscroll_name(overscroll[1]).into()),
             );
         }
-        if self.PreventScrollAxisLocking() {
+        if self.PreventScrollAxisLocking(access) {
             json.insert(
                 "preventScrollAxisLock".into(),
                 serde_json::Value::Bool(true),
             );
         }
         let infinite = foundation::infinite_int_rect::InfiniteIntRect();
-        let cull = self.ScrollingContentsCullRect();
+        let cull = self.ScrollingContentsCullRect(access);
         let is_infinite = cull.x == f64::from(infinite.x())
             && cull.y == f64::from(infinite.y())
             && cull.width == f64::from(infinite.width())
@@ -1775,21 +1862,23 @@ impl PropertyTreeState {
             };
             // ScrollRoot is a sentinel, not a real scroll. Its nullable overflow
             // clip also avoids manufacturing a cyclic root clip relationship.
-            let scroll = Arc::new(ScrollPaintPropertyNode {
-                compositor: Default::default(),
-                lifecycle: PaintPropertyNodeLifecycle::root(),
-                id: 0,
-                owner_client_id: 0,
-                owner_node_id: 0,
-                parent: None,
-                overflow_clip: None,
-                container_rect: infinite,
-                contents_rect: infinite,
-                minimum_scroll_offset: Offset::default(),
-                maximum_scroll_offset: Offset::default(),
-                user_scrollable_horizontal: false,
-                user_scrollable_vertical: false,
-            });
+            let scroll = Arc::new(ScrollPaintPropertyNode::new(
+                PaintPropertyNodeLifecycle::root(),
+                0,
+                ScrollPaintPropertyNodeState {
+                    compositor: Default::default(),
+                    owner_client_id: 0,
+                    owner_node_id: 0,
+                    parent: None,
+                    overflow_clip: None,
+                    container_rect: infinite,
+                    contents_rect: infinite,
+                    minimum_scroll_offset: Offset::default(),
+                    maximum_scroll_offset: Offset::default(),
+                    user_scrollable_horizontal: false,
+                    user_scrollable_vertical: false,
+                },
+            ));
             let transform = Arc::new(TransformPaintPropertyNode {
                 compositor: TransformCompositorState {
                     in_subtree_of_page_scale: false,
@@ -2149,10 +2238,14 @@ impl PaintPropertyTrees {
             return;
         }
         self.insert_scroll(node.clone());
-        if let Some(parent) = &node.parent {
+        let (parent, clip) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        if let Some(parent) = &parent {
             self.add_scroll(parent);
         }
-        if let Some(clip) = &node.overflow_clip {
+        if let Some(clip) = &clip {
             self.add_clip(clip);
         }
     }
@@ -2229,7 +2322,7 @@ macro_rules! persisted_property_node {
                 self.id
             }
             fn linked_parent_id(&self) -> u64 {
-                self.parent.as_ref().map_or(0, |parent| parent.id)
+                self.snapshot_parent_id()
             }
             fn recorded_parent_id(&self) -> u64 {
                 self.lifecycle.parent_id
@@ -2695,10 +2788,14 @@ impl FrozenPropertyTrees {
         if !Self::admit(node, self.scrolls.by_id(node.id), seen, coverage) {
             return;
         }
-        if let Some(parent) = &node.parent {
+        let (parent, clip) = crate::property_cell::with_access(|access| {
+            let state = node.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        if let Some(parent) = &parent {
             self.verify_scroll(PropertyNodeResolver::scroll(self, parent), seen, coverage);
         }
-        if let Some(clip) = &node.overflow_clip {
+        if let Some(clip) = &clip {
             self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
     }
@@ -2767,7 +2864,9 @@ impl PaintPropertyNodeStore {
             count(&self.transforms, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
             count(&self.clips, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
             count(&self.effects, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
-            count(&self.scrolls, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+            count(&self.scrolls, |n| {
+                crate::property_cell::with_access(|access| n.Parent(access).map(|p| (p.id, n.lifecycle.parent_id)))
+            }),
         ];
         parts.iter().fold((0, 0), |(c, u), (pc, pu)| (c + pc, u + pu))
     }
@@ -3049,7 +3148,7 @@ impl PaintPropertyNodeStore {
             owner: PaintPropertyOwner::Viewport,
             role: PaintPropertyRole::VisualViewportScroll,
         };
-        let mut visual_scroll = ScrollPaintPropertyNode {
+        let mut visual_scroll = ScrollPaintPropertyNode::new(Default::default(), 0, ScrollPaintPropertyNodeState {
             compositor: ScrollCompositorState {
                 compositor_element_id: scroll_element_id,
                 max_scroll_offset_affected_by_page_scale: true,
@@ -3057,8 +3156,6 @@ impl PaintPropertyNodeStore {
                 snap_container_data_absent: true,
                 ..Default::default()
             },
-            lifecycle: Default::default(),
-            id: 0,
             owner_client_id: 0,
             owner_node_id: 0,
             parent: Some(
@@ -3089,7 +3186,7 @@ impl PaintPropertyNodeStore {
             }),
             user_scrollable_horizontal: true,
             user_scrollable_vertical: true,
-        };
+        });
         let visual_scroll = if let Some(old) = self.scrolls.get(&visual_scroll_key) {
             let change = scroll_state_change(old, &visual_scroll);
             // An unchanged value keeps the old snapshot only while its links
@@ -3842,16 +3939,20 @@ impl ArtifactPropertyStateRebinder {
             .cloned()
             .unwrap_or_else(|| input.clone());
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
-        let parent = source.parent.as_ref().map(|parent| self.scroll(parent));
-        let overflow_clip = source.overflow_clip.as_ref().map(|clip| self.clip(clip));
-        let node = if same_entity_option(&parent, &source.parent)
-            && same_entity_option(&overflow_clip, &source.overflow_clip)
+        let (source_parent, source_clip) = crate::property_cell::with_access(|access| {
+            let state = source.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        let parent = source_parent.as_ref().map(|parent| self.scroll(parent));
+        let overflow_clip = source_clip.as_ref().map(|clip| self.clip(clip));
+        let node = if same_entity_option(&parent, &source_parent)
+            && same_entity_option(&overflow_clip, &source_clip)
         {
             source
         } else {
             let mut node = (*source).clone();
-            node.parent = parent;
-            node.overflow_clip = overflow_clip;
+            node.state_mut().parent = parent;
+            node.state_mut().overflow_clip = overflow_clip;
             Arc::new(node)
         };
         self.rebound_scrolls.insert(source_identity, node.clone());
@@ -4028,30 +4129,27 @@ impl RetainedScrollSnapshotRebinder {
         if let Some(node) = self.trees.scroll_for(input) {
             return node.clone();
         }
-        let parent = input.parent.as_ref().map(|parent| self.scroll(parent));
-        let clip = input.overflow_clip.as_ref().map(|clip| self.clip(clip));
-        let node = if same_snapshot_option(&parent, &input.parent)
-            && same_snapshot_option(&clip, &input.overflow_clip)
+        let (input_parent, input_clip) = crate::property_cell::with_access(|access| {
+            let state = input.state(access);
+            (state.parent.clone(), state.overflow_clip.clone())
+        });
+        let parent = input_parent.as_ref().map(|parent| self.scroll(parent));
+        let clip = input_clip.as_ref().map(|clip| self.clip(clip));
+        let node = if same_snapshot_option(&parent, &input_parent)
+            && same_snapshot_option(&clip, &input_clip)
             && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
                 == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
-            Arc::new(ScrollPaintPropertyNode {
-                compositor: input.compositor.clone(),
-                lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
-                id: input.id,
-                owner_client_id: input.owner_client_id,
-                owner_node_id: input.owner_node_id,
-                parent,
-                overflow_clip: clip,
-                container_rect: input.container_rect,
-                contents_rect: input.contents_rect,
-                minimum_scroll_offset: input.minimum_scroll_offset,
-                maximum_scroll_offset: input.maximum_scroll_offset,
-                user_scrollable_horizontal: input.user_scrollable_horizontal,
-                user_scrollable_vertical: input.user_scrollable_vertical,
-            })
+            let mut node = ScrollPaintPropertyNode::new(
+                input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
+                input.id,
+                crate::property_cell::with_access(|access| input.state(access).clone()),
+            );
+            node.state_mut().parent = parent;
+            node.state_mut().overflow_clip = clip;
+            Arc::new(node)
         };
         self.trees.insert_scroll(node.clone());
         node
@@ -4106,6 +4204,9 @@ fn same_snapshot_option<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
     }
 }
 impl TransformPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        self.parent.as_ref().map_or(0, |parent| parent.id)
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
         same_entity_option(&self.parent, &other.parent)
             && same_entity_option(&self.scroll, &other.scroll)
@@ -4120,6 +4221,9 @@ impl TransformPaintPropertyNode {
     }
 }
 impl ClipPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        self.parent.as_ref().map_or(0, |parent| parent.id)
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
         same_entity_option(&self.parent, &other.parent)
             && same_entity(&self.local_transform_space, &other.local_transform_space)
@@ -4127,6 +4231,9 @@ impl ClipPaintPropertyNode {
     }
 }
 impl EffectPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        self.parent.as_ref().map_or(0, |parent| parent.id)
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
         same_entity_option(&self.parent, &other.parent)
             && same_entity(&self.local_transform_space, &other.local_transform_space)
@@ -4139,16 +4246,22 @@ impl EffectPaintPropertyNode {
     }
 }
 impl ScrollPaintPropertyNode {
+    fn snapshot_parent_id(&self) -> u64 {
+        crate::property_cell::with_access(|access| self.Parent(access).map_or(0, |parent| parent.id))
+    }
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_entity_option(&self.parent, &other.parent)
-            && same_entity_option(&self.overflow_clip, &other.overflow_clip)
-            // These are Rechrom package-boundary associations, not fields in
-            // Chromium ScrollPaintPropertyNode::State. Keep a new value when
-            // they change without promoting the source lifecycle category.
-            && self.owner_client_id == other.owner_client_id
-            && self.owner_node_id == other.owner_node_id
-            && self.minimum_scroll_offset == other.minimum_scroll_offset
-            && self.maximum_scroll_offset == other.maximum_scroll_offset
+        crate::property_cell::with_access(|access| {
+            let (this, other) = (self.state(access), other.state(access));
+            same_entity_option(&this.parent, &other.parent)
+                && same_entity_option(&this.overflow_clip, &other.overflow_clip)
+                // These are Rechrom package-boundary associations, not fields in
+                // Chromium ScrollPaintPropertyNode::State. Keep a new value when
+                // they change without promoting the source lifecycle category.
+                && this.owner_client_id == other.owner_client_id
+                && this.owner_node_id == other.owner_node_id
+                && this.minimum_scroll_offset == other.minimum_scroll_offset
+                && this.maximum_scroll_offset == other.maximum_scroll_offset
+        })
     }
 }
 
@@ -4421,6 +4534,14 @@ fn scroll_state_change(
     a: &ScrollPaintPropertyNode,
     b: &ScrollPaintPropertyNode,
 ) -> PaintPropertyChangeType {
+    crate::property_cell::with_access(|access| {
+        scroll_node_state_change(a.state(access), b.state(access))
+    })
+}
+fn scroll_node_state_change(
+    a: &ScrollPaintPropertyNodeState,
+    b: &ScrollPaintPropertyNodeState,
+) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
     // Source: scroll_paint_property_node.cc:31-55. Parent is compared by the
     // enclosing Update's SetParent and therefore participates in the maximum.
@@ -4468,7 +4589,7 @@ macro_rules! update_snapshot {
             if $node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
                 $self.store.change_markers_cleared = false;
             }
-            $node.lifecycle.parent_id = $node.parent.as_ref().map_or(0, |parent| parent.id);
+            $node.lifecycle.parent_id = $node.snapshot_parent_id();
             let node = if let Some(old) = $self.store.$map.get(&key).filter(|old| {
                 $node.lifecycle.changed == PaintPropertyChangeType::Unchanged
                     && crate::property_cell::with_access(|access| old.lifecycle.node_changed(access))
@@ -4721,8 +4842,10 @@ impl PropertyNodeUpdater<'_> {
             }
         }
         let mut node = (**input).clone();
-        node.parent = node.parent.as_ref().map(|p| self.scroll(p));
-        node.overflow_clip = node.overflow_clip.as_ref().map(|c| self.clip(c));
+        let parent = node.state_mut().parent.as_ref().map(|p| self.scroll(p));
+        node.state_mut().parent = parent;
+        let clip = node.state_mut().overflow_clip.as_ref().map(|c| self.clip(c));
+        node.state_mut().overflow_clip = clip;
         let node = update_snapshot!(self, node, key, old, scroll_state_change, scrolls);
         if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
             self.store.intersection_observation_state =
@@ -5194,44 +5317,46 @@ mod retained_scroll_update_tests {
         let mut scroll = (*root_scroll).clone();
         scroll.id = 81;
         scroll.lifecycle = PaintPropertyNodeLifecycle::root();
-        scroll.parent = Some(root_scroll.clone());
-        scroll.overflow_clip = Some(root.clip.clone());
-        scroll.container_rect = PaintRect {
+        scroll.state_mut().parent = Some(root_scroll.clone());
+        scroll.state_mut().overflow_clip = Some(root.clip.clone());
+        scroll.state_mut().container_rect = PaintRect {
             x: 1.0,
             y: 2.0,
             width: 30.0,
             height: 40.0,
         };
-        scroll.contents_rect = PaintRect {
+        scroll.state_mut().contents_rect = PaintRect {
             x: 1.0,
             y: 2.0,
             width: 300.0,
             height: 400.0,
         };
-        scroll.user_scrollable_horizontal = true;
-        scroll.user_scrollable_vertical = true;
-        scroll.compositor.main_thread_repaint_reasons = 1 | (1 << 3);
-        scroll.compositor.max_scroll_offset_affected_by_page_scale = true;
-        scroll.compositor.prevent_scroll_axis_locking = true;
-        scroll.compositor.overscroll_behavior = [
+        scroll.state_mut().user_scrollable_horizontal = true;
+        scroll.state_mut().user_scrollable_vertical = true;
+        scroll.state_mut().compositor.main_thread_repaint_reasons = 1 | (1 << 3);
+        scroll.state_mut().compositor.max_scroll_offset_affected_by_page_scale = true;
+        scroll.state_mut().compositor.prevent_scroll_axis_locking = true;
+        scroll.state_mut().compositor.overscroll_behavior = [
             LayoutOverscrollBehavior::kContain,
             LayoutOverscrollBehavior::kNone,
         ];
-        scroll.compositor.snap_container_data_absent = true;
-        scroll.compositor.snap_container_data = None;
-        scroll.compositor.compositor_element_id = foundation::CompositorElementId::new(42);
+        scroll.state_mut().compositor.snap_container_data_absent = true;
+        scroll.state_mut().compositor.snap_container_data = None;
+        scroll.state_mut().compositor.compositor_element_id = foundation::CompositorElementId::new(42);
 
-        assert_eq!(scroll.ContainerRect().width, 30.0);
-        assert_eq!(scroll.ContentsRect().height, 400.0);
-        assert!(scroll.UserScrollable());
-        assert!(scroll.RequiresMainThreadForBackgroundAttachmentFixed());
-        assert!(scroll.PreventScrollAxisLocking());
+        crate::property_cell::with_access(|a| {
+        assert_eq!(scroll.ContainerRect(a).width, 30.0);
+        assert_eq!(scroll.ContentsRect(a).height, 400.0);
+        assert!(scroll.UserScrollable(a));
+        assert!(scroll.RequiresMainThreadForBackgroundAttachmentFixed(a));
+        assert!(scroll.PreventScrollAxisLocking(a));
         assert!(scroll
-            .OverflowClipNode()
+            .OverflowClipNode(a)
             .is_some_and(|clip| Arc::ptr_eq(clip, &root.clip)));
+        });
 
         let mut cull_changed = scroll.clone();
-        cull_changed.compositor.scrolling_contents_cull_rect = PaintRect {
+        cull_changed.state_mut().compositor.scrolling_contents_cull_rect = PaintRect {
             x: 3.0,
             y: 4.0,
             width: 50.0,
@@ -5242,13 +5367,14 @@ mod retained_scroll_update_tests {
             PaintPropertyChangeType::ChangedOnlySimpleValues
         );
         let mut auxiliary_changed = scroll.clone();
-        auxiliary_changed.maximum_scroll_offset.y = 99.0;
+        auxiliary_changed.state_mut().maximum_scroll_offset.y = 99.0;
         assert_eq!(
             scroll_state_change(&scroll, &auxiliary_changed),
             PaintPropertyChangeType::Unchanged
         );
         let mut source_changed = scroll.clone();
         source_changed
+            .state_mut()
             .compositor
             .prevent_viewport_scrolling_from_inner = true;
         assert_eq!(
@@ -5271,7 +5397,7 @@ mod retained_scroll_update_tests {
 
         let mut resident = scroll.clone();
         let mut next = resident.clone();
-        next.user_scrollable_vertical = false;
+        next.state_mut().user_scrollable_vertical = false;
         assert_eq!(
             resident.Update(root_scroll, next),
             PaintPropertyChangeType::ChangedOnlyValues
@@ -5796,12 +5922,10 @@ mod retained_scroll_update_tests {
         let key = |role| PaintPropertyKey { owner, role };
         let clean =
             || PaintPropertyNodeLifecycle::default().updated(PaintPropertyChangeType::Unchanged);
-        let scroll = Arc::new(ScrollPaintPropertyNode {
+        let scroll = Arc::new(ScrollPaintPropertyNode::new(clean(), 1, ScrollPaintPropertyNodeState {
             compositor: Default::default(),
-            id: 1,
             owner_client_id: 42,
             owner_node_id: 0,
-            lifecycle: clean(),
             parent: root.transform.scroll.clone(),
             overflow_clip: Some(root.clip.clone()),
             container_rect: PaintRect::default(),
@@ -5810,7 +5934,7 @@ mod retained_scroll_update_tests {
             maximum_scroll_offset: Offset { x: 0.0, y: 100.0 },
             user_scrollable_horizontal: false,
             user_scrollable_vertical: true,
-        });
+        }));
         let translation = Arc::new(TransformPaintPropertyNode {
             compositor: Default::default(),
             geometry_mapper_cache: Default::default(),
@@ -5886,12 +6010,10 @@ mod retained_scroll_update_tests {
             }
             .with_inherited_view_transition(),
         );
-        let secondary_scroll = Arc::new(ScrollPaintPropertyNode {
+        let secondary_scroll = Arc::new(ScrollPaintPropertyNode::new(clean(), 6, ScrollPaintPropertyNodeState {
             compositor: Default::default(),
-            id: 6,
             owner_client_id: 43,
             owner_node_id: 0,
-            lifecycle: clean(),
             parent: Some(scroll.clone()),
             overflow_clip: Some(clip.clone()),
             container_rect: PaintRect::default(),
@@ -5900,7 +6022,7 @@ mod retained_scroll_update_tests {
             maximum_scroll_offset: Offset::default(),
             user_scrollable_horizontal: false,
             user_scrollable_vertical: false,
-        });
+        }));
         let mut store = PaintPropertyNodeStore::default();
         // This test bypasses updater() to construct marked resident slots.
         store.change_markers_cleared = false;
@@ -5991,10 +6113,10 @@ mod retained_scroll_update_tests {
             trees.effects[&5].output_clip.as_ref().unwrap(),
             &trees.clips[&4]
         ));
-        assert!(Arc::ptr_eq(
-            trees.scrolls[&6].overflow_clip.as_ref().unwrap(),
+        assert!(crate::property_cell::with_access(|access| Arc::ptr_eq(
+            trees.scrolls[&6].OverflowClipNode(access).unwrap(),
             &trees.clips[&4]
-        ));
+        )));
         assert!(updated.is_scroll_only_update_from(&store));
         assert!(
             trees.transforms.contains_key(&0)

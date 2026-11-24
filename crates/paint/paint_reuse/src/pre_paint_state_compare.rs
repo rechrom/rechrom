@@ -10,8 +10,10 @@ use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,
         PaintPropertyNodeLifecycle, PropertyTreeState, ScrollPaintPropertyNode,
+        ScrollPaintPropertyNodeState,
         TransformPaintPropertyNode,
     },
+    property_cell::PropertyAccess,
     PaintRect,
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -22,14 +24,19 @@ pub fn SameBuilderState(
     current_keys: &BTreeMap<u64, PaintPropertyKey>,
     prior_keys: &BTreeMap<u64, PaintPropertyKey>,
 ) -> bool {
-    let mut compare = Compare {
-        current_keys,
-        prior_keys,
-        memo: BTreeMap::new(),
-    };
-    compare.transform(&a.transform, &b.transform)
-        && compare.clip(&a.clip, &b.clip)
-        && compare.effect(&a.effect, &b.effect)
+    // One proof for the whole comparison: the compared nodes belong to the
+    // document sequence running PrePaint.
+    paint_model::property_cell::with_access(|access| {
+        let mut compare = Compare {
+            access,
+            current_keys,
+            prior_keys,
+            memo: BTreeMap::new(),
+        };
+        compare.transform(&a.transform, &b.transform)
+            && compare.clip(&a.clip, &b.clip)
+            && compare.effect(&a.effect, &b.effect)
+    })
 }
 
 /// Chromium keeps property nodes in stable mutable owner/role slots. A value
@@ -101,6 +108,7 @@ enum Compared {
 }
 type Pair = (u8, usize, usize);
 struct Compare<'a> {
+    access: &'a PropertyAccess,
     current_keys: &'a BTreeMap<u64, PaintPropertyKey>,
     prior_keys: &'a BTreeMap<u64, PaintPropertyKey>,
     memo: BTreeMap<Pair, Compared>,
@@ -322,10 +330,10 @@ impl Compare<'_> {
         if let Some(result) = cached {
             return result;
         }
-        let ScrollPaintPropertyNode {
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let ScrollPaintPropertyNodeState {
             compositor,
-            lifecycle,
-            id,
             owner_client_id,
             owner_node_id,
             parent,
@@ -336,21 +344,22 @@ impl Compare<'_> {
             maximum_scroll_offset,
             user_scrollable_horizontal,
             user_scrollable_vertical,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
-            && compositor == &b.compositor
-            && owner_client_id == &b.owner_client_id
-            && owner_node_id == &b.owner_node_id
+            && compositor == &bs.compositor
+            && owner_client_id == &bs.owner_client_id
+            && owner_node_id == &bs.owner_node_id
             && finite_rect(container_rect)
-            && container_rect == &b.container_rect
+            && container_rect == &bs.container_rect
             && finite_rect(contents_rect)
-            && contents_rect == &b.contents_rect
-            && minimum_scroll_offset == &b.minimum_scroll_offset
-            && maximum_scroll_offset == &b.maximum_scroll_offset
-            && user_scrollable_horizontal == &b.user_scrollable_horizontal
-            && user_scrollable_vertical == &b.user_scrollable_vertical
-            && self.optional(parent, &b.parent, Self::scroll)
-            && self.optional(overflow_clip, &b.overflow_clip, Self::clip);
+            && contents_rect == &bs.contents_rect
+            && minimum_scroll_offset == &bs.minimum_scroll_offset
+            && maximum_scroll_offset == &bs.maximum_scroll_offset
+            && user_scrollable_horizontal == &bs.user_scrollable_horizontal
+            && user_scrollable_vertical == &bs.user_scrollable_vertical
+            && self.optional(parent, &bs.parent, Self::scroll)
+            && self.optional(overflow_clip, &bs.overflow_clip, Self::clip);
         self.finish(key, same)
     }
 }

@@ -266,7 +266,8 @@ impl Page {
             .and_then(|frame| frame.display_items.compositor_viewport.as_ref())
             .and_then(|viewport| viewport.visual_scroll_translation.scroll.as_deref())
             .is_some_and(|scroll| {
-                scroll.compositor.compositor_element_id.GetInternalValue()
+                paint::property_cell::with_access(|access| scroll.GetCompositorElementId(access))
+                    .GetInternalValue()
                     == element.GetInternalValue()
             })
     }

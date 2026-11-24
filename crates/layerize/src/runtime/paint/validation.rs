@@ -317,16 +317,23 @@ fn ValidateArtifactGraph(
                     pending.push(Node::Transform(parent.clone()));
                 }
                 if let Some(scroll) = &node.scroll {
-                    if scroll.parent.is_some()
-                        && !scroll.compositor.snap_container_data_absent
-                        && scroll.compositor.snap_container_data.is_none()
-                    {
+                    let (missing_snap_data, overflow_clip) =
+                        paint_model::property_cell::with_access(|access| {
+                            let state = scroll.state(access);
+                            (
+                                state.parent.is_some()
+                                    && !state.compositor.snap_container_data_absent
+                                    && state.compositor.snap_container_data.is_none(),
+                                state.overflow_clip.clone(),
+                            )
+                        });
+                    if missing_snap_data {
                         return Err(PaintInputError::MissingScrollCompositorData {
                             node: scroll.clone(),
                         });
                     }
-                    if let Some(clip) = &scroll.overflow_clip {
-                        pending.push(Node::Clip(clip.clone()));
+                    if let Some(clip) = overflow_clip {
+                        pending.push(Node::Clip(clip));
                     }
                 }
             }

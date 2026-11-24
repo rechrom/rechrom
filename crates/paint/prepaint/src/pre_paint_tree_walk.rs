@@ -182,12 +182,19 @@ fn ScrollElementIdForStickyClient(
 ) -> foundation::CompositorElementId {
     let mut transform = Some(parent.clone());
     while let Some(node) = transform {
-        let mut scroll = node.scroll.clone();
-        while let Some(candidate) = scroll {
-            if candidate.owner_client_id == owner_client_id {
-                return candidate.compositor.compositor_element_id;
+        let found = paint_model::property_cell::with_access(|access| {
+            let mut scroll = node.scroll.as_ref();
+            while let Some(candidate) = scroll {
+                let state = candidate.state(access);
+                if state.owner_client_id == owner_client_id {
+                    return Some(state.compositor.compositor_element_id);
+                }
+                scroll = state.parent.as_ref();
             }
-            scroll = candidate.parent.clone();
+            None
+        });
+        if let Some(element_id) = found {
+            return element_id;
         }
         transform = node.parent.clone();
     }
@@ -5147,11 +5154,13 @@ impl<'a> OwnNodeRebase<'a> {
         }
         let mut value = (**node).clone();
         value.lifecycle = Default::default();
-        value.parent = match &node.parent {
+        let parent = value.state_mut().parent.clone();
+        value.state_mut().parent = match &parent {
             Some(parent) => Some(self.scroll(parent)?),
             None => None,
         };
-        value.overflow_clip = match &node.overflow_clip {
+        let overflow_clip = value.state_mut().overflow_clip.clone();
+        value.state_mut().overflow_clip = match &overflow_clip {
             Some(clip) => Some(self.clip(clip)?),
             None => None,
         };

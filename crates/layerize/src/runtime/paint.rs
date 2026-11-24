@@ -146,6 +146,14 @@ impl PropertyNodeIdentity {
 /// Arc links themselves.
 pub type HandleTrees = Option<Arc<paint_property_tree::FrozenPropertyTrees>>;
 
+/// One node read under the document sequence's proof (decision D1: layerize
+/// handles take the proof per call; LayerizeEngine runs on the document
+/// sequence that owns the nodes).
+#[inline]
+pub(crate) fn read<T>(f: impl FnOnce(&paint_model::property_cell::PropertyAccess) -> T) -> T {
+    paint_model::property_cell::with_access(f)
+}
+
 
 macro_rules! resolve_link {
     ($trees:expr, $kind:ident, $link:expr) => {
@@ -190,7 +198,7 @@ macro_rules! node_handle {
             }
             /// This node's current parent.
             pub fn parent_handle(&self) -> Option<Self> {
-                self.node.parent.as_ref().map(|parent| self.link_same(parent))
+                read(|a| self.node.Parent(a).map(|parent| self.link_same(parent)))
             }
             /// Whether this node is `other` or one of its current ancestors.
             pub fn is_ancestor_of(&self, other: &Self) -> bool {

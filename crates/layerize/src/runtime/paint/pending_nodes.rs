@@ -220,12 +220,8 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
         paint_model::property_cell::with_access(|a| self.node().lifecycle.node_changed(a))
     }
     fn ScrollCompositorElementId(&self) -> ElementId {
-        element(
-            self.node()
-                .ScrollNode()
-                .expect("source ScrollNode")
-                .GetCompositorElementId(),
-        )
+        let scroll = self.node().ScrollNode().expect("source ScrollNode");
+        element(paint_model::property_cell::with_access(|a| scroll.GetCompositorElementId(a)))
     }
     fn ScrollContainerRect(&self) -> crate::adapter::geometry::Rect {
         crate::adapter::paint_geometry::GeometryMapperNode::ScrollContainerRect(self)

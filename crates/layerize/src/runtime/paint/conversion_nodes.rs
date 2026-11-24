@@ -150,33 +150,28 @@ where
     B: PaintChunksTypes<ScrollNode = Self, ClipNode = ClipNode<R>>,
 {
     fn Parent(&self) -> Option<Self> {
-        self.node()
-            .parent
-            .as_ref()
-            .map(|s| self.link_same(s))
+        self.parent_handle()
     }
     fn ContentsRect(&self) -> Rect {
-        rect(self.node().ContentsRect())
+        rect(read(|a| self.node().ContentsRect(a)))
     }
     fn ContainerRect(&self) -> Rect {
-        rect(self.node().ContainerRect())
+        rect(read(|a| self.node().ContainerRect(a)))
     }
     fn UserScrollableHorizontal(&self) -> bool {
-        self.node().UserScrollableHorizontal()
+        read(|a| self.node().UserScrollableHorizontal(a))
     }
     fn PropagatesXScroll(&self) -> bool {
-        self.node().OverscrollBehavior()[0].AllowsScrollChaining()
+        read(|a| self.node().OverscrollBehavior(a))[0].AllowsScrollChaining()
     }
     fn CompositedScrollingNotPreferred(&self) -> bool {
-        self.node().GetCompositedScrollingPreference()
+        read(|a| self.node().GetCompositedScrollingPreference(a))
             == paint_property_tree::PaintCompositedScrollingPreference::NotPreferred
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        element(self.node().GetCompositorElementId())
+        element(read(|a| self.node().GetCompositorElementId(a)))
     }
     fn OverflowClipNode(&self) -> Option<ClipNode<R>> {
-        self.node()
-            .OverflowClipNode()
-            .map(|p| self.link_clip(p))
+        read(|a| self.node().OverflowClipNode(a).map(|p| self.link_clip(p)))
     }
 }

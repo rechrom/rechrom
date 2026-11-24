@@ -206,30 +206,16 @@ impl GeometryMapperNode for NativeTransformNode {
         })
     }
     fn ScrollContentsRect(&self) -> Rect {
-        rect(
-            self.node()
-                .scroll
-                .as_ref()
-                .expect("source ScrollNode")
-                .ContentsRect(),
-        )
+        let scroll = self.node().scroll.as_ref().expect("source ScrollNode");
+        rect(crate::property_cell::with_access(|access| scroll.ContentsRect(access)))
     }
     fn ScrollContainerRect(&self) -> Rect {
-        rect(
-            self.node()
-                .scroll
-                .as_ref()
-                .expect("source ScrollNode")
-                .ContainerRect(),
-        )
+        let scroll = self.node().scroll.as_ref().expect("source ScrollNode");
+        rect(crate::property_cell::with_access(|access| scroll.ContainerRect(access)))
     }
     fn ScrollOverflowClip(&self) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
-        self.node()
-            .scroll
-            .as_ref()
-            .expect("source ScrollNode")
-            .OverflowClipNode()
-            .cloned()
+        let scroll = self.node().scroll.as_ref().expect("source ScrollNode");
+        crate::property_cell::with_access(|access| scroll.OverflowClipNode(access).cloned())
     }
 }
 impl GeometryMapperState for NativeGeometryState {

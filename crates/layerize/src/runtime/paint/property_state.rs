@@ -126,9 +126,12 @@ fn can_merge_for_sticky_position<R: PaintSkiaBackend>(
         first_constraint.y_scroll_ancestor_element_id,
         second_constraint.y_scroll_ancestor_element_id,
     ) {
-        let contents = source_rect(scroll_node.ContentsRect());
-        let container = source_rect(scroll_node.ContainerRect());
-        let mut range = source_rect(scroll_node.ScrollingContentsCullRect());
+        let (contents, container, cull) = super::read(|a| {
+            (scroll_node.ContentsRect(a), scroll_node.ContainerRect(a), scroll_node.ScrollingContentsCullRect(a))
+        });
+        let contents = source_rect(contents);
+        let container = source_rect(container);
+        let mut range = source_rect(cull);
         range.Intersect(contents);
         range = Rect::new(
             range.x.saturating_sub(contents.x),

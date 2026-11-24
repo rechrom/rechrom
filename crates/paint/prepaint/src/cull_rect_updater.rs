@@ -233,13 +233,14 @@ impl CullRectUpdater {
         if parent_state != local_state {
             let old =
                 old_cull.map(|stored| stored.map_or_else(CullRect::Infinite, CullRect::FromRect));
-            expanded = cull.ApplyPaintProperties(
+            expanded = paint_model::property_cell::with_access(|access| cull.ApplyPaintProperties(
+                access,
                 root_state,
                 parent_state,
                 local_state,
                 old,
                 expansion_ratio,
-            );
+            ));
         }
         (cull.Rect(), expanded)
     }
@@ -258,13 +259,14 @@ impl CullRectUpdater {
         if local_state != contents_state {
             let old = old_contents_cull
                 .map(|stored| stored.map_or_else(CullRect::Infinite, CullRect::FromRect));
-            expanded = contents_cull.ApplyPaintProperties(
+            expanded = paint_model::property_cell::with_access(|access| contents_cull.ApplyPaintProperties(
+                access,
                 root_state,
                 local_state,
                 contents_state,
                 old,
                 expansion_ratio,
-            );
+            ));
         }
         (contents_cull.Rect(), expanded)
     }
