@@ -1,37 +1,30 @@
-//! Compare inherited builder context before persistence/canonicalization.
-//! Blink reuses source property-node slots; this builder instead creates raw
-//! snapshots. Chromium owner + role identifies that same slot, and every typed
-//! value/link must still match before a clean child can reuse its context.
+//! Compare inherited builder context. PrePaint updates the resident
+//! ObjectPaintProperties slot nodes in place (Chromium owner + role slots),
+//! so a slot is one node: two states name the same slot exactly when they
+//! name the same node entity, and every typed value/link must still match
+//! before a clean child can reuse its context.
 //! Sources: pre_paint_tree_walk.cc:398-447 and
 //! paint_property_tree_builder.cc:4731-4770. This comparison itself neither
 //! mutates node identities nor produces property invalidation.
 use paint_input_types::paint_input::PaintCornerRadii;
 use paint_model::{
     paint_property_tree::{
-        ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,
-        PaintPropertyNodeLifecycle, PropertyTreeState, ScrollPaintPropertyNode,
-        ClipPaintPropertyNodeState, EffectPaintPropertyNodeState, ScrollPaintPropertyNodeState,
-        TransformPaintPropertyNodeState,
-        TransformPaintPropertyNode,
+        ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyNodeLifecycle,
+        PropertyTreeState, ScrollPaintPropertyNode, ClipPaintPropertyNodeState,
+        EffectPaintPropertyNodeState, ScrollPaintPropertyNodeState,
+        TransformPaintPropertyNodeState, TransformPaintPropertyNode,
     },
     property_cell::PropertyAccess,
     PaintRect,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-pub fn SameBuilderState(
-    a: &PropertyTreeState,
-    b: &PropertyTreeState,
-    current_keys: &BTreeMap<u64, PaintPropertyKey>,
-    prior_keys: &BTreeMap<u64, PaintPropertyKey>,
-) -> bool {
+pub fn SameBuilderState(a: &PropertyTreeState, b: &PropertyTreeState) -> bool {
     // One proof for the whole comparison: the compared nodes belong to the
     // document sequence running PrePaint.
     paint_model::property_cell::with_access(|access| {
         let mut compare = Compare {
             access,
-            current_keys,
-            prior_keys,
             memo: BTreeMap::new(),
         };
         compare.transform(&a.transform, &b.transform)
@@ -40,66 +33,20 @@ pub fn SameBuilderState(
     })
 }
 
+/// The same resident slot node (Chromium's `Member` pointer compare), also
+/// across the value snapshots that still share one node entity.
+fn same_slot(aid: u64, bid: u64, alife: &PaintPropertyNodeLifecycle, blife: &PaintPropertyNodeLifecycle) -> bool {
+    aid == bid && alife.same_node(blife)
+}
+
 /// Chromium keeps property nodes in stable mutable owner/role slots. A value
 /// change on an ancestor slot does not by itself require rebuilding clean
-/// descendants; their references are rebound to the updated slot during the
-/// persistence pass. This comparison admits only that case: each inherited
-/// top slot must still name the same semantic owner/role entry.
-pub fn SameBuilderStructure(
-    a: &PropertyTreeState,
-    b: &PropertyTreeState,
-    current_keys: &BTreeMap<u64, PaintPropertyKey>,
-    prior_keys: &BTreeMap<u64, PaintPropertyKey>,
-) -> bool {
-    fn same_slot<T>(
-        a: &Arc<T>,
-        b: &Arc<T>,
-        aid: u64,
-        bid: u64,
-        alife: &PaintPropertyNodeLifecycle,
-        blife: &PaintPropertyNodeLifecycle,
-        current_keys: &BTreeMap<u64, PaintPropertyKey>,
-        prior_keys: &BTreeMap<u64, PaintPropertyKey>,
-    ) -> bool {
-        if aid == 0 || bid == 0 {
-            return aid == 0 && bid == 0 && alife.same_node(blife);
-        }
-        match (
-            current_keys.get(&aid).or_else(|| prior_keys.get(&aid)),
-            current_keys.get(&bid).or_else(|| prior_keys.get(&bid)),
-        ) {
-            (Some(a), Some(b)) => a == b,
-            _ => Arc::ptr_eq(a, b),
-        }
-    }
-    same_slot(
-        &a.transform,
-        &b.transform,
-        a.transform.id,
-        b.transform.id,
-        &a.transform.lifecycle,
-        &b.transform.lifecycle,
-        current_keys,
-        prior_keys,
-    ) && same_slot(
-        &a.clip,
-        &b.clip,
-        a.clip.id,
-        b.clip.id,
-        &a.clip.lifecycle,
-        &b.clip.lifecycle,
-        current_keys,
-        prior_keys,
-    ) && same_slot(
-        &a.effect,
-        &b.effect,
-        a.effect.id,
-        b.effect.id,
-        &a.effect.lifecycle,
-        &b.effect.lifecycle,
-        current_keys,
-        prior_keys,
-    )
+/// descendants: they reference the same updated slot node. This comparison
+/// admits only that case: each inherited top slot must be the same node.
+pub fn SameBuilderStructure(a: &PropertyTreeState, b: &PropertyTreeState) -> bool {
+    same_slot(a.transform.id, b.transform.id, &a.transform.lifecycle, &b.transform.lifecycle)
+        && same_slot(a.clip.id, b.clip.id, &a.clip.lifecycle, &b.clip.lifecycle)
+        && same_slot(a.effect.id, b.effect.id, &a.effect.lifecycle, &b.effect.lifecycle)
 }
 
 #[derive(Clone, Copy)]
@@ -110,36 +57,19 @@ enum Compared {
 type Pair = (u8, usize, usize);
 struct Compare<'a> {
     access: &'a PropertyAccess,
-    current_keys: &'a BTreeMap<u64, PaintPropertyKey>,
-    prior_keys: &'a BTreeMap<u64, PaintPropertyKey>,
     memo: BTreeMap<Pair, Compared>,
 }
 impl Compare<'_> {
     fn same_slot<T>(
         &self,
-        a: &Arc<T>,
-        b: &Arc<T>,
+        _a: &Arc<T>,
+        _b: &Arc<T>,
         aid: u64,
         bid: u64,
         alife: &PaintPropertyNodeLifecycle,
         blife: &PaintPropertyNodeLifecycle,
     ) -> bool {
-        if aid == 0 || bid == 0 {
-            return aid == 0 && bid == 0 && alife.same_node(blife);
-        }
-        match (
-            self.current_keys
-                .get(&aid)
-                .or_else(|| self.prior_keys.get(&aid)),
-            self.current_keys
-                .get(&bid)
-                .or_else(|| self.prior_keys.get(&bid)),
-        ) {
-            (Some(a), Some(b)) => a == b,
-            // Unowned hand-built nodes have no cross-frame slot proof. The
-            // same live immutable Arc is the only admissible identity there.
-            _ => Arc::ptr_eq(a, b),
-        }
+        same_slot(aid, bid, alife, blife)
     }
     fn start<T>(&mut self, kind: u8, a: &Arc<T>, b: &Arc<T>) -> (Pair, Option<bool>) {
         let key = (kind, Arc::as_ptr(a) as usize, Arc::as_ptr(b) as usize);

@@ -5,7 +5,7 @@
 
 use layout::fragment::ResidentBoxGeometry as _;
 use super::*;
-use paint_model::property_cell::PropertyAccess;
+
 use crate::compositing_reason_finder::CompositingReasonFinder;
 
 // Source: core/paint/paint_property_tree_builder.cc:499-530. The Layout
@@ -29,10 +29,11 @@ fn NeedsCssBlendEffect(
 }
 
 pub(super) struct PaintPropertyTreeBuilder<'a> {
+    /// The walk owns the ObjectPaintProperties slots this builder updates in
+    /// place. The builder holds no property proof across a build: each read
+    /// takes the shared proof for its expression and each slot `Update` the
+    /// exclusive one (`PrePaintTreeWalk::Update*Property`).
     walk: &'a mut PrePaintTreeWalk,
-    /// The document sequence proof for reading the property nodes this
-    /// builder links to (decision D1: explicit in PrePaint).
-    access: &'a PropertyAccess,
     previous_paint_result: paint_model::PaintResult,
     // The node's offset in its paint-tree parent from its source cursor;
     // fixtures without a cursor use their recorded offset.
@@ -43,10 +44,9 @@ pub(super) struct PaintPropertyTreeBuilder<'a> {
 }
 
 impl<'a> PaintPropertyTreeBuilder<'a> {
-    pub(super) fn new(walk: &'a mut PrePaintTreeWalk, access: &'a PropertyAccess) -> Self {
+    pub(super) fn new(walk: &'a mut PrePaintTreeWalk) -> Self {
         Self {
             walk,
-            access,
             previous_paint_result: paint_model::PaintResult::kMayBeClippedByCullRect,
             link_offset: None,
             source_cursor: None,
@@ -109,7 +109,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         fragment
             .paint
             .UpdateSourcePaintLayerDescendantDependentFlags();
-        let own_key_start = self.walk.next_property_id;
+        let own_key_start = self.walk.own_key_log.len();
+        let own_change_start = self.walk.own_change_log.len();
         let inherited = InheritedContext {
             inside_blocking_wheel_event_handler: false,
             blocking_wheel_event_handler_changed: false,
@@ -207,14 +208,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             FlatTransforms::from(transforms)
         };
         node.scroll_offset = scroll_offset;
-        let inherited_tainted_subtree = parent_properties
-            .nodes
-            .effect
-            .IsInTaintedSubtree(self.access);
-        let is_in_drawable_canvas_subtree = parent_properties
-            .nodes
-            .effect
-            .IsInDrawableCanvasSubtree(self.access)
+        let (inherited_tainted_subtree, inherited_drawable_canvas_subtree) =
+            paint_model::property_cell::with_access(|a| {
+                let effect = &parent_properties.nodes.effect;
+                (effect.IsInTaintedSubtree(a), effect.IsInDrawableCanvasSubtree(a))
+            });
+        let is_in_drawable_canvas_subtree = inherited_drawable_canvas_subtree
             || CompositingReasonFinder::DirectReasonsForPaintProperties(fragment)
                 .Has(foundation::CompositingReason::kCanvasChild);
         node.applies_clip = is_root && parent_clip.is_some();
@@ -296,8 +295,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let mut pre_transform = None;
         let canvas_transform = fragment.paint.ElementCanvasTransformInput();
         if geometry.applies_transform || canvas_transform.is_some() {
-            node.properties.transform_id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
             node.applies_transform = true;
             node.local_transforms
                 .extend_from_slice(&node.transforms[inherited_transform_count..]);
@@ -356,7 +353,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             }
             let mut flat_transform_context = node.transforms[..inherited_transform_count].to_vec();
             let mut current_rendering_context_id = inherited_rendering_context_id;
-            for (index, (role, matrix)) in operations.iter().enumerate() {
+            for (role, matrix) in operations.iter() {
                 // UpdatePaintOffsetTranslation/UpdateTransform establish a
                 // local paint space. Express this reset matrix in its actual
                 // property-parent space, so P_parent*M_property
@@ -376,13 +373,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 } else {
                     *matrix
                 };
-                let id = if index == 0 {
-                    node.properties.transform_id
-                } else {
-                    let id = self.walk.next_property_id;
-                    self.walk.next_property_id += 1;
-                    id
-                };
+                let id = self.walk.RegisterProperty(fragment, *role);
                 let sticky_constraint = (*role == PaintPropertyRole::StickyTranslation)
                     .then_some(fragment.paint.StickyConstraint())
                     .flatten();
@@ -459,20 +450,20 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     } else {
                         PaintBackfaceVisibility::Inherited
                     };
-                self.walk.RegisterProperty(fragment, *role, id);
-                let transform_node = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
+                let scroll_parent_scroll_translation = if *role
+                    == PaintPropertyRole::PaintOffsetTranslation
+                    && fragment.paint.FixedToView()
+                {
+                    self.walk
+                        .root_fixed_position
+                        .as_ref()
+                        .and_then(|context| context.scroll_translation.clone())
+                } else {
+                    None
+                };
+                let transform_node = self.walk.UpdateTransformProperty(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                     compositor,
-                    scroll_parent_scroll_translation: if *role
-                        == PaintPropertyRole::PaintOffsetTranslation
-                        && fragment.paint.FixedToView()
-                    {
-                        self.walk
-                            .root_fixed_position
-                            .as_ref()
-                            .and_then(|context| context.scroll_translation.clone())
-                    } else {
-                        None
-                    },
+                    scroll_parent_scroll_translation,
                     parent: Some(parent_transform),
                     matrix: property_matrix,
                     origin: [0.0; 3],
@@ -483,6 +474,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     sticky_constraint,
                     direct_compositing_reasons: reasons,
                 }));
+                node.properties.transform_id = id;
                 if *role == PaintPropertyRole::PaintOffsetTranslation {
                     node.paint_offset_translation = Some(transform_node.clone());
                 }
@@ -685,14 +677,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     if let Some(mapped) = MapRectToRoot(path_bounds, &node.transforms) {
                         node.clip = Some(node.clip.map_or(mapped, |clip| Intersect(clip, &mapped)));
                     }
-                    node.properties.clip_id = self.walk.next_property_id;
-                    self.walk.next_property_id += 1;
-                    self.walk.RegisterProperty(
-                        fragment,
-                        PaintPropertyRole::ClipPathClip,
-                        node.properties.clip_id,
-                    );
-                    node.properties.nodes.clip = Arc::new(
+                    node.properties.clip_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::ClipPathClip);
+                    node.properties.nodes.clip = self.walk.UpdateClipProperty(
                         ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                             layout_clip_rects: Default::default(),
                             parent: Some(node.properties.nodes.clip.clone()),
@@ -730,11 +716,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         if has_primary_effect {
             let style = style.expect("effect must have source style");
             let backdrop_filter_clip = if node.applies_backdrop_filter {
-                let id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk
-                    .RegisterProperty(fragment, PaintPropertyRole::BackdropFilterClip, id);
-                Some(Arc::new(
+                let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::BackdropFilterClip);
+                Some(self.walk.UpdateClipProperty(
                     ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
                         parent: Some(node.properties.nodes.clip.clone()),
@@ -763,13 +746,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             } else {
                 None
             };
-            node.properties.effect_id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk.RegisterProperty(
-                fragment,
-                PaintPropertyRole::Effect,
-                node.properties.effect_id,
-            );
+            node.properties.effect_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::Effect);
             // Source: paint_layer.cc:2618-2636. Blink's backdrop effect owns
             // the authored backdrop chain followed by the ordinary CSS filter
             // chain. Box reflection is appended only by
@@ -851,7 +828,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             );
             compositor.filter_output_bounds = filter_reference_box
                 .and_then(|reference| backdrop_filters.reference_output_bounds(reference));
-            node.properties.nodes.effect = Arc::new(
+            node.properties.nodes.effect = self.walk.UpdateEffectProperty(
                 EffectPaintPropertyNode::new(Default::default(), node.properties.effect_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor,
 
@@ -899,21 +876,17 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // when a standalone source owner has no exported PaintLayer yet.
             node.is_paint_layer = true;
             node.is_stacking_context = true;
-            let mask_id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk
-                .RegisterProperty(fragment, PaintPropertyRole::Mask, mask_id);
-            let mask_effect = Arc::new(
+            let mask_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::Mask);
+            let mask_effect = self.walk.UpdateEffectProperty(
                 EffectPaintPropertyNode::new(Default::default(), mask_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor: EffectCompositorState(
                         fragment,
                         PaintPropertyRole::Mask,
                         false,
                         false,
-                        node.properties
-                            .nodes
-                            .effect
-                            .IsInTaintedSubtree(self.access),
+                        paint_model::property_cell::with_access(|a| {
+                            node.properties.nodes.effect.IsInTaintedSubtree(a)
+                        }),
                         is_in_drawable_canvas_subtree,
                     ),
                     backdrop_filter_bounds: None,
@@ -945,12 +918,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 effect: mask_effect,
             });
             let mask_bounds = node.ResolvedMaskClipRect().expect("resolved MaskClip");
-            let clip_id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk
-                .RegisterProperty(fragment, PaintPropertyRole::MaskClip, clip_id);
+            let clip_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::MaskClip);
             node.properties.clip_id = clip_id;
-            node.properties.nodes.clip = Arc::new(
+            node.properties.nodes.clip = self.walk.UpdateClipProperty(
                 ClipPaintPropertyNode::new(Default::default(), clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                     layout_clip_rects: Default::default(),
                     parent: Some(mask_output_clip),
@@ -988,14 +958,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 if let Some(mapped) = MapRectToRoot(local, &node.transforms) {
                     node.clip = Some(node.clip.map_or(mapped, |clip| Intersect(clip, &mapped)));
                 }
-                node.properties.clip_id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk.RegisterProperty(
-                    fragment,
-                    PaintPropertyRole::CssClip,
-                    node.properties.clip_id,
-                );
-                node.properties.nodes.clip = Arc::new(
+                node.properties.clip_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::CssClip);
+                node.properties.nodes.clip = self.walk.UpdateClipProperty(
                     ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
                         parent: Some(node.properties.nodes.clip.clone()),
@@ -1015,13 +979,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         if node.applies_filter {
             style.expect("filter must have source style");
             node.recording_filters = ResolveFilterImages(&node, &authored_filters);
-            node.properties.effect_id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk.RegisterProperty(
-                fragment,
-                PaintPropertyRole::Filter,
-                node.properties.effect_id,
-            );
+            node.properties.effect_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::Filter);
             // Source: paint_layer.cc:2044-2047 and
             // paint_property_tree_builder.cc:2602,2609-2612. A pixel-moving layer
             // uses its stitched visual overflow including self-painting layer
@@ -1114,17 +1072,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 PaintPropertyRole::Filter,
                 !filter_reasons.IsEmpty(),
                 false,
-                node.properties
-                    .nodes
-                    .effect
-                    .IsInTaintedSubtree(self.access)
-                    || filter_taints_subtree,
+                paint_model::property_cell::with_access(|a| {
+                    node.properties.nodes.effect.IsInTaintedSubtree(a)
+                }) || filter_taints_subtree,
                 is_in_drawable_canvas_subtree,
             );
             compositor.filter_output_bounds = filters.reference_output_bounds(filter_reference_box);
             // UpdateFilter follows UpdateEffect and has its own persistent
             // ObjectPaintProperties slot (paint_property_tree_builder.cc:2630).
-            node.properties.nodes.effect = Arc::new(
+            node.properties.nodes.effect = self.walk.UpdateEffectProperty(
                 EffectPaintPropertyNode::new(Default::default(), node.properties.effect_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor,
                     backdrop_filter_bounds: None,
@@ -1158,14 +1114,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         | PaintFilterType::kBoxReflect
                 )
             }) {
-                node.properties.clip_id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk.RegisterProperty(
-                    fragment,
-                    PaintPropertyRole::PixelMovingFilterClipExpander,
-                    node.properties.clip_id,
-                );
-                node.properties.nodes.clip = Arc::new(
+                node.properties.clip_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::PixelMovingFilterClipExpander);
+                node.properties.nodes.clip = self.walk.UpdateClipProperty(
                     ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
                         parent: Some(node.properties.nodes.clip.clone()),
@@ -1216,11 +1166,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     (local.height - fragment.Padding().top - fragment.Padding().bottom)
                         .max(0.0);
             }
-            let id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk
-                .RegisterProperty(fragment, PaintPropertyRole::BackgroundClip, id);
-            let clip = Arc::new(
+            let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::BackgroundClip);
+            let clip = self.walk.UpdateClipProperty(
                 ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                     layout_clip_rects: Default::default(),
                     parent: Some(node.properties.nodes.clip.clone()),
@@ -1311,11 +1258,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     || bounds.y + bounds.height > border_box.y + border_box.height
             });
             if controls_outside_border {
-                let id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk
-                    .RegisterProperty(fragment, PaintPropertyRole::OverflowControlsClip, id);
-                let clip = Arc::new(
+                let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::OverflowControlsClip);
+                let clip = self.walk.UpdateClipProperty(
                     ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
                         parent: Some(node.properties.nodes.clip.clone()),
@@ -1453,11 +1397,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 let inner_clip = node.PixelSnappedRect(&inner_radius_clip);
                 node.local_inner_border_radius_clip = Some(inner_clip);
                 node.local_inner_border_radius_radii = resolved_clip_radii;
-                let id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk
-                    .RegisterProperty(fragment, PaintPropertyRole::InnerBorderRadiusClip, id);
-                node.properties.nodes.clip = Arc::new(
+                let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::InnerBorderRadiusClip);
+                node.properties.nodes.clip = self.walk.UpdateClipProperty(
                     ClipPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                         layout_clip_rects: Default::default(),
                         parent: Some(node.properties.nodes.clip.clone()),
@@ -1485,13 +1426,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             if let Some(mapped) = MapRectToRoot(local, &node.transforms) {
                 node.clip = Some(node.clip.map_or(mapped, |clip| Intersect(clip, &mapped)));
             }
-            node.properties.clip_id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk.RegisterProperty(
-                fragment,
-                PaintPropertyRole::OverflowClip,
-                node.properties.clip_id,
-            );
+            node.properties.clip_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::OverflowClip);
             let mut excluding_overlay = precise_layout_clip;
             if let Some(scrollbars) = fragment
                 .ViewScrollbars()
@@ -1512,7 +1447,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         (excluding_overlay.height - horizontal.track_size.height).max(0.0);
                 }
             }
-            node.properties.nodes.clip = Arc::new(
+            node.properties.nodes.clip = self.walk.UpdateClipProperty(
                 ClipPaintPropertyNode::new(Default::default(), node.properties.clip_id, paint_model::paint_property_tree::ClipPaintPropertyNodeState {
                     layout_clip_rects: Default::default(),
                     parent: Some(node.properties.nodes.clip.clone()),
@@ -1536,13 +1471,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             if fragment.paint.SourceKind() != NodeKind::kSvgViewportContainer
                 && NeedsScrollAndScrollTranslation(fragment)
             {
-                node.properties.scroll_id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk.RegisterProperty(
-                    fragment,
-                    PaintPropertyRole::Scroll,
-                    node.properties.scroll_id,
-                );
+                node.properties.scroll_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::Scroll);
                 // Blink's UpdateScrollNode passes
                 // PaintLayerScrollableArea::PixelSnappedContentsSize() to
                 // cc. Snap the contents with the same physical origin as the
@@ -1563,7 +1492,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         .height
                         .max(precise_layout_clip.height),
                 });
-                scroll_node = Some(Arc::new(ScrollPaintPropertyNode::new(
+                scroll_node = Some(self.walk.UpdateScrollProperty(ScrollPaintPropertyNode::new(
                     Default::default(),
                     node.properties.scroll_id,
                     paint_model::paint_property_tree::ScrollPaintPropertyNodeState {
@@ -1724,9 +1653,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 ),
             ] {
                 let Some(axis) = axis else { continue };
-                let id = self.walk.next_property_id;
-                self.walk.next_property_id += 1;
-                self.walk.RegisterProperty(fragment, role, id);
+                let id = self.walk.RegisterProperty(fragment, role);
                 let mut scrollbar_reasons = Default::default();
                 // Source: paint_property_tree_builder.cc:3706-3721. Canvas
                 // children render their overflow controls into the drawable
@@ -1735,15 +1662,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 if !is_in_drawable_canvas_subtree {
                     scrollbar_reasons = CompositingReasonFinder::ActiveOpacityAnimation();
                 }
-                let effect = Arc::new(
+                let effect = self.walk.UpdateEffectProperty(
                     EffectPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                         compositor: paint_model::paint_property_tree::EffectCompositorState {
                             compositor_element_id: axis.compositor_element_id,
-                            is_in_tainted_subtree: node
-                                .properties
-                                .nodes
-                                .effect
-                                .IsInTaintedSubtree(self.access),
+                            is_in_tainted_subtree: paint_model::property_cell::with_access(
+                                |a| node.properties.nodes.effect.IsInTaintedSubtree(a),
+                            ),
                             is_in_drawable_canvas_subtree,
                             ..Default::default()
                         },
@@ -1830,7 +1755,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let mut child_transforms: Vec<TransformMatrix> = node.transforms.to_vec();
         let preserves_3d = style.is_some_and(|style| style.preserves_3d());
         let mut child_rendering_context_id = if preserves_3d {
-            node.properties.nodes.transform.RenderingContextId(self.access)
+            paint_model::property_cell::with_access(|a| {
+                node.properties.nodes.transform.RenderingContextId(a)
+            })
         } else {
             0
         };
@@ -1863,11 +1790,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 &TranslationTransform(pivot.x, pivot.y),
                 &MultiplyTransforms(&perspective, &TranslationTransform(-pivot.x, -pivot.y)),
             );
-            let id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk
-                .RegisterProperty(fragment, PaintPropertyRole::Perspective, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
+            let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::Perspective);
+            child_properties.nodes.transform = self.walk.UpdateTransformProperty(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(fragment, PaintPropertyRole::Perspective),
                 scroll_parent_scroll_translation: None,
                 parent: Some(child_properties.nodes.transform.clone()),
@@ -1890,11 +1814,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // before ScrollTranslation, so the content transform scrolls with the
         // replaced element rather than wrapping its scroll node.
         if let Some(matrix) = svg_view_box {
-            let id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk
-                .RegisterProperty(fragment, PaintPropertyRole::ReplacedContentTransform, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
+            let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::ReplacedContentTransform);
+            child_properties.nodes.transform = self.walk.UpdateTransformProperty(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(
                     fragment,
                     PaintPropertyRole::ReplacedContentTransform,
@@ -1921,11 +1842,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             || scroll_origin.x != 0.0
             || scroll_origin.y != 0.0;
         if has_scroll_translation {
-            let id = self.walk.next_property_id;
-            self.walk.next_property_id += 1;
-            self.walk
-                .RegisterProperty(fragment, PaintPropertyRole::ScrollTranslation, id);
-            child_properties.nodes.transform = Arc::new(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
+            let id = self.walk.RegisterProperty(fragment, PaintPropertyRole::ScrollTranslation);
+            child_properties.nodes.transform = self.walk.UpdateTransformProperty(TransformPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::TransformPaintPropertyNodeState {
                 compositor: TransformCompositorState(
                     fragment,
                     PaintPropertyRole::ScrollTranslation,
@@ -1963,8 +1881,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             has_non_composited_transform,
             self.previous_paint_result,
         );
+        SyncPropertyIds(&mut child_properties);
         node.contents_properties = child_properties.clone();
         node.properties = border_box_properties;
+        SyncPropertyIds(&mut node.properties);
         if infinite_cull.use_infinite {
             node.cull_rect = None;
             node.self_cull_rect = None;
@@ -1992,12 +1912,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         if let Some(svg) = svg_view_box {
             child_transforms.push(svg);
         }
-        let own_keys: Vec<_> = self
+        // The slots this object's build registered, and the maximum change
+        // their in-place updates reported.
+        let own_keys: Vec<_> = self.walk.own_key_log.drain(own_key_start..).collect();
+        let own_change = self
             .walk
-            .property_keys
-            .range(own_key_start..self.walk.next_property_id)
-            .map(|(&id, &key)| (id, key))
-            .collect();
+            .own_change_log
+            .drain(own_change_start..)
+            .max()
+            .unwrap_or_default();
         node.cache = Some(NodeCache {
             inherited,
             children: ChildContext {
@@ -2051,13 +1974,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             subtree_resource_usage: 0,
             record: Default::default(),
             previous_fragment: None,
-            raw_properties: node.properties.clone(),
-            raw_contents: node.contents_properties.clone(),
-            raw_fixed_background: node.fixed_background_properties.clone(),
-            raw_horizontal_scrollbar: node.horizontal_scrollbar_properties.clone(),
-            raw_vertical_scrollbar: node.vertical_scrollbar_properties.clone(),
-            raw_mask: node.mask_properties.clone(),
-            raw_opacity: node.opacity,
+            own_change,
             subtree_keys: own_keys.clone(),
             own_keys,
             nodes: 1,
