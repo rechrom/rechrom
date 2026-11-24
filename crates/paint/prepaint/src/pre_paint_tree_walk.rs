@@ -4963,6 +4963,34 @@ fn ShiftedTransforms(old_node: &FlatTransforms, old_inherited_len: usize, inheri
     }
 }
 
+/// A node retained under the same property-slot structure while an
+/// ancestor's transform value changed (a ScrollTranslation after a
+/// compositor-owned scroll, SameRetainedContextStructure). The resident
+/// property nodes are updated in place, so the flat transform list this
+/// node and its children build from must carry the same new ancestor values:
+/// a child rebuilt from the retained ChildContext maps its paint offset
+/// through `FlatToPropertySpaceOffset` against the live parent node, and a
+/// stale flat prefix would turn the ancestor's value change into a spurious
+/// PaintOffsetTranslation (and cull rect) offset. Only the inherited prefix
+/// is replaced; this node's own matrices are independent of its position.
+fn RefreshRetainedFlatTransforms(node: &mut PaintTreeNode<'_>, inherited: &InheritedContext) {
+    let Some(cache) = node.cache.as_mut() else {
+        return;
+    };
+    let old = &cache.inherited.transforms;
+    if Arc::ptr_eq(old, &inherited.transforms)
+        || old.len() != inherited.transforms.len()
+        || *old == inherited.transforms
+    {
+        return;
+    }
+    let len = old.len();
+    node.transforms = ShiftedTransforms(&node.transforms, len, &inherited.transforms);
+    cache.children.transforms =
+        ShiftedTransforms(&cache.children.transforms, len, &inherited.transforms);
+    cache.inherited.transforms = inherited.transforms.clone();
+}
+
 /// The object's only own property node is a plain Effect (opacity/blend, no
 /// filter, backdrop or mask) that BuildNode derived from the inherited
 /// transform, clip and effect alone, it is linked to the resident inherited
@@ -6505,6 +6533,7 @@ impl PrePaintTreeWalk {
             // retained builder context; widening it to an infinite cull rect is
             // not a Chromium CullRectUpdater operation and defeats culling for
             // the complete clean subtree.
+            RefreshRetainedFlatTransforms(&mut node, &inherited);
             let mut retained_inherited = inherited;
             if retained_context {
                 let old_cull = node.cache.as_ref().unwrap().inherited.cull;
@@ -6662,6 +6691,7 @@ impl PrePaintTreeWalk {
         } else if self_clean {
             self.stats.reused_nodes += 1;
             let mut node = previous.take().unwrap();
+            RefreshRetainedFlatTransforms(&mut node, &inherited);
             if self.source_owner_changed {
                 self.stats.rebound_nodes += 1;
                 node.BindSource(fragment);
