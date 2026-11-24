@@ -503,7 +503,6 @@ name = "compositor_animation"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "compositor_scheduler",
  "compositor_tree",
  "scroll_animation",
 ]
@@ -535,8 +534,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "compositor_animation",
- "compositor_scheduler",
  "compositor_tree",
+ "scroll_animation",
  "scroll_snap",
 ]
 

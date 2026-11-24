@@ -19,7 +19,7 @@ use super::{
     keyframe_model::{KeyframeCurve, KeyframeModel, LimitDirection, RunState},
 };
 use crate::gfx_keyframe_model as gfx_model;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::{geometry::PointF, target_property::Type as TargetProperty, ElementId};
 use std::sync::{Arc, Mutex};
 

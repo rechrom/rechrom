@@ -17,7 +17,7 @@ use crate::{
     scrollbar_controller_boundary::*,
     ScrollGranularity,
 };
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 use compositor_tree::{
     geometry::{Rect, RectF},
     input_geometry::{PointF, Vector2dF},

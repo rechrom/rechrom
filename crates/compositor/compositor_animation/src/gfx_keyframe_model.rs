@@ -1,7 +1,7 @@
 // Translation status: complete
 // Source: ui/gfx/animation/keyframe/keyframe_model.h:1-258
 // Source: ui/gfx/animation/keyframe/keyframe_model.cc:1-364
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 // Source: ui/gfx/animation/keyframe/keyframe_model.h:38-66
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunState {

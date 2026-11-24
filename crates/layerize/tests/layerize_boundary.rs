@@ -174,8 +174,7 @@ const LAYERIZE_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[
 
 /// Shared-root dependencies on impl packages that S4 is still cutting.
 /// Do not add entries.
-const SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] =
-    &[("compositor_animation", "compositor_scheduler", "S4-2")];
+const SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
 
 /// Non-compositor value crates a shared root may name (gfx geometry, tracing,
 /// Skia values, base types, image values).

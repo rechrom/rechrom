@@ -10,7 +10,7 @@ use crate::{
     scroll_state::ScrollState,
     scrollbar::ScrollbarOrientation,
 };
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 use compositor_tree::{
     geometry::{cpp_max, Vector2d},
     input_geometry::{Point, PointF, Size, SizeF, Vector2dF},

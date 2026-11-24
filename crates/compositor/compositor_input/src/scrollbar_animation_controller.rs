@@ -13,7 +13,7 @@ use crate::{
     scrollbar_animation::ScrollbarAnimationTask,
     scrollbar_controller_boundary::{ScrollbarInitializationClient, ScrollbarLayerAccess},
 };
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::geometry::{cpp_clamp, cpp_max, cpp_min, PointF};
 use std::sync::Arc;
 

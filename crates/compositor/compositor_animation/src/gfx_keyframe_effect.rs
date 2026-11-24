@@ -5,7 +5,7 @@ use crate::{
     cubic_bezier::CubicBezier,
     gfx_keyframe_model::{AnimationCurve, Direction, LimitDirection, RunState},
 };
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use std::{collections::BTreeSet, ops::Range};
 // Source dependency: ui/gfx/animation/keyframe/transition.h:17-30; .cc:9-18.
 #[derive(Clone)]

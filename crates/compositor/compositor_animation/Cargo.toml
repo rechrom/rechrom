@@ -7,5 +7,4 @@ publish = false
 [dependencies]
 scroll_animation = { path = "../scroll_animation" }
 browser_tracing = { path = "../../tracing" }
-compositor_scheduler = { path = "../compositor_scheduler" }
 compositor_tree = { path = "../compositor_tree" }

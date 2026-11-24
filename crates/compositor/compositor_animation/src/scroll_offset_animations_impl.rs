@@ -13,7 +13,7 @@ use super::{
     scroll_offset_animation_curve::{ScrollCurveConfig, ScrollOffsetAnimationCurve, ScrollType},
     scroll_offset_animation_curve_factory::ScrollOffsetAnimationCurveFactory as Factory,
 };
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::{
     geometry::{PointF, Vector2dF},
     target_property::Type as Property,

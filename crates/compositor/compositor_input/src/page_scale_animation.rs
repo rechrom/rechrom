@@ -8,7 +8,7 @@
 //         cc/input/page_scale_animation.cc:1-16,40-45,241.
 // Rust imports/module scope replace includes, namespaces and export guards.
 use compositor_animation::cubic_bezier::CubicBezier;
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::input_geometry::{
     Point, PointAtOffsetFromOrigin, PointF, RectF, ScaleSize, ScaleVector2d, SizeF, Vector2dF,
 };

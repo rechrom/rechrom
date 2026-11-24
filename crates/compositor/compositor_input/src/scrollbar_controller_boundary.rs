@@ -4,7 +4,7 @@
 
 use crate::input_types::{ElementId, InputLayerId, InputScrollNodeId};
 use crate::scrollbar::{ScrollbarOrientation, ScrollbarPart};
-use compositor_scheduler::TimeDelta;
+use scroll_animation::TimeDelta;
 use compositor_tree::geometry::{self, PointF, Rect, SizeF, Vector2dF};
 use std::sync::Weak;
 

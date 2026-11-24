@@ -7,7 +7,7 @@
 use crate::{
     input_handler_types::InputHandlerScrollResult, overscroll_behavior::OverscrollBehavior,
 };
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use compositor_tree::{geometry::Vector2dF, ElementId};
 use std::collections::BTreeMap;
 
