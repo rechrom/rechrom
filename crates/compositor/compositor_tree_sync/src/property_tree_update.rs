@@ -23,7 +23,7 @@ pub fn UpdatePropertyTrees<C: PropertyTreeUpdateContext>(
     context: &mut C,
     update_render_targets: bool,
 ) -> PropertyTreeUpdateStats {
-    let mut trace = browser_tracing::span("compositor.tree", "Compositor.Tree.UpdatePropertyTrees");
+    let mut trace = browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.UpdatePropertyTrees");
     let propagate = context.transform_tree_needs_update();
     if propagate {
         context.mark_clip_tree_needs_update();

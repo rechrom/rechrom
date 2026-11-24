@@ -45,7 +45,7 @@ pub fn PlanScrollbarOpacitySync<ElementId: Copy>(
     candidates: impl IntoIterator<Item = ScrollbarOpacityCandidate<ElementId>>,
 ) -> ScrollbarOpacitySyncPlan<ElementId> {
     let mut trace =
-        browser_tracing::span("compositor.tree", "Compositor.Tree.SyncScrollbarOpacities");
+        browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.SyncScrollbarOpacities");
     let mut plan = ScrollbarOpacitySyncPlan::default();
     for candidate in candidates {
         plan.candidates += 1;

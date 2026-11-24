@@ -1277,7 +1277,7 @@ where
         &'a mut <B::Synchronizer as LayerTreeSynchronizer<B>>::MainContext<'main, 'main_context>,
 }
 
-impl<'main, 'main_context, B> compositor_tree::commit_sync::CommitSyncContext
+impl<'main, 'main_context, B> compositor_tree_sync::commit_sync::CommitSyncContext
     for TreeCommitSyncAdapter<'_, '_, 'main, 'main_context, B>
 where
     B: LayerTreeTypes + 'main + 'main_context,
@@ -1455,7 +1455,7 @@ struct TreeCommitPropertyAdapter<'a, 'context, B: LayerTreeTypes> {
     context: &'a mut LayerTreeContext<'context, B>,
 }
 
-impl<B: LayerTreeTypes> compositor_tree::commit_properties::CommitPropertyContext
+impl<B: LayerTreeTypes> compositor_tree_sync::commit_properties::CommitPropertyContext
     for TreeCommitPropertyAdapter<'_, '_, B>
 {
     fn trees_in_viz_client_process(&self) -> bool {
@@ -1652,7 +1652,7 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         context: &mut LayerTreeContext<'_, B>,
         main_context: &mut <B::Synchronizer as LayerTreeSynchronizer<B>>::MainContext<'_, '_>,
     ) {
-        compositor_tree::commit_sync::PullCommitIntoSyncTree(&mut TreeCommitSyncAdapter {
+        compositor_tree_sync::commit_sync::PullCommitIntoSyncTree(&mut TreeCommitSyncAdapter {
             tree: self,
             commit,
             unsafe_state,
@@ -1687,7 +1687,7 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         commit: &mut B::CommitState,
         context: &mut LayerTreeContext<'_, B>,
     ) {
-        compositor_tree::commit_properties::PullCommitProperties(&mut TreeCommitPropertyAdapter {
+        compositor_tree_sync::commit_properties::PullCommitProperties(&mut TreeCommitPropertyAdapter {
             tree: self,
             commit,
             context,
@@ -1791,7 +1791,7 @@ struct TreePropertyPushAdapter<'a, 'services, B: LayerTreeTypes> {
     context: &'a mut LayerTreeContext<'services, B>,
 }
 
-impl<B: LayerTreeTypes> compositor_tree::property_push::PropertyPushContext
+impl<B: LayerTreeTypes> compositor_tree_sync::property_push::PropertyPushContext
     for TreePropertyPushAdapter<'_, '_, B>
 {
     type ViewTransitionRequest = Box<B::ViewTransitionRequest>;
@@ -2395,7 +2395,7 @@ impl<B: LayerTreeTypes> compositor_tile::picture_layer_update::PictureLayerUpdat
 impl<B: LayerTreeTypes> LayerTreeImpl<B> {
     // Source: cc/trees/layer_tree_impl.cc:989-1121.
     pub fn PushPropertiesTo(&mut self, target: &mut Self, context: &mut LayerTreeContext<'_, B>) {
-        compositor_tree::property_push::PushPropertiesToActive(&mut TreePropertyPushAdapter {
+        compositor_tree_sync::property_push::PushPropertiesToActive(&mut TreePropertyPushAdapter {
             source: self,
             target,
             context,

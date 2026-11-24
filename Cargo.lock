@@ -486,6 +486,7 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_tree_sync",
  "foundation",
  "getrandom 0.4.3",
  "layerize",
@@ -593,6 +594,13 @@ dependencies = [
  "browser_tracing",
  "paint_model",
  "scroll_snap",
+]
+
+[[package]]
+name = "compositor_tree_sync"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
 ]
 
 [[package]]

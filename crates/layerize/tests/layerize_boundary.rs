@@ -149,6 +149,7 @@ const CLASSIFICATION: &[(&str, Class)] = &[
     ("scroll_animation", Shared),
     ("compositor_tree", Shared),
     ("compositor_animation", Shared),
+    ("compositor_tree_sync", Impl),
     ("compositor_input", Impl),
     ("compositor_draw", Impl),
     ("compositor_scheduler", Impl),
@@ -181,20 +182,8 @@ const SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
 const SHARED_ROOT_VALUE_DEPENDENCIES: &[&str] =
     &["paint_model", "browser_tracing", "skia", "foundation", "image_resource"];
 
-/// Impl modules of the mixed `compositor_tree` (moved out in S4-3) and the
-/// value modules of the mixed `compositor_input` that layerize may name
+/// Value modules of the mixed `compositor_input` that layerize may name
 /// until S4-4 cuts them. Remove with `layerize_names_only_shared_modules`.
-const COMPOSITOR_TREE_IMPL_MODULES: &[&str] = &[
-    "activation",
-    "commit_sync",
-    "commit_properties",
-    "property_push",
-    "property_tree_update",
-    "clip_tree_update",
-    "render_target_update",
-    "scrollbar_opacity_sync",
-    "layer_collections",
-];
 const COMPOSITOR_INPUT_VALUE_MODULES: &[&str] = &[
     "actively_scrolling_type",
     "browser_controls_params",
@@ -523,8 +512,8 @@ fn named_modules(text: &str, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-/// S4 transition guard: no new impl use of the mixed packages appears while
-/// they are being split.
+/// S4 transition guard: no new impl use of the mixed `compositor_input`
+/// appears while its values are being cut.
 #[test]
 fn layerize_names_only_shared_modules() {
     let mut found = Vec::new();
@@ -534,11 +523,6 @@ fn layerize_names_only_shared_modules() {
         p.extension().is_some_and(|e| e == "rs") && !relative(p).starts_with("crates/layerize/tests/")
     }) {
         let text = std::fs::read_to_string(path).unwrap();
-        for module in named_modules(&text, "compositor_tree") {
-            if COMPOSITOR_TREE_IMPL_MODULES.contains(&module.as_str()) {
-                violations.push(format!("{}: compositor_tree::{module}", relative(path)));
-            }
-        }
         for module in named_modules(&text, "compositor_input") {
             if !COMPOSITOR_INPUT_VALUE_MODULES.contains(&module.as_str()) {
                 violations.push(format!("{}: compositor_input::{module}", relative(path)));

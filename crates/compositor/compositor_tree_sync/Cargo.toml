@@ -1,0 +1,12 @@
+[package]
+name = "compositor_tree_sync"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# cc impl-side tree synchronization: pending-tree commit, activation and the
+# impl property-tree updates (cc/trees/layer_tree_impl.cc,
+# tree_synchronizer.cc, draw_property_utils.cc impl half). Impl-only; the
+# shared property trees stay in `compositor_tree`.
+[dependencies]
+browser_tracing = { path = "../../tracing" }

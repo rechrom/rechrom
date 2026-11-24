@@ -42,7 +42,7 @@ pub struct CommitSyncStats {
 /// cross-stage scheduling in this path.
 pub fn PullCommitIntoSyncTree<C: CommitSyncContext>(context: &mut C) -> CommitSyncStats {
     let mut trace =
-        browser_tracing::span("compositor.tree", "Compositor.Tree.PullCommitIntoSyncTree");
+        browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.PullCommitIntoSyncTree");
     context.begin_sync();
 
     let forced_redraw = context.commit_forces_redraw();

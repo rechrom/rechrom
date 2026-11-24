@@ -8360,7 +8360,7 @@ struct TreeActivationAdapter<'a, 'services, B: HostImplTypes> {
     context: &'a mut HostImplContext<'services, B>,
 }
 
-impl<B: HostImplTypes> compositor_tree::activation::ActivationContext
+impl<B: HostImplTypes> compositor_tree_sync::activation::ActivationContext
     for TreeActivationAdapter<'_, '_, B>
 {
     fn trace_source_activation(&mut self) {
@@ -8748,7 +8748,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             return;
         }
         self.WithScrollbarOpacityTrees(context, |controllers, client, pending| {
-            use compositor_tree::scrollbar_opacity_sync::ScrollbarOpacityCandidate;
+            use compositor_tree_sync::scrollbar_opacity_sync::ScrollbarOpacityCandidate;
             // The once-with projection is consumed inside the Tree package's
             // trace interval, so controller traversal and node lookups are
             // attributed to Tree while resident ownership stays in the facade.
@@ -8785,7 +8785,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             })
             .flatten();
             let plan =
-                compositor_tree::scrollbar_opacity_sync::PlanScrollbarOpacitySync(candidates);
+                compositor_tree_sync::scrollbar_opacity_sync::PlanScrollbarOpacitySync(candidates);
             for update in plan.updates {
                 let target = pending
                     .property_trees_mut()
@@ -8802,7 +8802,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
     }
     // Source: cc/trees/layer_tree_host_impl.cc:4051-4197.
     pub fn ActivateSyncTree(&mut self, context: &mut HostImplContext<'_, B>) {
-        compositor_tree::activation::ActivateSyncTree(&mut TreeActivationAdapter {
+        compositor_tree_sync::activation::ActivateSyncTree(&mut TreeActivationAdapter {
             host: self,
             context,
         });

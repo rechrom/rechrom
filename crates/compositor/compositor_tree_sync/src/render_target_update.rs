@@ -43,7 +43,7 @@ pub struct RenderTargetUpdateStats {
 pub fn UpdateRenderTargets<C: RenderTargetUpdateContext>(
     context: &mut C,
 ) -> RenderTargetUpdateStats {
-    let mut trace = browser_tracing::span("compositor.tree", "Compositor.Tree.UpdateRenderTargets");
+    let mut trace = browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.UpdateRenderTargets");
     let root = context.root_effect_id();
     let end = context.effect_node_count();
     let mut resources = BTreeMap::new();

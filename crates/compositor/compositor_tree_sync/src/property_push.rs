@@ -64,7 +64,7 @@ pub struct PropertyPushStats {
 /// optional-stage decisions are owned and measured by Tree.
 pub fn PushPropertiesToActive<C: PropertyPushContext>(context: &mut C) -> PropertyPushStats {
     let mut trace =
-        browser_tracing::span("compositor.tree", "Compositor.Tree.PushPropertiesToActive");
+        browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.PushPropertiesToActive");
     context.assert_source_ui_resource_queue_empty();
     context.push_surface_ranges();
     context.push_pending_scroll_updates();
