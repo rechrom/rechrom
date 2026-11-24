@@ -48,7 +48,8 @@ pub use engine::{
     CompositorServices, CompositorInput, CompositorInputEffect, CompositorEmbedderNotification, CompositorMainThreadEffect, CompositorMutation,
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
-    PresentationUnavailableReason, BeginMainFrameState, ImplToMainTask, MainFamily, MainFrameResult,
-    MainLayerize, MainPropertyTreeFeatures, MainProxy, MainToImplTask, ProxyImplInit, CreateMainHalf,
+    PresentationUnavailableReason, BeginMainFrameState, ImplToMainTask, MainFamily,
+    MainAnimationHost, MainHostParams, MainPropertyTreeFeatures, MainToImplTask, ProxyImplInit,
+    CreateMainHostParams,
     ScrollPhase, ScrollSourceType, TargetSnapAreaElementIds,
 };

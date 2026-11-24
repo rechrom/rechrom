@@ -1,8 +1,12 @@
 # Compositor main/impl thread split (live property tree, stage S1)
 
-Status: S1c done. S1a-1, S1a-2, S1a-3 B1-B4 (with the blanket family impls) done (see "S1a-3 status" and "Plan
-correction" at the end); the S1a Send+Sync endpoint and real protected-sequence synchronizer, and the thread split (S1b/S1d) are not
-implemented.
+Status: S1a, S1b (S1b-1..S1b-9) and S1c done; see `S1B_PROXY_DESIGN.md`
+"S1b status" for the thread split. The main half (`layerize::LayerizeEngine`
+and its `ProxyMain`) is constructed and run by the Page on its document
+thread from the plain `compositor::MainHostParams` values; the impl half
+(`compositor::CompositorEngine`) is built by its owner from the posted
+`ProxyImplInit`. `crates/layerize/tests/layerize_boundary.rs` has no
+exceptions. The sections below are the historical plan and per-stage notes.
 
 ## Chromium reference
 

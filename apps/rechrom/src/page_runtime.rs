@@ -2765,7 +2765,7 @@ fn run_document(
                 send_page_compositor_continuations(&mut page, &impl_sender)?;
                 let committed = matches!(
                     result,
-                    compositor::MainFrameResult::ReadyToCommit { .. }
+                    browser::page::MainFrameResult::ReadyToCommit { .. }
                 );
                 if let Some(current) = page.CurrentFrame() {
                     let content = ContentFrameProvenance {

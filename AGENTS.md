@@ -58,12 +58,10 @@ owners**: no copied trees. Boundary 6 is the only document → compositor
 thread crossing and follows cc's ProxyMain/ProxyImpl commit. Boundaries 7–9
 can cross threads and pass **immutable shared values**.
 
-Migration note (live-property-tree plan, `crates/compositor/MAIN_IMPL_SPLIT.md`
-and `S1B_PROXY_DESIGN.md`): since stage S1b-7 the Page runs
-`LayerizeEngine` and `ProxyMain` on its document thread and pushes its
-artifact inside `ProxyMain::BeginMainFrame`; `Arc<PaintArtifact>` no longer
-crosses to the compositor thread. Until S1b-9 the main half is still
-constructed through the compositor facade (`compositor::CreateMainHalf`).
+The Page constructs and runs `LayerizeEngine` and its `ProxyMain` on its
+document thread and pushes its artifact inside `ProxyMain::BeginMainFrame`
+(`crates/compositor/MAIN_IMPL_SPLIT.md`, `S1B_PROXY_DESIGN.md`); no
+`PaintArtifact` crosses to the compositor thread.
 
 | # | Boundary | Interface | How data crosses |
 |---|---|---|---|
@@ -71,7 +69,7 @@ constructed through the compositor facade (`compositor::CreateMainHalf`).
 | 2 | DOM → Style | `DocumentStyleEngine::Update(owner: &mut impl StyleDocument, &MediaValuesCachedData, UserAgentStyleSheetInput) -> StyleUpdateImpact` | Style reads the live DOM through `StyleDocument` and stores each `ComputedStyle` owner on its element. |
 | 3 | Style → Layout | `layout::LayoutEngine::ApplyMutation(LayoutMutation<'_>)` then `Layout()`; the `LayoutMutation::TreeUpdate(&mut dyn FnMut(&mut LayoutTreeUpdate))` variant lends Layout's tree builder for one synchronous attach transaction. Side commands (form controls, selection, scroll, pointer, event registry) are `LayoutMutation` family variants; engine queries are borrowed `layout::views::*` views. | DOM's `LayoutTreeBuilder` attaches layout objects in place, sharing the same `ComputedStyle` owner. |
 | 4 | Layout → Paint | `PaintEngine::Paint(&LayoutPaintOutput, EditingPaintState)`; `LayoutPaintOutput` wraps a `LayoutResultHandle`, walked with `PaintFragmentCursor`; resources arrive as `PaintMutation` / `PaintResourceUpdate`. | Paint walks the resident fragments and their attached Paint sidecars in place. |
-| 5 | Paint → Layerize | `LayerizeEngine` runs Blink's `PaintArtifactCompositor::Update` over the `PaintArtifact`, viewport and scroll translations (Blink `LocalFrameView::PushPaintArtifactToCompositor`), then cc's `UpdateLayers` / `WillCommit`. | Borrowed artifact on the document sequence (after S1b-7). |
+| 5 | Paint → Layerize | `LayerizeEngine` runs Blink's `PaintArtifactCompositor::Update` over the `PaintArtifact`, viewport and scroll translations (Blink `LocalFrameView::PushPaintArtifactToCompositor`), then cc's `UpdateLayers` / `WillCommit`. | Borrowed artifact on the document sequence. |
 | 6 | Layerize → Compositor | `layerize::commit`: impl → main `BeginMainFrame` with impl deltas as values; main → impl `ReadyToCommit(CommitState)` or `BeginMainFrameAborted`; impl `FinishCommit` pushes dirty main-layer and animation properties through the push-target traits. | `CommitState` moved (cc property trees as a value inside it); main layers stay on main and are borrowed through `ThreadUnsafeCommitState` while main is parked (`ProtectedCommitLease`, `CompletionEvent`); display lists and paint records `Arc`-shared and immutable. `compositor` may use only `layerize::commit`; `layerize` never depends on `compositor`. |
 | 7 | Compositor → Viz | `CompositorFrame { metadata, render_pass_list, resource_list }`, plus frame-scoped raster read leases; Viz returns `FrameSubmission` with returned resources. | Immutable value per frame. |
 | 8 | Viz → Renderer | `Aggregate(DeviceRect, &[SurfacePlacement]) -> VizOutput` (an `AggregatedFrame` of `AggregatedRenderPass`es). | Immutable aggregate per frame. |
@@ -237,7 +235,11 @@ with `ProxyImpl` receiving the commit.
   independent instances, each held directly by its owner (the Page domain
   on the document thread; the embedding's impl runner, or the Page's
   synchronous presenter), connected only by the Proxy task queues. No type
-  groups the two halves.
+  or factory groups the two halves: the Page constructs `LayerizeEngine` and
+  `ProxyMain` itself (cc `LayerTreeHost::CreateThreaded`) from the plain
+  `compositor::MainHostParams` values (settings, paint feature state, main
+  `AnimationHost` instance, identity), and `ProxyMain::Start` posts the
+  `ProxyImplInit` from which the impl owner calls `CompositorEngine::new`.
 - `CompositorOutput` carries no main-thread effects. Impl → main
   notifications are ProxyImpl → ProxyMain tasks; only the synchronous
   InputHandlerProxy results of an input call (wheel/gesture disposition,

@@ -16,7 +16,22 @@
 //! direct animation updates.
 use super::*;
 use compositor::CompositorMutation;
-use layerize::runtime::proxy_main::{MainFrameClient, MainFrameResult, ProxyMainClient};
+use layerize::runtime::proxy_main::{MainFrameClient, ProxyMainClient};
+pub use layerize::runtime::proxy_main::MainFrameResult;
+
+/// The main half of the Page compositor: Blink's LayerTreeView role.
+pub(crate) type MainLayerize = layerize::LayerizeEngine<compositor::MainFamily>;
+pub(crate) type MainProxy = layerize::runtime::proxy_main::ProxyMain<compositor::MainFamily>;
+
+// The main LayerTreeHost is lent to the impl thread inside the protected
+// commit sequence (S1B_PROXY_DESIGN.md B4).
+#[allow(dead_code)]
+const _: () = {
+    fn assert_send_ref<T: Send + ?Sized>(_: &T) {}
+    fn assertions(engine: &MainLayerize) {
+        assert_send_ref(engine.Main());
+    }
+};
 
 pub type MainToImplQueue = layerize::commit::proxy::ProxyTaskQueue<compositor::MainToImplTask>;
 pub type ImplToMainQueue = layerize::commit::proxy::ProxyTaskQueue<compositor::ImplToMainTask>;
@@ -63,9 +78,13 @@ impl PageDomainServices {
         })
     }
 
-    /// Creates the main half on this thread (`compositor::CreateMainHalf`)
-    /// with ProxyMain posting to `to_impl`, and returns the ProxyImpl
-    /// construction values that ProxyMain::Start posts with Initialize.
+    /// Creates the main half on this thread with ProxyMain posting to
+    /// `to_impl` (LayerTreeHost::CreateThreaded, cc/trees/layer_tree_host.cc:
+    /// the main LayerTreeHost, then its ProxyMain; Blink's
+    /// LayerTreeView::Initialize supplies the settings and the main
+    /// AnimationHost, here `compositor::CreateMainHostParams`), and returns
+    /// the ProxyImpl construction values that ProxyMain::Start posts with
+    /// Initialize (proxy_main.cc:80-89,898-914).
     pub(super) fn CreateMainCompositor(
         &self,
         config: CompositorConfig,
@@ -74,9 +93,42 @@ impl PageDomainServices {
         assert!(self.layerize.get().is_none(), "one main compositor half per Page");
         let main_tasks: layerize::commit::main_callbacks::TaskRunner =
             Arc::new(PageMainTaskRunner(self.compositor_executor.clone()));
-        let (layerize, proxy, features, init) =
-            compositor::CreateMainHalf(config, to_impl, main_tasks)
-                .map_err(|error| io::Error::other(error.to_string()))?;
+        let params = compositor::CreateMainHostParams(&config)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let in_process = to_impl.IsInProcess();
+        let endpoint = layerize::runtime::proxy_main::ProxyMainEndpoint::new(
+            to_impl,
+            main_tasks,
+            params.commit_request_trace,
+        );
+        let layerize = MainLayerize::new(
+            params.paint_features,
+            params.paint_diagnostics,
+            layerize::commit::main_effects::MainHostInit {
+                id: params.id,
+                owner: layerize::commit::property_tree_services::PropertyTreesOwnerId::FromOwnerValue(
+                    params.id,
+                ),
+                mutator: params.animation_host.clone(),
+                settings: params.settings,
+                threaded: false,
+                background_color: params.background_color,
+                // A single-sequence embedding drains both queues itself; its
+                // protected-sequence waits return immediately
+                // (layer_tree_host.cc:521-522).
+                impl_on_owner_sequence: in_process,
+                sink: endpoint.clone()
+                    as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
+            },
+        )
+        .map_err(|error| io::Error::other(error.to_string()))?;
+        let proxy = MainProxy::new(endpoint, params.first_property_owner);
+        let init = Box::new(compositor::ProxyImplInit::new(
+            params.id,
+            &params.animation_host,
+            layerize.PaintValues(),
+        ));
+        let features = params.property_tree_features;
         let _ = self.proxy_main_endpoint.set(proxy.Endpoint().clone());
         let _ = self.proxy_main.set(RefCell::new(proxy));
         let _ = self.layerize.set(RefCell::new(layerize));
@@ -119,7 +171,7 @@ impl PageDomainServices {
         layerize.borrow_mut().Shutdown();
     }
 
-    fn MainLayerize(&self) -> &RefCell<compositor::MainLayerize> {
+    fn MainLayerize(&self) -> &RefCell<MainLayerize> {
         self.layerize.get().expect("created main compositor half")
     }
     fn MainEndpoint(
