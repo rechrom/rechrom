@@ -54,10 +54,10 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
 {
     type Matrix = crate::runtime::geometry::Transform<R>;
     fn CcNodeId(&self, s: i32) -> i32 {
-        self.node().lifecycle.cc_node_id(s)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.cc_node_id(a, s))
     }
     fn SetCcNodeId(&self, s: i32, id: i32) {
-        self.node().lifecycle.set_cc_node_id(s, id)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, s, id))
     }
     fn IsRoot(&self) -> bool {
         self.node().parent.is_none()
@@ -217,7 +217,7 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
         crate::adapter::geometry::Point3F::new(o[0] as f32, o[1] as f32, o[2] as f32)
     }
     fn NodeChanged(&self) -> PaintPropertyChange {
-        self.node().lifecycle.node_changed()
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.node_changed(a))
     }
     fn ScrollCompositorElementId(&self) -> ElementId {
         element(
@@ -237,10 +237,10 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
     type PaintPropertyChange = paint_property_tree::PaintPropertyChangeType;
     type ClipNode = ClipNode<R>;
     fn CcNodeId(&self, s: i32) -> i32 {
-        self.node().lifecycle.cc_node_id(s)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.cc_node_id(a, s))
     }
     fn SetCcNodeId(&self, s: i32, id: i32) {
-        self.node().lifecycle.set_cc_node_id(s, id)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, s, id))
     }
     fn IsRoot(&self) -> bool {
         self.node().parent.is_none()
@@ -340,7 +340,7 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
         element(self.node().compositor.backdrop_mask_element_id)
     }
     fn NodeChanged(&self) -> Self::PaintPropertyChange {
-        self.node().lifecycle.node_changed()
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.node_changed(a))
     }
     fn ViewTransitionElementResourceId(&self) -> ViewTransitionElementResourceId {
         match self.node().compositor.view_transition_element_resource_id {
@@ -361,10 +361,10 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
 impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R> {
     type EffectNode = EffectNode<R>;
     fn CcNodeId(&self, sequence: i32) -> i32 {
-        self.node().lifecycle.cc_node_id(sequence)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.cc_node_id(a, sequence))
     }
     fn SetCcNodeId(&self, sequence: i32, id: i32) {
-        self.node().lifecycle.set_cc_node_id(sequence, id)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, sequence, id))
     }
     fn IsRoot(&self) -> bool {
         self.node().parent.is_none()

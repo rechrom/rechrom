@@ -7,8 +7,8 @@
 use foundation::{TrustedIdentityHashMap, TrustedIdentityHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, OnceLock};
+use crate::property_cell::{MutableCell, PaintSequenceId, PropertyAccess};
+use std::sync::Arc;
 
 use crate::paint_clip_path::PaintClipPath;
 use crate::property_filter_operations::PropertyFilterOperations;
@@ -56,68 +56,60 @@ impl fmt::Display for PaintPropertyChangeType {
 #[derive(Debug)]
 pub struct PaintPropertyNodeIdentity {
     // Chromium: third_party/blink/renderer/platform/graphics/paint/
-    // paint_property_node.h:91-97,228-230. The pair is one mutable cache slot
-    // on the actual Paint property node, keyed by the cc property-tree
-    // sequence. Packing both i32 values makes concurrent readers observe one
-    // complete source state without adding a compositor-owned side table.
-    cc_sequence_and_node_id: AtomicU64,
+    // paint_property_node.h:91-97,228-230. One mutable cache slot on the
+    // actual Paint property node, keyed by the cc property-tree sequence:
+    // (sequence number, cc node id).
+    cc_node: MutableCell<(i32, i32)>,
     // Chromium: paint_property_node.h:191-230. These are mutable members of
     // the resident Paint node even when the property state is reached through
     // a const PaintArtifact. Keeping them on the persistent identity allocation
-    // preserves that ownership across immutable Rust value revisions.
-    changed: AtomicU8,
-    changed_sequence_number: AtomicI32,
-    _private: (),
+    // preserves that ownership across immutable Rust value revisions. They
+    // are confined to the document sequence that created the node: PrePaint,
+    // Paint and PaintArtifactCompositor all run there.
+    changed: MutableCell<PaintPropertyChangeType>,
+    changed_sequence_number: MutableCell<i32>,
 }
 
 impl PaintPropertyNodeIdentity {
     const INVALID_CC_NODE_ID: i32 = -1;
 
-    fn pack_cc_mapping(sequence_number: i32, node_id: i32) -> u64 {
-        ((sequence_number as u32 as u64) << 32) | node_id as u32 as u64
+    fn new(changed: PaintPropertyChangeType) -> Self {
+        let owner = PaintSequenceId::current();
+        Self {
+            cc_node: MutableCell::with_owner(owner, (0, Self::INVALID_CC_NODE_ID)),
+            changed: MutableCell::with_owner(owner, changed),
+            changed_sequence_number: MutableCell::with_owner(owner, 0),
+        }
     }
 
-    fn cc_node_id(&self, sequence_number: i32) -> i32 {
-        let mapping = self.cc_sequence_and_node_id.load(Ordering::Relaxed);
-        let mapped_sequence = (mapping >> 32) as u32 as i32;
+    fn cc_node_id(&self, access: &PropertyAccess, sequence_number: i32) -> i32 {
+        let (mapped_sequence, node_id) = self.cc_node.get(access);
         if mapped_sequence == sequence_number {
-            mapping as u32 as i32
+            node_id
         } else {
             Self::INVALID_CC_NODE_ID
         }
     }
 
-    fn set_cc_node_id(&self, sequence_number: i32, node_id: i32) {
-        self.cc_sequence_and_node_id.store(
-            Self::pack_cc_mapping(sequence_number, node_id),
-            Ordering::Relaxed,
-        );
+    fn set_cc_node_id(&self, access: &PropertyAccess, sequence_number: i32, node_id: i32) {
+        self.cc_node.set(access, (sequence_number, node_id));
     }
 
-    fn node_changed(&self) -> PaintPropertyChangeType {
-        match self.changed.load(Ordering::Relaxed) {
-            0 => PaintPropertyChangeType::Unchanged,
-            1 => PaintPropertyChangeType::ChangedOnlyCompositedValues,
-            2 => PaintPropertyChangeType::ChangedOnlySimpleValues,
-            3 => PaintPropertyChangeType::ChangedOnlyValues,
-            4 => PaintPropertyChangeType::NodeAddedOrRemoved,
-            _ => unreachable!("PaintPropertyChangeType is a bounded enum"),
+    fn node_changed(&self, access: &PropertyAccess) -> PaintPropertyChangeType {
+        self.changed.get(access)
+    }
+
+    /// Source: paint_property_node.h:185-188 `AddChanged`.
+    fn add_changed(&self, access: &PropertyAccess, changed: PaintPropertyChangeType) {
+        if changed > self.changed.get(access) {
+            self.changed.set(access, changed);
         }
     }
 
-    fn add_changed(&self, changed: PaintPropertyChangeType) {
-        self.changed.fetch_max(changed as u8, Ordering::Relaxed);
-    }
-
-    fn clear_changed(&self, sequence_number: i32) {
-        debug_assert_ne!(
-            self.changed_sequence_number.load(Ordering::Relaxed),
-            sequence_number
-        );
-        self.changed
-            .store(PaintPropertyChangeType::Unchanged as u8, Ordering::Relaxed);
-        self.changed_sequence_number
-            .store(sequence_number, Ordering::Relaxed);
+    fn clear_changed(&self, access: &PropertyAccess, sequence_number: i32) {
+        debug_assert_ne!(self.changed_sequence_number.get(access), sequence_number);
+        self.changed.set(access, PaintPropertyChangeType::Unchanged);
+        self.changed_sequence_number.set(access, sequence_number);
     }
 }
 
@@ -135,17 +127,9 @@ pub struct PaintPropertyNodeLifecycle {
 impl Default for PaintPropertyNodeLifecycle {
     fn default() -> Self {
         Self {
-            identity: Arc::new(PaintPropertyNodeIdentity {
-                cc_sequence_and_node_id: AtomicU64::new(
-                    PaintPropertyNodeIdentity::pack_cc_mapping(
-                        0,
-                        PaintPropertyNodeIdentity::INVALID_CC_NODE_ID,
-                    ),
-                ),
-                changed: AtomicU8::new(PaintPropertyChangeType::NodeAddedOrRemoved as u8),
-                changed_sequence_number: AtomicI32::new(0),
-                _private: (),
-            }),
+            identity: Arc::new(PaintPropertyNodeIdentity::new(
+                PaintPropertyChangeType::NodeAddedOrRemoved,
+            )),
             revision: 0,
             changed: PaintPropertyChangeType::NodeAddedOrRemoved,
             parent_id: 0,
@@ -161,25 +145,26 @@ impl PaintPropertyNodeLifecycle {
     pub fn same_node(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.identity, &other.identity)
     }
-    pub fn cc_node_id(&self, sequence_number: i32) -> i32 {
-        self.identity.cc_node_id(sequence_number)
+    pub fn cc_node_id(&self, access: &PropertyAccess, sequence_number: i32) -> i32 {
+        self.identity.cc_node_id(access, sequence_number)
     }
-    pub fn set_cc_node_id(&self, sequence_number: i32, node_id: i32) {
-        self.identity.set_cc_node_id(sequence_number, node_id);
+    pub fn set_cc_node_id(&self, access: &PropertyAccess, sequence_number: i32, node_id: i32) {
+        self.identity.set_cc_node_id(access, sequence_number, node_id);
     }
     fn root() -> Self {
-        let result = Self {
+        Self {
+            identity: Arc::new(PaintPropertyNodeIdentity::new(
+                PaintPropertyChangeType::Unchanged,
+            )),
+            revision: 0,
             changed: PaintPropertyChangeType::Unchanged,
-            ..Self::default()
-        };
-        result
-            .identity
-            .changed
-            .store(PaintPropertyChangeType::Unchanged as u8, Ordering::Relaxed);
-        result
+            parent_id: 0,
+        }
     }
     fn updated(&self, changed: PaintPropertyChangeType) -> Self {
-        self.identity.add_changed(changed);
+        // Value revisions are produced on the owning document sequence; the
+        // shared entity marker is raised there, as AddChanged does in Blink.
+        crate::property_cell::with_access(|access| self.identity.add_changed(access, changed));
         Self {
             identity: self.identity.clone(),
             revision: self.revision + u64::from(changed != PaintPropertyChangeType::Unchanged),
@@ -188,26 +173,23 @@ impl PaintPropertyNodeLifecycle {
         }
     }
 
-    pub fn node_changed(&self) -> PaintPropertyChangeType {
-        self.identity.node_changed()
+    pub fn node_changed(&self, access: &PropertyAccess) -> PaintPropertyChangeType {
+        self.identity.node_changed(access)
     }
-    pub fn changed_sequence_number(&self) -> i32 {
-        self.identity
-            .changed_sequence_number
-            .load(Ordering::Relaxed)
+    pub fn changed_sequence_number(&self, access: &PropertyAccess) -> i32 {
+        self.identity.changed_sequence_number.get(access)
     }
-    pub fn clear_changed(&self, sequence_number: i32) {
-        self.identity.clear_changed(sequence_number);
+    pub fn clear_changed(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.identity.clear_changed(access, sequence_number);
     }
     /// Source: paint_property_node.h:82-85. A successful direct compositor
     /// update downgrades only the exact simple-values marker.
-    pub fn CompositorSimpleValuesUpdated(&self) {
-        let _ = self.identity.changed.compare_exchange(
-            PaintPropertyChangeType::ChangedOnlySimpleValues as u8,
-            PaintPropertyChangeType::ChangedOnlyCompositedValues as u8,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        );
+    pub fn CompositorSimpleValuesUpdated(&self, access: &PropertyAccess) {
+        if self.identity.changed.get(access) == PaintPropertyChangeType::ChangedOnlySimpleValues {
+            self.identity
+                .changed
+                .set(access, PaintPropertyChangeType::ChangedOnlyCompositedValues);
+        }
     }
 }
 
@@ -224,7 +206,7 @@ pub fn PaintPropertyNodeToJSON<T>(
             serde_json::Value::String(format!("{:p}", Arc::as_ptr(parent))),
         );
     }
-    let changed = lifecycle.node_changed();
+    let changed = crate::property_cell::with_access(|access| lifecycle.node_changed(access));
     if changed != PaintPropertyChangeType::Unchanged {
         json.insert(
             "changed".into(),
@@ -517,23 +499,24 @@ impl TransformPaintPropertyNode {
 
     /// Source: transform_paint_property_node.cc:151-164. Supported producer
     /// nodes are unaliased; associated Scroll changes are cleared recursively.
-    pub fn ClearChangedToRoot(&self, sequence_number: i32) {
-        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
     }
     /// ClearChangedToRoot following links through `resolver`.
     pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
         &self,
+        access: &PropertyAccess,
         resolver: &R,
         sequence_number: i32,
     ) {
         let mut current = Some(self);
         while let Some(node) = current {
-            if node.lifecycle.changed_sequence_number() == sequence_number {
+            if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
-            node.lifecycle.clear_changed(sequence_number);
+            node.lifecycle.clear_changed(access, sequence_number);
             if let Some(scroll) = node.ScrollNode() {
-                resolver.scroll(scroll).ClearChangedToRootIn(resolver, sequence_number);
+                resolver.scroll(scroll).ClearChangedToRootIn(access, resolver, sequence_number);
             }
             current = node.parent.as_ref().map(|parent| &**resolver.transform(parent));
         }
@@ -790,24 +773,25 @@ impl ClipPaintPropertyNode {
 
     /// Source: clip_paint_property_node.cc:70-81. Supported snapshots are
     /// unaliased; each clip also clears its local transform chain.
-    pub fn ClearChangedToRoot(&self, sequence_number: i32) {
-        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
     }
     /// ClearChangedToRoot following links through `resolver`.
     pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
         &self,
+        access: &PropertyAccess,
         resolver: &R,
         sequence_number: i32,
     ) {
         let mut current = Some(self);
         while let Some(node) = current {
-            if node.lifecycle.changed_sequence_number() == sequence_number {
+            if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
-            node.lifecycle.clear_changed(sequence_number);
+            node.lifecycle.clear_changed(access, sequence_number);
             resolver
                 .transform(node.LocalTransformSpace())
-                .ClearChangedToRootIn(resolver, sequence_number);
+                .ClearChangedToRootIn(access, resolver, sequence_number);
             current = node.parent.as_ref().map(|parent| &**resolver.clip(parent));
         }
     }
@@ -1314,26 +1298,27 @@ impl EffectPaintPropertyNode {
 
     /// Source: effect_paint_property_node.cc:181-193. Supported snapshots are
     /// unaliased; local transform and output clip dependencies are included.
-    pub fn ClearChangedToRoot(&self, sequence_number: i32) {
-        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
     }
     /// ClearChangedToRoot following links through `resolver`.
     pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
         &self,
+        access: &PropertyAccess,
         resolver: &R,
         sequence_number: i32,
     ) {
         let mut current = Some(self);
         while let Some(node) = current {
-            if node.lifecycle.changed_sequence_number() == sequence_number {
+            if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
-            node.lifecycle.clear_changed(sequence_number);
+            node.lifecycle.clear_changed(access, sequence_number);
             resolver
                 .transform(node.LocalTransformSpace())
-                .ClearChangedToRootIn(resolver, sequence_number);
+                .ClearChangedToRootIn(access, resolver, sequence_number);
             if let Some(clip) = node.OutputClip() {
-                resolver.clip(clip).ClearChangedToRootIn(resolver, sequence_number);
+                resolver.clip(clip).ClearChangedToRootIn(access, resolver, sequence_number);
             }
             current = node.parent.as_ref().map(|parent| &**resolver.effect(parent));
         }
@@ -1596,21 +1581,22 @@ impl ScrollPaintPropertyNode {
     }
 
     /// Source: scroll_paint_property_node.cc:73-79.
-    pub fn ClearChangedToRoot(&self, sequence_number: i32) {
-        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
     }
     /// ClearChangedToRoot following links through `resolver`.
     pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
         &self,
+        access: &PropertyAccess,
         resolver: &R,
         sequence_number: i32,
     ) {
         let mut current = Some(self);
         while let Some(node) = current {
-            if node.lifecycle.changed_sequence_number() == sequence_number {
+            if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
-            node.lifecycle.clear_changed(sequence_number);
+            node.lifecycle.clear_changed(access, sequence_number);
             current = node.parent.as_ref().map(|parent| &**resolver.scroll(parent));
         }
     }
@@ -1764,10 +1750,22 @@ impl fmt::Display for PropertyTreeState {
 
 impl Default for PropertyTreeState {
     fn default() -> Self {
-        // Blink Root() references shared sentinel nodes, rather than allocating
-        // distinct identity nodes for each default state.
-        static ROOT: OnceLock<PropertyTreeState> = OnceLock::new();
-        ROOT.get_or_init(|| {
+        // Source: transform_paint_property_node.cc:117-122 and its clip, effect
+        // and scroll equivalents: Root() returns DEFINE_STATIC_LOCAL sentinels of
+        // the single painting thread. Rechrom paints several Pages per process,
+        // one document sequence each, so the sentinels belong to the calling
+        // sequence: their mutable members (changed markers, cc node ids) are
+        // written by that Page's PaintArtifactCompositor only.
+        thread_local! {
+            static ROOT: PropertyTreeState = PropertyTreeState::CreateRoot();
+        }
+        ROOT.with(PropertyTreeState::clone)
+    }
+}
+
+impl PropertyTreeState {
+    fn CreateRoot() -> Self {
+        {
             let infinite = foundation::infinite_int_rect::InfiniteIntRect();
             let infinite = PaintRect {
                 x: infinite.x() as f64,
@@ -1859,8 +1857,7 @@ impl Default for PropertyTreeState {
                 clip,
                 effect,
             }
-        })
-        .clone()
+        }
     }
 }
 
@@ -1889,32 +1886,39 @@ impl PropertyTreeState {
     }
 
     /// Source: property_tree_state.h:142-152,288-301.
-    pub fn ClearChangedToRoot(&self, sequence_number: i32) {
-        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
+        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
     }
     /// ClearChangedToRoot following links through `resolver`.
     pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
         &self,
+        access: &PropertyAccess,
         resolver: &R,
         sequence_number: i32,
     ) {
-        self.Transform().ClearChangedToRootIn(resolver, sequence_number);
-        self.Clip().ClearChangedToRootIn(resolver, sequence_number);
-        self.Effect().ClearChangedToRootIn(resolver, sequence_number);
+        self.Transform().ClearChangedToRootIn(access, resolver, sequence_number);
+        self.Clip().ClearChangedToRootIn(access, resolver, sequence_number);
+        self.Effect().ClearChangedToRootIn(access, resolver, sequence_number);
     }
-    pub fn Changed(&self, change: PaintPropertyChangeType, relative_to: &Self) -> bool {
-        crate::property_node_geometry::PropertyStateChanged(self, change, relative_to)
+    pub fn Changed(
+        &self,
+        access: &PropertyAccess,
+        change: PaintPropertyChangeType,
+        relative_to: &Self,
+    ) -> bool {
+        crate::property_node_geometry::PropertyStateChanged(access, self, change, relative_to)
     }
-    pub fn ChangedToRoot(&self, change: PaintPropertyChangeType) -> bool {
-        self.Changed(change, &Self::Root())
+    pub fn ChangedToRoot(&self, access: &PropertyAccess, change: PaintPropertyChangeType) -> bool {
+        self.Changed(access, change, &Self::Root())
     }
     /// ChangedToRoot following links through `resolver`.
     pub fn ChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
         &self,
+        access: &PropertyAccess,
         resolver: &R,
         change: PaintPropertyChangeType,
     ) -> bool {
-        crate::property_node_geometry::PropertyStateChangedIn(resolver, self, change, &Self::Root())
+        crate::property_node_geometry::PropertyStateChangedIn(access, resolver, self, change, &Self::Root())
     }
 
     /// Source: property_tree_state.cc:198-200,212-218.
@@ -1969,15 +1973,15 @@ impl PropertyTreeState {
                 && scroll_state_change(a, b) == PaintPropertyChangeType::Unchanged
         })
     }
-    pub fn changed_to_root(&self) -> PaintPropertyChangeType {
+    pub fn changed_to_root(&self, access: &PropertyAccess) -> PaintPropertyChangeType {
         let trees = PaintPropertyTrees::from_states([self]);
         trees
             .transforms
             .values()
-            .map(|n| n.lifecycle.node_changed())
-            .chain(trees.clips.values().map(|n| n.lifecycle.node_changed()))
-            .chain(trees.effects.values().map(|n| n.lifecycle.node_changed()))
-            .chain(trees.scrolls.values().map(|n| n.lifecycle.node_changed()))
+            .map(|n| n.lifecycle.node_changed(access))
+            .chain(trees.clips.values().map(|n| n.lifecycle.node_changed(access)))
+            .chain(trees.effects.values().map(|n| n.lifecycle.node_changed(access)))
+            .chain(trees.scrolls.values().map(|n| n.lifecycle.node_changed(access)))
             .max()
             .unwrap_or_default()
     }
@@ -3887,7 +3891,8 @@ impl RetainedScrollSnapshotRebinder {
             && same_snapshot_option(&parent, &input.parent)
             && same_snapshot_option(&scroll, &input.scroll)
             && same_snapshot_option(&scroll_parent, &input.scroll_parent_scroll_translation)
-            && input.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
+            && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
+                == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
@@ -3934,7 +3939,8 @@ impl RetainedScrollSnapshotRebinder {
         let node = if same_snapshot_option(&parent, &input.parent)
             && Arc::ptr_eq(&transform, &input.local_transform_space)
             && same_snapshot_option(&filter, &input.pixel_moving_filter)
-            && input.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
+            && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
+                == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
@@ -3982,7 +3988,8 @@ impl RetainedScrollSnapshotRebinder {
             && same_snapshot_option(&clip, &input.output_clip)
             && same_snapshot_option(&backdrop_clip, &input.backdrop_filter_clip)
             && same_snapshot_option(&canvas_child_state, &input.compositor.canvas_child_state)
-            && input.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
+            && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
+                == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
@@ -4025,7 +4032,8 @@ impl RetainedScrollSnapshotRebinder {
         let clip = input.overflow_clip.as_ref().map(|clip| self.clip(clip));
         let node = if same_snapshot_option(&parent, &input.parent)
             && same_snapshot_option(&clip, &input.overflow_clip)
-            && input.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
+            && crate::property_cell::with_access(|access| input.lifecycle.node_changed(access))
+                == PaintPropertyChangeType::Unchanged
         {
             input.clone()
         } else {
@@ -4463,7 +4471,8 @@ macro_rules! update_snapshot {
             $node.lifecycle.parent_id = $node.parent.as_ref().map_or(0, |parent| parent.id);
             let node = if let Some(old) = $self.store.$map.get(&key).filter(|old| {
                 $node.lifecycle.changed == PaintPropertyChangeType::Unchanged
-                    && old.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
+                    && crate::property_cell::with_access(|access| old.lifecycle.node_changed(access))
+                == PaintPropertyChangeType::Unchanged
                     && $node.same_snapshot_references(old)
             }) {
                 $self.store.snapshot_stats[0] += 1;
@@ -5027,7 +5036,7 @@ mod retained_scroll_update_tests {
     fn property_tree_state_owns_source_access_change_and_diagnostics() {
         let root = PropertyTreeState::Root();
         assert!(root.same_nodes(&PropertyTreeState::default()));
-        assert!(!root.ChangedToRoot(PaintPropertyChangeType::ChangedOnlyValues));
+        assert!(!crate::property_cell::with_access(|a| root.ChangedToRoot(a, PaintPropertyChangeType::ChangedOnlyValues)));
 
         let mut child_transform = (*root.transform).clone();
         child_transform.id = 101;
@@ -5039,8 +5048,8 @@ mod retained_scroll_update_tests {
         let mut state = root.clone();
         state.SetTransform(child_transform.clone());
         assert!(Arc::ptr_eq(state.Transform(), &child_transform));
-        assert!(state.Changed(PaintPropertyChangeType::ChangedOnlyValues, &root));
-        assert!(state.ChangedToRoot(PaintPropertyChangeType::ChangedOnlyValues));
+        assert!(crate::property_cell::with_access(|a| state.Changed(a, PaintPropertyChangeType::ChangedOnlyValues, &root)));
+        assert!(crate::property_cell::with_access(|a| state.ChangedToRoot(a, PaintPropertyChangeType::ChangedOnlyValues)));
 
         let text = state.ToString();
         assert!(text.starts_with("t:"));
@@ -5051,9 +5060,9 @@ mod retained_scroll_update_tests {
         assert!(json["clip"].is_object());
         assert!(json["effect"].is_object());
 
-        state.ClearChangedToRoot(17);
-        assert_eq!(child_transform.lifecycle.changed_sequence_number(), 17);
-        assert!(!state.ChangedToRoot(PaintPropertyChangeType::ChangedOnlyValues));
+        crate::property_cell::with_access(|a| state.ClearChangedToRoot(a, 17));
+        assert_eq!(crate::property_cell::with_access(|a| child_transform.lifecycle.changed_sequence_number(a)), 17);
+        assert!(!crate::property_cell::with_access(|a| state.ChangedToRoot(a, PaintPropertyChangeType::ChangedOnlyValues)));
     }
 
     #[test]
@@ -5169,8 +5178,8 @@ mod retained_scroll_update_tests {
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
         assert_eq!(resident.Matrix().values[12], 8.0);
-        resident.ClearChangedToRoot(8);
-        assert_eq!(resident.lifecycle.changed_sequence_number(), 8);
+        crate::property_cell::with_access(|a| resident.ClearChangedToRoot(a, 8));
+        assert_eq!(crate::property_cell::with_access(|a| resident.lifecycle.changed_sequence_number(a)), 8);
     }
 
     #[test]
@@ -5272,11 +5281,11 @@ mod retained_scroll_update_tests {
         resident.SetScrollingContentsCullRect(PaintRect::default());
         assert_eq!(resident.lifecycle.revision, 2);
         assert_eq!(
-            resident.lifecycle.node_changed(),
+            crate::property_cell::with_access(|a| resident.lifecycle.node_changed(a)),
             PaintPropertyChangeType::ChangedOnlyValues
         );
-        resident.ClearChangedToRoot(7);
-        assert_eq!(resident.lifecycle.changed_sequence_number(), 7);
+        crate::property_cell::with_access(|a| resident.ClearChangedToRoot(a, 7));
+        assert_eq!(crate::property_cell::with_access(|a| resident.lifecycle.changed_sequence_number(a)), 7);
     }
 
     #[test]
@@ -5490,23 +5499,23 @@ mod retained_scroll_update_tests {
             "simple-values"
         );
         let initial = PaintPropertyNodeLifecycle::default();
-        initial.clear_changed(1);
+        crate::property_cell::with_access(|a| initial.clear_changed(a, 1));
         let simple = initial.updated(PaintPropertyChangeType::ChangedOnlySimpleValues);
         assert_eq!(
-            simple.node_changed(),
+            crate::property_cell::with_access(|a| simple.node_changed(a)),
             PaintPropertyChangeType::ChangedOnlySimpleValues
         );
-        simple.CompositorSimpleValuesUpdated();
+        crate::property_cell::with_access(|a| simple.CompositorSimpleValuesUpdated(a));
         assert_eq!(
-            simple.node_changed(),
+            crate::property_cell::with_access(|a| simple.node_changed(a)),
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
         let initial = PaintPropertyNodeLifecycle::default();
-        initial.clear_changed(1);
+        crate::property_cell::with_access(|a| initial.clear_changed(a, 1));
         let values = initial.updated(PaintPropertyChangeType::ChangedOnlyValues);
-        values.CompositorSimpleValuesUpdated();
+        crate::property_cell::with_access(|a| values.CompositorSimpleValuesUpdated(a));
         assert_eq!(
-            values.node_changed(),
+            crate::property_cell::with_access(|a| values.node_changed(a)),
             PaintPropertyChangeType::ChangedOnlyValues
         );
 
@@ -5612,7 +5621,7 @@ mod retained_scroll_update_tests {
         assert_eq!(direct.opacity, 0.5);
         assert_eq!(direct.lifecycle.revision, 1);
         assert_eq!(
-            direct.lifecycle.node_changed(),
+            crate::property_cell::with_access(|a| direct.lifecycle.node_changed(a)),
             PaintPropertyChangeType::ChangedOnlyCompositedValues
         );
         assert_eq!(

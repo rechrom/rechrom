@@ -10,15 +10,11 @@ use super::geometry_mapper_transform_cache::CacheTreeScope;
 use super::native::NativeTrees;
 use crate::paint_property_tree::{ClipPaintPropertyNode, TransformPaintPropertyNode};
 pub use foundation::OverlayScrollbarClipBehavior;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc, Mutex, Weak,
-};
-// Source process-global invalidation generation. Atomic storage preserves the
-// single unsigned generation when native cache owners are lent across threads.
-static S_GLOBAL_GENERATION: AtomicU32 = AtomicU32::new(1);
+use std::sync::{Arc, Mutex, Weak};
+// Source: geometry_mapper_clip_cache.h:65-67 `s_global_generation`, kept per
+// document sequence (paint_model::property_cell).
 fn global_generation() -> u32 {
-    S_GLOBAL_GENERATION.load(Ordering::Relaxed)
+    crate::property_cell::ClipCacheGeneration()
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.h:31-50.
 #[derive(Clone, Debug)]
@@ -106,7 +102,7 @@ impl GeometryMapperClipCache {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.cc:28-34.
     pub fn ClearCache() {
-        S_GLOBAL_GENERATION.fetch_add(1, Ordering::Relaxed);
+        crate::property_cell::ClearClipCache();
     }
     pub fn IsValid(&self) -> bool {
         self.cache_generation_ == global_generation()

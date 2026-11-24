@@ -271,10 +271,10 @@ macro_rules! node_handle {
                 PropertyNodeIdentity::of(&self.node.lifecycle)
             }
             pub fn cc_node_id(&self, sequence_number: i32) -> i32 {
-                self.node.lifecycle.cc_node_id(sequence_number)
+                paint_model::property_cell::with_access(|a| self.node.lifecycle.cc_node_id(a, sequence_number))
             }
             pub fn set_cc_node_id(&self, sequence_number: i32, node_id: i32) {
-                self.node.lifecycle.set_cc_node_id(sequence_number, node_id);
+                paint_model::property_cell::with_access(|a| self.node.lifecycle.set_cc_node_id(a, sequence_number, node_id));
             }
         }
         impl<R> PartialEq for $handle<R> {
@@ -384,13 +384,15 @@ impl<R> PropertyTreeState<R> {
     /// actual persistent Paint node identity, so shared ancestors are visited
     /// once without cloning or rewriting the artifact.
     pub fn clear_changed_to_root(&self, sequence_number: i32) {
-        self.as_source()
-            .ClearChangedToRootIn(self.transform_.trees(), sequence_number);
+        paint_model::property_cell::with_access(|a| {
+            self.as_source()
+                .ClearChangedToRootIn(a, self.transform_.trees(), sequence_number)
+        });
     }
 }
 
 fn clear_scroll_changed(node: &paint_property_tree::ScrollPaintPropertyNode, sequence_number: i32) {
-    node.ClearChangedToRoot(sequence_number);
+    paint_model::property_cell::with_access(|a| node.ClearChangedToRoot(a, sequence_number));
 }
 
 fn clear_transform_changed(
@@ -398,15 +400,15 @@ fn clear_transform_changed(
     trees: &HandleTrees,
     sequence_number: i32,
 ) {
-    node.ClearChangedToRootIn(trees, sequence_number);
+    paint_model::property_cell::with_access(|a| node.ClearChangedToRootIn(a, trees, sequence_number));
 }
 
 fn clear_clip_changed(node: &paint_property_tree::ClipPaintPropertyNode, sequence_number: i32) {
-    node.ClearChangedToRoot(sequence_number);
+    paint_model::property_cell::with_access(|a| node.ClearChangedToRoot(a, sequence_number));
 }
 
 fn clear_effect_changed(node: &paint_property_tree::EffectPaintPropertyNode, sequence_number: i32) {
-    node.ClearChangedToRoot(sequence_number);
+    paint_model::property_cell::with_access(|a| node.ClearChangedToRoot(a, sequence_number));
 }
 
 // This is a direct native value projection, independent of a complete PAC

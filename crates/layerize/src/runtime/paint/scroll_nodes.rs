@@ -41,10 +41,10 @@ fn rect(p: paint::paint_engine::PaintRect) -> Rect {
 }
 impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
     fn CcNodeId(&self, s: i32) -> i32 {
-        self.node().lifecycle.cc_node_id(s)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.cc_node_id(a, s))
     }
     fn SetCcNodeId(&self, s: i32, id: i32) {
-        self.node().lifecycle.set_cc_node_id(s, id)
+        paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, s, id))
     }
     fn IsRoot(&self) -> bool {
         self.node().parent.is_none()

@@ -188,6 +188,12 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
 - Retained PrePaint data is limited to Chromium's derived FragmentData,
   ObjectPaintProperties, PaintLayer, invalidation and cache state. It must
   never become another copy of Layout's geometry or fragment payload.
+- Paint property nodes belong to the document sequence that built them.
+  Their mutable members (change markers, cc node ids), the GeometryMapper
+  cache generations and the root sentinels are sequence-confined
+  (`paint_model::property_cell`): node members are read and written through
+  the `PropertyAccess` proof; other threads may only hold and drop the
+  `Arc`s.
 
 **Layerize** (`layerize`): cc's main side, `LayerizeEngine`. Blink
 `PaintArtifactCompositor`, `PropertyTreeManager`, `PaintChunksToCcLayer`,

@@ -22,6 +22,7 @@ pub mod performance;
 pub use paint_commit::scroll_paint_update;
 pub use paint_model::paint_order;
 pub use paint_model::paint_property_tree;
+pub use paint_model::property_cell;
 pub use paint_model::property_filter_operations;
 pub use paint_model::svg_filter_geometry;
 pub use paint_model::{

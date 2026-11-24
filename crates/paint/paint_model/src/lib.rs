@@ -22,6 +22,7 @@ pub mod paint_phase;
 pub mod paint_property_tree;
 pub mod paint_result;
 pub mod path_hit_test;
+pub mod property_cell;
 pub mod property_filter_operations;
 pub mod property_node_geometry;
 pub mod stroke_data;

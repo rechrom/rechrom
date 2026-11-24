@@ -808,7 +808,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         for node in &update.transforms {
             let transform = paint::TransformNode::<R>::from_arc(node.clone());
             if pac.DirectlyUpdateTransform(&transform, context) {
-                node.lifecycle.CompositorSimpleValuesUpdated();
+                paint_model::property_cell::with_access(|a| node.lifecycle.CompositorSimpleValuesUpdated(a));
             } else {
                 rejected += 1;
             }
@@ -816,7 +816,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         for node in &update.effects {
             let effect = paint::EffectNode::<R>::from_arc(node.clone());
             if pac.DirectlyUpdateCompositedOpacityValue(&effect, context) {
-                node.lifecycle.CompositorSimpleValuesUpdated();
+                paint_model::property_cell::with_access(|a| node.lifecycle.CompositorSimpleValuesUpdated(a));
             } else {
                 rejected += 1;
             }
@@ -896,15 +896,15 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                 .expect("validated native viewport")
                 .scroll_translation_nodes
             {
-                if node.lifecycle.node_changed()
-                    != ::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues
+                if paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a))
+                    !=::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues
                     || !node.HasDirectCompositingReasons()
                 {
                     continue;
                 }
                 let transform = paint::TransformNode::<R>::from_arc(node.clone());
                 if pac.DirectlyUpdateScrollOffsetTransform(&transform, context.layer) {
-                    node.lifecycle.CompositorSimpleValuesUpdated();
+                    paint_model::property_cell::with_access(|a| node.lifecycle.CompositorSimpleValuesUpdated(a));
                     direct_scroll_updates += 1;
                 }
             }
@@ -950,11 +950,14 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             // identity while their shared lifecycle marker is raised. This is
             // the same ChangedToRoot threshold asserted by PAC's fast path.
             let changed_to_root = input.artifact().chunks.iter().any(|chunk| {
-                ::paint::property_node_geometry::PropertyStateChanged(
-                    &chunk.properties,
+                paint_model::property_cell::with_access(|a| {
+                    ::paint::property_node_geometry::PropertyStateChanged(
+                        a,
+                        &chunk.properties,
                     ::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
                     &::paint::paint_property_tree::PropertyTreeState::default(),
-                )
+                    )
+                })
             });
             let property_trees_changed = changed_to_root
                 || (previous.chunks.len() == input.artifact().chunks.len()
