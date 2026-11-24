@@ -702,3 +702,79 @@ S1b-7 (S1b-4 still forces `true`); D4 AGENTS.md updated in S1b-9; D5
   otherwise none. Checks: `cargo check -p compositor`, `-p browser`, `-p
   rechrom_app` pass; Matrix / Scroll set / video and drag pages not run (no
   builds on this machine).
+- **S1b-7 done (thread move, external runtime).** The main half runs on
+  `page-document-*`, the impl half on `page-compositor-*`; the only
+  main-tree path between them is cc's commit over the Proxy tasks.
+  - Transport (D1): `commit::proxy::ProxyTaskQueue` is either the in-process
+    queue or a cross-thread poster (`ProxyTaskQueue::Posting`); the app
+    posts `MainToImpl` as `ImplCommand::Proxy` and `ImplToMain` as
+    `Command::Main(MainThreadEvent::BeginMainFrame { frame, state })` (the
+    document's rendering opportunity) or `Command::ProxyMain`.
+    `MainToImpl::{Initialize, Stop}` carry a `CompletionSignal` (signals as
+    abandoned when dropped unrun); `ReadyCommitAwaitsBeginMainFrame` is
+    deleted; `NotifyLatencyInfoSwapPromiseMonitors` was added (the monitor
+    registry is impl-owned).
+  - `ProxyMain` (layerize) is the whole main pipeline: `ProxyMainEndpoint`
+    (the main host's `MainHostEffectSink`: owner ThreadId, max/current/
+    final/deferred pipeline stages, SendCommitRequestToImplThreadIfNeeded,
+    SetNeedsAnimate/UpdateLayers/Commit with the ANIMATE-stage folding of
+    proxy_main.cc:715-756) and `ProxyMain::BeginMainFrame(state, &RefCell<
+    LayerizeEngine>, features, &mut dyn MainFrameClient) -> MainFrameResult
+    { ReadyToCommit { source_frame_number } | Aborted(reason) }`, one
+    synchronous call of proxy_main.cc:174-580: visibility and
+    DeferMainFrameUpdate early-outs, commit-deferral timeout,
+    ApplyCompositorChanges + ApplyMutatorEvents + PAC scroll callbacks to
+    the client, `client.UpdateRendering` (the Page lifecycle, whose Paint
+    calls PaintArtifactCompositor::Update), skip_commit, UpdateLayers'
+    result and `has_updates` (D3: `LayerizeEngine::WillCommit(has_updates)`
+    unwinds ActivateCommitState and returns `None`, layer_tree_host.cc:
+    470-483, then kFinishedNoUpdates and DidCommit), NotifyReadyToCommit.
+    `prepared_commit` / `ready_commit` / the open-frame split are gone. The
+    LayerizeEngine is a `RefCell` because the client lifecycle borrows it
+    (deviation from the approved `UpdateRendering(args, &mut LayerizeEngine)`
+    shape: the Page needs the engine from arbitrary lifecycle code, video
+    ForeignLayers and direct animation updates, not only from a parameter).
+  - Impl (`CompositorEngine::new(config, executors, init, to_main)`):
+    `ReadyToCommit`, `BeginMainFrameAborted`, `RunMainThreadTask`
+    (SetNeedsCommit, SetDeferBeginMainFrame, SetVisible, SetNeedsRedraw,
+    LocalSurfaceId tasks); NotifyBeginMainFrameStarted now carries the main
+    start time (proxy_impl.cc:318,440); an unsynced commit requests another
+    BeginMainFrame (:488-492). EngineCore holds no main half (LentMain,
+    `EngineMainHostEffects`, `EngineTask::MainHost`, the delta pull,
+    coalescing, scroll-animation commit token, Commit/CommitWith
+    ScrollAnimations/RequestMainFrame/FinishMainFrameWithoutUpdates/
+    SetViewport/RequestPresentationTime are deleted). The factory has
+    separate constructors: `compositor::CreateMainHalf(config, to_impl,
+    main_tasks) -> (LayerizeEngine, ProxyMain, features, ProxyImplInit)` on
+    the document thread, `CompositorEngine::new` from the posted
+    `ProxyImplInit { owner, impl AnimationHost, paint values }` on the
+    compositor thread. `SwapPromise`, `AnimatedImageFrameIndexMap` and
+    `SnapSelectionStrategy` are `Send` (CompositorCommitData crosses).
+  - Browser: `page::main_compositor::MainCompositor` (LayerizeEngine +
+    ProxyMain + viewport/LocalSurfaceId allocation, page scale, PAC sequence,
+    main-side mutations); `Page::{StartExternalCompositor,
+    RunExternalBeginMainFrame, RunCompositorImplTask,
+    ApplyPendingMainCompositorMutations, SetNeedsCompositorAnimate}`. B1/B2
+    applied: `PageRenderPipeline::{pending, presentable}`, the
+    `CommitArtifactInternal` retry, `ImplPresentation`'s epoch/scroll-
+    sequence admission, the Commit/FinishMainFrameWithoutUpdates/
+    RequestMainFrame routes, the publication tail and the no-update
+    heuristic are deleted; `Arc<PaintArtifact>` no longer crosses threads.
+    The internal presenter runs both halves over the in-process queues; its
+    `CommitArtifact` holds the artifact for the next BeginMainFrame and
+    drives manual BeginFrames (SingleThreadProxy::CompositeImmediately
+    shape). B5 gate: `CanApplyCompositedAnimationProperties` = main half
+    has a resident artifact in both modes; direct updates apply to the main
+    tree on the document thread and call SetNeedsCommit (the impl-side
+    coalescing is deleted).
+  - Not done (reported): the wrapper removal the coordinator asked for
+    (`PageRenderPipeline` still groups the impl engine, executors, raster
+    engine, internal Viz/Renderer and frame queues; `MainCompositor` groups
+    the main fields); `CompositorEngine::SetViewport(viewport, LocalSurfaceId)`
+    (viewport stays a main LayerTreeHost setter, layer_tree_host.cc:
+    1477-1530); `CompositorServices` (the existing `CompositorExecutors`
+    is the services value); the impl `ScrollApplied` trace (now only
+    Page.CompositorScrollOffsetApplied on the document side); D5 blocking
+    commit (asserted off). Tests touching the removed APIs were deleted
+    (page_runtime) or not updated (browser/compositor unit tests). Not run:
+    Matrix, Scroll set, rollback cases, browser tests.

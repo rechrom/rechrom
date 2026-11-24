@@ -44,10 +44,11 @@ pub type CompositorFrameSubmission =
 pub mod engine;
 pub use engine::{
     CommitDeferralReason, CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
-    CompositorMainEngine,
+
     CompositorExecutors, CompositorInput, CompositorMainThreadEffect, CompositorMutation,
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
-    PresentationUnavailableReason, ScrollAnimationAreaClassification, ScrollAnimationCommitToken,
+    PresentationUnavailableReason, BeginMainFrameState, ImplToMainTask, MainFamily, MainFrameResult,
+    MainLayerize, MainPropertyTreeFeatures, MainProxy, MainToImplTask, ProxyImplInit, CreateMainHalf,
     ScrollPhase, ScrollSourceType, ScrollbarPaintMutation, TargetSnapAreaElementIds,
 };

@@ -19,17 +19,14 @@ const PAINT_PROPERTY_NODES: &[&str] = &[
 /// Do not add entries.
 const PROPERTY_NODE_ALLOWED: &[&str] = &[];
 
-/// Temporary (until S1b-7): these files host the lent main half
-/// (`layerize::LayerizeEngine`, `layerize::runtime::proxy_main`) on the
-/// compositor sequence. Removed at the thread move, when Page owns the main
-/// half on the document thread. Do not add entries.
-const LAYERIZE_ENGINE_ALLOWED: &[&str] = &[
-    "crates/compositor/src/engine.rs",
-    "crates/compositor/src/runtime/engine_core.rs",
-    "crates/compositor/src/runtime/engine_assembly.rs",
-    "crates/compositor/src/runtime/proxy_impl.rs",
-];
-/// Main-half names the hosting files above may use until S1b-7.
+/// Temporary (until S1b-9): since S1b-7 the main half runs on the document
+/// thread, but its constructor (`compositor::CreateMainHalf`) and the family
+/// aliases the Page names (`MainLayerize`, `MainProxy`, `MainFrameResult`)
+/// still live in the compositor facade, because the main LayerTreeHost
+/// settings, the main AnimationHost instance and the family binding are
+/// compositor types. Do not add entries.
+const LAYERIZE_ENGINE_ALLOWED: &[&str] = &["crates/compositor/src/engine.rs"];
+/// Main-half names the hosting files above may use until S1b-9.
 const MAIN_HALF_PREFIXES: &[&str] = &["layerize::LayerizeEngine", "layerize::runtime::proxy_main"];
 
 fn root() -> PathBuf {

@@ -30,7 +30,7 @@ pub(crate) struct RenderConfig {
     pub trace_enabled: bool,
 }
 #[derive(Clone)]
-pub(crate) struct RenderServices {
+pub struct RenderServices {
     config: RenderConfig,
     events: Arc<dyn EventSink>,
 }

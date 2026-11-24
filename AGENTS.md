@@ -59,10 +59,11 @@ thread crossing and follows cc's ProxyMain/ProxyImpl commit. Boundaries 7–9
 can cross threads and pass **immutable shared values**.
 
 Migration note (live-property-tree plan, `crates/compositor/MAIN_IMPL_SPLIT.md`
-and `S1B_PROXY_DESIGN.md`): until stage S1b-7 the Page still hands
-`Arc<PaintArtifact>` to the compositor thread, which runs `LayerizeEngine`
-there; boundary 5 becomes a same-sequence borrow when S1b-7 moves the main
-half to the document thread.
+and `S1B_PROXY_DESIGN.md`): since stage S1b-7 the Page runs
+`LayerizeEngine` and `ProxyMain` on its document thread and pushes its
+artifact inside `ProxyMain::BeginMainFrame`; `Arc<PaintArtifact>` no longer
+crosses to the compositor thread. Until S1b-9 the main half is still
+constructed through the compositor facade (`compositor::CreateMainHalf`).
 
 | # | Boundary | Interface | How data crosses |
 |---|---|---|---|

@@ -1,39 +1,29 @@
 //! ProxyImpl: the impl-thread half of cc's threaded Proxy
 //! (cc/trees/proxy_impl.{h,cc} at 6c1d401fcca5e1b0030563a90c2f2bba168e0c15),
-//! S1b-4 of S1B_PROXY_DESIGN.md.
+//! S1b-7 of S1B_PROXY_DESIGN.md.
 //!
 //! As in Chromium, the impl owner of LayerTreeHostImpl and the Scheduler
 //! client is ProxyImpl; here that is `EngineCore`, whose SchedulerClient
-//! callbacks touch only impl state. Their main-thread work is posted to
-//! `layerize::runtime::proxy_main::ProxyMain` as `ImplToMain` tasks, and
-//! ProxyMain answers with `MainToImpl` tasks. Both halves still share one
-//! sequence (decision D1): `EngineCore::RunProxyTasks` is the in-process
-//! transport and drains both queues at the posting call site, so every task
-//! runs where the single-thread engine ran the same work.
-use super::{
-    engine_core::EngineCore, skia::SkRegion, types::CpuCompositorTypes,
-};
+//! callbacks touch only impl state. Main-thread work is posted to ProxyMain
+//! (ProxyMain, on the document thread) as `ImplToMain`
+//! tasks; ProxyMain's `MainToImpl` tasks arrive through `RunMainThreadTask`.
+use super::{engine_core::EngineCore, skia::SkRegion, types::CpuCompositorTypes};
 use crate::{
     adapter::{
         begin_frame::BeginFrameArgs, client_layer_tree_host_impl::ClientHostContext,
         layer_tree_host_impl::HostImplContext,
     },
     cc::scheduler::{commit_earlyout_reason::CommitEarlyOutReason, scheduler::Scheduler},
-    engine::CompositorMainThreadEffect,
     performance::{CompositorPackage, Span},
 };
 use layerize::commit::{
     commit_state::{CommitState, CommitTimestamps},
     completion_event::CompletionEvent,
-    compositor_commit_data::CompositorCommitData,
-    paint_holding::PaintHoldingReason,
     proxy::{
         BeginMainFrameAndCommitState, ImplToMain, MainToImpl, ProtectedCommitLease,
         ProxyTaskQueue,
     },
 };
-// In-process main client bridge; removed at S1b-7.
-use layerize::runtime::proxy_main::ProxyMainClient;
 type Root = CpuCompositorTypes<SkRegion>;
 
 /// Ensures that the commit CompletionEvent is always signaled.
@@ -82,7 +72,8 @@ impl Drop for ScopedCommitCompletionEvent {
             }
         }
         if self.notify_main {
-            self.main_thread_task_runner
+            let _ = self
+                .main_thread_task_runner
                 .PostTask(ImplToMain::DidCompleteCommit {
                     source_frame_number: self.source_frame_number,
                     timestamps: self.commit_timestamps,
@@ -108,99 +99,40 @@ pub(crate) struct ProxyImpl {
     activation_completion_event: Option<ScopedCommitCompletionEvent>,
     main_wants_defer_begin_main_frame: bool,
     impl_wants_defer_begin_main_frame: bool,
-    // MainToImpl::ReadyCommitAwaitsBeginMainFrame (B1 bridge, S1b-7 deletes
-    // it): the commit ProxyMain holds for the next BeginMainFrame predates
-    // the deltas that BeginMainFrame pulls, which therefore belong to the
-    // pipelined slot exactly as with `data_for_commit_`.
-    ready_commit_awaits_begin_main_frame: bool,
 }
 impl ProxyImpl {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(main_thread_task_runner: ProxyTaskQueue<ImplToMain<Root>>) -> Self {
         Self {
-            main_thread_task_runner: Default::default(),
+            main_thread_task_runner,
             data_for_commit: None,
             activation_completion_event: None,
             main_wants_defer_begin_main_frame: false,
             impl_wants_defer_begin_main_frame: false,
-            ready_commit_awaits_begin_main_frame: false,
         }
     }
     pub(crate) fn HasDataForCommit(&self) -> bool {
         self.data_for_commit.is_some()
     }
+    /// ProxyImpl destruction (proxy_impl.cc:139-170): a ready commit and a
+    /// commit held for activation release the main thread.
+    pub(crate) fn DropCommits(&mut self) {
+        self.data_for_commit = None;
+        self.activation_completion_event = None;
+    }
     // Source: cc/trees/proxy_impl.cc ShouldDeferBeginMainFrame.
     fn ShouldDeferBeginMainFrame(&self) -> bool {
         self.main_wants_defer_begin_main_frame || self.impl_wants_defer_begin_main_frame
     }
-}
-
-/// The in-process LayerTreeHost client side of ProxyMain: the Page-bound
-/// compositor main-thread effects.
-pub(crate) struct InProcessMainClient<'a> {
-    pub(crate) effects: &'a mut Vec<CompositorMainThreadEffect>,
-}
-impl ProxyMainClient<Root> for InProcessMainClient<'_> {
-    fn CommitDeferralChanged(&mut self, deferred: bool, reason: PaintHoldingReason) {
-        self.effects
-            .push(CompositorMainThreadEffect::CommitDeferralChanged { deferred, reason });
-    }
-    fn ViewportScaleChanged(&mut self, scale: f32, data: &CompositorCommitData) {
-        self.effects
-            .push(CompositorMainThreadEffect::ViewportScaleChanged {
-                scale,
-                delta: data.page_scale_delta,
-                pinch_active: data.is_pinch_gesture_active,
-                inner_scroll_delta: data.inner_viewport_scroll.scroll_delta,
-            });
-    }
-    // ProxyMain.cc:351-352 -> AnimationHost.cc:795-822: the delegate
-    // notifications of the events LayerizeEngine applied.
-    fn NotifyScrollAnimationsFinished(
-        &mut self,
-        completions: Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion>,
-    ) {
-        for completion in completions {
-            self.effects
-                .push(CompositorMainThreadEffect::ScrollAnimationCompleted(
-                    completion,
-                ));
-        }
-    }
-    fn BeginMainFrame(&mut self) {
-        self.effects.push(CompositorMainThreadEffect::BeginMainFrame);
-    }
-    // The finish timestamp belongs to FinishCommit, before the potentially
-    // expensive ScheduledActionPostCommit and the independently scheduled
-    // draw (proxy_impl.cc ScheduledActionCommit).
-    fn DidCommit(&mut self, _source_frame_number: i32, timestamps: CommitTimestamps) {
-        self.effects
-            .push(CompositorMainThreadEffect::MainFrameCommitCompleted {
-                commit_finish_time: timestamps.finish,
-            });
+    pub(crate) fn PostToMain(&self, task: ImplToMain<Root>) {
+        // A stopped main thread drops the task.
+        let _ = self.main_thread_task_runner.PostTask(task);
     }
 }
 
 impl EngineCore {
-    /// The in-process transport (decision D1): runs every posted Proxy task
-    /// of both directions, in posting order, on this sequence.
-    pub(crate) fn RunProxyTasks(&mut self, scheduler: &mut Scheduler) {
-        loop {
-            if let Some(task) = self.proxy_impl.main_thread_task_runner.TakeTask() {
-                let now = self.services.core.MonotonicTimeNow();
-                let mut client = InProcessMainClient {
-                    effects: &mut self.effects,
-                };
-                self.proxy_main
-                    .RunImplTask(task, now, &mut self.layerize, &mut client);
-            } else if let Some(task) = self.proxy_main.TakeImplTask() {
-                self.RunMainThreadTask(task, scheduler);
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn RunMainThreadTask(&mut self, task: MainToImpl<Root>, scheduler: &mut Scheduler) {
+    /// Runs one ProxyMain -> ProxyImpl task. Initialize and Stop are run by
+    /// the embedder that owns this engine (construction and Shutdown).
+    pub(crate) fn RunMainThreadTask(&mut self, task: MainToImpl<Root>, scheduler: &mut Scheduler) {
         match task {
             MainToImpl::NotifyReadyToCommit {
                 lease,
@@ -236,21 +168,57 @@ impl EngineCore {
             MainToImpl::SetDeferBeginMainFrame(defer) => {
                 self.SetDeferBeginMainFrameFromMain(defer, scheduler)
             }
-            MainToImpl::ReadyCommitAwaitsBeginMainFrame => {
-                self.proxy_impl.ready_commit_awaits_begin_main_frame = true;
-                scheduler.SetNeedsBeginMainFrame(false, false, self);
+            // Source: proxy_impl.cc:325-329.
+            MainToImpl::SetVisible(visible) => {
+                self.SetHostVisible(visible);
+                scheduler.SetVisible(visible, self);
             }
-            _ => unreachable!("ProxyMain posts this task from S1b-7 on"),
+            MainToImpl::SetNeedsRedraw(_) => {
+                self.SetFullViewportDamage();
+                scheduler.SetNeedsRedraw(self);
+            }
+            MainToImpl::SetTargetLocalSurfaceId(id) => self
+                .host
+                .as_mut()
+                .unwrap()
+                .BaseMutable()
+                .SetTargetLocalSurfaceId(
+                    &id,
+                    &mut HostImplContext {
+                        services: &mut self.services,
+                    },
+                ),
+            MainToImpl::NotifyNewLocalSurfaceIdExpectedWhilePaused => self
+                .host
+                .as_mut()
+                .unwrap()
+                .BaseMutable()
+                .NotifyNewLocalSurfaceIdExpectedWhilePaused(&mut HostImplContext {
+                    services: &mut self.services,
+                }),
+            MainToImpl::NotifyLatencyInfoSwapPromiseMonitors => self
+                .host
+                .as_mut()
+                .unwrap()
+                .BaseMutable()
+                .NotifyLatencyInfoSwapPromiseMonitors(&mut HostImplContext {
+                    services: &mut self.services,
+                }),
+            MainToImpl::Initialize { .. } | MainToImpl::Stop { .. } => {
+                unreachable!("the embedder runs Initialize and Stop")
+            }
+            MainToImpl::SetPauseRendering { .. }
+            | MainToImpl::SetMutator(_)
+            | MainToImpl::QueueImageDecode { .. } => {
+                unreachable!("ProxyMain does not post this task yet")
+            }
         }
     }
 
-    /// Source: cc/trees/proxy_impl.cc:801-848. NotifyBeginMainFrameStarted
-    /// is still called by the Scheduler callback before this (as the
-    /// single-thread engine did); it moves to NotifyReadyToCommitOnImpl /
-    /// BeginMainFrameAbortedOnImpl with the main start time in S1b-7.
+    /// Source: cc/trees/proxy_impl.cc:801-848.
     pub(crate) fn SendBeginMainFrame(&mut self, args: &BeginFrameArgs) {
-        let next_bmf = self.proxy_impl.data_for_commit.is_some()
-            || std::mem::take(&mut self.proxy_impl.ready_commit_awaits_begin_main_frame);
+        // proxy_impl.cc:812-815.
+        let next_bmf = self.proxy_impl.data_for_commit.is_some();
         let host = self.host.as_mut().expect("resident Host").BaseMutable();
         let mut context = HostImplContext {
             services: &mut self.services,
@@ -268,22 +236,23 @@ impl EngineCore {
             consecutive_no_damage_main_frames: 0,
         };
         self.proxy_impl
-            .main_thread_task_runner
-            .PostTask(ImplToMain::BeginMainFrame(Box::new(state)));
+            .PostToMain(ImplToMain::BeginMainFrame(Box::new(state)));
     }
 
     /// Source: cc/trees/proxy_impl.cc:425-493.
-    fn NotifyReadyToCommitOnImpl(
+    pub(crate) fn NotifyReadyToCommitOnImpl(
         &mut self,
         mut unsafe_state: ProtectedCommitLease<Root>,
         commit_state: Box<CommitState<Root>>,
-        _main_thread_start_time: crate::adapter::time::TimeTicks,
+        main_thread_start_time: crate::adapter::time::TimeTicks,
         scroll_and_viewport_changes_synced: bool,
         commit_timeout: bool,
         scheduler: &mut Scheduler,
     ) {
         assert!(self.proxy_impl.data_for_commit.is_none());
         debug_assert!(scheduler.CommitPending());
+        // proxy_impl.cc:440.
+        scheduler.NotifyBeginMainFrameStarted(main_thread_start_time);
         let start_time = self.services.core.MonotonicTimeNow();
         let query = self.scheduler_queries.Enter(scheduler.IsReadyToActivate());
         self.host.as_mut().unwrap().ReadyToCommit(
@@ -308,24 +277,25 @@ impl EngineCore {
             unsafe_state,
         });
         scheduler.NotifyReadyToCommit(None, self);
-        // proxy_impl.cc:488-492 requests another BeginMainFrame when the
-        // scroll offsets were not synchronized. The only unsynchronized
-        // commit before S1b-7 is the B1 commit finished outside a
-        // BeginMainFrame, which the single-thread engine never followed with
-        // an extra main frame; the request is added with B1's removal.
+        // proxy_impl.cc:488-492: deltas the main thread did not apply
+        // (deferred commits) need another BeginMainFrame.
+        if !scroll_and_viewport_changes_synced {
+            scheduler.SetNeedsBeginMainFrame(false, false, self);
+        }
     }
 
-    /// Source: cc/trees/proxy_impl.cc:306-323 (NotifyBeginMainFrameStarted:
-    /// see SendBeginMainFrame).
-    fn BeginMainFrameAbortedOnImpl(
+    /// Source: cc/trees/proxy_impl.cc:306-323.
+    pub(crate) fn BeginMainFrameAbortedOnImpl(
         &mut self,
         reason: CommitEarlyOutReason,
-        _main_thread_start_time: crate::adapter::time::TimeTicks,
+        main_thread_start_time: crate::adapter::time::TimeTicks,
         swap_promises: Vec<Box<super::host_owners::SwapPromise<SkRegion>>>,
         scroll_and_viewport_changes_synced: bool,
         scheduler: &mut Scheduler,
     ) {
         debug_assert!(scheduler.CommitPending());
+        // proxy_impl.cc:318.
+        scheduler.NotifyBeginMainFrameStarted(main_thread_start_time);
         let args = scheduler.last_dispatched_begin_main_frame_args().clone();
         let next_bmf = self.proxy_impl.data_for_commit.is_some();
         self.host.as_mut().unwrap().BeginMainFrameAborted(

@@ -36,7 +36,6 @@ pub use compositor_animation::keyframed_animation_curve::{
     TimingFunction as AnimationTimingFunction,
 };
 pub use compositor_tree::target_property::Type as AnimationTargetProperty;
-use paint::PaintArtifact;
 use std::{fmt, io, sync::Arc};
 
 /// Independent sequenced execution capability. The embedding may execute
@@ -239,15 +238,6 @@ pub enum CompositorInput {
     },
 }
 
-/// Only the compositor can mint the pending main commit's identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ScrollAnimationCommitToken(pub(crate) u64);
-#[derive(Clone, Copy, Debug)]
-pub struct ScrollAnimationAreaClassification {
-    pub element: ElementId,
-    pub uses_composited_scrolling: bool,
-    pub reasons: crate::cc::input::main_thread_scrolling_reason::MainThreadRepaintReasons,
-}
 /// Blink's live WebScrollbar values needed by the resident composited
 /// PaintedScrollbarLayer. The producer identity stays an ElementId; no Layout
 /// or Paint owner crosses the compositor boundary.
@@ -262,9 +252,6 @@ pub struct ScrollbarPaintMutation {
 /// value type while raw input keeps its original Copy event semantics.
 #[derive(Clone, Debug)]
 pub enum CompositorMutation {
-    RequestPresentationTime {
-        request: u64,
-    },
     FrameLifecycle(FrameLifecycleMutation),
     Input(CompositorInput),
     /// Blink's deferred transform/opacity property-node update. The values
@@ -274,10 +261,6 @@ pub enum CompositorMutation {
     ScrollbarPaint(ScrollbarPaintMutation),
     PropertyAnimation(compositor_animation::compositor_mutation::PropertyAnimationMutation),
     ScrollAnimation(scroll_animation::compositor_mutation::ScrollAnimationMutation),
-    FinalizeScrollAnimations {
-        token: ScrollAnimationCommitToken,
-        commands: Vec<scroll_animation::compositor_mutation::ScrollAnimationMutation>,
-    },
 }
 /// A backend can acknowledge a buffer without knowing a display time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -322,13 +305,6 @@ pub enum CompositorMainThreadEffect {
     MainFrameCommitDeferred {
         reason: CommitDeferralReason,
     },
-    ScrollAnimationCommitPrepared {
-        token: ScrollAnimationCommitToken,
-        areas: Vec<ScrollAnimationAreaClassification>,
-    },
-    ScrollAnimationCommitFinalized {
-        token: ScrollAnimationCommitToken,
-    },
     ScrollAnimationCompleted(scroll_animation::compositor_mutation::ScrollAnimationCompletion),
     GestureDisposition {
         dispatch_id: u64,
@@ -365,12 +341,9 @@ pub enum CompositorMainThreadEffect {
         ack: crate::adapter::scheduler_host::BeginFrameAck,
         reason: crate::cc::scheduler::scheduler::FrameSkippedReason,
     },
-    /// Scheduler has entered BeginMainFrameState::SENT and the main thread
-    /// must answer this transaction with a commit or an explicit early-out.
+    /// A single-sequence embedding ran ProxyMain::BeginMainFrame; the Page
+    /// schedules its lifecycle (the threaded embedding runs it inside).
     BeginMainFrame,
-    /// MainHost asks Page to schedule lifecycle work. Unlike BeginMainFrame,
-    /// this does not prove that Scheduler has dispatched a transaction.
-    RequestMainFrame,
     SaveActiveEventMetrics,
     UpdateDeferMainFrameUpdate,
     ImageDecodeFinished {
@@ -413,8 +386,8 @@ pub struct CompositorOutput {
     pub needs_begin_frames: bool,
     /// Typed impl tasks remain queued and require another owner-sequence turn.
     pub work_pending: bool,
-    /// The accepted main commit has not yet reached Scheduler's COMMIT action.
-    /// Embedders may retain a newer PaintArtifact, but must not submit it yet.
+    /// ProxyImpl holds a ready commit (DataForCommit) that has not yet
+    /// reached Scheduler's COMMIT action.
     pub main_commit_pending: bool,
 }
 
@@ -532,276 +505,244 @@ impl From<layerize::commit::main_effects::PacScrollEffect> for CompositorMainThr
 pub type ImmutablePaintRecord =
     crate::runtime::paint::CpuPaintRecord<crate::runtime::skia::SkRegion>;
 
-type MainFamily = crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>;
+/// The single Layerize family of this compositor (S1B_PROXY_DESIGN.md 1).
+pub type MainFamily = crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>;
+/// ProxyMain -> ProxyImpl task of this family.
+pub type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
+/// ProxyImpl -> ProxyMain task of this family.
+pub type ImplToMainTask = layerize::commit::proxy::ImplToMain<MainFamily>;
+/// ProxyMain::BeginMainFrame's answer for this family.
+pub type MainFrameResult = layerize::runtime::proxy_main::MainFrameResult;
+/// The posted BeginMainFrameAndCommitState of this family.
+pub type BeginMainFrameState = layerize::commit::proxy::BeginMainFrameAndCommitState<MainFamily>;
+/// The main half of a Page compositor: Blink's LayerTreeView role.
+pub type MainLayerize = layerize::LayerizeEngine<MainFamily>;
+pub type MainProxy = layerize::runtime::proxy_main::ProxyMain<MainFamily>;
+pub type ProxyImplInit = crate::runtime::engine_factory::ProxyImplInit<crate::runtime::skia::SkRegion>;
+/// The main half's PropertyTreeFeatures (draw_property_utils /
+/// LayerTreeHost::UpdateLayers inputs), built from the same settings as the
+/// impl half's.
+pub type MainPropertyTreeFeatures = crate::runtime::render::RenderServices;
 
-/// The main half of one Page compositor (S1b-6 of S1B_PROXY_DESIGN.md):
-/// Blink's LayerTreeView role over `layerize::LayerizeEngine` (main
-/// LayerTreeHost, PaintArtifactCompositor, main AnimationHost) and
-/// `ProxyMain`. The Page owns it next to its `CompositorEngine` (the impl
-/// half) and lends it to every `CompositorEngine` call, because both halves
-/// still run on one sequence with the in-process Proxy transport (decision
-/// D1). Declared fields drop ProxyMain (which may hold a commit lease)
-/// before the main host.
-pub struct CompositorMainEngine {
-    proxy_main: Option<Box<layerize::runtime::proxy_main::ProxyMain<MainFamily>>>,
-    layerize: Option<Box<layerize::LayerizeEngine<MainFamily>>>,
-}
-impl CompositorMainEngine {
-    pub(crate) fn new(
-        proxy_main: Box<layerize::runtime::proxy_main::ProxyMain<MainFamily>>,
-        layerize: Box<layerize::LayerizeEngine<MainFamily>>,
-    ) -> Self {
-        Self {
-            proxy_main: Some(proxy_main),
-            layerize: Some(layerize),
-        }
+// Compile-time thread-safety of the main-half values that cross to, or are
+// read by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the
+// main LayerTreeHost (lent inside the protected sequence), its
+// ThreadUnsafeCommitState (read by FinishCommit), the moved CommitState and
+// the posted Proxy tasks.
+#[allow(dead_code)]
+const _: () = {
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_send_ref<T: Send + ?Sized>(_: &T) {}
+    fn assertions(engine: &layerize::LayerizeEngine<MainFamily>) {
+        assert_send_ref(engine.Main());
+        assert_sync::<layerize::commit::commit_state::ThreadUnsafeCommitState<MainFamily>>();
+        assert_send::<layerize::commit::commit_state::CommitState<MainFamily>>();
+        assert_send::<MainToImplTask>();
+        assert_send::<ImplToMainTask>();
     }
-    fn Layerize(&self) -> &layerize::LayerizeEngine<MainFamily> {
-        self.layerize
-            .as_deref()
-            .expect("main half returned after the CompositorEngine call")
-    }
-    fn LayerizeMut(&mut self) -> &mut layerize::LayerizeEngine<MainFamily> {
-        self.layerize
-            .as_deref_mut()
-            .expect("main half returned after the CompositorEngine call")
-    }
-    /// PaintRecordBuilder::EndRecording, source paint_record_builder.cc:36-44.
-    /// This is a value-only conversion using the same Page compositor's source
-    /// Paint services. It neither commits nor mutates the resident PAC/tree.
-    pub fn ConvertPaintArtifactSubsetToRecord(
-        &self,
-        artifact: Arc<PaintArtifact>,
-        state: &paint::paint_property_tree::PropertyTreeState,
-    ) -> ImmutablePaintRecord {
-        self.Layerize()
-            .ConvertPaintArtifactSubsetToRecord(artifact, state)
-    }
-    /// Creates the resident cc::SurfaceLayer used by VideoPainter's
-    /// kForeignLayerVideo item, through the main LayerTreeHost. The child
-    /// frame is submitted separately to Viz and identified by `range`;
-    /// Browser never receives compositor services.
-    pub fn CreateVideoSurfaceForeignLayer(
-        &mut self,
-        range: crate::runtime::types::SurfaceRange,
-    ) -> Arc<dyn paint::ForeignLayer> {
-        self.LayerizeMut().CreateVideoSurfaceForeignLayer(range)
-    }
+};
+
+/// Creates the main half of one Page compositor on the calling (document)
+/// thread: the main LayerTreeHost, PaintArtifactCompositor and main
+/// AnimationHost (`layerize::LayerizeEngine`, Blink's LayerTreeView) and its
+/// ProxyMain over `to_impl`. Returns the ProxyImpl construction values that
+/// `ProxyMain::Start` posts with Initialize (proxy_main.cc:80-89,898-914),
+/// from which the impl thread builds its `CompositorEngine`. `main_tasks`
+/// runs the main LayerTreeHost's posted main-thread callbacks.
+pub fn CreateMainHalf(
+    config: CompositorConfig,
+    to_impl: layerize::commit::proxy::ProxyTaskQueue<MainToImplTask>,
+    main_tasks: layerize::commit::main_callbacks::TaskRunner,
+) -> Result<(MainLayerize, MainProxy, MainPropertyTreeFeatures, Box<ProxyImplInit>), CompositorError>
+{
+    let parts = crate::runtime::engine_factory::MainHalfParts::new(&config)?;
+    let in_process = to_impl.IsInProcess();
+    let endpoint = layerize::runtime::proxy_main::ProxyMainEndpoint::new(
+        to_impl,
+        main_tasks,
+        parts.CommitRequestTrace(),
+    );
+    let layerize = layerize::LayerizeEngine::<MainFamily>::new(
+        parts.paint_features,
+        parts.paint_diagnostics,
+        layerize::commit::main_effects::MainHostInit {
+            id: parts.owner,
+            owner: crate::adapter::property_tree::PropertyTreesOwnerId::FromOwnerValue(parts.owner),
+            mutator: parts.main_animations.clone(),
+            settings: parts.settings.clone(),
+            threaded: false,
+            // Chromium's WebLayerTreeView forwards the embedder background
+            // color to LayerTreeHost. An alpha-zero root keeps popup Pages
+            // compositable over the document.
+            background_color: config.transparent_background.then_some(
+                crate::adapter::layer_tree_impl::Color4f {
+                    red: 0.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 0.0,
+                },
+            ),
+            // A single-sequence embedding drains both queues itself; its
+            // protected-sequence waits return immediately
+            // (layer_tree_host.cc:521-522).
+            impl_on_owner_sequence: in_process,
+            sink: endpoint.clone() as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
+        },
+    )
+    .map_err(|error| CompositorError::Backend(std::io::Error::other(error.to_string())))?;
+    let proxy = layerize::runtime::proxy_main::ProxyMain::new(endpoint, parts.owner + 1);
+    let init = Box::new(parts.ImplInit(layerize.PaintValues()));
+    let features = parts.features;
+    Ok((layerize, proxy, features, init))
 }
 
+/// The impl half of one Page compositor (cc LayerTreeHostImpl, Scheduler,
+/// ProxyImpl) on the compositor thread. It receives the main thread's
+/// commits only as `CommitState` values with their protected lease; its
+/// outputs carry the ProxyImpl -> ProxyMain tasks.
 pub struct CompositorEngine {
     assembly: crate::runtime::engine_assembly::EngineAssembly,
 }
 impl CompositorEngine {
-    /// Creates both halves of one Page compositor: the main half the Page
-    /// owns and the impl half (S1b-6).
+    /// ProxyMain::InitializeOnImplThread -> ProxyImpl construction
+    /// (proxy_main.cc:80-89) from the values ProxyMain::Start posted.
     pub fn new(
         config: CompositorConfig,
         executors: CompositorExecutors,
-    ) -> Result<(CompositorMainEngine, Self), CompositorError> {
-        crate::runtime::engine_factory::CreateDefault(config, executors)
-            .map(|(main, assembly)| (main, Self { assembly }))
+        init: Box<ProxyImplInit>,
+        to_main: layerize::commit::proxy::ProxyTaskQueue<ImplToMainTask>,
+    ) -> Result<Self, CompositorError> {
+        crate::runtime::engine_factory::CreateImpl(config, executors, init, to_main)
+            .map(|assembly| Self { assembly })
     }
-    /// Runs one impl-half call with the main half lent to it
-    /// (`runtime::lent_main`). The halves are returned before this returns.
-    fn Lend<T>(
+    /// ProxyMain::Stop -> DestroyProxyImplOnImplThread.
+    pub fn Shutdown(&mut self) {
+        self.assembly.Shutdown()
+    }
+    /// ProxyImpl::NotifyReadyToCommitOnImpl (proxy_impl.cc:425-493).
+    pub fn ReadyToCommit(
         &mut self,
-        main: &mut CompositorMainEngine,
-        call: impl FnOnce(&mut crate::runtime::engine_assembly::EngineAssembly) -> T,
-    ) -> T {
-        self.assembly.LendMain(
-            main.proxy_main.take().expect("main half not lent twice"),
-            main.layerize.take().expect("main half not lent twice"),
-        );
-        let result = call(&mut self.assembly);
-        let (proxy_main, layerize) = self.assembly.ReturnMain();
-        main.proxy_main = Some(proxy_main);
-        main.layerize = Some(layerize);
-        result
-    }
-    /// Tears both halves down in the former single-engine order (scheduler
-    /// stop, PAC destruction and main root detach, impl host). The Page calls
-    /// it before dropping the halves; a dropped engine that was never shut
-    /// down still tears down its impl half.
-    pub fn Shutdown(&mut self, main: &mut CompositorMainEngine) {
-        if main.proxy_main.is_some() && main.layerize.is_some() {
-            self.Lend(main, |assembly| assembly.Shutdown())
-        } else {
-            // A call that unwound left the main half lent to the core; the
-            // teardown then runs with it there (no second panic in Drop).
-            self.assembly.Shutdown()
-        }
-    }
-    pub fn Commit(
-        &mut self,
-        main: &mut CompositorMainEngine,
-        artifact: Arc<PaintArtifact>,
-        viewport: CompositorViewportState,
+        commit_state: Box<layerize::commit::commit_state::CommitState<MainFamily>>,
+        lease: layerize::commit::proxy::ProtectedCommitLease<MainFamily>,
+        main_thread_start_time: TimeTicks,
+        scroll_and_viewport_changes_synced: bool,
+        commit_timeout: bool,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.Commit(artifact, viewport))
+        self.assembly.ReadyToCommit(
+            commit_state,
+            lease,
+            main_thread_start_time,
+            scroll_and_viewport_changes_synced,
+            commit_timeout,
+        )
     }
-    pub fn CommitWithScrollAnimations(
+    /// ProxyImpl::BeginMainFrameAbortedOnImpl (proxy_impl.cc:306-323).
+    pub fn BeginMainFrameAborted(
         &mut self,
-        main: &mut CompositorMainEngine,
-        artifact: Arc<PaintArtifact>,
-        viewport: CompositorViewportState,
-        areas: Vec<ElementId>,
+        reason: crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason,
+        main_thread_start_time: TimeTicks,
+        swap_promises: Vec<Box<crate::runtime::host_owners::SwapPromise<crate::runtime::skia::SkRegion>>>,
+        scroll_and_viewport_changes_synced: bool,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| {
-            assembly.CommitWithScrollAnimations(artifact, viewport, areas)
-        })
+        self.assembly.BeginMainFrameAborted(
+            reason,
+            main_thread_start_time,
+            swap_promises,
+            scroll_and_viewport_changes_synced,
+        )
     }
-    pub fn SetViewport(
+    /// The other ProxyMain -> ProxyImpl tasks (SetNeedsCommitOnImpl,
+    /// SetDeferBeginMainFrameFromMain, SetVisibleOnImpl, ...). Initialize and
+    /// Stop belong to the embedder that owns this engine's lifetime.
+    pub fn RunMainThreadTask(
         &mut self,
-        main: &mut CompositorMainEngine,
-        viewport: CompositorViewportState,
+        task: MainToImplTask,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.SetViewport(viewport))
-    }
-    /// Mirrors LayerTreeHost/ProxyMain commit demand before the main-frame
-    /// lifecycle has produced its PaintArtifact.
-    pub fn RequestMainFrame(
-        &mut self,
-        main: &mut CompositorMainEngine,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.RequestMainFrame())
+        self.assembly.RunMainThreadTask(task)
     }
     /// Requests a compositor frame from the resident active tree without
-    /// manufacturing a new PaintArtifact or main-tree commit.
-    pub fn RequestRedraw(
-        &mut self,
-        main: &mut CompositorMainEngine,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.RequestRedraw())
+    /// a main-tree commit.
+    pub fn RequestRedraw(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.RequestRedraw()
     }
-    pub fn FinishMainFrameWithoutUpdates(
-        &mut self,
-        main: &mut CompositorMainEngine,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.FinishMainFrameWithoutUpdates())
+    pub fn BeginFrame(&mut self, args: BeginFrameArgs) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.BeginFrame(args)
     }
-    pub fn CanApplyCompositedAnimationProperties(&self, main: &CompositorMainEngine) -> bool {
-        main.Layerize().HasResidentPaintArtifact()
+    pub fn Input(&mut self, input: CompositorInput) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.Input(input)
     }
-    pub fn BeginFrame(
-        &mut self,
-        main: &mut CompositorMainEngine,
-        args: BeginFrameArgs,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.BeginFrame(args))
-    }
-    pub fn Input(
-        &mut self,
-        main: &mut CompositorMainEngine,
-        input: CompositorInput,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.Input(input))
-    }
+    /// Impl-side mutations only (input routing); main-side mutations
+    /// (`CompositorMutation::IsMainThreadMutation`) belong to the main half.
     pub fn Mutate(
         &mut self,
-        main: &mut CompositorMainEngine,
         mutation: CompositorMutation,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| match mutation {
-            CompositorMutation::RequestPresentationTime { request } => {
-                assembly.RequestPresentationTime(request)
+        match mutation {
+            CompositorMutation::Input(input) if !mutation_is_main_input(&input) => {
+                self.assembly.Input(input)
             }
-            CompositorMutation::FrameLifecycle(mutation) => {
-                assembly.ApplyFrameLifecycle(mutation)
-            }
-            CompositorMutation::Input(input) => assembly.Input(input),
-            CompositorMutation::CompositedAnimationProperties(update) => {
-                assembly.ApplyCompositedAnimationProperties(update)
-            }
-            CompositorMutation::ScrollbarPaint(mutation) => {
-                assembly.ApplyScrollbarPaintMutation(mutation)
-            }
-            CompositorMutation::PropertyAnimation(mutation) => {
-                assembly.ApplySourcePropertyAnimation(mutation)
-            }
-            CompositorMutation::ScrollAnimation(mutation) => {
-                assembly.ApplySourceScrollAnimation(mutation)
-            }
-            CompositorMutation::FinalizeScrollAnimations { token, commands } => {
-                assembly.FinalizeScrollAnimationCommit(token, commands)
-            }
-        })
+            _ => Err(CompositorError::NotReady {
+                stage: "main-thread compositor mutation reached the impl half",
+            }),
+        }
     }
-    /// Signals that Viz accepted a submitted frame. This does not reclaim
-    /// resources; their actual lease returns arrive through ReclaimResources.
-    pub fn DidReceiveFrameAck(
-        &mut self,
-        main: &mut CompositorMainEngine,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.DidReceiveFrameAck())
+    /// Signals that Viz accepted a submitted frame.
+    pub fn DidReceiveFrameAck(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.DidReceiveFrameAck()
     }
-    /// Actual Viz presentation feedback; neither submit nor ack synthesizes it.
+    /// Actual Viz presentation feedback.
     pub fn DidPresentFrame(
         &mut self,
-        main: &mut CompositorMainEngine,
         frame_token: u32,
         details: CompositorFrameTimingDetails,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.DidPresentFrame(frame_token, details))
+        self.assembly.DidPresentFrame(frame_token, details)
     }
     pub fn ReclaimResources(
         &mut self,
-        main: &mut CompositorMainEngine,
         resources: Vec<RasterReturnedResource>,
     ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.ReclaimResources(resources))
+        self.assembly.ReclaimResources(resources)
     }
-    pub fn Poll(
-        &mut self,
-        main: &mut CompositorMainEngine,
-    ) -> Result<CompositorOutput, CompositorError> {
-        self.Lend(main, |assembly| assembly.Poll())
+    pub fn Poll(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.Poll()
     }
 }
 
-#[cfg(test)]
-mod public_boundary_tests {
-    use super::*;
-
-    #[test]
-    fn compositor_engine_command_effect_boundary_signatures_stay_stable() {
-        let _: fn(
-            CompositorConfig,
-            CompositorExecutors,
-        ) -> Result<(CompositorMainEngine, CompositorEngine), CompositorError> =
-            CompositorEngine::new;
-        let _: fn(
-            &mut CompositorEngine,
-            &mut CompositorMainEngine,
-            Arc<PaintArtifact>,
-            CompositorViewportState,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Commit;
-        let _: fn(
-            &mut CompositorMainEngine,
-            crate::runtime::types::SurfaceRange,
-        ) -> Arc<dyn paint::ForeignLayer> = CompositorMainEngine::CreateVideoSurfaceForeignLayer;
-        let _: fn(
-            &mut CompositorEngine,
-            &mut CompositorMainEngine,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::RequestMainFrame;
-        let _: fn(
-            &mut CompositorEngine,
-            &mut CompositorMainEngine,
-            BeginFrameArgs,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::BeginFrame;
-        let _: fn(
-            &mut CompositorEngine,
-            &mut CompositorMainEngine,
-            CompositorInput,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Input;
-        let _: fn(
-            &mut CompositorEngine,
-            &mut CompositorMainEngine,
-        ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Poll;
-
-        fn frame_boundary(output: CompositorOutput) -> Option<CompositorFrameSubmission> {
-            output.frame
+fn mutation_is_main_input(input: &CompositorInput) -> bool {
+    matches!(
+        input,
+        CompositorInput::SetPageScaleFactorAndLimits { .. }
+            | CompositorInput::SetHaveScrollEventHandlers(_)
+            | CompositorInput::SetEventListenerProperties { .. }
+    )
+}
+impl CompositorMutation {
+    /// The mutation targets the main LayerTreeHost, PaintArtifactCompositor
+    /// or main AnimationHost (main thread), not InputHandlerProxy (impl).
+    pub fn IsMainThreadMutation(&self) -> bool {
+        match self {
+            Self::Input(input) => mutation_is_main_input(input),
+            Self::FrameLifecycle(_)
+            | Self::CompositedAnimationProperties(_)
+            | Self::ScrollbarPaint(_)
+            | Self::PropertyAnimation(_)
+            | Self::ScrollAnimation(_) => true,
         }
-        let _: fn(CompositorOutput) -> Option<CompositorFrameSubmission> = frame_boundary;
+    }
+}
+
+
+/// The first parent LocalSurfaceId of a Page widget (Blink's
+/// ParentLocalSurfaceIdAllocator::GenerateId with a new embed token,
+/// components/viz/common/surfaces/parent_local_surface_id_allocator.cc).
+pub fn NewParentLocalSurfaceId() -> crate::runtime::types::LocalSurfaceId {
+    crate::runtime::types::LocalSurfaceId {
+        parent_sequence_number: 1,
+        child_sequence_number: 1,
+        embed_token: crate::runtime::host_core::SurfaceTokenSource::NextEmbedToken(
+            &crate::runtime::host_core::OsSurfaceTokenSource,
+        ),
     }
 }

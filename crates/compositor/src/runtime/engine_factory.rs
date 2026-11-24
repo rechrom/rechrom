@@ -121,27 +121,93 @@ impl CheckerImageClient for CheckerDelivery {
     }
 }
 
-/// The embedding's capabilities implementation supplies Paint's pure value/recording
-/// primitives inside this crate; these are never arguments to public Commit.
-pub(crate) fn Create(
+/// The values ProxyMain::InitializeOnImplThread passes to the ProxyImpl
+/// constructor (proxy_main.cc:80-89): the LayerTreeHost id and settings
+/// source (the shared CompositorConfig), the impl AnimationHost instance
+/// (AnimationHost::CreateImplInstance, animation_host.cc:74-79) and the
+/// shared cc/paint value capability the impl tiles and images replay
+/// committed records with.
+pub struct ProxyImplInit<R: crate::runtime::types::CpuSkiaBackend> {
+    pub(crate) owner: u64,
+    pub(crate) impl_animations: AnimationHostOwner,
+    pub(crate) paint_values: Arc<dyn layerize::commit::paint::CpuPaintValueServices<R>>,
+}
+
+/// The main half's construction values (LayerTreeHost::InitParams and the
+/// Blink paint feature state), from the same settings policy as the impl.
+pub(crate) struct MainHalfParts {
+    pub(crate) owner: u64,
+    pub(crate) settings: LayerTreeSettings,
+    pub(crate) paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
+    pub(crate) paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
+    pub(crate) main_animations: AnimationHostOwner,
+    pub(crate) features: RenderServices,
+    events: Arc<dyn EventSink>,
+}
+impl MainHalfParts {
+    pub(crate) fn new(config: &CompositorConfig) -> Result<Self, CompositorError> {
+        if config.thread {
+            return Err(CompositorError::UnsupportedExecutionConfiguration {
+                reason: "CompositorConfig::thread is not a supported mode",
+            });
+        }
+        // The factory owns identity generation; Page never passes internal IDs.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let owner = NEXT.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            owner < i32::MAX as u64,
+            "capabilities engine identity exhausted"
+        );
+        let options = FactoryOptions::cpu_default(config);
+        Ok(Self {
+            owner,
+            settings: options.settings.clone(),
+            paint_features: DefaultPaintFeatures(),
+            paint_diagnostics: DefaultPaintDiagnostics(),
+            // Source: cc/animation/animation_host.cc:55-57. The main instance
+            // is owned by the main half (LayerizeEngine).
+            main_animations: AnimationHostOwner::CreateMainInstance(),
+            features: RenderServices::new(options.render, options.events.clone()),
+            events: options.events,
+        })
+    }
+    pub(crate) fn CommitRequestTrace(&self) -> Arc<dyn Fn(bool) + Send + Sync> {
+        let events = self.events.clone();
+        Arc::new(move |urgent| {
+            events.Emit("compositor.main", format!("SetNeedsCommit urgent={urgent}"))
+        })
+    }
+    pub(crate) fn ImplInit(
+        &self,
+        paint_values: Arc<dyn layerize::commit::paint::CpuPaintValueServices<SkRegion>>,
+    ) -> ProxyImplInit<SkRegion> {
+        ProxyImplInit {
+            owner: self.owner,
+            impl_animations: self.main_animations.CreateImplInstance(),
+            paint_values,
+        }
+    }
+}
+
+/// ProxyImpl construction on the impl thread (proxy_main.cc:80-89 ->
+/// proxy_impl.cc:65-137): LayerTreeHostImpl, Scheduler and their services.
+pub(crate) fn CreateImpl(
     config: CompositorConfig,
     executors: CompositorExecutors,
-    options: FactoryOptions,
-    paint_features: layerize::commit::main_paint_config::CpuPaintFeatures,
-    paint_diagnostics: layerize::commit::main_paint_config::SkiaPaintDiagnostics,
-) -> Result<(crate::engine::CompositorMainEngine, super::engine_assembly::EngineAssembly), CompositorError> {
+    init: Box<ProxyImplInit<SkRegion>>,
+    to_main: layerize::commit::proxy::ProxyTaskQueue<crate::engine::ImplToMainTask>,
+) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
     if config.thread {
         return Err(CompositorError::UnsupportedExecutionConfiguration {
-            reason: "separate main/impl Proxy transport is not yet constructed",
+            reason: "CompositorConfig::thread is not a supported mode",
         });
     }
-    // The factory owns identity generation; Page never passes internal IDs.
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let owner = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    assert!(
-        owner <= i32::MAX as u64,
-        "capabilities engine identity exhausted"
-    );
+    let options = FactoryOptions::cpu_default(&config);
+    let ProxyImplInit {
+        owner,
+        impl_animations,
+        paint_values,
+    } = *init;
     let commands = EngineTaskQueue::default();
     let lifecycle_effects = HostLifecycleEffects::default();
     let lifecycle = Arc::new(HostLifecycle::new(lifecycle_effects.clone()));
@@ -155,46 +221,9 @@ pub(crate) fn Create(
     let runners = Arc::new(TaskRunnerServices::new_threaded_on_single_executor(
         executors.compositor.clone(),
     ));
-    // Source: cc/animation/animation_host.cc:55-57,74-79. The main instance
-    // is owned by the main half (LayerizeEngine, Blink's LayerTreeView
-    // role); the impl instance by LayerTreeHostImpl.
-    let main_animations = AnimationHostOwner::CreateMainInstance();
-    let impl_animations = main_animations.CreateImplInstance();
-    // The main half (LayerizeEngine): main paint services, the main
-    // LayerTreeHost and its Proxy endpoint. Chromium's WebLayerTreeView
-    // forwards the embedder background color to LayerTreeHost. An alpha-zero
-    // root keeps popup Pages compositable over the document instead of
-    // producing an opaque white fill quad.
-    let main_effects = Arc::new(super::execution::EngineMainHostEffects::new(
-        executors.compositor.clone(),
-        commands.clone(),
-        options.events.clone(),
-    ));
-    let layerize = EngineCore::CreateLayerize(
-        paint_features,
-        paint_diagnostics,
-        layerize::commit::main_effects::MainHostInit {
-            id: owner,
-            owner: PropertyTreesOwnerId::FromOwnerValue(owner),
-            // The main AnimationHost moves into LayerizeEngine (S1b-5).
-            mutator: main_animations,
-            settings: options.settings.clone(),
-            threaded: config.thread,
-            background_color: config.transparent_background.then_some(Color4f {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            }),
-            // Both halves still run on this compositor sequence (S1b-2..S1b-6).
-            impl_on_owner_sequence: true,
-            sink: main_effects.clone()
-                as Arc<dyn layerize::commit::main_effects::MainHostEffectSink>,
-        },
-    )?;
     // The impl half receives only the shared paint value capability for
     // tiles and images.
-    let impl_paint = CpuImplPaintServices::new(layerize.PaintValues());
+    let impl_paint = CpuImplPaintServices::new(paint_values);
     let latency_monitors = LatencyMonitorRegistry::default();
     let scheduler_effects = SchedulerEffects::default();
     let scheduler_host = Arc::new(EngineSchedulerHost::new(
@@ -400,25 +429,17 @@ pub(crate) fn Create(
         image_worker_task_runner,
         scheduling_delegate: HostImplSchedulingDelegateId(owner),
     };
-    let local_surface_id = LocalSurfaceId {
-        parent_sequence_number: 1,
-        child_sequence_number: 1,
-        embed_token: super::host_core::SurfaceTokenSource::NextEmbedToken(&OsSurfaceTokenSource),
-    };
     let input_client = Arc::new(super::input_client::QueuedInputHandlerClient::default());
-    let core = EngineCore::new(
+    let mut core = EngineCore::new(
         services,
         init,
-        Box::new(layerize),
-        main_effects,
         lifecycle,
         queries,
         sink,
-        local_surface_id,
-        owner + 1,
         input_client.clone(),
     )?;
-    let mut assembly = super::engine_assembly::EngineAssembly::new(
+    core.proxy_impl = super::proxy_impl::ProxyImpl::new(to_main);
+    let assembly = super::engine_assembly::EngineAssembly::new(
         core,
         scheduler_settings,
         scheduler_host,
@@ -431,13 +452,7 @@ pub(crate) fn Create(
         capabilities.latency_monitors.clone(),
         input_client,
     )?;
-    // The main half leaves the impl half once both are constructed: the
-    // Page owns it and lends it to every CompositorEngine call (S1b-6).
-    let (proxy_main, layerize) = assembly.ReturnMain();
-    Ok((
-        crate::engine::CompositorMainEngine::new(proxy_main, layerize),
-        assembly,
-    ))
+    Ok(assembly)
 }
 
 /// Default capability construction is admitted only after the capabilities Paint
@@ -651,19 +666,9 @@ impl FactoryOptions {
         }
     }
 }
-pub(crate) fn CreateDefault(
-    config: CompositorConfig,
-    executors: CompositorExecutors,
-) -> Result<(crate::engine::CompositorMainEngine, super::engine_assembly::EngineAssembly), CompositorError> {
-    if config.thread {
-        return Err(CompositorError::UnsupportedExecutionConfiguration {
-            reason: "separate main/impl Proxy transport is not yet constructed",
-        });
-    }
-    let options = FactoryOptions::cpu_default(&config);
-    // The main half (LayerizeEngine, created in Create) keeps the
-    // PAC/conversion/recording owner built from these values.
-    let features = layerize::commit::main_paint_config::CpuPaintFeatures {
+/// The Blink paint feature state of the main half's PAC/conversion owner.
+fn DefaultPaintFeatures() -> layerize::commit::main_paint_config::CpuPaintFeatures {
+    layerize::commit::main_paint_config::CpuPaintFeatures {
         cc_slimming: true,
         singular_transform_fix: true,
         merge_fixed_layers: true,
@@ -676,11 +681,12 @@ pub(crate) fn CreateDefault(
         expensive_dchecks: cfg!(debug_assertions),
         paint_under_invalidation_checking: false,
         layer_merge_distance_limit: 0x10000000,
-    };
-    let diagnostics = layerize::commit::main_paint_config::SkiaPaintDiagnostics {
+    }
+}
+fn DefaultPaintDiagnostics() -> layerize::commit::main_paint_config::SkiaPaintDiagnostics {
+    layerize::commit::main_paint_config::SkiaPaintDiagnostics {
         trace: std::env::var_os("RECHROM_DIAG_STACKING").is_some(),
         verbose_level: 0,
         histogram: false,
-    };
-    Create(config, executors, options, features, diagnostics)
+    }
 }
