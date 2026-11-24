@@ -36,8 +36,8 @@ URL / input
   -> Style       style_*
   -> Layout      layout (facade) over layout_base, layout_*
   -> Paint       prepaint, paint_*
-  -> Layerize    layerize            (cc main side: PaintArtifactCompositor, LayerTreeHost, commit)
-  -> Compositor  compositor_*        (cc impl side: layers, tiles, raster scheduling, draw)
+  -> Layerize    layerize, compositor_layerize   (cc main side: PaintArtifactCompositor, LayerTreeHost, commit)
+  -> Compositor  compositor, compositor_*        (cc impl side: layers, tiles, raster scheduling, draw)
   -> Viz         viz                 (surface aggregation, display scheduling)
   -> Renderer    renderer, renderer_skia
   -> host render target / display
@@ -203,35 +203,47 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
   PaintArtifactCompositor update crosses to Layerize as the artifact's
   `property_tree_update_generation`, never by comparing nodes.
 
-**Layerize** (`layerize`): cc's main side, `LayerizeEngine`. Blink
+**Layerize** (`layerize`, with `compositor_layerize` under
+`crates/layerize/`): cc's main side, `LayerizeEngine`. Blink
 `PaintArtifactCompositor`, `PropertyTreeManager`, `PaintChunksToCcLayer`,
-`ContentLayerClientImpl`, `PendingLayer` (with `compositor_layerize`), cc main
-layers, the main `LayerTreeHost`, the main `AnimationHost`, scroll callbacks
+`ContentLayerClientImpl`, `PendingLayer`, cc main layers, the main `LayerTreeHost`, the main `AnimationHost`, scroll callbacks
 and `ProxyMain`. Its public `layerize::commit` module is the commit vocabulary
 shared with the impl side (`CommitState`, `ThreadUnsafeCommitState`, cc
 property trees, cc paint records and display lists, proxy messages,
 `CompletionEvent`, push-target traits, `LayerizeFamily`). Main code is generic
 over `F: LayerizeFamily` only. Blink paint property nodes are read only here.
-Guard: `crates/layerize/tests/layerize_boundary.rs`.
+Layerize packages depend only on the cc shared roots (below), never on a
+Compositor impl package or the `compositor` facade. Guard:
+`crates/layerize/tests/layerize_boundary.rs` (package classification:
+`crates/compositor/S4_CRATE_CLASSIFICATION.md`).
 
 **Compositor**: cc's impl side, two loops driven by `compositor_scheduler`
 (BeginFrame state machine; commit, activation and draw action selection),
 with `ProxyImpl` receiving the commit.
 
 - Main-frame commit: `ProxyImpl` takes the moved `CommitState` and runs
-  `FinishCommit` into the pending tree (`compositor_tree`) while main is
-  parked.
+  `FinishCommit` into the pending tree (`compositor_tree_sync` over the
+  shared `compositor_tree` property trees) while main is parked.
 - Impl frame, each BeginFrame: `compositor_input` (impl scroll/pinch) and
   `compositor_animation` tick → `compositor_tile` (tilings, priority,
   PrepareTiles) → `compositor_raster` (raster task graph and completion
   accounting) → `compositor_resource` (pooling, budget, export) → activation
-  (`compositor_tree`) → `compositor_draw` (draw properties, damage, occlusion,
+  (`compositor_tree_sync`) → `compositor_draw` (draw properties, damage, occlusion,
   render surfaces, quads) → `compositor_frame` (immutable `CompositorFrame`).
-- `compositor` is the Page-facing facade. Shared roots `scroll_snap` and
-  `scroll_animation` live under `crates/compositor/`, carry only
-  source-aligned values and algorithms, and never own Page or facade
-  lifecycle. Trace categories are `compositor.<package>`; packages report
-  their own work counts.
+- `compositor` is the Page-facing facade of the impl side. The cc shared
+  roots `scroll_snap`, `scroll_animation`, `compositor_tree` (cc property
+  trees and their nodes), `compositor_animation` (cc/animation, one
+  AnimationHost class for the main and the impl instance) and
+  `compositor_values` (cc input, settings, viz and gfx values named by both
+  sides, including `gfx::Transform`) live under `crates/compositor/`. They
+  carry only source-aligned values and algorithms used by both sides, depend
+  only on each other and on value crates (`paint_model` geometry,
+  `foundation`, `skia`, `browser_tracing`, `image_resource`), and never own
+  Page, facade or thread lifecycle. Every other `crates/compositor` package
+  is impl-only: neither Layerize nor any crate outside the compositor family
+  may depend on it. Impl packages implement their own facets (occlusion,
+  damage, scrollbar) for the shared values. Trace categories are
+  `compositor.<package>`; packages report their own work counts.
 - Each instance belongs to exactly one Page and consumes only that Page's
   commits, viewport, input, BeginFrame and resource completions.
   It has no toolbar/content roles, tab collection or other Page recordings.

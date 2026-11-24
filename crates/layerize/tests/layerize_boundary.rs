@@ -163,14 +163,6 @@ const CLASSIFICATION: &[(&str, Class)] = &[
     ("layerize", MainFacade),
 ];
 
-/// Main-side dependencies on impl packages that S4 is still cutting:
-/// `(from, to, step that removes it)`. Do not add entries.
-const LAYERIZE_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
-
-/// Shared-root dependencies on impl packages that S4 is still cutting.
-/// Do not add entries.
-const SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
-
 /// Non-compositor value crates a shared root may name (gfx geometry, tracing,
 /// Skia values, base types, image values).
 const SHARED_ROOT_VALUE_DEPENDENCIES: &[&str] =
@@ -274,10 +266,6 @@ fn in_compositor_family(path: &str) -> bool {
     path.starts_with("crates/compositor/") || path.starts_with("crates/layerize/")
 }
 
-fn allowed(list: &[(&str, &str, &str)], from: &str, to: &str) -> bool {
-    list.iter().any(|(a, b, _)| *a == from && *b == to)
-}
-
 #[test]
 fn every_compositor_package_is_classified() {
     let manifests = manifests();
@@ -320,12 +308,10 @@ fn main_side_depends_only_on_shared_roots() {
         }
         for dependency in &manifest.dependencies {
             if let Some(other @ (Impl | ImplFacade | MainFacade)) = class(dependency) {
-                if !allowed(LAYERIZE_IMPL_DEPENDENCY_ALLOWED, &manifest.package, dependency) {
-                    violations.push(format!(
-                        "{}: `{}` depends on `{dependency}` ({other:?})",
-                        manifest.path, manifest.package
-                    ));
-                }
+                violations.push(format!(
+                    "{}: `{}` depends on `{dependency}` ({other:?})",
+                    manifest.path, manifest.package
+                ));
             }
         }
     }
@@ -346,9 +332,7 @@ fn shared_roots_do_not_depend_on_impl() {
         for dependency in &manifest.dependencies {
             let ok = match class(dependency) {
                 Some(Shared) => true,
-                Some(_) => {
-                    allowed(SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED, &manifest.package, dependency)
-                }
+                Some(_) => false,
                 None => SHARED_ROOT_VALUE_DEPENDENCIES.contains(&dependency.as_str()),
             };
             if !ok {
@@ -414,20 +398,4 @@ fn outside_crates_use_only_shared_roots_or_facades() {
         "crates outside the compositor family may use only cc shared roots or a facade:\n{}",
         violations.join("\n")
     );
-}
-
-#[test]
-fn allowances_have_no_stale_entries() {
-    let manifests = manifests();
-    for (from, to, step) in LAYERIZE_IMPL_DEPENDENCY_ALLOWED
-        .iter()
-        .chain(SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED)
-    {
-        assert!(
-            manifests
-                .iter()
-                .any(|m| m.package == *from && m.dependencies.iter().any(|d| d == to)),
-            "`{from}` no longer depends on `{to}`; remove its {step} allowance"
-        );
-    }
 }
