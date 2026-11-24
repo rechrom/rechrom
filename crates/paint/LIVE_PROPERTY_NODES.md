@@ -1,7 +1,8 @@
 # S2 design: live paint property nodes
 
-Status: design only, written 2026-11-23 at main `7f978395`. Nothing here is
-implemented. Stage S2 of the live-property-tree plan (S0 map, S1 split
+Status: written 2026-11-23 at main `7f978395`; S2-1 and the first part of
+S2-3 are implemented (see "As implemented" below).
+Stage S2 of the live-property-tree plan (S0 map, S1 split
 LayerizeEngine from CompositorEngine, **S2 live nodes**, S3 delete the
 snapshot machinery, S4 contract/guards, S5 verification).
 
@@ -15,6 +16,59 @@ numbers refer to `7f978395`. Chromium paths are abbreviated:
 `pgp/` = `third_party/blink/renderer/platform/graphics/paint/`,
 `pgc/` = `third_party/blink/renderer/platform/graphics/compositing/`,
 `core/paint/` = `third_party/blink/renderer/core/paint/`.
+
+## As implemented (2026-11-24, on main `a6d70d05`)
+
+Decisions D1-D6 were fixed before implementation (D1 per-call `with_access`
+in layerize handles, explicit proof elsewhere; D2 builder-context OOF parent;
+D3 keep `DirectlyUpdateScrollOffsetTransform` in Layerize; D4 keep the nested
+SVG `PaintRecording`, no S2-7; D5 unaliased; D6 fold S2-2 into S2-3).
+
+Landed:
+
+- **S2-1** (`feat(paint): add the sequence-confined property access
+  primitive`): `paint_model::property_cell` with `PaintSequenceId`,
+  `PropertyAccess` / `PropertyWriter`, `with_access`, `with_writer`,
+  `PropertyCell`, `MutableCell` and unit tests (cross-thread `get`/`set`
+  panic, reentrant writer panic, reentrant `with_mut` panic, foreign-thread
+  `Drop`, distinct sequences). Deviation from 3.3/3.5: the GeometryMapper
+  cache generations are a separate sequence-local `Cell` (free functions
+  `TransformCacheGeneration`, `ClipCacheGeneration`, `ClearTransformCache`,
+  `ClearClipCache`) rather than a field of `PropertyAccess`, so cache code can
+  read them inside a writer scope without a `RefCell` borrow. The only
+  `unsafe` is the four `UnsafeCell` dereferences and the `Send`/`Sync` impls
+  of the two cell types, justified in the module comment (invariants 1-3).
+- **S2-2/S2-3, first part** (`refactor(paint): confine property node markers
+  to the document sequence`): `PaintPropertyNodeIdentity` keeps `changed`,
+  `changed_sequence_number` and the cc node mapping in `MutableCell`s owned by
+  the creating sequence (no atomics); `node_changed`, `clear_changed`,
+  `changed_sequence_number`, `cc_node_id`, `set_cc_node_id`,
+  `CompositorSimpleValuesUpdated`, `ClearChangedToRoot[In]`,
+  `Changed`/`ChangedToRoot[In]` and every `property_node_geometry::*Changed*`
+  query take `&PropertyAccess`. Root sentinels are per sequence (a
+  thread-local in `PropertyTreeState::default`; `Default` is kept because the
+  thread-local needs no proof). Both cache generations are per sequence.
+  Layerize handles and the Paint engine's composited-animation collector take
+  the proof per call (D1). Private `PaintPropertyNodeLifecycle::updated`
+  takes it per call too; it is deleted by S2-4.
+
+Not landed (stopped here): the rest of S2-3 (node values into
+`PropertyCell<State>`, identity by `Arc::ptr_eq`, typed caches replacing
+`OpaquePaintCacheSlot` / per-node `Mutex`, `CacheTreeScope` removal), S2-4,
+S2-5, S2-6. Moving node values behind the proof changes every node field read
+in `paint_*`, `prepaint`, `layerize`, `interaction_hit_test` and
+`compositor_layerize` (about 68k lines of affected files) and is the
+prerequisite of in-place `Update`; it was not attempted in this session. D2
+was therefore not reached: the deferred reparent phase
+(`RebindLogicalEffectState`, `RestoreLogicalOutOfFlowParents`) is unchanged.
+`CacheTreeScope` must stay until S2-6 because snapshot nodes are still
+resolved through different `FrozenPropertyTrees`.
+
+Runtime facts this part changes: a read of a node marker or cc id from a
+thread other than the one that created the node now panics (previously a
+relaxed atomic race); `PropertyTreeState::default()` on a second thread yields
+that thread's own roots. After S1b-7 all such readers run on the Page
+document thread.
 
 ## 0. Target in one paragraph
 
