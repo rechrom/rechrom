@@ -1,7 +1,8 @@
 //! Viz-owned BeginFrame values at the compositor input boundary.
 //! This is boundary data, not a translation of the Viz BeginFrameSource.
 
-use crate::{trace_sink::SourceLocation, TimeDelta, TimeTicks};
+use crate::location::SourceLocation;
+use scroll_animation::{TimeDelta, TimeTicks};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PossibleDeadline {

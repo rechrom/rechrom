@@ -1,27 +1,6 @@
 use compositor_tree::geometry::Rect;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RenderSurfacePropertyChangedFlags {
-    pub self_changed: bool,
-    pub ancestor_changed: bool,
-}
-
-impl RenderSurfacePropertyChangedFlags {
-    pub const fn new(self_changed: bool, ancestor_changed: bool) -> Self {
-        Self {
-            self_changed,
-            ancestor_changed,
-        }
-    }
-
-    pub const fn self_changed(&self) -> bool {
-        self.self_changed
-    }
-
-    pub const fn ancestor_changed(&self) -> bool {
-        self.ancestor_changed
-    }
-}
+pub use compositor_values::render_surface_flags::RenderSurfacePropertyChangedFlags;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContributingLayerDisposition {

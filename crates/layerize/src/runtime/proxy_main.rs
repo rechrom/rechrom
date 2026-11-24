@@ -35,7 +35,8 @@ use crate::{
     },
     layerize_engine::LayerizeEngine,
 };
-use compositor_scheduler::{begin_frame::BeginFrameArgs, TimeTicks};
+use compositor_values::begin_frame::BeginFrameArgs;
+use scroll_animation::TimeTicks;
 use std::{
     cell::RefCell,
     sync::{Arc, Mutex, MutexGuard},

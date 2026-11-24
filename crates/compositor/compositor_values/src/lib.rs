@@ -3,11 +3,17 @@
 //!
 //! The modules keep their Chromium source paths: cc/input values carried by
 //! the commit (compositor_commit_data.h, layer_selection_bound.h,
-//! touch_action_region.h, ...). Impl packages re-export them under their old
-//! paths. This package owns no lifecycle, thread or engine state.
+//! touch_action_region.h, ...), the LayerTreeSettings fields
+//! (scheduler_settings.h, tile_manager_settings.h, managed_memory_policy.h),
+//! the viz values in BeginMainFrameAndCommitState and the commit
+//! (begin_frame_args.h, local_surface_id.h, shared_image_format.h), base
+//! values and the gfx/Skia values cc layers carry. Impl packages re-export
+//! them under their old paths. This package owns no lifecycle, thread or
+//! engine state.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+// cc/input values.
 pub mod browser_controls_params;
 pub mod compositor_commit_data;
 pub mod hit_test_opaqueness;
@@ -23,6 +29,30 @@ pub mod scrollbar;
 pub mod snap_selection_strategy;
 pub mod touch_action;
 pub mod touch_action_region;
+
+// LayerTreeSettings fields, proxy and scheduler values named by both proxies.
+pub mod commit_earlyout_reason;
+pub mod gpu_memory_allocation;
+pub mod layer_tree_settings_features;
+pub mod managed_memory_policy;
+pub mod scheduler_settings;
+pub mod tile_manager_settings;
+pub mod tile_priority;
+
+// viz values.
+pub mod begin_frame;
+pub mod local_surface_id;
+pub mod shared_image_format;
+pub mod surface_id;
+
+// base, gfx, Skia and cc/raster values.
+pub mod color4f;
+pub mod location;
+pub mod prioritized_tile;
+pub mod raster_source;
+pub mod render_surface_flags;
+pub mod sk_matrix;
+pub mod traced_value;
 
 pub mod actively_scrolling_type {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

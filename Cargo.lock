@@ -514,6 +514,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "compositor_tree",
+ "compositor_values",
 ]
 
 [[package]]
@@ -526,6 +527,7 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
  "image_resource",
 ]
 
@@ -554,6 +556,7 @@ name = "compositor_raster"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "compositor_values",
 ]
 
 [[package]]
@@ -565,6 +568,7 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
 ]
 
 [[package]]
@@ -575,6 +579,7 @@ dependencies = [
  "compositor_draw",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
  "scroll_animation",
 ]
 
@@ -586,6 +591,7 @@ dependencies = [
  "compositor_draw",
  "compositor_raster",
  "compositor_tree",
+ "compositor_values",
 ]
 
 [[package]]
@@ -2308,12 +2314,8 @@ dependencies = [
  "canvas",
  "compositor_animation",
  "compositor_draw",
- "compositor_frame",
  "compositor_input",
  "compositor_layerize",
- "compositor_resource",
- "compositor_scheduler",
- "compositor_tile",
  "compositor_tree",
  "compositor_values",
  "foundation",

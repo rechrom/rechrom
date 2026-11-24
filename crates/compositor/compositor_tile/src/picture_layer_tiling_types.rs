@@ -8,7 +8,7 @@ use crate::{
 };
 use compositor_draw::occlusion::OcclusionTransform;
 use compositor_tree::{
-    geometry::{Rect, Size},
+    geometry::Size,
     region::Region,
     region_backend::SkRegionBackend,
 };
@@ -17,13 +17,7 @@ pub struct PictureLayerTilingClientId(pub u64);
 /// Non-owning identity of an existing owner's resident invalidation field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PendingInvalidationId(pub u64);
-/// Immutable resident raster-source metadata; no playback or platform work.
-pub trait TilingRasterSource {
-    fn IsSolidColor(&self) -> bool;
-    fn size(&self) -> Size;
-    fn recorded_bounds(&self) -> Rect;
-    fn IntersectsRect(&self, rect: Rect) -> bool;
-}
+pub use compositor_values::raster_source::TilingRasterSource;
 pub trait PictureLayerTilingTypes: TileTypes {
     type RasterSource: TilingRasterSource;
     type RegionBackend: SkRegionBackend;

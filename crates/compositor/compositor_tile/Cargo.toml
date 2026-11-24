@@ -9,3 +9,4 @@ browser_tracing = { path = "../../tracing" }
 compositor_draw = { path = "../compositor_draw" }
 compositor_raster = { path = "../compositor_raster" }
 compositor_tree = { path = "../compositor_tree" }
+compositor_values = { path = "../compositor_values" }

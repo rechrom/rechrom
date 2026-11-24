@@ -14,18 +14,7 @@ pub trait OcclusionTransform: Clone + Default + PartialEq {
     fn OcclusionTransformToString(&self) -> String;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SkMatrix {
-    pub values: [f32; 9],
-}
-
-impl SkMatrix {
-    pub const fn I() -> Self {
-        Self {
-            values: [1., 0., 0., 0., 1., 0., 0., 0., 1.],
-        }
-    }
-}
+pub use compositor_values::sk_matrix::SkMatrix;
 
 // Source: cc/trees/occlusion.h:17-39
 // Source: cc/trees/occlusion.cc:13

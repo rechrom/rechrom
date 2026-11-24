@@ -2,7 +2,7 @@
 //! SingleThreadProxy.cc:436-473. State belongs to cc's main-frame proxy;
 //! Page never filters submitted CompositorFrames to implement paint holding.
 use crate::commit::paint_holding::{CommitDeferralReason, PaintHoldingReason};
-use compositor_scheduler::{TimeDelta, TimeTicks};
+use scroll_animation::{TimeDelta, TimeTicks};
 use std::time::Duration;
 #[derive(Default)]
 pub struct MainFrameLifecycle {

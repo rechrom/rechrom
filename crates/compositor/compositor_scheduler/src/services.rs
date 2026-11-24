@@ -1,7 +1,7 @@
 //! Scheduler host-service boundary. Feature flags, sampling, diagnostics and
 //! tracing are supplied by the embedding, without platform or clock ownership.
 
-use crate::{TimeDelta, TraceValue};
+use crate::TraceValue;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -157,8 +157,3 @@ pub struct SchedulerStateTrace {
     pub tree_priority: Option<SchedulerProtoValue>,
 }
 
-impl From<TimeDelta> for TraceValue {
-    fn from(value: TimeDelta) -> Self {
-        Self::Integer(value.InMicroseconds())
-    }
-}

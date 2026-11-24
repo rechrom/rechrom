@@ -168,10 +168,6 @@ const CLASSIFICATION: &[(&str, Class)] = &[
 const LAYERIZE_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[
     ("layerize", "compositor_input", "S4-4c"),
     ("layerize", "compositor_draw", "S4-4c"),
-    ("layerize", "compositor_scheduler", "S4-4b"),
-    ("layerize", "compositor_tile", "S4-4b"),
-    ("layerize", "compositor_frame", "S4-4b"),
-    ("layerize", "compositor_resource", "S4-4b"),
 ];
 
 /// Shared-root dependencies on impl packages that S4 is still cutting.

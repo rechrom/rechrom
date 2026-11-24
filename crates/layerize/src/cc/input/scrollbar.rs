@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 use crate::commit::geometry::{Rect, Size};
-use compositor_draw::Color4f;
+use compositor_values::color4f::Color4f;
 
 // External gfx::Insets value (ui/gfx/geometry/insets.h) returned by
 // Scrollbar::SolidColorThumbInsets.

@@ -10,22 +10,16 @@ publish = false
 # crates/compositor/MAIN_IMPL_SPLIT.md.
 [dependencies]
 compositor_tree = { path = "../compositor/compositor_tree" }
-# cc shared values (cc/input, settings, viz) named by both sides.
+# cc shared values (cc/input, LayerTreeSettings fields, viz, gfx) named by
+# both sides.
 compositor_values = { path = "../compositor/compositor_values" }
-# Only the ScrollbarTransform facet impl until S4-4c.
+# Only the transform facet impls until S4-4c.
 compositor_input = { path = "../compositor/compositor_input" }
 compositor_draw = { path = "../compositor/compositor_draw" }
 compositor_animation = { path = "../compositor/compositor_animation" }
 # The main AnimationHost mutations (ScrollAnimationMutation and its
-# completions) the main half applies (commit::main_mutator).
+# completions) the main half applies (commit::main_mutator), and base time.
 scroll_animation = { path = "../compositor/scroll_animation" }
-compositor_scheduler = { path = "../compositor/compositor_scheduler" }
-# cc value roots shared with the impl half: ScrollOffsetMap (cc/tiles/
-# prioritized_tile.h) and gfx::ContentColorUsage (viz surface values).
-compositor_tile = { path = "../compositor/compositor_tile" }
-compositor_frame = { path = "../compositor/compositor_frame" }
-# SharedImageFormat of decoded image leases (cc/paint/decoded_draw_image.h).
-compositor_resource = { path = "../compositor/compositor_resource" }
 skia = { path = "../skia" }
 # Blink ContentLayerClient (PictureLayer client) and PAC layerization policy.
 compositor_layerize = { path = "compositor_layerize" }

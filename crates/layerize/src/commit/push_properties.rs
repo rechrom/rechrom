@@ -8,7 +8,7 @@ use super::{
     commit_state::CommitTypes,
     geometry::{Rect, Size, Vector2dF},
 };
-use compositor_draw::Color4f;
+use compositor_values::color4f::Color4f;
 use compositor_values::{
     hit_test_opaqueness::HitTestOpaqueness, input_types::ElementId,
     scroll_hit_test_rect::ScrollHitTestRect, touch_action_region::TouchActionRegion,

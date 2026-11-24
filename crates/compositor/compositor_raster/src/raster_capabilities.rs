@@ -4,6 +4,14 @@ pub trait RasterFormat: Copy {
     fn DefaultRgba() -> Self;
 }
 
+// Moved from compositor_resource::resource_types with the shared
+// viz::SharedImageFormat value (coherence: the trait is this package's).
+impl RasterFormat for compositor_values::shared_image_format::SharedImageFormat {
+    fn DefaultRgba() -> Self {
+        compositor_values::shared_image_format::SinglePlaneFormat::kRGBA_8888
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RasterCapabilities<F: RasterFormat> {
     pub use_gpu_rasterization: bool,
