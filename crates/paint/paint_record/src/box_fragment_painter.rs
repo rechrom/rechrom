@@ -6640,12 +6640,10 @@ fn CanvasBackgroundEffect(
     blend_mode: PaintBlendMode,
     isolates_blending: bool,
 ) -> EffectPaintPropertyNode {
-    EffectPaintPropertyNode {
+    EffectPaintPropertyNode::new(PaintPropertyNodeLifecycle::default(), id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
         compositor: Default::default(),
         backdrop_filter_bounds: None,
         self_or_ancestor_participates_in_view_transition: false,
-        lifecycle: PaintPropertyNodeLifecycle::default(),
-        id,
         parent: Some(parent),
         local_transform_space: local_state.transform.clone(),
         output_clip: Some(output_clip),
@@ -6663,7 +6661,7 @@ fn CanvasBackgroundEffect(
         has_mask: false,
         is_mask: false,
         direct_compositing_reasons: Default::default(),
-    }
+    })
     .with_filter_presence()
     .with_inherited_view_transition()
 }

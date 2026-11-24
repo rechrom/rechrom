@@ -294,8 +294,10 @@ fn mask_outputs(nodes: &[&PaintTreeNode<'_>]) -> Option<BTreeMap<u64, PaintRect>
             };
         }
         let mask = node.mask_properties.as_ref()?;
-        let content_effect = mask.effect.parent.as_ref()?;
-        outputs.insert(content_effect.id, MapRectToRoot(rect, &node.transforms)?);
+        let content_effect_id = paint_model::property_cell::with_access(|access| {
+            mask.effect.Parent(access).map(|parent| parent.id)
+        })?;
+        outputs.insert(content_effect_id, MapRectToRoot(rect, &node.transforms)?);
     }
     Some(outputs)
 }
@@ -308,13 +310,17 @@ fn effect_mask_output(
     if let Some(bounds) = cache.get(&effect.id) {
         return Some(*bounds);
     }
-    let mut bounds = match &effect.parent {
+    let (parent, has_mask) = paint_model::property_cell::with_access(|access| {
+        let state = effect.state(access);
+        (state.parent.clone(), state.has_mask)
+    });
+    let mut bounds = match &parent {
         Some(parent) => effect_mask_output(parent, own, cache)?,
         None => None,
     };
     if let Some(&mask) = own.get(&effect.id) {
         bounds = Some(bounds.map_or(mask, |parent| intersection(parent, mask)));
-    } else if effect.has_mask {
+    } else if has_mask {
         // Legacy standalone wrapper without a formal source is not reusable.
         return None;
     }
@@ -447,7 +453,10 @@ impl RetainedScrollPaintState {
             if !node.applies_mask {
                 continue;
             }
-            let effect_id = node.mask_properties.as_ref()?.effect.parent.as_ref()?.id;
+            let mask_effect = &node.mask_properties.as_ref()?.effect;
+            let effect_id = paint_model::property_cell::with_access(|access| {
+                mask_effect.Parent(access).map(|parent| parent.id)
+            })?;
             let world = property_world(store, &node.properties.nodes, &mut worlds)?;
             retained_masks.push(MaskOutput {
                 effect_id,

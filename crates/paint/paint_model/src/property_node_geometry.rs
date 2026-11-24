@@ -106,15 +106,15 @@ pub fn EffectChangedIn<R: PropertyNodeResolver + ?Sized>(
         if node.lifecycle.node_changed(access) >= change {
             return true;
         }
-        let transform = resolver.transform(&node.local_transform_space);
-        if node.HasFilterThatMovesPixels()
+        let transform = resolver.transform(node.LocalTransformSpace(access));
+        if node.HasFilterThatMovesPixels(access)
             && !transform_not_to_check
                 .is_some_and(|other| transform.lifecycle.same_node(&other.lifecycle))
             && TransformChangedIn(access, resolver, transform, change, &relative.transform)
         {
             return true;
         }
-        current = node.parent.as_ref().map(|parent| &**resolver.effect(parent));
+        current = node.Parent(access).map(|parent| &**resolver.effect(parent));
     }
     false
 }

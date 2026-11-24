@@ -49,28 +49,44 @@ where
         > + crate::commit::push_properties::PushPropertiesTypes<NodeId = NodeId>,
 {
     fn CanvasChildId(&self) -> NodeId {
-        NodeId(self.node().CanvasChildId())
+        read(|a| {
+            NodeId(self.node().CanvasChildId(a))
+        })
     }
     fn HasCanvasChildState(&self) -> bool {
-        self.node().HasCanvasChildState()
+        read(|a| {
+            self.node().HasCanvasChildState(a)
+        })
     }
     fn CanvasChildContentTransform(&self) -> TransformNode<R> {
-        self.link_transform(self.node().CanvasChildContentTransform())
+        read(|a| {
+            self.link_transform(self.node().CanvasChildContentTransform(a))
+        })
     }
     fn CanvasChildContentClip(&self) -> ClipNode<R> {
-        self.link_clip(self.node().CanvasChildContentClip())
+        read(|a| {
+            self.link_clip(self.node().CanvasChildContentClip(a))
+        })
     }
     fn CanvasChildContentEffect(&self) -> Self {
-        Self::from_arc(self.node().CanvasChildContentEffect().clone())
+        read(|a| {
+            Self::from_arc(self.node().CanvasChildContentEffect(a).clone())
+        })
     }
     fn IsInDrawableCanvasSubtree(&self) -> bool {
-        self.node().IsInDrawableCanvasSubtree()
+        read(|a| {
+            self.node().IsInDrawableCanvasSubtree(a)
+        })
     }
     fn DrawsContent(&self) -> bool {
-        self.node().DrawsContent()
+        read(|a| {
+            self.node().DrawsContent(a)
+        })
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
-        CpuCompositingReasons::from_source(&self.node().direct_compositing_reasons)
+        read(|a| {
+            CpuCompositingReasons::from_source(&self.node().state(a).direct_compositing_reasons)
+        })
     }
 }
 impl<R, B> ArtifactScrollNode<B> for ScrollNode<R>

@@ -1023,7 +1023,9 @@ impl PaintTreeNode<'_> {
 // though its own Filter changed taint.
 fn OwnFilterOriginTainted(node: &PaintTreeNode<'_>) -> bool {
     HasOwnPropertyRole(node, PaintPropertyRole::Filter)
-        && node.properties.nodes.effect.filters.origin_tainted()
+        && paint_model::property_cell::with_access(|access| {
+            node.properties.nodes.effect.state(access).filters.origin_tainted()
+        })
 }
 
 fn FilterTaintChanged(was_origin_tainted: bool, current: &PaintTreeNode<'_>) -> bool {
@@ -4066,8 +4068,9 @@ fn RebindLogicalEffectState(
             return parent;
         }
         let mut state = (**effect).clone();
-        state.parent = Some(ReparentLocalEffect(
-            state.parent.as_ref().expect("local effect parent"),
+        let local_parent = state.state_mut().parent.clone();
+        state.state_mut().parent = Some(ReparentLocalEffect(
+            local_parent.as_ref().expect("local effect parent"),
             count - 1,
             parent,
         ));
@@ -4082,17 +4085,19 @@ fn RebindLogicalEffectState(
         fixed.effect = node.properties.nodes.effect.clone();
     }
     if let Some(mask) = &mut node.mask_properties {
-        let parent_id = mask.effect.parent.as_ref().expect("Mask content effect").id;
-        let mut content = node.properties.nodes.effect.clone();
-        while content.id != parent_id {
-            content = content
-                .parent
-                .as_ref()
-                .expect("Mask parent belongs to content effect chain")
-                .clone();
-        }
+        let content = paint_model::property_cell::with_access(|access| {
+            let parent_id = mask.effect.Parent(access).expect("Mask content effect").id;
+            let mut content = node.properties.nodes.effect.clone();
+            while content.id != parent_id {
+                content = content
+                    .Parent(access)
+                    .expect("Mask parent belongs to content effect chain")
+                    .clone();
+            }
+            content
+        });
         let mut effect = (*mask.effect).clone();
-        effect.parent = Some(content);
+        effect.state_mut().parent = Some(content);
         mask.effect = Arc::new(effect);
     }
     for scrollbar in [
@@ -4101,7 +4106,7 @@ fn RebindLogicalEffectState(
     ] {
         if let Some(scrollbar) = scrollbar {
             let mut effect = (*scrollbar.effect).clone();
-            effect.parent = Some(node.properties.nodes.effect.clone());
+            effect.state_mut().parent = Some(node.properties.nodes.effect.clone());
             scrollbar.effect = Arc::new(effect);
         }
     }
@@ -4422,7 +4427,9 @@ fn GatherFinalEffects(
             Arc::as_ptr(&effect.lifecycle.identity) as usize,
             effect.clone(),
         );
-        effect = effect.parent.as_ref().expect("local effect parent").clone();
+        effect = paint_model::property_cell::with_access(|access| {
+            effect.Parent(access).expect("local effect parent").clone()
+        });
     }
     if let Some(mask) = &node.mask_properties {
         effects.insert(
@@ -4970,10 +4977,14 @@ fn RebasableOwnEffect(cache: &NodeCache, inherited: &InheritedContext) -> bool {
     }
     let old = &cache.inherited.properties;
     let raw = &cache.raw_properties;
-    let effect = &raw.nodes.effect;
-    let new_parent = &inherited.properties.nodes.effect;
+    let effect_node = &raw.nodes.effect;
+    let new_parent_node = &inherited.properties.nodes.effect;
     let old_parent = &old.nodes.effect;
-    raw.effect_id == effect.id
+    paint_model::property_cell::with_access(|access| {
+    let effect = effect_node.state(access);
+    let new_parent = new_parent_node.state(access);
+    let old_parent_state = old_parent.state(access);
+    raw.effect_id == effect_node.id
         && raw.effect_id != old.effect_id
         && raw.transform_id == old.transform_id
         && raw.clip_id == old.clip_id
@@ -4990,18 +5001,19 @@ fn RebasableOwnEffect(cache: &NodeCache, inherited: &InheritedContext) -> bool {
         && effect.filter_reference_box.is_none()
         && !effect.has_mask
         && !effect.is_mask
-        && Arc::ptr_eq(&cache.raw_contents.nodes.effect, effect)
-        && Arc::ptr_eq(&cache.children.properties.nodes.effect, effect)
+        && Arc::ptr_eq(&cache.raw_contents.nodes.effect, effect_node)
+        && Arc::ptr_eq(&cache.children.properties.nodes.effect, effect_node)
         && cache.raw_contents.clip_id == raw.clip_id
         && cache.raw_contents.transform_id == raw.transform_id
         && cache.children.properties.clip_id == raw.clip_id
         && cache.children.properties.transform_id == raw.transform_id
         && new_parent.compositor.is_in_tainted_subtree
-            == old_parent.compositor.is_in_tainted_subtree
+            == old_parent_state.compositor.is_in_tainted_subtree
         && new_parent.compositor.is_in_drawable_canvas_subtree
-            == old_parent.compositor.is_in_drawable_canvas_subtree
+            == old_parent_state.compositor.is_in_drawable_canvas_subtree
         && new_parent.self_or_ancestor_participates_in_view_transition
-            == old_parent.self_or_ancestor_participates_in_view_transition
+            == old_parent_state.self_or_ancestor_participates_in_view_transition
+    })
 }
 
 /// New snapshot of the object's own effect on the moved parent state:
@@ -5009,9 +5021,10 @@ fn RebasableOwnEffect(cache: &NodeCache, inherited: &InheritedContext) -> bool {
 fn RebaseOwnEffect(raw: &PropertyTreeState, inherited: &PropertyTreeState) -> PropertyTreeState {
     let mut effect = (*raw.nodes.effect).clone();
     effect.lifecycle = Default::default();
-    effect.parent = Some(inherited.nodes.effect.clone());
-    effect.local_transform_space = inherited.nodes.transform.clone();
-    effect.output_clip = Some(inherited.nodes.clip.clone());
+    let effect_state = effect.state_mut();
+    effect_state.parent = Some(inherited.nodes.effect.clone());
+    effect_state.local_transform_space = inherited.nodes.transform.clone();
+    effect_state.output_clip = Some(inherited.nodes.clip.clone());
     let mut state = inherited.clone();
     state.effect_id = raw.effect_id;
     state.nodes.effect = Arc::new(effect);
@@ -5126,24 +5139,33 @@ impl<'a> OwnNodeRebase<'a> {
         if let Some((_, mapped)) = self.effects.iter().find(|(old, _)| *old == key) {
             return Some(mapped.clone());
         }
-        if !self.is_own(node.id) || node.compositor.canvas_child_state.is_some() {
+        if !self.is_own(node.id) {
             return None;
         }
         let mut value = (**node).clone();
         value.lifecycle = Default::default();
-        value.parent = match &node.parent {
+        let links = value.state_mut().links();
+        if links.canvas_child_state.is_some() {
+            return None;
+        }
+        let parent = match &links.parent {
             Some(parent) => Some(self.effect(parent)?),
             None => None,
         };
-        value.local_transform_space = self.transform(&node.local_transform_space)?;
-        value.output_clip = match &node.output_clip {
+        let transform = self.transform(&links.local_transform_space)?;
+        let output_clip = match &links.output_clip {
             Some(clip) => Some(self.clip(clip)?),
             None => None,
         };
-        value.backdrop_filter_clip = match &node.backdrop_filter_clip {
+        let backdrop_filter_clip = match &links.backdrop_filter_clip {
             Some(clip) => Some(self.clip(clip)?),
             None => None,
         };
+        let state = value.state_mut();
+        state.parent = parent;
+        state.local_transform_space = transform;
+        state.output_clip = output_clip;
+        state.backdrop_filter_clip = backdrop_filter_clip;
         let value = Arc::new(value);
         self.effects.push((key, value.clone()));
         Some(value)
@@ -5232,12 +5254,15 @@ fn RebaseOwnStates(
         || inherited.clip != MovedRect(old.clip, delta.offset)
         || !node.transforms.starts_with(&old.transforms)
         || !cache.children.transforms.starts_with(&old.transforms)
-        || new_parent.compositor.is_in_tainted_subtree
-            != old_parent.compositor.is_in_tainted_subtree
-        || new_parent.compositor.is_in_drawable_canvas_subtree
-            != old_parent.compositor.is_in_drawable_canvas_subtree
-        || new_parent.self_or_ancestor_participates_in_view_transition
-            != old_parent.self_or_ancestor_participates_in_view_transition
+        || paint_model::property_cell::with_access(|access| {
+            let (new_parent, old_parent) = (new_parent.state(access), old_parent.state(access));
+            new_parent.compositor.is_in_tainted_subtree
+                != old_parent.compositor.is_in_tainted_subtree
+                || new_parent.compositor.is_in_drawable_canvas_subtree
+                    != old_parent.compositor.is_in_drawable_canvas_subtree
+                || new_parent.self_or_ancestor_participates_in_view_transition
+                    != old_parent.self_or_ancestor_participates_in_view_transition
+        })
     {
         return None;
     }
@@ -6818,7 +6843,7 @@ impl PrePaintTreeWalk {
             cache.revision = self.revision_generation;
             node
         } else {
-            let mut built = PaintPropertyTreeBuilder::new(self)
+            let mut built = paint_model::property_cell::with_access(|access| PaintPropertyTreeBuilder::new(self, access)
                 .with_previous_paint_result(old_previous_paint_result)
                 .with_link_offset(fragment.Cursor().ViewOffsetInContainer())
                 .with_source_cursor(fragment.Cursor())
@@ -6845,7 +6870,7 @@ impl PrePaintTreeWalk {
                     old_contents_cull_rect,
                     inherited.root,
                     inherited.flex_or_grid_item,
-                );
+                ));
             let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
                 old_previous_paint_result,
                 old_self_cull_rect,
@@ -7589,14 +7614,17 @@ impl PrePaintTreeWalk {
             .unwrap();
         let mut properties = base.properties.clone();
         if view.cross_origin_to_parent {
-            let mut effect = Some(properties.nodes.effect.clone());
-            let mut candidate = None;
-            while let Some(current) = effect {
-                if current.HasReferenceFilter() {
-                    candidate = current.parent.clone();
+            let candidate = paint_model::property_cell::with_access(|access| {
+                let mut effect = Some(&properties.nodes.effect);
+                let mut candidate = None;
+                while let Some(current) = effect {
+                    if current.HasReferenceFilter(access) {
+                        candidate = current.Parent(access).cloned();
+                    }
+                    effect = current.Parent(access);
                 }
-                effect = current.parent.clone();
-            }
+                candidate
+            });
             if let Some(effect) = candidate {
                 properties.effect_id = effect.id;
                 properties.nodes.effect = effect;
@@ -8364,8 +8392,10 @@ impl PrePaintTreeWalk {
                     reasons.PutAll(CompositingReasonFinder::AdditionalEffectCompositingTrigger(
                         fragment,
                     ));
-                    if !current.HasActiveOpacityAnimation()
-                        || current.direct_compositing_reasons != reasons
+                    if paint_model::property_cell::with_access(|access| {
+                        !current.HasActiveOpacityAnimation(access)
+                            || current.state(access).direct_compositing_reasons != reasons
+                    })
                     {
                         rejection = 3;
                         break;
@@ -8430,12 +8460,9 @@ impl PrePaintTreeWalk {
             self.property_node_store
                 .PublishDirectEffectSnapshot(key, snapshot.clone(), change);
             update.effects.push(snapshot);
-            let element_id = update
-                .effects
-                .last()
-                .unwrap()
-                .compositor
-                .compositor_element_id;
+            let element_id = paint_model::property_cell::with_access(|access| {
+                update.effects.last().unwrap().state(access).compositor.compositor_element_id
+            });
             if foundation::CompositorElementId::IsValidInternalValue(element_id.GetInternalValue())
             {
                 update.bindings.push(CompositedAnimationPropertyBinding {
@@ -8506,14 +8533,16 @@ impl PrePaintTreeWalk {
 
         fn collect_effect(
             node_id: u64,
-            mut node: Option<&Arc<EffectPaintPropertyNode>>,
+            node: Option<&Arc<EffectPaintPropertyNode>>,
             seen: &mut HashSet<u64>,
             output: &mut Vec<CompositedAnimationPropertyBinding>,
         ) {
+            paint_model::property_cell::with_access(|access| {
+            let mut node = node;
             while let Some(current) = node {
-                let element_id = current.compositor.compositor_element_id;
+                let element_id = current.state(access).compositor.compositor_element_id;
                 let internal = element_id.GetInternalValue();
-                if current.HasActiveOpacityAnimation()
+                if current.HasActiveOpacityAnimation(access)
                     && foundation::CompositorElementId::IsValidInternalValue(internal)
                     && seen.insert(internal)
                 {
@@ -8523,8 +8552,9 @@ impl PrePaintTreeWalk {
                         element_id,
                     });
                 }
-                node = current.parent.as_ref();
+                node = current.Parent(access);
             }
+            })
         }
 
         fn walk(
@@ -8559,7 +8589,9 @@ impl PrePaintTreeWalk {
                         ),
                         (
                             "active_opacity",
-                            node.properties.nodes.effect.HasActiveOpacityAnimation() as u8 as f64,
+                            paint_model::property_cell::with_access(|access| {
+                                node.properties.nodes.effect.HasActiveOpacityAnimation(access)
+                            }) as u8 as f64,
                         ),
                     ],
                 );

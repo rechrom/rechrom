@@ -159,30 +159,30 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         read(|a| clip.link_effect(clip.node().PixelMovingFilter(a).expect("source PixelMovingFilter")))
     }
     fn FilterLocalTransform(&self, e: &EffectNode<R>) -> TransformNode<R> {
-        e.link_transform(&e.node().local_transform_space)
+        read(|a| e.link_transform(e.node().LocalTransformSpace(a)))
     }
     fn HasActiveFilterAnimation(&self, e: &EffectNode<R>) -> bool {
-        e.node()
-            .direct_compositing_reasons
-            .Has(foundation::CompositingReason::kActiveFilterAnimation)
+        read(|a| e.node().HasActiveFilterAnimation(a))
     }
     fn FilterMapRect(&self, e: &EffectNode<R>, r: Rect) -> Rect {
-        let r = e
-            .node()
-            .filters
-            .canonical()
-            .expect("validated PaintInput native filters")
-            .MapRect(
-                foundation::gfx::Rect::new(
-                    foundation::gfx::Point::new(r.x, r.y),
-                    foundation::gfx::Size::new(r.width, r.height),
-                ),
-                None,
-            );
+        let r = read(|a| {
+            e.node()
+                .state(a)
+                .filters
+                .canonical()
+                .expect("validated PaintInput native filters")
+                .MapRect(
+                    foundation::gfx::Rect::new(
+                        foundation::gfx::Point::new(r.x, r.y),
+                        foundation::gfx::Size::new(r.width, r.height),
+                    ),
+                    None,
+                )
+        });
         Rect::new(r.x(), r.y(), r.width(), r.height())
     }
     fn SelfOrAncestorParticipatesInViewTransition(&self, e: &EffectNode<R>) -> bool {
-        e.node().self_or_ancestor_participates_in_view_transition
+        read(|a| e.node().state(a).self_or_ancestor_participates_in_view_transition)
     }
 }
 impl<R: PaintSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {

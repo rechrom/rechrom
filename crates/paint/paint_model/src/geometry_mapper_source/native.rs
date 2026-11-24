@@ -345,32 +345,32 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
     }
     fn FilterLocalTransform(&self, e: &NativeEffectNode) -> NativeTransformNode {
         NativeTransformNode::from_arc_in(
-            resolve_transform(&self.trees, &e.node().local_transform_space).clone(),
+            read(|a| resolve_transform(&self.trees, e.node().LocalTransformSpace(a)).clone()),
             self.trees.clone(),
         )
     }
     fn HasActiveFilterAnimation(&self, e: &NativeEffectNode) -> bool {
-        e.node()
-            .direct_compositing_reasons
-            .Has(foundation::CompositingReason::kActiveFilterAnimation)
+        read(|a| e.node().HasActiveFilterAnimation(a))
     }
     fn FilterMapRect(&self, e: &NativeEffectNode, r: Rect) -> Rect {
-        let r = e
-            .node()
-            .filters
-            .canonical()
-            .expect("validated PaintInput native filters")
-            .MapRect(
-                foundation::gfx::Rect::new(
-                    foundation::gfx::Point::new(r.x, r.y),
-                    foundation::gfx::Size::new(r.width, r.height),
-                ),
-                None,
-            );
+        let r = read(|a| {
+            e.node()
+                .state(a)
+                .filters
+                .canonical()
+                .expect("validated PaintInput native filters")
+                .MapRect(
+                    foundation::gfx::Rect::new(
+                        foundation::gfx::Point::new(r.x, r.y),
+                        foundation::gfx::Size::new(r.width, r.height),
+                    ),
+                    None,
+                )
+        });
         Rect::new(r.x(), r.y(), r.width(), r.height())
     }
     fn SelfOrAncestorParticipatesInViewTransition(&self, e: &NativeEffectNode) -> bool {
-        e.node().self_or_ancestor_participates_in_view_transition
+        read(|a| e.node().state(a).self_or_ancestor_participates_in_view_transition)
     }
 }
 

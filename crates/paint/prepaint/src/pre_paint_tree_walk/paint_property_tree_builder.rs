@@ -5,6 +5,7 @@
 
 use layout::fragment::ResidentBoxGeometry as _;
 use super::*;
+use paint_model::property_cell::PropertyAccess;
 use crate::compositing_reason_finder::CompositingReasonFinder;
 
 // Source: core/paint/paint_property_tree_builder.cc:499-530. The Layout
@@ -29,6 +30,9 @@ fn NeedsCssBlendEffect(
 
 pub(super) struct PaintPropertyTreeBuilder<'a> {
     walk: &'a mut PrePaintTreeWalk,
+    /// The document sequence proof for reading the property nodes this
+    /// builder links to (decision D1: explicit in PrePaint).
+    access: &'a PropertyAccess,
     previous_paint_result: paint_model::PaintResult,
     // The node's offset in its paint-tree parent from its source cursor;
     // fixtures without a cursor use their recorded offset.
@@ -39,9 +43,10 @@ pub(super) struct PaintPropertyTreeBuilder<'a> {
 }
 
 impl<'a> PaintPropertyTreeBuilder<'a> {
-    pub(super) fn new(walk: &'a mut PrePaintTreeWalk) -> Self {
+    pub(super) fn new(walk: &'a mut PrePaintTreeWalk, access: &'a PropertyAccess) -> Self {
         Self {
             walk,
+            access,
             previous_paint_result: paint_model::PaintResult::kMayBeClippedByCullRect,
             link_offset: None,
             source_cursor: None,
@@ -205,13 +210,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let inherited_tainted_subtree = parent_properties
             .nodes
             .effect
-            .compositor
-            .is_in_tainted_subtree;
+            .IsInTaintedSubtree(self.access);
         let is_in_drawable_canvas_subtree = parent_properties
             .nodes
             .effect
-            .compositor
-            .is_in_drawable_canvas_subtree
+            .IsInDrawableCanvasSubtree(self.access)
             || CompositingReasonFinder::DirectReasonsForPaintProperties(fragment)
                 .Has(foundation::CompositingReason::kCanvasChild);
         node.applies_clip = is_root && parent_clip.is_some();
@@ -852,12 +855,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             compositor.filter_output_bounds = filter_reference_box
                 .and_then(|reference| backdrop_filters.reference_output_bounds(reference));
             node.properties.nodes.effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(Default::default(), node.properties.effect_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor,
 
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: Default::default(),
-                    id: node.properties.effect_id,
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(node.properties.nodes.clip.clone()),
@@ -891,7 +892,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     // would restrict backdrop reads to individual raster tiles.
                     // The additional effect trigger also carries transform hints.
                     direct_compositing_reasons: effect_reasons,
-                }
+                })
                 .with_filter_presence()
                 .with_inherited_view_transition(),
             );
@@ -906,7 +907,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             self.walk
                 .RegisterProperty(fragment, PaintPropertyRole::Mask, mask_id);
             let mask_effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(Default::default(), mask_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor: EffectCompositorState(
                         fragment,
                         PaintPropertyRole::Mask,
@@ -915,14 +916,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         node.properties
                             .nodes
                             .effect
-                            .compositor
-                            .is_in_tainted_subtree,
+                            .IsInTaintedSubtree(self.access),
                         is_in_drawable_canvas_subtree,
                     ),
                     backdrop_filter_bounds: None,
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: Default::default(),
-                    id: mask_id,
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(mask_output_clip.clone()),
@@ -940,7 +938,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     has_mask: false,
                     is_mask: true,
                     direct_compositing_reasons: Default::default(),
-                }
+                })
                 .with_filter_presence()
                 .with_inherited_view_transition(),
             );
@@ -1122,8 +1120,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 node.properties
                     .nodes
                     .effect
-                    .compositor
-                    .is_in_tainted_subtree
+                    .IsInTaintedSubtree(self.access)
                     || filter_taints_subtree,
                 is_in_drawable_canvas_subtree,
             );
@@ -1131,12 +1128,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // UpdateFilter follows UpdateEffect and has its own persistent
             // ObjectPaintProperties slot (paint_property_tree_builder.cc:2630).
             node.properties.nodes.effect = Arc::new(
-                EffectPaintPropertyNode {
+                EffectPaintPropertyNode::new(Default::default(), node.properties.effect_id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                     compositor,
                     backdrop_filter_bounds: None,
                     self_or_ancestor_participates_in_view_transition: false,
-                    lifecycle: Default::default(),
-                    id: node.properties.effect_id,
                     parent: Some(node.properties.nodes.effect.clone()),
                     local_transform_space: node.properties.nodes.transform.clone(),
                     output_clip: Some(node.properties.nodes.clip.clone()),
@@ -1154,7 +1149,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     has_mask: false,
                     is_mask: false,
                     direct_compositing_reasons: filter_reasons,
-                }
+                })
                 .with_filter_presence()
                 .with_inherited_view_transition(),
             );
@@ -1744,22 +1739,19 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     scrollbar_reasons = CompositingReasonFinder::ActiveOpacityAnimation();
                 }
                 let effect = Arc::new(
-                    EffectPaintPropertyNode {
+                    EffectPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                         compositor: paint_model::paint_property_tree::EffectCompositorState {
                             compositor_element_id: axis.compositor_element_id,
                             is_in_tainted_subtree: node
                                 .properties
                                 .nodes
                                 .effect
-                                .compositor
-                                .is_in_tainted_subtree,
+                                .IsInTaintedSubtree(self.access),
                             is_in_drawable_canvas_subtree,
                             ..Default::default()
                         },
                         backdrop_filter_bounds: None,
                         self_or_ancestor_participates_in_view_transition: false,
-                        lifecycle: Default::default(),
-                        id,
                         parent: Some(node.properties.nodes.effect.clone()),
                         local_transform_space: border_box_properties.nodes.transform.clone(),
                         output_clip: Some(border_box_properties.nodes.clip.clone()),
@@ -1777,7 +1769,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         has_mask: false,
                         is_mask: false,
                         direct_compositing_reasons: scrollbar_reasons,
-                    }
+                    })
                     .with_filter_presence()
                     .with_inherited_view_transition(),
                 );

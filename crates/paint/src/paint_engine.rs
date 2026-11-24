@@ -560,8 +560,17 @@ fn CollectCompositedAnimationPropertyUpdate(
             {
                 return;
             }
-            if node.HasActiveOpacityAnimation() {
-                let element_id = node.compositor.compositor_element_id;
+            let (active, element_id, has_direct_reasons, parent) =
+                paint_model::property_cell::with_access(|a| {
+                    let state = node.state(a);
+                    (
+                        state.HasActiveOpacityAnimation(),
+                        state.compositor.compositor_element_id,
+                        state.HasDirectCompositingReasons(),
+                        state.parent.clone(),
+                    )
+                });
+            if active {
                 let internal = element_id.GetInternalValue();
                 if foundation::CompositorElementId::IsValidInternalValue(internal)
                     && self.seen_effect_bindings.insert(internal)
@@ -576,9 +585,7 @@ fn CollectCompositedAnimationPropertyUpdate(
                 match paint_model::property_cell::with_access(|a| node.lifecycle.node_changed(a)) {
                     PaintPropertyChangeType::Unchanged
                     | PaintPropertyChangeType::ChangedOnlyCompositedValues => {}
-                    PaintPropertyChangeType::ChangedOnlySimpleValues
-                        if node.HasDirectCompositingReasons() =>
-                    {
+                    PaintPropertyChangeType::ChangedOnlySimpleValues if has_direct_reasons => {
                         self.effects.push(node.clone());
                     }
                     change => {
@@ -588,7 +595,7 @@ fn CollectCompositedAnimationPropertyUpdate(
                     }
                 }
             }
-            if let Some(parent) = &node.parent {
+            if let Some(parent) = &parent {
                 self.effect(node_id, parent);
             }
         }

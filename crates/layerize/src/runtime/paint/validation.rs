@@ -369,28 +369,40 @@ fn ValidateArtifactGraph(
                 if !seen.insert((2, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if node.compositor.canvas_child_state.is_some() && !node.HasCanvasChildState() {
+                let (invalid_canvas_child, blocker, links) =
+                    paint_model::property_cell::with_access(|access| {
+                        let state = node.state(access);
+                        let blocker = [(false, &state.filters), (true, &state.backdrop_filters)]
+                            .into_iter()
+                            .find_map(|(backdrop, filters)| {
+                                filters.blocker().map(|blocker| (backdrop, blocker.clone()))
+                            });
+                        (
+                            state.compositor.canvas_child_state.is_some()
+                                && !state.HasCanvasChildState(),
+                            blocker,
+                            state.links(),
+                        )
+                    });
+                if invalid_canvas_child {
                     return Err(PaintInputError::InvalidCanvasChild { node: node.clone() });
                 }
-                for (backdrop, filters) in [(false, &node.filters), (true, &node.backdrop_filters)]
-                {
-                    if let Some(blocker) = filters.blocker() {
-                        return Err(PaintInputError::EffectFilter {
-                            node: node.clone(),
-                            backdrop,
-                            blocker: blocker.clone(),
-                        });
-                    }
+                if let Some((backdrop, blocker)) = blocker {
+                    return Err(PaintInputError::EffectFilter {
+                        node: node.clone(),
+                        backdrop,
+                        blocker,
+                    });
                 }
-                if let Some(parent) = &node.parent {
-                    pending.push(Node::Effect(parent.clone()));
+                if let Some(parent) = links.parent {
+                    pending.push(Node::Effect(parent));
                 }
-                pending.push(Node::Transform(node.local_transform_space.clone()));
-                if let Some(clip) = &node.output_clip {
-                    pending.push(Node::Clip(clip.clone()));
+                pending.push(Node::Transform(links.local_transform_space));
+                if let Some(clip) = links.output_clip {
+                    pending.push(Node::Clip(clip));
                 }
-                if let Some(clip) = &node.backdrop_filter_clip {
-                    pending.push(Node::Clip(clip.clone()));
+                if let Some(clip) = links.backdrop_filter_clip {
+                    pending.push(Node::Clip(clip));
                 }
             }
         }

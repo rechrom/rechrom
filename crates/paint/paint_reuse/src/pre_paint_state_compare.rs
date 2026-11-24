@@ -10,7 +10,7 @@ use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,
         PaintPropertyNodeLifecycle, PropertyTreeState, ScrollPaintPropertyNode,
-        ClipPaintPropertyNodeState, ScrollPaintPropertyNodeState,
+        ClipPaintPropertyNodeState, EffectPaintPropertyNodeState, ScrollPaintPropertyNodeState,
         TransformPaintPropertyNode,
     },
     property_cell::PropertyAccess,
@@ -267,12 +267,12 @@ impl Compare<'_> {
         if let Some(result) = cached {
             return result;
         }
-        let EffectPaintPropertyNode {
+        let access = self.access;
+        let (lifecycle, id) = (&a.lifecycle, &a.id);
+        let EffectPaintPropertyNodeState {
             compositor,
             backdrop_filter_bounds,
             self_or_ancestor_participates_in_view_transition,
-            lifecycle,
-            id,
             parent,
             local_transform_space,
             output_clip,
@@ -290,32 +290,33 @@ impl Compare<'_> {
             has_mask,
             is_mask,
             direct_compositing_reasons,
-        } = &**a;
+        } = a.state(access);
+        let bs = b.state(access);
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
-            && compositor == &b.compositor
-            && backdrop_filter_bounds == &b.backdrop_filter_bounds
+            && compositor == &bs.compositor
+            && backdrop_filter_bounds == &bs.backdrop_filter_bounds
             && opacity.is_finite()
-            && opacity == &b.opacity
+            && opacity == &bs.opacity
             && self_or_ancestor_participates_in_view_transition
-                == &b.self_or_ancestor_participates_in_view_transition
-            && blend_mode == &b.blend_mode
+                == &bs.self_or_ancestor_participates_in_view_transition
+            && blend_mode == &bs.blend_mode
             && filters.is_finite()
-            && filters == &b.filters
-            && filter_reference_box == &b.filter_reference_box
-            && filter_viewport == &b.filter_viewport
-            && filter_space_origin == &b.filter_space_origin
-            && filter_reference_scale == &b.filter_reference_scale
+            && filters == &bs.filters
+            && filter_reference_box == &bs.filter_reference_box
+            && filter_viewport == &bs.filter_viewport
+            && filter_space_origin == &bs.filter_space_origin
+            && filter_reference_scale == &bs.filter_reference_scale
             && backdrop_filters.is_finite()
-            && backdrop_filters == &b.backdrop_filters
-            && backdrop_filter_has_reference == &b.backdrop_filter_has_reference
-            && self.optional(backdrop_filter_clip, &b.backdrop_filter_clip, Self::clip)
-            && isolates_blending == &b.isolates_blending
-            && has_mask == &b.has_mask
-            && is_mask == &b.is_mask
-            && direct_compositing_reasons == &b.direct_compositing_reasons
-            && self.optional(parent, &b.parent, Self::effect)
-            && self.transform(local_transform_space, &b.local_transform_space)
-            && self.optional(output_clip, &b.output_clip, Self::clip);
+            && backdrop_filters == &bs.backdrop_filters
+            && backdrop_filter_has_reference == &bs.backdrop_filter_has_reference
+            && self.optional(backdrop_filter_clip, &bs.backdrop_filter_clip, Self::clip)
+            && isolates_blending == &bs.isolates_blending
+            && has_mask == &bs.has_mask
+            && is_mask == &bs.is_mask
+            && direct_compositing_reasons == &bs.direct_compositing_reasons
+            && self.optional(parent, &bs.parent, Self::effect)
+            && self.transform(local_transform_space, &bs.local_transform_space)
+            && self.optional(output_clip, &bs.output_clip, Self::clip);
         self.finish(key, same)
     }
     fn scroll(

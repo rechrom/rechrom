@@ -177,9 +177,11 @@ impl ImageDependencyIndex {
                 chunk.begin_index as usize <= record_index
                     && record_index < chunk.end_index as usize
             }) {
+                paint_model::property_cell::with_access(|access| {
                 let mut effect = Some(chunk.properties.effect.as_ref());
                 while let Some(node) = effect {
-                    for filter in [&node.filters, &node.backdrop_filters] {
+                    let state = node.state(access);
+                    for filter in [&state.filters, &state.backdrop_filters] {
                         for layer in filter.reflection_mask_layers() {
                             if let Some(image) = &layer.image {
                                 if image.id != 0 {
@@ -193,11 +195,11 @@ impl ImageDependencyIndex {
                             }
                         }
                     }
-                    effect = node
-                        .parent
-                        .as_ref()
-                        .map(|parent| &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent));
+                    effect = node.Parent(access).map(|parent| {
+                        &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent)
+                    });
                 }
+                });
             }
             for image_id in ids {
                 by_image
@@ -771,12 +773,14 @@ impl PaintRecording {
         // before the second recording snapshots their resource payloads.
         let mut visited = std::collections::HashSet::new();
         for chunk in &self.chunks {
+            paint_model::property_cell::with_access(|access| {
             let mut effect = Some(chunk.properties.effect.as_ref());
             while let Some(node) = effect {
                 if !visited.insert(node as *const _) {
                     break;
                 }
-                for filter in [&node.filters, &node.backdrop_filters] {
+                let state = node.state(access);
+                for filter in [&state.filters, &state.backdrop_filters] {
                     for layer in filter.reflection_mask_layers() {
                         if let (Some(image), Some(key)) =
                             (&layer.image, &layer.document_image_container_key)
@@ -791,11 +795,11 @@ impl PaintRecording {
                         }
                     }
                 }
-                effect = node
-                    .parent
-                    .as_ref()
-                    .map(|parent| &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent));
+                effect = node.Parent(access).map(|parent| {
+                        &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent)
+                    });
             }
+                });
         }
         output
     }

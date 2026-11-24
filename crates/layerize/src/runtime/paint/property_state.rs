@@ -234,12 +234,10 @@ impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
     type EffectNode = EffectNode<R>;
 
     fn EffectRequiresCompositingForBackdropFilterMask(&self) -> bool {
-        self.effect_
-            .node()
-            .RequiresCompositingForBackdropFilterMask()
+        super::read(|a| self.effect_.node().RequiresCompositingForBackdropFilterMask(a))
     }
     fn EffectRequiresCompositingForCanvasChild(&self) -> bool {
-        self.effect_.node().RequiresCompositingForCanvasChild()
+        super::read(|a| self.effect_.node().RequiresCompositingForCanvasChild(a))
     }
     fn ChangedToRoot(&self, change: Self::PaintPropertyChange) -> bool {
         paint_model::property_cell::with_access(|a| self.as_source().ChangedToRootIn(a, self.transform_.trees(), change))
@@ -254,10 +252,10 @@ impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
             .is_some_and(|parent| parent == self.effect_)
     }
     fn EffectIsOpacityOnly(&self) -> bool {
-        self.effect_.node().IsOpacityOnly()
+        super::read(|a| self.effect_.node().IsOpacityOnly(a))
     }
     fn EffectOpacity(&self) -> f32 {
-        self.effect_.node().opacity
+        super::read(|a| self.effect_.node().state(a).opacity)
     }
     fn EffectBlendMode(&self) -> BlendMode {
         <EffectNode<R> as PendingEffectNode<TransformNode<R>, usize>>::BlendMode(&self.effect_)

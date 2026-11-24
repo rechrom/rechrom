@@ -21,7 +21,7 @@ fn element(id: foundation::CompositorElementId) -> ElementId {
         ElementId::new(id)
     }
 }
-fn blend(n: &paint_property_tree::EffectPaintPropertyNode) -> BlendMode {
+fn blend(n: &paint_property_tree::EffectPaintPropertyNodeState) -> BlendMode {
     if n.is_mask {
         return BlendMode::kDstIn;
     }
@@ -236,7 +236,9 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
         paint_model::property_cell::with_access(|a| self.node().lifecycle.set_cc_node_id(a, s, id))
     }
     fn IsRoot(&self) -> bool {
-        self.node().parent.is_none()
+        read(|a| {
+            self.node().state(a).parent.is_none()
+        })
     }
     fn Identity(&self) -> usize {
         Arc::as_ptr(&self.node().lifecycle.identity) as usize
@@ -245,110 +247,156 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
         self.parent_handle().expect("source effect parent")
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        self.link_transform(self.node().LocalTransformSpace())
+        read(|a| {
+            self.link_transform(self.node().LocalTransformSpace(a))
+        })
     }
     fn BlendMode(&self) -> BlendMode {
-        blend(self.node())
+        read(|a| blend(self.node().state(a)))
     }
     fn Opacity(&self) -> f32 {
-        self.node().opacity
+        read(|a| {
+            self.node().state(a).opacity
+        })
     }
     fn HasActiveOpacityAnimation(&self) -> bool {
-        self.node().HasActiveOpacityAnimation()
+        read(|a| {
+            self.node().HasActiveOpacityAnimation(a)
+        })
     }
     fn HasFilter(&self) -> bool {
-        self.node().Filter().is_some()
+        read(|a| {
+            self.node().Filter(a).is_some()
+        })
     }
     fn RequiresCompositingForWillChangeFilter(&self) -> bool {
-        self.node().RequiresCompositingForWillChangeFilter()
+        read(|a| {
+            self.node().RequiresCompositingForWillChangeFilter(a)
+        })
     }
     fn HasActiveFilterAnimation(&self) -> bool {
-        self.node().HasActiveFilterAnimation()
+        read(|a| {
+            self.node().HasActiveFilterAnimation(a)
+        })
     }
     fn HasBackdropFilter(&self) -> bool {
-        self.node().BackdropFilter().is_some()
+        read(|a| {
+            self.node().BackdropFilter(a).is_some()
+        })
     }
     fn RequiresCompositingForWillChangeBackdropFilter(&self) -> bool {
-        self.node().RequiresCompositingForWillChangeBackdropFilter()
+        read(|a| {
+            self.node().RequiresCompositingForWillChangeBackdropFilter(a)
+        })
     }
     fn HasActiveBackdropFilterAnimation(&self) -> bool {
-        self.node().HasActiveBackdropFilterAnimation()
+        read(|a| {
+            self.node().HasActiveBackdropFilterAnimation(a)
+        })
     }
     fn HasValidViewTransitionElementResourceId(&self) -> bool {
-        self.node().HasValidViewTransitionElementResourceId()
+        read(|a| {
+            self.node().HasValidViewTransitionElementResourceId(a)
+        })
     }
     fn RequiresCompositingForUnboundedElement(&self) -> bool {
-        self.node().RequiresCompositingForUnboundedElement()
+        read(|a| {
+            self.node().RequiresCompositingForUnboundedElement(a)
+        })
     }
     fn FlattensAtLeafOf3DScene(&self) -> bool {
-        self.node().FlattensAtLeafOf3DScene()
+        read(|a| {
+            self.node().FlattensAtLeafOf3DScene(a)
+        })
     }
     fn HasElementCaptureId(&self) -> bool {
-        self.node().HasElementCaptureId()
+        read(|a| {
+            self.node().HasElementCaptureId(a)
+        })
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
         self.lowest_common_ancestor(other)
     }
     // Source: effect_paint_property_node.h:355-385.
     fn MayHaveBackdropEffect(&self) -> bool {
-        self.node().MayHaveBackdropEffect()
+        read(|a| {
+            self.node().MayHaveBackdropEffect(a)
+        })
     }
     fn OutputClip(&self) -> Option<ClipNode<R>> {
-        self.node()
-            .output_clip
-            .as_ref()
-            .map(|c| self.link_clip(c))
+        read(|a| {
+            self.node().state(a)
+                .output_clip
+                .as_ref()
+                .map(|c| self.link_clip(c))
+        })
     }
     fn GetCompositorElementId(&self) -> ElementId {
-        element(self.node().compositor.compositor_element_id)
+        read(|a| {
+            element(self.node().state(a).compositor.compositor_element_id)
+        })
     }
     fn NeedsEffectFor2DScaleTransform(&self) -> bool {
-        self.node().NeedsEffectFor2DScaleTransform()
+        read(|a| {
+            self.node().NeedsEffectFor2DScaleTransform(a)
+        })
     }
     fn FilterOperations(&self) -> Option<Self::Filters> {
-        self.HasFilter().then(|| {
-            self.node()
-                .filters
-                .canonical()
-                .expect("validated PaintInput native filter")
-                .clone()
+        read(|a| {
+            self.HasFilter().then(|| {
+                self.node().state(a)
+                    .filters
+                    .canonical()
+                    .expect("validated PaintInput native filter")
+                    .clone()
+            })
         })
     }
     fn BackdropFilterOperations(&self) -> Option<Self::Filters> {
-        self.HasBackdropFilter().then(|| {
-            self.node()
-                .backdrop_filters
-                .canonical()
-                .expect("validated PaintInput native backdrop filter")
-                .clone()
+        read(|a| {
+            self.HasBackdropFilter().then(|| {
+                self.node().state(a)
+                    .backdrop_filters
+                    .canonical()
+                    .expect("validated PaintInput native backdrop filter")
+                    .clone()
+            })
         })
     }
     fn PropertyTreeBackdropFilterBounds(&self) -> Option<Self::Path> {
-        self.node()
-            .backdrop_filter_bounds
-            .as_ref()
-            .map(|path| R::FromPaintPath(path.as_ref()))
+        read(|a| {
+            self.node().state(a)
+                .backdrop_filter_bounds
+                .as_ref()
+                .map(|path| R::FromPaintPath(path.as_ref()))
+        })
     }
     fn BackdropMaskElementId(&self) -> ElementId {
-        element(self.node().compositor.backdrop_mask_element_id)
+        read(|a| {
+            element(self.node().state(a).compositor.backdrop_mask_element_id)
+        })
     }
     fn NodeChanged(&self) -> Self::PaintPropertyChange {
         paint_model::property_cell::with_access(|a| self.node().lifecycle.node_changed(a))
     }
     fn ViewTransitionElementResourceId(&self) -> ViewTransitionElementResourceId {
-        match self.node().compositor.view_transition_element_resource_id {
-            Some((token, local_id, for_scope_snapshot)) => ViewTransitionElementResourceId {
-                transition_token: Some(token),
-                local_id,
-                for_scope_snapshot,
-            },
-            None => ViewTransitionElementResourceId::default(),
-        }
+        read(|a| {
+            match self.node().state(a).compositor.view_transition_element_resource_id {
+                Some((token, local_id, for_scope_snapshot)) => ViewTransitionElementResourceId {
+                    transition_token: Some(token),
+                    local_id,
+                    for_scope_snapshot,
+                },
+                None => ViewTransitionElementResourceId::default(),
+            }
+        })
     }
     fn SubtreeCaptureId(&self) -> SubtreeCaptureId {
-        SubtreeCaptureId {
-            token: self.node().compositor.restriction_target_id,
-        }
+        read(|a| {
+            SubtreeCaptureId {
+                token: self.node().state(a).compositor.restriction_target_id,
+            }
+        })
     }
 }
 impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R> {

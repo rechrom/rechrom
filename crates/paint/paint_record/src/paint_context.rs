@@ -840,7 +840,9 @@ impl<'o> PaintContext<'o> {
         // retain that same producer-owned output bound on the resident chunk.
         // This prevents cc from allocating only the unfiltered source extent.
         if kind == RecordedDisplayItemKind::Drawing {
-            if let Some(filtered) = properties.effect.compositor.filter_output_bounds {
+            if let Some(filtered) = paint_model::property_cell::with_access(|access| {
+                properties.effect.state(access).compositor.filter_output_bounds
+            }) {
                 visual_rect.union(filtered);
             }
         }
@@ -1549,7 +1551,9 @@ impl<'o> PaintContext<'o> {
             // PaintLayer::UpdateCompositorFilterOperationsForFilter publishes
             // one canonical value on the Effect node. Flat PaintRecords retain
             // that value instead of asking Raster to rebuild authored filters.
-            item.canonical_filters = node.properties.nodes.effect.filters.clone();
+            item.canonical_filters = paint_model::property_cell::with_access(|access| {
+                node.properties.nodes.effect.state(access).filters.clone()
+            });
             self.Append(item, node);
         }
     }
@@ -1852,12 +1856,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         borrowed.next_property_id += 1;
         // FrameCaret::PaintCaret + CaretEffectNodeState, frame_caret.cc:86,282.
         properties.effect = std::sync::Arc::new(
-            EffectPaintPropertyNode {
+            EffectPaintPropertyNode::new(Default::default(), id, paint_model::paint_property_tree::EffectPaintPropertyNodeState {
                 compositor: Default::default(),
                 backdrop_filter_bounds: None,
                 self_or_ancestor_participates_in_view_transition: false,
-                lifecycle: Default::default(),
-                id,
                 parent: Some(previous.effect.clone()),
                 local_transform_space: previous.transform.clone(),
                 output_clip: None,
@@ -1877,7 +1879,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 direct_compositing_reasons: foundation::CompositingReasons::FromReason(
                     foundation::CompositingReason::kActiveOpacityAnimation,
                 ),
-            }
+            })
             .with_filter_presence()
             .with_inherited_view_transition(),
         );

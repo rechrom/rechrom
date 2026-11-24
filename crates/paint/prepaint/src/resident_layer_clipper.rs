@@ -108,7 +108,7 @@ impl PrePaintTreeWalk {
             if options.respect_root_clip {
                 destination.SetClip(root.PreClip());
                 destination
-                    .SetEffect(NativeEffectNode::from_arc_in(root.PreEffect().clone(), trees.clone()));
+                    .SetEffect(NativeEffectNode::from_arc_in(root.PreEffect(), trees.clone()));
             } else {
                 destination.SetClip(root.ContentsProperties().clip.clone());
             }

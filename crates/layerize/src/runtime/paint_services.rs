@@ -291,7 +291,9 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
         &self,
         state: &paint::PropertyTreeState<R>,
     ) -> Option<Arc<::paint::paint_property_tree::PaintCanvasChildState>> {
-        state.effect().node().compositor.canvas_child_state.clone()
+        paint_model::property_cell::with_access(|a| {
+            state.effect().node().state(a).compositor.canvas_child_state.clone()
+        })
     }
     fn ScrollContentsRect(&self, state: &paint::PropertyTreeState<R>) -> Option<Rect> {
         use crate::adapter::pending_layer::PendingTransformNode;
@@ -798,7 +800,10 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             trace.set("transform_y", node.Matrix().values[13]);
         }
         if let Some(node) = update.effects.first() {
-            trace.set("opacity", node.opacity as f64);
+            trace.set(
+                "opacity",
+                paint_model::property_cell::with_access(|a| node.state(a).opacity) as f64,
+            );
         }
         // Per node, as FragmentPaintPropertyTreeBuilder::UpdateTransform /
         // UpdateEffect call PAC: an accepted node becomes
