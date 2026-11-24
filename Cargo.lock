@@ -536,6 +536,7 @@ dependencies = [
  "browser_tracing",
  "compositor_animation",
  "compositor_tree",
+ "compositor_values",
  "scroll_animation",
  "scroll_snap",
 ]
@@ -601,6 +602,16 @@ name = "compositor_tree_sync"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+]
+
+[[package]]
+name = "compositor_values"
+version = "0.0.1"
+dependencies = [
+ "compositor_animation",
+ "compositor_tree",
+ "scroll_animation",
+ "scroll_snap",
 ]
 
 [[package]]
@@ -2304,6 +2315,7 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "compositor_values",
  "foundation",
  "getrandom 0.4.3",
  "paint",

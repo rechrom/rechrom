@@ -33,7 +33,7 @@ pub(crate) mod layer_tree_host_impl {
 }
 pub(crate) mod layer_tree_impl {
     pub use crate::commit::{values::UIResourceId, PropertyTreesFor};
-    pub use compositor_input::layer_selection_bound::SelectionBoundType;
+    pub use compositor_values::layer_selection_bound::SelectionBoundType;
     pub use compositor_animation::ElementListType;
     pub use compositor_draw::Color4f;
 }

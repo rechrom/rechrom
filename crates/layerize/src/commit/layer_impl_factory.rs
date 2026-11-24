@@ -1,5 +1,5 @@
 //! The push-target factory of the main/impl commit.
-use compositor_input::scrollbar::ScrollbarOrientation;
+use compositor_values::scrollbar::ScrollbarOrientation;
 
 /// The impl tree in which a main Layer allocates its LayerImpl: the
 /// `LayerTreeImpl*` argument of Chromium's virtual Layer::CreateLayerImpl and

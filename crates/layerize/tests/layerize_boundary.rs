@@ -149,6 +149,7 @@ const CLASSIFICATION: &[(&str, Class)] = &[
     ("scroll_animation", Shared),
     ("compositor_tree", Shared),
     ("compositor_animation", Shared),
+    ("compositor_values", Shared),
     ("compositor_tree_sync", Impl),
     ("compositor_input", Impl),
     ("compositor_draw", Impl),
@@ -182,32 +183,10 @@ const SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
 const SHARED_ROOT_VALUE_DEPENDENCIES: &[&str] =
     &["paint_model", "browser_tracing", "skia", "foundation", "image_resource"];
 
-/// Value modules of the mixed `compositor_input` that layerize may name
-/// until S4-4 cuts them. Remove with `layerize_names_only_shared_modules`.
-const COMPOSITOR_INPUT_VALUE_MODULES: &[&str] = &[
-    "actively_scrolling_type",
-    "browser_controls_params",
-    "browser_controls_state",
-    "compositor_commit_data",
-    "event_listener_properties",
-    "hit_test_opaqueness",
-    "input_types",
-    "layer_selection_bound",
-    "main_thread_scrolling_reason",
-    "overscroll_behavior",
-    "page_scale_animation",
-    "scroll_decision",
-    "scroll_hit_test_rect",
-    "scroll_snap_data",
-    "scroll_source_type",
-    "scrollbar",
-    "snap_selection_strategy",
-    "touch_action",
-    "touch_action_region",
-    "ScrollGranularity",
-    // The ScrollbarTransform facet; it moves with gfx::Transform in S4-4c.
-    "scrollbar_controller_boundary",
-];
+/// The only `compositor_input` module layerize may still name: the
+/// ScrollbarTransform facet, which moves with gfx::Transform in S4-4c.
+/// Remove with `layerize_names_only_shared_modules`.
+const COMPOSITOR_INPUT_VALUE_MODULES: &[&str] = &["scrollbar_controller_boundary"];
 
 struct Manifest {
     path: String,

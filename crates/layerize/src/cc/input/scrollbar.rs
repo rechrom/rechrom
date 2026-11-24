@@ -16,7 +16,7 @@ pub struct Insets {
     pub right: i32,
 }
 
-pub use compositor_input::scrollbar::{
+pub use compositor_values::scrollbar::{
     kAutoscrollMultiplier, kDefaultWinScrollbarThickness, kInitialAutoscrollTimerDelay,
     kOffSideMultiplier, ScrollbarOrientation, ScrollbarPart,
 };

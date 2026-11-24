@@ -10,6 +10,9 @@ publish = false
 # crates/compositor/MAIN_IMPL_SPLIT.md.
 [dependencies]
 compositor_tree = { path = "../compositor/compositor_tree" }
+# cc shared values (cc/input, settings, viz) named by both sides.
+compositor_values = { path = "../compositor/compositor_values" }
+# Only the ScrollbarTransform facet impl until S4-4c.
 compositor_input = { path = "../compositor/compositor_input" }
 compositor_draw = { path = "../compositor/compositor_draw" }
 compositor_animation = { path = "../compositor/compositor_animation" }

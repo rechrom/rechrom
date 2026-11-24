@@ -1,0 +1,15 @@
+[package]
+name = "compositor_values"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# cc shared value root: cc input, settings, viz and gfx values that both the
+# main (layerize) and the impl (compositor) side name. Values and value
+# algorithms only; no lifecycle, thread or engine state.
+[dependencies]
+scroll_snap = { path = "../scroll_snap" }
+scroll_animation = { path = "../scroll_animation" }
+compositor_tree = { path = "../compositor_tree" }
+# cc/animation CubicBezier, used by PageScaleAnimation.
+compositor_animation = { path = "../compositor_animation" }

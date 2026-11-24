@@ -51,7 +51,7 @@ pub mod viz_metadata;
 //         main_thread_scrolling_reason}.h.
 pub use compositor_animation::property_animation_state;
 pub use compositor_draw::damage_reason;
-pub use compositor_input::{
+pub use compositor_values::{
     browser_controls_params, compositor_commit_data, event_listener_properties, input_types,
     layer_selection_bound, main_thread_scrolling_reason, overscroll_behavior, page_scale_animation,
     scroll_snap_data, scroll_source_type,

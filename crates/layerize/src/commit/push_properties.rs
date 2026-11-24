@@ -9,7 +9,7 @@ use super::{
     geometry::{Rect, Size, Vector2dF},
 };
 use compositor_draw::Color4f;
-use compositor_input::{
+use compositor_values::{
     hit_test_opaqueness::HitTestOpaqueness, input_types::ElementId,
     scroll_hit_test_rect::ScrollHitTestRect, touch_action_region::TouchActionRegion,
 };
