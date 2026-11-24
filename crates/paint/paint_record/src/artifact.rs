@@ -349,12 +349,9 @@ impl PartialEq for PaintRecording {
             && self.image_content_revisions == other.image_content_revisions
             && self.resource_changed_chunks == other.resource_changed_chunks
             && self.painted_layout_image_resource_ids == other.painted_layout_image_resource_ids
+            // PaintChunk::operator== compares the property state by node
+            // identity; live nodes carry their current values.
             && self.chunks == other.chunks
-            && self
-                .chunks
-                .iter()
-                .zip(&other.chunks)
-                .all(|(a, b)| a.properties.same_values(&b.properties))
             && match (&self.resources, &other.resources) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),

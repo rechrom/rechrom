@@ -165,7 +165,6 @@ pub struct ScrollPropertyUpdate {
 }
 
 fn world_transform(
-    resolver: &dyn paint_model::paint_property_tree::PropertyNodeResolver,
     node: &Arc<TransformPaintPropertyNode>,
     worlds: &mut BTreeMap<u64, TransformMatrix>,
 ) -> TransformMatrix {
@@ -179,7 +178,7 @@ fn world_transform(
     let parent = parent_link
         .as_ref()
         .map_or_else(TransformMatrix::default, |parent| {
-            world_transform(resolver, resolver.transform(parent), worlds)
+            world_transform(parent, worlds)
         });
     let matrix = MultiplyTransforms(&parent, &local);
     worlds.insert(node.id, matrix);
@@ -187,11 +186,10 @@ fn world_transform(
 }
 
 fn property_world(
-    resolver: &dyn paint_model::paint_property_tree::PropertyNodeResolver,
     state: &PropertyTreeState,
     worlds: &mut BTreeMap<u64, TransformMatrix>,
 ) -> Option<TransformMatrix> {
-    let matrix = world_transform(resolver, &state.transform, worlds);
+    let matrix = world_transform(&state.transform, worlds);
     let m = &matrix.values;
     (m.iter().all(|v| v.is_finite())
         && [2, 3, 6, 7, 8, 9, 11, 14].iter().all(|&i| m[i] == 0.0)
@@ -338,7 +336,6 @@ struct ClipOutput {
 }
 
 fn clip_output(
-    resolver: &dyn paint_model::paint_property_tree::PropertyNodeResolver,
     clip: &Arc<ClipPaintPropertyNode>,
     viewport: Option<&Arc<ClipPaintPropertyNode>>,
     worlds: &mut BTreeMap<u64, TransformMatrix>,
@@ -362,11 +359,11 @@ fn clip_output(
         return None;
     }
     let mut output = match &parent {
-        Some(parent) => clip_output(resolver, resolver.clip(parent), viewport, worlds, cache)?,
+        Some(parent) => clip_output(parent, viewport, worlds, cache)?,
         None => ClipOutput::default(),
     };
     if let Some(rect) = rect {
-        let world = world_transform(resolver, resolver.transform(&transform), worlds);
+        let world = world_transform(&transform, worlds);
         let rect = MapRectToRoot(rect, &[world])?;
         output.visible = Some(
             output
@@ -390,7 +387,6 @@ fn clip_output(
 }
 
 fn visible_output(
-    resolver: &dyn paint_model::paint_property_tree::PropertyNodeResolver,
     state: &PropertyTreeState,
     masks: &BTreeMap<u64, PaintRect>,
     mask_cache: &mut BTreeMap<u64, Option<PaintRect>>,
@@ -402,7 +398,7 @@ fn visible_output(
     // BorderBoxProperties excludes this owner's overflow clip, unlike
     // node.clip (the geometry used for its children). Its background, border
     // and shadow need the real border-box chain's complete visible region.
-    let clips = clip_output(resolver, &state.clip, viewport, worlds, clip_cache)?;
+    let clips = clip_output(&state.clip, viewport, worlds, clip_cache)?;
     let mut visible = clips.visible;
     if let Some(rect) = &mut visible {
         if !rect.is_empty() {
@@ -460,7 +456,7 @@ impl RetainedScrollPaintState {
             let effect_id = paint_model::property_cell::with_access(|access| {
                 mask_effect.Parent(access).map(|parent| parent.id)
             })?;
-            let world = property_world(store, &node.properties.nodes, &mut worlds)?;
+            let world = property_world(&node.properties.nodes, &mut worlds)?;
             retained_masks.push(MaskOutput {
                 effect_id,
                 transform: node.properties.nodes.transform.clone(),
@@ -477,15 +473,14 @@ impl RetainedScrollPaintState {
             // Pixel-moving effects are retained property-tree effects. Their
             // unsupported coverage mapping is isolated below to that state;
             // it must not disable retained scrolling for unrelated layers.
-            let raw_world = world_transform(store, &node.properties.nodes.transform, &mut worlds);
+            let raw_world = world_transform(&node.properties.nodes.transform, &mut worlds);
             // A singular transform has no drawable area. Keep its retained
             // fragment/property identity, but omit it from the coverage proof.
             // One scale(0) menu or animation must not disable retained scroll
             // painting for the whole document.
-            let world = property_world(store, &node.properties.nodes, &mut worlds);
+            let world = property_world(&node.properties.nodes, &mut worlds);
             let recorded_visible = world.and_then(|_| {
                 visible_output(
-                    store,
                     &node.properties.nodes,
                     &masks,
                     &mut mask_cache,
@@ -1043,7 +1038,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     let mut masks = BTreeMap::new();
     for mask in &retained.masks {
         let transform = &mask.transform;
-        let world = world_transform(&paint_model::paint_property_tree::LinkedProperties, transform, &mut worlds);
+        let world = world_transform(transform, &mut worlds);
         let (rect, _) = rebase_rect(mask.recorded_rect, &mask.recorded_world, &world)
             .ok_or(UnsupportedTransform)?;
         masks.insert(mask.effect_id, rect);
@@ -1060,11 +1055,10 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             continue;
         };
         let state = &old.properties.clone();
-        let world = property_world(&paint_model::paint_property_tree::LinkedProperties, &state, &mut worlds).ok_or(UnsupportedTransform)?;
+        let world = property_world(&state, &mut worlds).ok_or(UnsupportedTransform)?;
         let rect =
             MapRectWithTransforms(local_rect, &[world], false).ok_or(UnsupportedTransform)?;
         let output = visible_output(
-            &paint_model::paint_property_tree::LinkedProperties,
             &state,
             &masks,
             &mut mask_cache,
@@ -1095,9 +1089,8 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     let mut coverage_trace = browser_tracing::span("paint_reuse", "ScrollPaint.ValidateCoverage");
     for group in &retained.coverage_groups {
         let state = &group.properties.clone();
-        let world = property_world(&paint_model::paint_property_tree::LinkedProperties, &state, &mut worlds).ok_or(UnsupportedTransform)?;
+        let world = property_world(&state, &mut worlds).ok_or(UnsupportedTransform)?;
         let exact = visible_output(
-            &paint_model::paint_property_tree::LinkedProperties,
             &state,
             &masks,
             &mut mask_cache,
@@ -1109,7 +1102,6 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         .ok_or(UnsupportedTransform)?
         .ok_or(CoverageExceeded)?;
         let fringe = visible_output(
-            &paint_model::paint_property_tree::LinkedProperties,
             &state,
             &masks,
             &mut mask_cache,
@@ -1218,11 +1210,10 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                     .ok_or(UnsupportedTransform)?;
                 let state = &old.properties;
                 let current_world =
-                    property_world(&paint_model::paint_property_tree::LinkedProperties, state, &mut worlds).ok_or(UnsupportedTransform)?;
+                    property_world(state, &mut worlds).ok_or(UnsupportedTransform)?;
                 let (rect, _) = rebase_rect(original_root, &old.recorded_world, &current_world)
                     .ok_or(UnsupportedTransform)?;
                 let output = visible_output(
-                    &paint_model::paint_property_tree::LinkedProperties,
                     state,
                     &masks,
                     &mut mask_cache,

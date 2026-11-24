@@ -5,7 +5,7 @@ use paint_input_types::paint_input::{
     PaintTransform, PaintTransformOperationKind, PaintTransformOrigin, PaintTransformReferenceBox,
 };
 
-use crate::paint_property_tree::{LinkedProperties, PropertyNodeResolver, 
+use crate::paint_property_tree::{
     ClipPaintPropertyNode, PropertyTreeState, TransformPaintPropertyNode,
 };
 use crate::PaintRect;
@@ -99,16 +99,13 @@ fn SameClip(a: &ClipPaintPropertyNode, b: &ClipPaintPropertyNode) -> bool {
     a.lifecycle.same_node(&b.lifecycle)
 }
 
-fn TransformToRoot<R: PropertyNodeResolver + ?Sized>(
-    resolver: &R,
-    node: &TransformPaintPropertyNode,
-) -> TransformMatrix {
+fn TransformToRoot(node: &TransformPaintPropertyNode) -> TransformMatrix {
     crate::property_cell::with_access(|access| {
     let mut path: Vec<&TransformPaintPropertyNode> = Vec::new();
     let mut current = Some(node);
     while let Some(value) = current {
         path.push(value);
-        current = value.state(access).parent.as_ref().map(|parent| &**resolver.transform(parent));
+        current = value.state(access).parent.as_deref();
     }
     let mut result = TransformMatrix::default();
     for value in path.into_iter().rev() {
@@ -134,8 +131,7 @@ fn FlattenTransform(transform: &mut TransformMatrix) {
     transform.values[14] = 0.0;
 }
 
-fn TransformToAncestor<R: PropertyNodeResolver + ?Sized>(
-    resolver: &R,
+fn TransformToAncestor(
     descendant: &TransformPaintPropertyNode,
     ancestor: &TransformPaintPropertyNode,
 ) -> Option<TransformMatrix> {
@@ -157,7 +153,7 @@ fn TransformToAncestor<R: PropertyNodeResolver + ?Sized>(
             return Some(result);
         }
         path.push(value);
-        current = value.state(access).parent.as_ref().map(|parent| &**resolver.transform(parent));
+        current = value.state(access).parent.as_deref();
     }
     None
     })
@@ -177,15 +173,6 @@ pub fn SourceToDestinationProjection(
     source: &TransformPaintPropertyNode,
     destination: &TransformPaintPropertyNode,
 ) -> Option<TransformMatrix> {
-    SourceToDestinationProjectionIn(&LinkedProperties, source, destination)
-}
-
-/// SourceToDestinationProjection following links through `resolver`.
-pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
-    resolver: &R,
-    source: &TransformPaintPropertyNode,
-    destination: &TransformPaintPropertyNode,
-) -> Option<TransformMatrix> {
     crate::property_cell::with_access(|access| {
     if SameTransform(source, destination) {
         return Some(TransformMatrix::default());
@@ -195,7 +182,7 @@ pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
     // matrix for the overwhelmingly common property-tree mapping.
     if source
         .Parent(access)
-        .is_some_and(|parent| SameTransform(resolver.transform(parent), destination))
+        .is_some_and(|parent| SameTransform(parent, destination))
         && IsIdentityOr2dTranslation(&source.state(access).matrix)
         && source.state(access).origin == [0.0; 3]
     {
@@ -203,7 +190,7 @@ pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
     }
     if destination
         .Parent(access)
-        .is_some_and(|parent| SameTransform(resolver.transform(parent), source))
+        .is_some_and(|parent| SameTransform(parent, source))
         && IsIdentityOr2dTranslation(&destination.state(access).matrix)
     {
         return InvertTransform(&destination.state(access).matrix);
@@ -213,17 +200,17 @@ pub fn SourceToDestinationProjectionIn<R: PropertyNodeResolver + ?Sized>(
     // coplanar by construction of this path, so compute in that plane rather
     // than through the screen. This also works when an ancestor above the
     // shared plane has a singular transform.
-    if let Some(source_to_destination) = TransformToAncestor(resolver, source, destination) {
+    if let Some(source_to_destination) = TransformToAncestor(source, destination) {
         return Some(source_to_destination);
     }
-    if let Some(destination_to_source) = TransformToAncestor(resolver, destination, source) {
+    if let Some(destination_to_source) = TransformToAncestor(destination, source) {
         return InvertTransform(&destination_to_source);
     }
 
     // Source: geometry_mapper.cc:172-194. For unrelated branches use the
     // canonical flattened screen projection.
-    let source_to_root = TransformToRoot(resolver, source);
-    let destination_to_root = TransformToRoot(resolver, destination);
+    let source_to_root = TransformToRoot(source);
+    let destination_to_root = TransformToRoot(destination);
     Some(MultiplyTransforms(
         &InvertTransform(&destination_to_root)?,
         &source_to_root,
@@ -236,17 +223,7 @@ pub fn SourceToDestinationRect(
     destination: &TransformPaintPropertyNode,
     rect: PaintRect,
 ) -> Option<PaintRect> {
-    SourceToDestinationRectIn(&LinkedProperties, source, destination, rect)
-}
-
-/// SourceToDestinationRect following links through `resolver`.
-pub fn SourceToDestinationRectIn<R: PropertyNodeResolver + ?Sized>(
-    resolver: &R,
-    source: &TransformPaintPropertyNode,
-    destination: &TransformPaintPropertyNode,
-    rect: PaintRect,
-) -> Option<PaintRect> {
-    let transform = SourceToDestinationProjectionIn(resolver, source, destination)?;
+    let transform = SourceToDestinationProjection(source, destination)?;
     MapRectWithTransforms(rect, std::slice::from_ref(&transform), false)
 }
 
@@ -284,15 +261,6 @@ pub fn LocalToAncestorClipRect(
     local: &PropertyTreeState,
     ancestor: &PropertyTreeState,
 ) -> Option<PaintRect> {
-    LocalToAncestorClipRectIn(&LinkedProperties, local, ancestor)
-}
-
-/// LocalToAncestorClipRect following links through `resolver`.
-pub fn LocalToAncestorClipRectIn<R: PropertyNodeResolver + ?Sized>(
-    resolver: &R,
-    local: &PropertyTreeState,
-    ancestor: &PropertyTreeState,
-) -> Option<PaintRect> {
     if SameClip(&local.clip, &ancestor.clip) {
         return None;
     }
@@ -305,7 +273,7 @@ pub fn LocalToAncestorClipRectIn<R: PropertyNodeResolver + ?Sized>(
                 break;
             }
             intermediate.push(clip.state(access));
-            current = clip.Parent(access).map(|parent| &**resolver.clip(parent));
+            current = clip.Parent(access).map(|parent| &**parent);
         }
         // Chromium deliberately declines to clip abnormal hierarchies.
         current?;
@@ -313,9 +281,8 @@ pub fn LocalToAncestorClipRectIn<R: PropertyNodeResolver + ?Sized>(
         let mut result: Option<PaintRect> = None;
         for clip in intermediate.into_iter().rev() {
             if let Some(rect) = clip.layout_clip_rects.expanded.rect.or(clip.rect) {
-                let Some(mapped) = SourceToDestinationRectIn(
-                    resolver,
-                    resolver.transform(&clip.local_transform_space),
+                let Some(mapped) = SourceToDestinationRect(
+                    &clip.local_transform_space,
                     &ancestor.transform,
                     rect,
                 )

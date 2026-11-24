@@ -4,7 +4,6 @@
 //! clip, effect and scroll_paint_property_node.h files. These are paint trees,
 //! not compositor layer trees. Numeric IDs are dump-local labels; reference
 //! equality, as in Blink, determines whether states share property nodes.
-use foundation::TrustedIdentityHashMap;
 use std::collections::BTreeMap;
 use std::fmt;
 use crate::property_cell::{
@@ -52,9 +51,9 @@ impl fmt::Display for PaintPropertyChangeType {
     }
 }
 
-/// A separately owned, persistent node entity. Blink mutates its GC node in
-/// place; Rust retains immutable frame states referring to this same entity.
-/// Its allocation, rather than a client hash or dump ID, defines identity.
+/// The mutable members of one live node (paint_property_node.h:214-230).
+/// Nodes are updated in place, so a node and its identity allocation are one
+/// to one; only hand-built test fixtures copy a node (and so share it).
 #[derive(Debug)]
 pub struct PaintPropertyNodeIdentity {
     // Chromium: third_party/blink/renderer/platform/graphics/paint/
@@ -499,15 +498,6 @@ impl TransformPaintPropertyNode {
     /// Source: transform_paint_property_node.cc:151-164. Supported producer
     /// nodes are unaliased; associated Scroll changes are cleared recursively.
     pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number(access) == sequence_number {
@@ -515,9 +505,9 @@ impl TransformPaintPropertyNode {
             }
             node.lifecycle.clear_changed(access, sequence_number);
             if let Some(scroll) = node.ScrollNode(access) {
-                resolver.scroll(scroll).ClearChangedToRootIn(access, resolver, sequence_number);
+                scroll.ClearChangedToRoot(access, sequence_number);
             }
-            current = node.Parent(access).map(|parent| &**resolver.transform(parent));
+            current = node.Parent(access).map(|parent| &**parent);
         }
     }
 
@@ -538,7 +528,7 @@ impl TransformPaintPropertyNode {
 }
 
 /// The property-node links of one transform state, cloned out of the proof
-/// scope (snapshot directory and rebinder walks).
+/// scope for walks that recurse across node kinds.
 #[derive(Clone)]
 pub struct TransformStateLinks {
     pub parent: Option<Arc<TransformPaintPropertyNode>>,
@@ -1051,25 +1041,14 @@ impl ClipPaintPropertyNode {
     /// Source: clip_paint_property_node.cc:70-81. Supported snapshots are
     /// unaliased; each clip also clears its local transform chain.
     pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
             node.lifecycle.clear_changed(access, sequence_number);
-            resolver
-                .transform(node.LocalTransformSpace(access))
-                .ClearChangedToRootIn(access, resolver, sequence_number);
-            current = node.Parent(access).map(|parent| &**resolver.clip(parent));
+            node.LocalTransformSpace(access).ClearChangedToRoot(access, sequence_number);
+            current = node.Parent(access).map(|parent| &**parent);
         }
     }
 
@@ -1461,28 +1440,17 @@ impl EffectPaintPropertyNode {
     /// Source: effect_paint_property_node.cc:181-193. Supported snapshots are
     /// unaliased; local transform and output clip dependencies are included.
     pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
             node.lifecycle.clear_changed(access, sequence_number);
-            resolver
-                .transform(node.LocalTransformSpace(access))
-                .ClearChangedToRootIn(access, resolver, sequence_number);
+            node.LocalTransformSpace(access).ClearChangedToRoot(access, sequence_number);
             if let Some(clip) = node.OutputClip(access) {
-                resolver.clip(clip).ClearChangedToRootIn(access, resolver, sequence_number);
+                clip.ClearChangedToRoot(access, sequence_number);
             }
-            current = node.Parent(access).map(|parent| &**resolver.effect(parent));
+            current = node.Parent(access).map(|parent| &**parent);
         }
     }
 
@@ -1507,7 +1475,7 @@ fn PaintPropertyNodeToJSONWithState(
 }
 
 /// The property-node links of one effect state, cloned out of the proof scope
-/// (snapshot directory and rebinder walks).
+/// for walks that recurse across node kinds.
 #[derive(Clone)]
 pub struct EffectStateLinks {
     pub parent: Option<Arc<EffectPaintPropertyNode>>,
@@ -2111,22 +2079,13 @@ impl ScrollPaintPropertyNode {
 
     /// Source: scroll_paint_property_node.cc:73-79.
     pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number(access) == sequence_number {
                 break;
             }
             node.lifecycle.clear_changed(access, sequence_number);
-            current = node.Parent(access).map(|parent| &**resolver.scroll(parent));
+            current = node.Parent(access).map(|parent| &**parent);
         }
     }
 
@@ -2417,18 +2376,9 @@ impl PropertyTreeState {
 
     /// Source: property_tree_state.h:142-152,288-301.
     pub fn ClearChangedToRoot(&self, access: &PropertyAccess, sequence_number: i32) {
-        self.ClearChangedToRootIn(access, &LinkedProperties, sequence_number)
-    }
-    /// ClearChangedToRoot following links through `resolver`.
-    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        sequence_number: i32,
-    ) {
-        self.Transform().ClearChangedToRootIn(access, resolver, sequence_number);
-        self.Clip().ClearChangedToRootIn(access, resolver, sequence_number);
-        self.Effect().ClearChangedToRootIn(access, resolver, sequence_number);
+        self.Transform().ClearChangedToRoot(access, sequence_number);
+        self.Clip().ClearChangedToRoot(access, sequence_number);
+        self.Effect().ClearChangedToRoot(access, sequence_number);
     }
     pub fn Changed(
         &self,
@@ -2440,15 +2390,6 @@ impl PropertyTreeState {
     }
     pub fn ChangedToRoot(&self, access: &PropertyAccess, change: PaintPropertyChangeType) -> bool {
         self.Changed(access, change, &Self::Root())
-    }
-    /// ChangedToRoot following links through `resolver`.
-    pub fn ChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
-        &self,
-        access: &PropertyAccess,
-        resolver: &R,
-        change: PaintPropertyChangeType,
-    ) -> bool {
-        crate::property_node_geometry::PropertyStateChangedIn(access, resolver, self, change, &Self::Root())
     }
 
     /// Source: property_tree_state.cc:198-200,212-218.
@@ -2471,45 +2412,6 @@ impl PropertyTreeState {
     pub fn same_nodes(&self, other: &Self) -> bool {
         self == other
     }
-    /// Frame-state comparison is intentionally separate from node identity.
-    /// A stable node can have new values (including changed ancestor values).
-    pub fn same_values(&self, other: &Self) -> bool {
-        if Arc::ptr_eq(&self.transform, &other.transform)
-            && Arc::ptr_eq(&self.clip, &other.clip)
-            && Arc::ptr_eq(&self.effect, &other.effect)
-        {
-            return true;
-        }
-        // Compare each shared graph node once. Recursive derived equality can
-        // revisit filter/clip cross-links exponentially in a nested subtree.
-        let a = PaintPropertyTrees::from_states([self]);
-        let b = PaintPropertyTrees::from_states([other]);
-        same_directory(&a.transforms, &b.transforms, |a, b| {
-            a.lifecycle == b.lifecycle
-                && transform_state_change(a, b) == PaintPropertyChangeType::Unchanged
-        }) && same_directory(&a.clips, &b.clips, |a, b| {
-            a.lifecycle == b.lifecycle
-                && clip_state_change(a, b) == PaintPropertyChangeType::Unchanged
-        }) && same_directory(&a.effects, &b.effects, |a, b| {
-            a.lifecycle == b.lifecycle
-                && effect_state_change(a, b) == PaintPropertyChangeType::Unchanged
-        }) && same_directory(&a.scrolls, &b.scrolls, |a, b| {
-            a.lifecycle == b.lifecycle
-                && scroll_state_change(a, b) == PaintPropertyChangeType::Unchanged
-        })
-    }
-    pub fn changed_to_root(&self, access: &PropertyAccess) -> PaintPropertyChangeType {
-        let trees = PaintPropertyTrees::from_states([self]);
-        trees
-            .transforms
-            .values()
-            .map(|n| n.lifecycle.node_changed(access))
-            .chain(trees.clips.values().map(|n| n.lifecycle.node_changed(access)))
-            .chain(trees.effects.values().map(|n| n.lifecycle.node_changed(access)))
-            .chain(trees.scrolls.values().map(|n| n.lifecycle.node_changed(access)))
-            .max()
-            .unwrap_or_default()
-    }
     pub fn nearest_scroll(&self) -> Option<Arc<ScrollPaintPropertyNode>> {
         crate::property_cell::with_access(|access| {
             let mut transform = Some(&self.transform);
@@ -2521,166 +2423,6 @@ impl PropertyTreeState {
             }
             None
         })
-    }
-}
-
-/// A deduplicated directory suitable for exporting the complete referenced
-/// ancestry of one paint artifact. Per-type roots all have ID zero.
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct PaintPropertyTrees {
-    pub transforms: BTreeMap<u64, Arc<TransformPaintPropertyNode>>,
-    pub clips: BTreeMap<u64, Arc<ClipPaintPropertyNode>>,
-    pub effects: BTreeMap<u64, Arc<EffectPaintPropertyNode>>,
-    pub scrolls: BTreeMap<u64, Arc<ScrollPaintPropertyNode>>,
-    transforms_by_identity: BTreeMap<usize, Arc<TransformPaintPropertyNode>>,
-    clips_by_identity: BTreeMap<usize, Arc<ClipPaintPropertyNode>>,
-    effects_by_identity: BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
-    scrolls_by_identity: BTreeMap<usize, Arc<ScrollPaintPropertyNode>>,
-}
-
-impl PaintPropertyTrees {
-    fn identity(lifecycle: &PaintPropertyNodeLifecycle) -> usize {
-        Arc::as_ptr(&lifecycle.identity) as usize
-    }
-    pub fn transform_for(
-        &self,
-        node: &TransformPaintPropertyNode,
-    ) -> Option<&Arc<TransformPaintPropertyNode>> {
-        self.transforms_by_identity
-            .get(&Self::identity(&node.lifecycle))
-    }
-    pub fn clip_for(&self, node: &ClipPaintPropertyNode) -> Option<&Arc<ClipPaintPropertyNode>> {
-        self.clips_by_identity.get(&Self::identity(&node.lifecycle))
-    }
-    pub fn effect_for(
-        &self,
-        node: &EffectPaintPropertyNode,
-    ) -> Option<&Arc<EffectPaintPropertyNode>> {
-        self.effects_by_identity
-            .get(&Self::identity(&node.lifecycle))
-    }
-    pub fn scroll_for(
-        &self,
-        node: &ScrollPaintPropertyNode,
-    ) -> Option<&Arc<ScrollPaintPropertyNode>> {
-        self.scrolls_by_identity
-            .get(&Self::identity(&node.lifecycle))
-    }
-    pub fn transform_snapshots(&self) -> impl Iterator<Item = &Arc<TransformPaintPropertyNode>> {
-        self.transforms_by_identity.values()
-    }
-    pub fn clip_snapshots(&self) -> impl Iterator<Item = &Arc<ClipPaintPropertyNode>> {
-        self.clips_by_identity.values()
-    }
-    pub fn effect_snapshots(&self) -> impl Iterator<Item = &Arc<EffectPaintPropertyNode>> {
-        self.effects_by_identity.values()
-    }
-    pub fn scroll_snapshots(&self) -> impl Iterator<Item = &Arc<ScrollPaintPropertyNode>> {
-        self.scrolls_by_identity.values()
-    }
-    fn insert_transform(&mut self, node: Arc<TransformPaintPropertyNode>) {
-        self.transforms_by_identity
-            .insert(Self::identity(&node.lifecycle), node.clone());
-        self.transforms.entry(node.id).or_insert(node);
-    }
-    fn insert_clip(&mut self, node: Arc<ClipPaintPropertyNode>) {
-        self.clips_by_identity
-            .insert(Self::identity(&node.lifecycle), node.clone());
-        self.clips.entry(node.id).or_insert(node);
-    }
-    fn insert_effect(&mut self, node: Arc<EffectPaintPropertyNode>) {
-        self.effects_by_identity
-            .insert(Self::identity(&node.lifecycle), node.clone());
-        self.effects.entry(node.id).or_insert(node);
-    }
-    fn insert_scroll(&mut self, node: Arc<ScrollPaintPropertyNode>) {
-        self.scrolls_by_identity
-            .insert(Self::identity(&node.lifecycle), node.clone());
-        self.scrolls.entry(node.id).or_insert(node);
-    }
-    pub fn from_states<'a>(states: impl IntoIterator<Item = &'a PropertyTreeState>) -> Self {
-        let mut trees = Self::default();
-        for state in states {
-            trees.add_transform(&state.transform);
-            trees.add_clip(&state.clip);
-            trees.add_effect(&state.effect);
-        }
-        trees
-    }
-    fn add_transform(&mut self, node: &Arc<TransformPaintPropertyNode>) {
-        if self.transform_for(node).is_some() {
-            return;
-        }
-        self.insert_transform(node.clone());
-        let links = crate::property_cell::with_access(|access| node.state(access).links());
-        if let Some(parent) = &links.parent {
-            self.add_transform(parent);
-        }
-        if let Some(scroll) = &links.scroll {
-            self.add_scroll(scroll);
-        }
-        if let Some(parent) = &links.scroll_parent_scroll_translation {
-            self.add_transform(parent);
-        }
-    }
-    fn add_clip(&mut self, node: &Arc<ClipPaintPropertyNode>) {
-        if self.clip_for(node).is_some() {
-            return;
-        }
-        self.insert_clip(node.clone());
-        let (parent, filter, transform) = crate::property_cell::with_access(|access| {
-            let state = node.state(access);
-            (
-                state.parent.clone(),
-                state.pixel_moving_filter.clone(),
-                state.local_transform_space.clone(),
-            )
-        });
-        if let Some(parent) = &parent {
-            self.add_clip(parent);
-        }
-        if let Some(filter) = &filter {
-            self.add_effect(filter);
-        }
-        self.add_transform(&transform);
-    }
-    fn add_effect(&mut self, node: &Arc<EffectPaintPropertyNode>) {
-        if self.effect_for(node).is_some() {
-            return;
-        }
-        self.insert_effect(node.clone());
-        let links = crate::property_cell::with_access(|access| node.state(access).links());
-        if let Some(parent) = &links.parent {
-            self.add_effect(parent);
-        }
-        self.add_transform(&links.local_transform_space);
-        if let Some(clip) = &links.output_clip {
-            self.add_clip(clip);
-        }
-        if let Some(clip) = &links.backdrop_filter_clip {
-            self.add_clip(clip);
-        }
-        if let Some(child) = &links.canvas_child_state {
-            self.add_transform(&child.content_state.transform);
-            self.add_clip(&child.content_state.clip);
-            self.add_effect(&child.content_state.effect);
-        }
-    }
-    fn add_scroll(&mut self, node: &Arc<ScrollPaintPropertyNode>) {
-        if self.scroll_for(node).is_some() {
-            return;
-        }
-        self.insert_scroll(node.clone());
-        let (parent, clip) = crate::property_cell::with_access(|access| {
-            let state = node.state(access);
-            (state.parent.clone(), state.overflow_clip.clone())
-        });
-        if let Some(parent) = &parent {
-            self.add_scroll(parent);
-        }
-        if let Some(clip) = &clip {
-            self.add_clip(clip);
-        }
     }
 }
 
@@ -2737,46 +2479,20 @@ pub struct PaintPropertyKey {
 /// Persistent Create-or-Update slots; source: ObjectPaintProperties::Update /
 /// Clear in core/paint/object_paint_properties.h. The map is scoped to one
 /// retained paint lifecycle, never global and never keyed by DOM order.
-/// Old frames keep immutable snapshots; identity allocations are retained by
-/// both snapshots. Removing a slot and later adding it creates a new entity.
-/// Node id of a persisted property node.
-pub trait PersistedPropertyNode {
-    fn node_id(&self) -> u64;
-    fn entity_lifecycle(&self) -> &PaintPropertyNodeLifecycle;
-}
-macro_rules! persisted_property_node {
-    ($($type:ty),*) => {$(
-        impl PersistedPropertyNode for $type {
-            fn node_id(&self) -> u64 {
-                self.id
-            }
-            fn entity_lifecycle(&self) -> &PaintPropertyNodeLifecycle {
-                &self.lifecycle
-            }
-        }
-    )*};
-}
-persisted_property_node!(
-    TransformPaintPropertyNode,
-    ClipPaintPropertyNode,
-    EffectPaintPropertyNode,
-    ScrollPaintPropertyNode
-);
-
-/// One kind of persisted property node by slot key, with an index from node
-/// id to slot. Reads go through Deref; every write goes through `insert` or
-/// `retain`, which keep the index in step.
+/// A slot holds one live node updated in place; artifacts that still name a
+/// removed node keep it alive. Removing a slot and later adding it creates a
+/// new node.
+/// One kind of ObjectPaintProperties slot node by slot key. Reads go through
+/// Deref; writes go through `insert` and `retain`.
 #[derive(Debug)]
 pub struct KeyedPropertyNodes<T> {
     by_key: BTreeMap<PaintPropertyKey, Arc<T>>,
-    ids: TrustedIdentityHashMap<u64, PaintPropertyKey>,
 }
 impl<T> Clone for KeyedPropertyNodes<T> {
     /// Clones the slot map: the same live node `Arc`s.
     fn clone(&self) -> Self {
         Self {
             by_key: self.by_key.clone(),
-            ids: self.ids.clone(),
         }
     }
 }
@@ -2784,7 +2500,6 @@ impl<T> Default for KeyedPropertyNodes<T> {
     fn default() -> Self {
         Self {
             by_key: BTreeMap::new(),
-            ids: TrustedIdentityHashMap::default(),
         }
     }
 }
@@ -2801,7 +2516,7 @@ impl<'a, T> IntoIterator for &'a KeyedPropertyNodes<T> {
         self.by_key.iter()
     }
 }
-impl<T: PersistedPropertyNode> FromIterator<(PaintPropertyKey, Arc<T>)> for KeyedPropertyNodes<T> {
+impl<T> FromIterator<(PaintPropertyKey, Arc<T>)> for KeyedPropertyNodes<T> {
     fn from_iter<I: IntoIterator<Item = (PaintPropertyKey, Arc<T>)>>(iter: I) -> Self {
         let mut nodes = Self::default();
         for (key, node) in iter {
@@ -2810,144 +2525,13 @@ impl<T: PersistedPropertyNode> FromIterator<(PaintPropertyKey, Arc<T>)> for Keye
         nodes
     }
 }
-impl<T: PersistedPropertyNode> KeyedPropertyNodes<T> {
+impl<T> KeyedPropertyNodes<T> {
     /// Store `node` in `key`'s slot.
     pub fn insert(&mut self, key: PaintPropertyKey, node: Arc<T>) -> Option<Arc<T>> {
-        let id = node.node_id();
-        let old = self.by_key.insert(key, node);
-        match &old {
-            // The common re-persist of a slot under its existing id.
-            Some(old) if old.node_id() == id => {}
-            Some(old) => {
-                if self.ids.get(&old.node_id()) == Some(&key) {
-                    self.ids.remove(&old.node_id());
-                }
-                self.ids.insert(id, key);
-            }
-            None => {
-                self.ids.insert(id, key);
-            }
-        }
-        old
+        self.by_key.insert(key, node)
     }
-    pub fn retain(&mut self, mut keep: impl FnMut(&PaintPropertyKey, &mut Arc<T>) -> bool) {
-        let ids = &mut self.ids;
-        self.by_key.retain(|key, node| {
-            let retained = keep(key, node);
-            if !retained && ids.get(&node.node_id()) == Some(key) {
-                ids.remove(&node.node_id());
-            }
-            retained
-        });
-    }
-    /// Slot of the persisted node with this id.
-    pub fn key_of_id(&self, id: u64) -> Option<PaintPropertyKey> {
-        self.ids.get(&id).copied()
-    }
-    /// The persisted node with this id.
-    pub fn by_id(&self, id: u64) -> Option<&Arc<T>> {
-        self.by_key
-            .get(self.ids.get(&id)?)
-            .filter(|node| node.node_id() == id)
-    }
-}
-
-/// Resolves a property-node link (a parent or cross-tree `Arc`) to the
-/// current snapshot of the node it names. A link names a node entity by id
-/// and lifecycle identity; its target snapshot may be older than the current
-/// one once the store keeps a node's snapshot across an ancestor's value
-/// update (Chromium's mutable nodes: the pointer is the identity, the value
-/// is current). Readers follow links only through a resolver.
-pub trait PropertyNodeResolver {
-    fn transform<'a>(
-        &'a self,
-        link: &'a Arc<TransformPaintPropertyNode>,
-    ) -> &'a Arc<TransformPaintPropertyNode>;
-    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode>;
-    fn effect<'a>(
-        &'a self,
-        link: &'a Arc<EffectPaintPropertyNode>,
-    ) -> &'a Arc<EffectPaintPropertyNode>;
-    fn scroll<'a>(
-        &'a self,
-        link: &'a Arc<ScrollPaintPropertyNode>,
-    ) -> &'a Arc<ScrollPaintPropertyNode>;
-}
-
-/// The resolver for nodes outside any published tree (PrePaint's raw nodes,
-/// hand-built test trees): every link already names its current snapshot.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LinkedProperties;
-
-impl PropertyNodeResolver for LinkedProperties {
-    fn transform<'a>(
-        &'a self,
-        link: &'a Arc<TransformPaintPropertyNode>,
-    ) -> &'a Arc<TransformPaintPropertyNode> {
-        link
-    }
-    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
-        link
-    }
-    fn effect<'a>(
-        &'a self,
-        link: &'a Arc<EffectPaintPropertyNode>,
-    ) -> &'a Arc<EffectPaintPropertyNode> {
-        link
-    }
-    fn scroll<'a>(
-        &'a self,
-        link: &'a Arc<ScrollPaintPropertyNode>,
-    ) -> &'a Arc<ScrollPaintPropertyNode> {
-        link
-    }
-}
-
-/// The live store resolves links the same way as a published tree.
-impl PropertyNodeResolver for PaintPropertyNodeStore {
-    fn transform<'a>(&'a self, link: &'a Arc<TransformPaintPropertyNode>) -> &'a Arc<TransformPaintPropertyNode> {
-        self.transform_by_id(link.id)
-            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
-            .unwrap_or(link)
-    }
-    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
-        self.clip_by_id(link.id)
-            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
-            .unwrap_or(link)
-    }
-    fn effect<'a>(&'a self, link: &'a Arc<EffectPaintPropertyNode>) -> &'a Arc<EffectPaintPropertyNode> {
-        self.effect_by_id(link.id)
-            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
-            .unwrap_or(link)
-    }
-    fn scroll<'a>(&'a self, link: &'a Arc<ScrollPaintPropertyNode>) -> &'a Arc<ScrollPaintPropertyNode> {
-        self.scroll_by_id(link.id)
-            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
-            .unwrap_or(link)
-    }
-}
-
-impl<R: PropertyNodeResolver + ?Sized> PropertyNodeResolver for &R {
-    fn transform<'a>(
-        &'a self,
-        link: &'a Arc<TransformPaintPropertyNode>,
-    ) -> &'a Arc<TransformPaintPropertyNode> {
-        (**self).transform(link)
-    }
-    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
-        (**self).clip(link)
-    }
-    fn effect<'a>(
-        &'a self,
-        link: &'a Arc<EffectPaintPropertyNode>,
-    ) -> &'a Arc<EffectPaintPropertyNode> {
-        (**self).effect(link)
-    }
-    fn scroll<'a>(
-        &'a self,
-        link: &'a Arc<ScrollPaintPropertyNode>,
-    ) -> &'a Arc<ScrollPaintPropertyNode> {
-        (**self).scroll(link)
+    pub fn retain(&mut self, keep: impl FnMut(&PaintPropertyKey, &mut Arc<T>) -> bool) {
+        self.by_key.retain(keep);
     }
 }
 
@@ -3237,19 +2821,6 @@ impl PaintPropertyNodeStore {
         self.change_markers_cleared = self.changed == PaintPropertyChangeType::Unchanged;
     }
 
-    /// Persisted nodes by id: the id-indexed parent links of the tree.
-    pub fn transform_by_id(&self, id: u64) -> Option<&Arc<TransformPaintPropertyNode>> {
-        self.transforms.by_id(id)
-    }
-    pub fn clip_by_id(&self, id: u64) -> Option<&Arc<ClipPaintPropertyNode>> {
-        self.clips.by_id(id)
-    }
-    pub fn effect_by_id(&self, id: u64) -> Option<&Arc<EffectPaintPropertyNode>> {
-        self.effects.by_id(id)
-    }
-    pub fn scroll_by_id(&self, id: u64) -> Option<&Arc<ScrollPaintPropertyNode>> {
-        self.scrolls.by_id(id)
-    }
     /// Borrow an ObjectPaintProperties slot by its existing owner and role.
     /// Query adapters retain neither another property graph nor a snapshot.
     pub fn TransformForKey(&self, key: PaintPropertyKey) -> Option<&TransformPaintPropertyNode> {
@@ -3752,109 +3323,6 @@ impl PaintPropertyNodeStore {
         })
     }
 
-    pub fn is_scroll_only_update_from(&self, old: &Self) -> bool {
-        let reject = |kind: &str,
-                      key: &PaintPropertyKey,
-                      before: u64,
-                      after: u64,
-                      same_identity: bool,
-                      change: PaintPropertyChangeType| {
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                eprintln!(
-                    "scroll-property-reject kind={} key={:?} old_id={} new_id={} same_identity={} change={:?}",
-                    kind, key, before, after, same_identity, change
-                );
-            }
-            false
-        };
-        if self.transforms.len() != old.transforms.len()
-            || self.clips.len() != old.clips.len()
-            || self.effects.len() != old.effects.len()
-            || self.scrolls.len() != old.scrolls.len()
-        {
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                eprintln!(
-                    "scroll-property-reject kind=slot-count old={:?} new={:?}",
-                    (
-                        old.transforms.len(),
-                        old.clips.len(),
-                        old.effects.len(),
-                        old.scrolls.len()
-                    ),
-                    (
-                        self.transforms.len(),
-                        self.clips.len(),
-                        self.effects.len(),
-                        self.scrolls.len()
-                    )
-                );
-            }
-            return false;
-        }
-        for (key, node) in &self.transforms {
-            let Some(before) = old.transforms.get(key) else {
-                return reject(
-                    "transform-slot",
-                    key,
-                    0,
-                    node.id,
-                    false,
-                    PaintPropertyChangeType::NodeAddedOrRemoved,
-                );
-            };
-            let change = transform_state_change(before, node);
-            let same_identity = node.lifecycle.same_node(&before.lifecycle);
-            if !same_identity
-                || !(change == PaintPropertyChangeType::Unchanged
-                    || (key.role == PaintPropertyRole::ScrollTranslation
-                        && crate::property_cell::with_access(|access| {
-                            node.ScrollNode(access).is_some_and(|scroll| scroll.id != 0)
-                        })
-                        && change == PaintPropertyChangeType::ChangedOnlySimpleValues))
-            {
-                if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
-                    eprintln!(
-                        "scroll-transform-values old={:?} new={:?}",
-                        crate::property_cell::with_access(|access| before.Matrix(access).values),
-                        crate::property_cell::with_access(|access| node.Matrix(access).values)
-                    );
-                }
-                return reject("transform", key, before.id, node.id, same_identity, change);
-            }
-        }
-        macro_rules! check_nodes {
-            ($map:ident, $change:ident) => {
-                for (key, node) in &self.$map {
-                    let Some(before) = old.$map.get(key) else {
-                        return reject(
-                            stringify!($map),
-                            key,
-                            0,
-                            node.id,
-                            false,
-                            PaintPropertyChangeType::NodeAddedOrRemoved,
-                        );
-                    };
-                    let change = $change(before, node);
-                    let same_identity = node.lifecycle.same_node(&before.lifecycle);
-                    if !same_identity || change != PaintPropertyChangeType::Unchanged {
-                        return reject(
-                            stringify!($map),
-                            key,
-                            before.id,
-                            node.id,
-                            same_identity,
-                            change,
-                        );
-                    }
-                }
-            };
-        }
-        check_nodes!(clips, clip_state_change);
-        check_nodes!(effects, effect_state_change);
-        check_nodes!(scrolls, scroll_state_change);
-        true
-    }
     pub fn clear_owner(&mut self, owner: PaintPropertyOwner) {
         self.transforms.retain(|k, _| k.owner != owner);
         self.clips.retain(|k, _| k.owner != owner);
@@ -3866,18 +3334,7 @@ impl PaintPropertyNodeStore {
     }
 }
 
-fn same_directory<T>(
-    a: &BTreeMap<u64, Arc<T>>,
-    b: &BTreeMap<u64, Arc<T>>,
-    same: impl Fn(&T, &T) -> bool,
-) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|((ka, a), (kb, b))| ka == kb && same(a, b))
-}
-// Each snapshot's parent and cross-tree links are canonicalized before its
-// local state is compared. Compare node entities, not old ancestor values:
+// Compare linked node entities, not ancestor values:
 // Blink SetParent/State::ComputeChange compares pointers in these fields.
 fn same_optional<T>(
     a: &Option<Arc<T>>,
@@ -3930,6 +3387,7 @@ fn compute_transform_change(
 /// Source: transform_paint_property_node.cc:72-105 and
 /// transform_paint_property_node.h:173-185. Parent participates through the
 /// enclosing SetParent result, represented here by resident identity.
+#[cfg(test)]
 fn transform_state_change_with_animation(
     a: &TransformPaintPropertyNode,
     b: &TransformPaintPropertyNode,
@@ -3971,6 +3429,7 @@ fn transform_node_state_change(
     compute_transform_change(a, b, animation_state)
 }
 
+#[cfg(test)]
 fn transform_state_change(
     a: &TransformPaintPropertyNode,
     b: &TransformPaintPropertyNode,
@@ -3993,12 +3452,6 @@ fn transform_state_change(
             is_running_animation_on_compositor: directly_sampled_active_animation,
         },
     )
-}
-fn clip_state_change(
-    a: &ClipPaintPropertyNode,
-    b: &ClipPaintPropertyNode,
-) -> PaintPropertyChangeType {
-    crate::property_cell::with_access(|access| clip_node_state_change(a.state(access), b.state(access)))
 }
 fn clip_node_state_change(
     a: &ClipPaintPropertyNodeState,
@@ -4074,6 +3527,7 @@ fn backdrop_filter_state_change(
     Unchanged
 }
 
+#[cfg(test)]
 fn effect_state_change_with_animation(
     a: &EffectPaintPropertyNode,
     b: &EffectPaintPropertyNode,
@@ -4160,12 +3614,7 @@ fn effect_node_state_change(
     Unchanged
 }
 
-fn effect_state_change(
-    a: &EffectPaintPropertyNode,
-    b: &EffectPaintPropertyNode,
-) -> PaintPropertyChangeType {
-    effect_state_change_with_animation(a, b, EffectAnimationState::default())
-}
+#[cfg(test)]
 fn scroll_state_change(
     a: &ScrollPaintPropertyNode,
     b: &ScrollPaintPropertyNode,
