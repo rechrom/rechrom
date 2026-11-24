@@ -130,21 +130,12 @@ impl PaintInput {
     }
 }
 
-/// Paint's persistent identity allocation; numeric node ids are diagnostic only.
-/// The retained node handles below keep the allocation alive while in use.
+/// A live Paint node's address (Chromium compares node pointers); numeric
+/// node ids are diagnostic only. The handles below keep the node alive while
+/// its identity is in use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct PropertyNodeIdentity(usize);
 
-impl PropertyNodeIdentity {
-    fn of(lifecycle: &paint_property_tree::PaintPropertyNodeLifecycle) -> Self {
-        Self(Arc::as_ptr(&lifecycle.identity) as usize)
-    }
-}
-
-/// The artifact's published property trees a handle resolves its links
-/// through (see paint_property_tree::PropertyNodeResolver); None follows the
-/// Arc links themselves.
-pub type HandleTrees = Option<Arc<paint_property_tree::FrozenPropertyTrees>>;
 
 /// One node read under the document sequence's proof (decision D1: layerize
 /// handles take the proof per call; LayerizeEngine runs on the document
@@ -155,50 +146,30 @@ pub(crate) fn read<T>(f: impl FnOnce(&paint_model::property_cell::PropertyAccess
 }
 
 
-macro_rules! resolve_link {
-    ($trees:expr, $kind:ident, $link:expr) => {
-        match $trees {
-            Some(trees) => {
-                paint_property_tree::PropertyNodeResolver::$kind(&**trees, $link).clone()
-            }
-            None => $link.clone(),
-        }
-    };
-}
-
 macro_rules! node_handle {
-    ($handle:ident, $node:ident, $kind:ident) => {
-        /// Retains the actual native node; equality/hash concern persistent
-        /// identity, independently of revision and all mutable-value metadata.
+    ($handle:ident, $node:ident) => {
+        /// Retains the actual live node (Chromium's `const Node*`); its links
+        /// are read through the node itself. Equality and hash are the node's
+        /// identity.
         pub struct $handle<R> {
             node: Arc<paint_property_tree::$node>,
-            trees: HandleTrees,
             backend: PhantomData<fn() -> R>,
         }
         impl<R> Clone for $handle<R> {
             fn clone(&self) -> Self {
-                Self::from_arc_in(Arc::clone(&self.node), self.trees.clone())
+                Self::from_arc(Arc::clone(&self.node))
             }
         }
         impl<R> $handle<R> {
-            /// A handle following its links directly (no published trees).
             pub fn from_arc(node: Arc<paint_property_tree::$node>) -> Self {
-                Self::from_arc_in(node, None)
-            }
-            /// A handle whose links resolve through `trees`.
-            pub fn from_arc_in(node: Arc<paint_property_tree::$node>, trees: HandleTrees) -> Self {
                 Self {
                     node,
-                    trees,
                     backend: PhantomData,
                 }
             }
-            pub fn trees(&self) -> &HandleTrees {
-                &self.trees
-            }
             /// This node's current parent.
             pub fn parent_handle(&self) -> Option<Self> {
-                read(|a| self.node.Parent(a).map(|parent| self.link_same(parent)))
+                read(|a| self.node.Parent(a).map(|parent| Self::from_arc(parent.clone())))
             }
             /// Whether this node is `other` or one of its current ancestors.
             pub fn is_ancestor_of(&self, other: &Self) -> bool {
@@ -213,9 +184,8 @@ macro_rules! node_handle {
             }
             /// Lowest common ancestor over current parents, by identity.
             pub fn lowest_common_ancestor(&self, other: &Self) -> Self {
-                let trees = self.trees.clone().or_else(|| other.trees.clone());
-                let a = Self::from_arc_in(self.node.clone(), trees.clone());
-                let b = Self::from_arc_in(other.node.clone(), trees);
+                let a = self.clone();
+                let b = other.clone();
                 let depth = |node: &Self| {
                     let mut depth = 0;
                     let mut current = node.parent_handle();
@@ -243,32 +213,6 @@ macro_rules! node_handle {
                 }
                 a
             }
-            /// The current node a same-kind link (parent) of this node names.
-            pub fn link_same(&self, link: &Arc<paint_property_tree::$node>) -> Self {
-                Self::from_arc_in(resolve_link!(&self.trees, $kind, link), self.trees.clone())
-            }
-            /// The current node a transform link of this node names.
-            pub fn link_transform(
-                &self,
-                link: &Arc<paint_property_tree::TransformPaintPropertyNode>,
-            ) -> TransformNode<R> {
-                TransformNode::from_arc_in(resolve_link!(&self.trees, transform, link), self.trees.clone())
-            }
-            pub fn link_clip(&self, link: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> ClipNode<R> {
-                ClipNode::from_arc_in(resolve_link!(&self.trees, clip, link), self.trees.clone())
-            }
-            pub fn link_effect(
-                &self,
-                link: &Arc<paint_property_tree::EffectPaintPropertyNode>,
-            ) -> EffectNode<R> {
-                EffectNode::from_arc_in(resolve_link!(&self.trees, effect, link), self.trees.clone())
-            }
-            pub fn link_scroll(
-                &self,
-                link: &Arc<paint_property_tree::ScrollPaintPropertyNode>,
-            ) -> ScrollNode<R> {
-                ScrollNode::from_arc_in(resolve_link!(&self.trees, scroll, link), self.trees.clone())
-            }
             pub fn as_arc(&self) -> &Arc<paint_property_tree::$node> {
                 &self.node
             }
@@ -276,7 +220,7 @@ macro_rules! node_handle {
                 &self.node
             }
             pub fn identity(&self) -> PropertyNodeIdentity {
-                PropertyNodeIdentity::of(&self.node.lifecycle)
+                PropertyNodeIdentity(Arc::as_ptr(&self.node) as *const u8 as usize)
             }
             pub fn cc_node_id(&self, sequence_number: i32) -> i32 {
                 paint_model::property_cell::with_access(|a| self.node.lifecycle.cc_node_id(a, sequence_number))
@@ -305,10 +249,10 @@ macro_rules! node_handle {
         }
     };
 }
-node_handle!(TransformNode, TransformPaintPropertyNode, transform);
-node_handle!(ClipNode, ClipPaintPropertyNode, clip);
-node_handle!(EffectNode, EffectPaintPropertyNode, effect);
-node_handle!(ScrollNode, ScrollPaintPropertyNode, scroll);
+node_handle!(TransformNode, TransformPaintPropertyNode);
+node_handle!(ClipNode, ClipPaintPropertyNode);
+node_handle!(EffectNode, EffectPaintPropertyNode);
+node_handle!(ScrollNode, ScrollPaintPropertyNode);
 
 /// The native three-node state. Clone retains only its three actual Arc nodes.
 /// No property node, directory, ancestry or recorded state is materialized.
@@ -352,14 +296,10 @@ impl<R> Default for PropertyTreeState<R> {
 
 impl<R> PropertyTreeState<R> {
     pub fn from_source(state: &paint_property_tree::PropertyTreeState) -> Self {
-        Self::from_source_in(state, None)
-    }
-    /// A state whose nodes resolve their links through `trees`.
-    pub fn from_source_in(state: &paint_property_tree::PropertyTreeState, trees: HandleTrees) -> Self {
         Self {
-            transform_: TransformNode::from_arc_in(state.transform.clone(), trees.clone()),
-            clip_: ClipNode::from_arc_in(state.clip.clone(), trees.clone()),
-            effect_: EffectNode::from_arc_in(state.effect.clone(), trees),
+            transform_: TransformNode::from_arc(state.transform.clone()),
+            clip_: ClipNode::from_arc(state.clip.clone()),
+            effect_: EffectNode::from_arc(state.effect.clone()),
         }
     }
     pub fn as_source(&self) -> paint_property_tree::PropertyTreeState {
@@ -393,8 +333,7 @@ impl<R> PropertyTreeState<R> {
     /// once without cloning or rewriting the artifact.
     pub fn clear_changed_to_root(&self, sequence_number: i32) {
         paint_model::property_cell::with_access(|a| {
-            self.as_source()
-                .ClearChangedToRootIn(a, self.transform_.trees(), sequence_number)
+            self.as_source().ClearChangedToRoot(a, sequence_number)
         });
     }
 }
@@ -405,10 +344,9 @@ fn clear_scroll_changed(node: &paint_property_tree::ScrollPaintPropertyNode, seq
 
 fn clear_transform_changed(
     node: &paint_property_tree::TransformPaintPropertyNode,
-    trees: &HandleTrees,
     sequence_number: i32,
 ) {
-    paint_model::property_cell::with_access(|a| node.ClearChangedToRootIn(a, trees, sequence_number));
+    paint_model::property_cell::with_access(|a| node.ClearChangedToRoot(a, sequence_number));
 }
 
 fn clear_clip_changed(node: &paint_property_tree::ClipPaintPropertyNode, sequence_number: i32) {
@@ -428,7 +366,7 @@ where
         > + ?Sized,
 {
     fn properties_unalias(&self) -> PropertyTreeState<R> {
-        PropertyTreeState::from_source_in(&self.properties, self.property_trees.0.clone())
+        PropertyTreeState::from_source(&self.properties)
     }
     fn raster_effect_outset(&self) -> crate::adapter::paint_geometry::RasterEffectOutset {
         use crate::adapter::paint_geometry::RasterEffectOutset as Output;
@@ -464,26 +402,21 @@ where
         EffectNode = EffectNode<R>,
     >,
 {
-    fn WithChunkTrees(&self, node: TransformNode<R>) -> TransformNode<R> {
-        TransformNode::from_arc_in(node.as_arc().clone(), self.property_trees.0.clone())
-    }
+
     fn CanMatchOldChunk(&self) -> bool {
         paint::paint_engine::PaintChunk::CanMatchOldChunk(self)
     }
     fn SameRawTransform(&self, other: &PaintChunk) -> bool {
-        self.properties
-            .transform
-            .lifecycle
-            .same_node(&other.properties.transform.lifecycle)
+        Arc::ptr_eq(&self.properties.transform, &other.properties.transform)
     }
     fn UnaliasedTransform(&self) -> TransformNode<R> {
-        TransformNode::from_arc_in(Arc::clone(&self.properties.transform), self.property_trees.0.clone())
+        TransformNode::from_arc(Arc::clone(&self.properties.transform))
     }
     fn UnaliasedClip(&self) -> ClipNode<R> {
-        ClipNode::from_arc_in(Arc::clone(&self.properties.clip), self.property_trees.0.clone())
+        ClipNode::from_arc(Arc::clone(&self.properties.clip))
     }
     fn UnaliasedEffect(&self) -> EffectNode<R> {
-        EffectNode::from_arc_in(Arc::clone(&self.properties.effect), self.property_trees.0.clone())
+        EffectNode::from_arc(Arc::clone(&self.properties.effect))
     }
     fn opaque_rect(&self) -> crate::adapter::geometry::Rect {
         // The native producer's integer-cell opacity proof is retained before
@@ -503,12 +436,12 @@ where
         format!("{:?}", self.id)
     }
     fn RawTransformForDebug(&self) -> TransformNode<R> {
-        TransformNode::from_arc_in(Arc::clone(&self.properties.transform), self.property_trees.0.clone())
+        TransformNode::from_arc(Arc::clone(&self.properties.transform))
     }
     fn RawClipForDebug(&self) -> ClipNode<R> {
-        ClipNode::from_arc_in(Arc::clone(&self.properties.clip), self.property_trees.0.clone())
+        ClipNode::from_arc(Arc::clone(&self.properties.clip))
     }
     fn RawEffectForDebug(&self) -> EffectNode<R> {
-        EffectNode::from_arc_in(Arc::clone(&self.properties.effect), self.property_trees.0.clone())
+        EffectNode::from_arc(Arc::clone(&self.properties.effect))
     }
 }

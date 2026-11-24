@@ -2,22 +2,9 @@
 //! second ancestry index; it borrows and retains only the actual node Arcs.
 use std::sync::Arc;
 
-use crate::paint_property_tree::{LinkedProperties, PropertyNodeResolver};
-
-// Source: transform_paint_property_node.cc:136-149. The producer's immutable
-// revisions share the actual node identity; no graph/cache is reconstructed.
+// Source: transform_paint_property_node.cc:136-149, over the live parents.
 pub fn TransformChanged(
     access: &crate::property_cell::PropertyAccess,
-    node: &crate::paint_property_tree::TransformPaintPropertyNode,
-    change: crate::paint_property_tree::PaintPropertyChangeType,
-    relative: &crate::paint_property_tree::TransformPaintPropertyNode,
-) -> bool {
-    TransformChangedIn(access, &LinkedProperties, node, change, relative)
-}
-/// TransformChanged following links through `resolver`.
-pub fn TransformChangedIn<R: PropertyNodeResolver + ?Sized>(
-    access: &crate::property_cell::PropertyAccess,
-    resolver: &R,
     node: &crate::paint_property_tree::TransformPaintPropertyNode,
     change: crate::paint_property_tree::PaintPropertyChangeType,
     relative: &crate::paint_property_tree::TransformPaintPropertyNode,
@@ -30,31 +17,19 @@ pub fn TransformChangedIn<R: PropertyNodeResolver + ?Sized>(
         if node.lifecycle.node_changed(access) >= change {
             return true;
         }
-        current = node.Parent(access).map(|parent| &**resolver.transform(parent));
+        current = node.Parent(access).map(|parent| &**parent);
     }
-    TransformChangedIn(
+    TransformChanged(
         access,
-        resolver,
         relative,
         change,
         &crate::paint_property_tree::PropertyTreeState::default().transform,
     )
 }
-// Source: clip_paint_property_node.cc:47-69. Chromium producer nodes are unaliased;
-// a cache/value revision still retains exactly the same source node identity.
+// Source: clip_paint_property_node.cc:47-69. Chromium producer nodes are
+// unaliased.
 pub fn ClipChanged(
     access: &crate::property_cell::PropertyAccess,
-    node: &crate::paint_property_tree::ClipPaintPropertyNode,
-    change: crate::paint_property_tree::PaintPropertyChangeType,
-    relative: &crate::paint_property_tree::PropertyTreeState,
-    transform_not_to_check: Option<&crate::paint_property_tree::TransformPaintPropertyNode>,
-) -> bool {
-    ClipChangedIn(access, &LinkedProperties, node, change, relative, transform_not_to_check)
-}
-/// ClipChanged following links through `resolver`.
-pub fn ClipChangedIn<R: PropertyNodeResolver + ?Sized>(
-    access: &crate::property_cell::PropertyAccess,
-    resolver: &R,
     node: &crate::paint_property_tree::ClipPaintPropertyNode,
     change: crate::paint_property_tree::PaintPropertyChangeType,
     relative: &crate::paint_property_tree::PropertyTreeState,
@@ -68,31 +43,20 @@ pub fn ClipChangedIn<R: PropertyNodeResolver + ?Sized>(
         if node.lifecycle.node_changed(access) >= change {
             return true;
         }
-        let transform = resolver.transform(node.LocalTransformSpace(access));
+        let transform = node.LocalTransformSpace(access);
         if !transform_not_to_check
             .is_some_and(|other| transform.lifecycle.same_node(&other.lifecycle))
-            && TransformChangedIn(access, resolver, transform, change, &relative.transform)
+            && TransformChanged(access, transform, change, &relative.transform)
         {
             return true;
         }
-        current = node.Parent(access).map(|parent| &**resolver.clip(parent));
+        current = node.Parent(access).map(|parent| &**parent);
     }
     false
 }
 // Source: effect_paint_property_node.cc:148-179.
 pub fn EffectChanged(
     access: &crate::property_cell::PropertyAccess,
-    node: &crate::paint_property_tree::EffectPaintPropertyNode,
-    change: crate::paint_property_tree::PaintPropertyChangeType,
-    relative: &crate::paint_property_tree::PropertyTreeState,
-    transform_not_to_check: Option<&crate::paint_property_tree::TransformPaintPropertyNode>,
-) -> bool {
-    EffectChangedIn(access, &LinkedProperties, node, change, relative, transform_not_to_check)
-}
-/// EffectChanged following links through `resolver`.
-pub fn EffectChangedIn<R: PropertyNodeResolver + ?Sized>(
-    access: &crate::property_cell::PropertyAccess,
-    resolver: &R,
     node: &crate::paint_property_tree::EffectPaintPropertyNode,
     change: crate::paint_property_tree::PaintPropertyChangeType,
     relative: &crate::paint_property_tree::PropertyTreeState,
@@ -106,15 +70,15 @@ pub fn EffectChangedIn<R: PropertyNodeResolver + ?Sized>(
         if node.lifecycle.node_changed(access) >= change {
             return true;
         }
-        let transform = resolver.transform(node.LocalTransformSpace(access));
+        let transform = node.LocalTransformSpace(access);
         if node.HasFilterThatMovesPixels(access)
             && !transform_not_to_check
                 .is_some_and(|other| transform.lifecycle.same_node(&other.lifecycle))
-            && TransformChangedIn(access, resolver, transform, change, &relative.transform)
+            && TransformChanged(access, transform, change, &relative.transform)
         {
             return true;
         }
-        current = node.Parent(access).map(|parent| &**resolver.effect(parent));
+        current = node.Parent(access).map(|parent| &**parent);
     }
     false
 }
@@ -125,19 +89,9 @@ pub fn PropertyStateChanged(
     change: crate::paint_property_tree::PaintPropertyChangeType,
     relative: &crate::paint_property_tree::PropertyTreeState,
 ) -> bool {
-    PropertyStateChangedIn(access, &LinkedProperties, node, change, relative)
-}
-/// PropertyStateChanged following links through `resolver`.
-pub fn PropertyStateChangedIn<R: PropertyNodeResolver + ?Sized>(
-    access: &crate::property_cell::PropertyAccess,
-    resolver: &R,
-    node: &crate::paint_property_tree::PropertyTreeState,
-    change: crate::paint_property_tree::PaintPropertyChangeType,
-    relative: &crate::paint_property_tree::PropertyTreeState,
-) -> bool {
-    TransformChangedIn(access, resolver, &node.transform, change, &relative.transform)
-        || ClipChangedIn(access, resolver, &node.clip, change, relative, Some(&node.transform))
-        || EffectChangedIn(access, resolver, &node.effect, change, relative, Some(&node.transform))
+    TransformChanged(access, &node.transform, change, &relative.transform)
+        || ClipChanged(access, &node.clip, change, relative, Some(&node.transform))
+        || EffectChanged(access, &node.effect, change, relative, Some(&node.transform))
 }
 pub trait PaintPropertyNodeGeometry: Sized {
     fn Parent<'a>(&'a self, access: &'a crate::property_cell::PropertyAccess)
@@ -171,8 +125,8 @@ fn NodeDepthOrFoundAncestor<N: PaintPropertyNodeGeometry>(
     }
     depth
 }
-/// LowestCommonAncestor following parents through `parent` (a resolver),
-/// for links whose snapshot may be older than the node's current one.
+/// LowestCommonAncestor following parents through `parent` (the live
+/// Parent() link of a handle type that wraps the node).
 pub fn LowestCommonAncestorBy<N>(
     node: &Arc<N>,
     other: &Arc<N>,

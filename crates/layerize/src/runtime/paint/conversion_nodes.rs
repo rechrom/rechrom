@@ -28,7 +28,7 @@ where
             self.node().state(a)
                 .scroll
                 .as_ref()
-                .map(|s| self.link_scroll(s))
+                .map(|s| super::ScrollNode::from_arc(s.clone()))
         })
     }
     fn NearestScrollTranslationNode(&self) -> Self {
@@ -186,6 +186,6 @@ where
         element(read(|a| self.node().GetCompositorElementId(a)))
     }
     fn OverflowClipNode(&self) -> Option<ClipNode<R>> {
-        read(|a| self.node().OverflowClipNode(a).map(|p| self.link_clip(p)))
+        read(|a| self.node().OverflowClipNode(a).map(|p| super::ClipNode::from_arc(p.clone())))
     }
 }

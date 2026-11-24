@@ -194,6 +194,14 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
   (`paint_model::property_cell`): node members are read and written through
   the `PropertyAccess` proof; other threads may only hold and drop the
   `Arc`s.
+- A property node is one live object per ObjectPaintProperties slot, updated
+  in place by PrePaint (Chromium `Node::Update`); its identity is its pointer.
+  Artifacts, cached chunks and handles name these live nodes directly: no
+  node snapshots, published trees, link resolvers or rebinding. Retained
+  values that must stay old (raster invalidation, retained-scroll coverage)
+  are captured as values. A property change that needs a full
+  PaintArtifactCompositor update crosses to Layerize as the artifact's
+  `property_tree_update_generation`, never by comparing nodes.
 
 **Layerize** (`layerize`): cc's main side, `LayerizeEngine`. Blink
 `PaintArtifactCompositor`, `PropertyTreeManager`, `PaintChunksToCcLayer`,

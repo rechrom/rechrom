@@ -6,11 +6,9 @@
 // opaque cache allocation. Key Weak references only compare node identity;
 // the nearest-filter member is held strongly (CachedClip), as Blink traces it.
 use super::float_clip_rect::FloatClipRect;
-use super::geometry_mapper_transform_cache::CacheTreeScope;
-use super::native::NativeTrees;
 use crate::paint_property_tree::{ClipPaintPropertyNode, TransformPaintPropertyNode};
 pub use foundation::OverlayScrollbarClipBehavior;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 // Source: geometry_mapper_clip_cache.h:65-67 `s_global_generation`, kept per
 // document sequence (paint_model::property_cell).
 fn global_generation() -> u32 {
@@ -57,9 +55,6 @@ pub struct GeometryMapperClipCache {
     clip_cache_: Vec<ClipCacheEntry>,
     nearest_pixel_moving_filter_clip_: Option<CachedClip>,
     cache_generation_: u32,
-    /// The published property trees this cache was computed in (see
-    /// CacheTreeScope): its entries were mapped through that tree's ancestors.
-    tree_scope_: CacheTreeScope,
 }
 /// A cached Member<const ClipPaintPropertyNode> (traced in Blink, so it keeps
 /// the node alive): the clip owning this cache, which an Arc cannot hold
@@ -83,20 +78,14 @@ impl Default for GeometryMapperClipCache {
             clip_cache_: Vec::new(),
             nearest_pixel_moving_filter_clip_: None,
             cache_generation_: global_generation().wrapping_sub(1),
-            tree_scope_: CacheTreeScope::default(),
         }
     }
 }
 impl GeometryMapperClipCache {
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.h:53-57.
-    pub fn UpdateIfNeeded(
-        &mut self,
-        node: &Arc<ClipPaintPropertyNode>,
-        trees: &NativeTrees,
-        parent_of: ClipParentFn<'_>,
-    ) {
-        if self.cache_generation_ != global_generation() || !self.tree_scope_.is(trees) {
-            self.Update(node, trees, parent_of);
+    pub fn UpdateIfNeeded(&mut self, node: &Arc<ClipPaintPropertyNode>) {
+        if self.cache_generation_ != global_generation() {
+            self.Update(node);
         }
         debug_assert_eq!(self.cache_generation_, global_generation());
     }
@@ -108,19 +97,16 @@ impl GeometryMapperClipCache {
         self.cache_generation_ == global_generation()
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.cc:36-50.
-    fn Update(
-        &mut self,
-        node: &Arc<ClipPaintPropertyNode>,
-        trees: &NativeTrees,
-        parent_of: ClipParentFn<'_>,
-    ) {
+    fn Update(&mut self, node: &Arc<ClipPaintPropertyNode>) {
         self.cache_generation_ = global_generation();
-        self.tree_scope_ = CacheTreeScope::of(trees);
         self.clip_cache_.clear();
-        if crate::property_cell::with_access(|access| node.PixelMovingFilter(access).is_some()) {
+        let (has_filter, parent) = crate::property_cell::with_access(|access| {
+            (node.PixelMovingFilter(access).is_some(), node.Parent(access).cloned())
+        });
+        if has_filter {
             self.nearest_pixel_moving_filter_clip_ = Some(CachedClip::Owner);
-        } else if let Some(parent) = parent_of(node) {
-            self.nearest_pixel_moving_filter_clip_ = WithClipCacheBy(&parent, trees, parent_of, |cache| {
+        } else if let Some(parent) = parent {
+            self.nearest_pixel_moving_filter_clip_ = WithClipCache(&parent, |cache| {
                 cache
                     .nearest_pixel_moving_filter_clip_
                     .as_ref()
@@ -156,38 +142,21 @@ impl GeometryMapperClipCache {
             .map(|member| member.resolve(owner))
     }
 }
-/// Source: clip_paint_property_node.h:249-258. This is the source node getter's
-/// allocation/update bridge, not a second cache registry or cache algorithm.
-/// The closure scope replaces a C++ mutable cache reference with a locked
-/// borrow of that exact node-owned allocation. No guard or owner is retained.
+/// Source: clip_paint_property_node.h:249-258 `GetClipCache`: the node's
+/// `mutable` cache member, allocated lazily and recomputed by the source
+/// generation check. The scoped `&mut` replaces C++'s mutable reference; a
+/// cache update reaches only the parent clip's cache.
 pub fn WithClipCache<R>(
     node: &Arc<ClipPaintPropertyNode>,
     callback: impl FnOnce(&mut GeometryMapperClipCache) -> R,
 ) -> R {
-    WithClipCacheBy(
-        node,
-        &None,
-        &|clip| crate::property_cell::with_access(|access| clip.Parent(access).cloned()),
-        callback,
-    )
-}
-/// A clip's current parent (a resolver over its parent link).
-pub type ClipParentFn<'a> =
-    &'a dyn Fn(&Arc<ClipPaintPropertyNode>) -> Option<Arc<ClipPaintPropertyNode>>;
-/// WithClipCache for a query in `trees`, whose update follows parents through
-/// `parent_of`.
-pub fn WithClipCacheBy<R>(
-    node: &Arc<ClipPaintPropertyNode>,
-    trees: &NativeTrees,
-    parent_of: ClipParentFn<'_>,
-    callback: impl FnOnce(&mut GeometryMapperClipCache) -> R,
-) -> R {
-    let allocation = node
-        .geometry_mapper_cache
-        .get_or_init(|| Mutex::new(GeometryMapperClipCache::default()));
-    let mut cache = allocation.lock().expect("Paint clip cache poisoned");
-    cache.UpdateIfNeeded(node, trees, parent_of);
-    callback(&mut cache)
+    crate::property_cell::with_access(|access| {
+        node.geometry_mapper_cache.with_mut(access, |slot| {
+            let cache: &mut GeometryMapperClipCache = slot.get_or_insert_with(Default::default);
+            cache.UpdateIfNeeded(node);
+            callback(cache)
+        })
+    })
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.cc:18-26,71.
 // GC Trace visits members; native Arc property owners retain their ancestors.

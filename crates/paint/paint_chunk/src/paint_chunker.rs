@@ -120,7 +120,6 @@ impl PaintChunker {
             bounds_are_complete: true,
             raster_effect_outset: RasterEffectOutset::kNone,
             properties: self.current_properties.clone(),
-            property_trees: Default::default(),
             is_cacheable: client.is_cacheable,
             client_is_just_created: client.is_just_created,
             is_moved_from_cached_subsequence: false,

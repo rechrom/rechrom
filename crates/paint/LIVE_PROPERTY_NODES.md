@@ -2,8 +2,9 @@
 
 Status: written 2026-11-23 at main `7f978395`; S2-1 and S2-3 (markers and
 node values sequence-confined), S2-4 (in-place PrePaint slot updates, D2)
-and S2-5 (in-place direct and retained-scroll updates) are implemented,
-S2-6 is not (see "As implemented" below).
+S2-5 (in-place direct and retained-scroll updates), S2-6 (Paint and
+Layerize read live nodes) and most of S3 are implemented; runtime
+verification (section 6) is pending (see "As implemented" below).
 Stage S2 of the live-property-tree plan (S0 map, S1 split
 LayerizeEngine from CompositorEngine, **S2 live nodes**, S3 delete the
 snapshot machinery, S4 contract/guards, S5 verification).
@@ -157,13 +158,15 @@ Deviations of S2-4/S2-5:
   update may run inside a `with_access` closure (it panics, it cannot race).
 - `OpaquePaintCacheSlot`, `CacheTreeScope`, `FrozenPropertyTrees`, the
   resolvers and `ArtifactPropertyStateRebinder` stay until S2-6: with live
-  nodes they resolve every link to itself but are still read.
+  nodes they resolve every link to itself but are still read. (Deleted
+  in S2-6.)
 - The retained scroll path updates nodes before its coverage proof; a
   rejection leaves the new values in place and the ordinary lifecycle that
   follows computes the same values (Chromium's PrePaint also updates the
   scroll translation before Paint decides).
 - Node `Clone`/`PartialEq` are still value-based with `with_access`; they
   must not run inside a writer scope (none does). Make them identity in S2-6.
+  (Done: `PartialEq` is identity; `Clone` remains for test fixtures.)
 - `prepaint` unit tests still do not compile (pre-existing); the named
   S2-4 tests were not run.
 - Fixed after runtime verification (`fix(prepaint): refresh retained flat
@@ -175,14 +178,100 @@ Deviations of S2-4/S2-5:
   inherited prefix of their flat lists. Any other retained flat geometry
   that is combined with live node values is the same hazard class.
 
-Not landed (stopped here because D: had 1.4 GB free): S2-6. No iteration
-build and no runtime verification (section 6) have been done for S2-4/S2-5.
+- **S2-6** (`refactor(paint): read live property nodes in paint and
+  layerize`). Deleted: `ArtifactPropertyStateRebinder` and its
+  `PaintCommit.RebindPropertyStates` call, `PublishedTrees`,
+  `PaintChunk::property_trees`, `PaintArtifact::property_trees`,
+  `FrozenPropertyTrees` / `NodesById` / `FrozenTreeCoverage` /
+  `verify_state` and the store's `published` freeze
+  (`published_trees`, `invalidate_published`, `freeze`, the `frozen_*`
+  trace counters), `PrePaintTreeWalk::PublishedTrees`,
+  `ResidentPaintHitTest::PublishedTrees` (resident hit test, layer clipper
+  and interaction hit test follow `Parent()` directly), `NativeTrees`,
+  `from_arc_in` / `from_state_in`, both `Trees()` trait methods and
+  `NativeGeometryMapperContext::trees`, `CacheTreeScope`,
+  `OpaquePaintCacheSlot` (the transform and clip GeometryMapper caches are
+  typed `MutableCell<Option<Box<..>>>` members of the node, `with_mut`
+  under a per-call `with_access`; `WithClipCacheBy` / `ClipParentFn`
+  collapsed into `WithClipCache` over the live parent), `HandleTrees`,
+  `resolve_link!`, the handles' `trees` field and `link_*` methods,
+  `with_trees`, `WithChunkTrees`. Handle and native-handle identity is the
+  node pointer; node `PartialEq` is `std::ptr::eq` (`Eq` added). Node
+  `Clone` is kept for hand-built test fixtures only (production code never
+  copies a node: `rechrom_app` type-checked with `Clone` removed).
+  The Layerize property-change heuristic (walk every chunk's ancestry with
+  `PropertyStateChanged`, plus a per-chunk identity compare) is replaced by
+  a typed PrePaint value: `PaintPropertyNodeStore::NoteCompositorChange`
+  draws a new process-unique `CompositorUpdateGeneration` whenever a node
+  update changes it beyond `ChangedOnlyCompositedValues` (Chromium's
+  `SetPaintArtifactCompositorNeedsUpdate` from the builder), except a
+  `ChangedOnlySimpleValues` change of a compositor scroll translation
+  (ScrollTranslation slot with a Scroll node), which Chromium absorbs with
+  `DirectlyUpdateScrollOffsetTransform`. Paint stamps the generation on the
+  artifact (`PaintArtifact::property_tree_update_generation`, in
+  `CommitPaintResult` and after an accepted retained scroll update).
+  `UpdateCompositor` calls `SetNeedsUpdate` when the generation differs from
+  the previously pushed artifact's or when a compositor scroll translation
+  still carries `ChangedOnlySimpleValues` after the direct scroll update
+  loop (no direct compositing reasons or rejected by PAC). Risk 4 holds:
+  "same contents, properties changed" reaches the full update through the
+  generation, independently of artifact `Arc` identity (Page admission is
+  unchanged: `TryUpdateScrollProperties` still `make_mut`s the artifact).
+- **S3** (`refactor(paint): delete the property snapshot machinery`).
+  Deleted: `PropertyNodeResolver` and all impls, `LinkedProperties`, every
+  `*In(resolver, ..)` variant (`ClearChangedToRootIn` on all four nodes and
+  `PropertyTreeState`, `ChangedToRootIn`, `TransformChangedIn`,
+  `ClipChangedIn`, `EffectChangedIn`, `PropertyStateChangedIn`,
+  `SourceToDestinationProjectionIn`, `SourceToDestinationRectIn`,
+  `LocalToAncestorClipRectIn`, the resolver parameter of the non-source
+  mapper's `TransformToRoot/Ancestor` and of the retained-scroll
+  `world_transform` / `property_world` / `clip_output` / `visible_output`),
+  the `PaintPropertyTrees` dedup directory, `PropertyTreeState::same_values`
+  (artifact equality compares chunk states by identity, as
+  `PaintChunk::operator==`) and `changed_to_root`, `same_snapshots`,
+  `same_directory`, `same_entity[_option]`, `same_snapshot_option`,
+  `PersistedPropertyNode`, `KeyedPropertyNodes`' id index (`ids`,
+  `key_of_id`, `by_id`) and the store's `*_by_id`,
+  `is_scroll_only_update_from`, the node-pair `clip_state_change` /
+  `effect_state_change` (the transform/scroll/effect node-pair oracles are
+  `#[cfg(test)]` now), the `chromium_translation.json` references to the
+  opaque cache slot, and snapshot-justifying comments.
+
+Deviations of S2-6/S3:
+
+- The proof stays per call in GeometryMapper handles and layerize handles
+  (D1 per call; the S2-4 narrow-scope rule still forbids a walk-wide
+  proof). The typed caches take one `with_access` per `WithTransformCache` /
+  `WithClipCache`.
+- Not deleted: `PaintPropertyNodeLifecycle` with its separate
+  `Arc<PaintPropertyNodeIdentity>`, `revision` and per-value `changed`
+  (`same_node` is used throughout; with no production copies it is
+  equivalent to `Arc::ptr_eq` on the node, so folding the cells into the
+  node is a mechanical follow-up), and the non-source
+  `paint_model::geometry_mapper` (many Paint callers; it now follows live
+  links only, but replacing it with the source GeometryMapper changes
+  results and needs pixel evidence).
+- `PropertyTreeState::Root()` / `Default` were not changed (3.4 already
+  per sequence through the thread-local).
+- Chromium line numbers for the builder's
+  `SetPaintArtifactCompositorNeedsUpdate` condition were not re-verified
+  offline (no Chromium checkout on this machine).
+
+Runtime verification (section 6) has not been run for S2-4..S3; the
+coordinator's iteration build is the first. Hazards to watch: a
+`PropertyCell` owner panic (a node read off the document thread);
+`MutableCell` reentrancy panic in a GeometryMapper cache (a cache update that
+reaches the same node's cache); missed PAC full updates (under-invalidation
+dumps, stale composited layers) if some property change bypasses the store's
+`NoteCompositorChange`; a full update on every scroll frame if the scroll
+translation classification is wrong; retained flat geometry combined with
+live node values (fix 113239d4 class).
 
 Runtime facts this part changes: a read of a node marker, cc id or node
 value from a thread other than the one that created the node now panics
 (previously a relaxed atomic race or an unchecked shared read); this includes
-node `Clone` and `PartialEq` (and so `PartialEq` of any type holding a node
-`Arc`, which delegates to the node). `Debug` does not panic.
+node `Clone`. Node `PartialEq` is pointer identity and needs no proof. `Debug`
+does not panic.
 `PropertyTreeState::default()` on a second thread yields that thread's own
 roots. After S1b-7 all such readers run on the Page document thread; raster
 threads replay only `PaintRecording::items` and the impl-side commit

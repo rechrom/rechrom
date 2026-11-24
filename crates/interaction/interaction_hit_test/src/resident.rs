@@ -1033,10 +1033,9 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
             geometry_mapper::GeometryMapper,
             native::{NativeGeometryMapperContext, NativeTransformNode},
         };
-        let trees = Some(self.resident.PublishedTrees());
         GeometryMapper::<NativeGeometryMapperContext>::SourceToDestinationProjection(
-            &NativeTransformNode::from_arc_in(source.NativeOwner().clone(), trees.clone()),
-            &NativeTransformNode::from_arc_in(destination.NativeOwner().clone(), trees),
+            &NativeTransformNode::from_arc(source.NativeOwner().clone()),
+            &NativeTransformNode::from_arc(destination.NativeOwner().clone()),
         )
         .as_source()
         .clone()
@@ -1046,20 +1045,14 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
         ancestor: &dyn LayerTransformNode,
         descendant: &dyn LayerTransformNode,
     ) -> bool {
-        // Links reached through fragments may hold older snapshots of their
-        // node; follow them through this layer's published trees.
-        let trees = self.resident.PublishedTrees();
+        // Source: TransformPaintPropertyNode::IsAncestorOf over live parents.
         let ancestor = ancestor.NativeOwner();
         let mut node = Some(descendant.NativeOwner().clone());
         while let Some(current) = node {
-            if ancestor.lifecycle.same_node(&current.lifecycle) {
+            if std::sync::Arc::ptr_eq(ancestor, &current) {
                 return true;
             }
-            node = paint::property_cell::with_access(|a| {
-                current.Parent(a).map(|parent| {
-                    paint::paint_property_tree::PropertyNodeResolver::transform(&*trees, parent).clone()
-                })
-            });
+            node = paint::property_cell::with_access(|a| current.Parent(a).cloned());
         }
         false
     }

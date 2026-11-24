@@ -642,10 +642,7 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
                 .is_some()
         );
         debug_assert!(chunk.display_item_count() == 0);
-        let translation = ArtifactPaintChunk::<B>::WithChunkTrees(
-            chunk,
-            chunk.hit_test_data().unwrap().scroll_translation().unwrap(),
-        );
+        let translation = chunk.hit_test_data().unwrap().scroll_translation().unwrap();
         debug_assert!(translation.ScrollNode().is_some());
         if translation.HasDirectCompositingReasons() {
             return true;
@@ -690,7 +687,6 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         let hit = chunk.hit_test_data();
         if let Some(translation) = hit
             .and_then(|hit| hit.scroll_translation())
-            .map(|translation| ArtifactPaintChunk::<B>::WithChunkTrees(chunk, translation))
         {
             let composited = self.ComputeNeedsCompositedScrolling(artifact, cursor);
             match self.painted_scroll_translations_.entry(translation) {
@@ -756,7 +752,6 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         let scroll_hit_test_requires_compositing = chunk
             .hit_test_data()
             .and_then(|data| data.scroll_translation())
-            .map(|translation| ArtifactPaintChunk::<B>::WithChunkTrees(chunk, translation))
             .map(|translation| {
                 self.ScrollState(services)
                     .NeedsCompositedScrolling(&translation)
@@ -785,7 +780,6 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
                 input.raster_inducing_scroll_enabled = services.RasterInducingScrollEnabled();
                 if let Some(translation) = item
                     .ScrollTranslation()
-                    .map(|translation| ArtifactPaintChunk::<B>::WithChunkTrees(chunk, translation))
                 {
                     input.scrollbar_has_scroll_translation = true;
                     input.scrollbar_scroll_requires_compositing = self
@@ -2027,7 +2021,6 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
             if let Some(translation) = chunk
                 .hit_test_data()
                 .and_then(|hit| hit.scroll_translation())
-                .map(|translation| ArtifactPaintChunk::<B>::WithChunkTrees(chunk, translation))
             {
                 translation.ClearChangedToRoot(*self.context.property_tree_sequence_number);
             }

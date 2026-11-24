@@ -195,9 +195,7 @@ impl ImageDependencyIndex {
                             }
                         }
                     }
-                    effect = node.Parent(access).map(|parent| {
-                        &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent)
-                    });
+                    effect = node.Parent(access).map(|parent| &**parent);
                 }
                 });
             }
@@ -302,10 +300,6 @@ pub struct PaintRecording {
     /// updates retain this backing; an actual operation edit uses Arc::make_mut
     /// to preserve old frame snapshots (Chromium PaintRecord sharing intent).
     pub items: Arc<Vec<DisplayItem>>,
-    /// The document's persisted property trees at publication, indexed by node
-    /// id (see FrozenPropertyTrees). Derived from the chunk states, so it is
-    /// not part of artifact equality.
-    pub property_trees: Option<Arc<paint_model::paint_property_tree::FrozenPropertyTrees>>,
     pub display_items: SharedArtifactData<DisplayItemList>,
     pub chunks: SharedArtifactData<PaintChunks>,
     /// Identity of the immutable display-item recording and its recording
@@ -315,6 +309,12 @@ pub struct PaintRecording {
     /// Zero is reserved for externally assembled/test artifacts, for which
     /// downstream caches must retain their complete value proof.
     pub recording_revision: u64,
+    /// PrePaint's `PaintPropertyNodeStore::CompositorUpdateGeneration` when
+    /// this artifact was published: a different value than the previously
+    /// pushed artifact's is LocalFrameView's
+    /// `SetPaintArtifactCompositorNeedsUpdate` (property nodes changed beyond
+    /// composited values). Lookup context, not part of artifact equality.
+    pub property_tree_update_generation: u64,
     pub resources: Option<Arc<PaintResources>>,
     pub image_dependencies: Arc<ImageDependencyIndex>,
     /// Resource revision proof is a small sidecar. Image changes replace this
@@ -349,12 +349,9 @@ impl PartialEq for PaintRecording {
             && self.image_content_revisions == other.image_content_revisions
             && self.resource_changed_chunks == other.resource_changed_chunks
             && self.painted_layout_image_resource_ids == other.painted_layout_image_resource_ids
+            // PaintChunk::operator== compares the property state by node
+            // identity; live nodes carry their current values.
             && self.chunks == other.chunks
-            && self
-                .chunks
-                .iter()
-                .zip(&other.chunks)
-                .all(|(a, b)| a.properties.same_values(&b.properties))
             && match (&self.resources, &other.resources) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
@@ -795,9 +792,7 @@ impl PaintRecording {
                         }
                     }
                 }
-                effect = node.Parent(access).map(|parent| {
-                        &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent)
-                    });
+                effect = node.Parent(access).map(|parent| &**parent);
             }
                 });
         }

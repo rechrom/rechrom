@@ -6,7 +6,6 @@
 
 pub use paint_chunk::paint_chunker;
 pub use paint_model::display_item_id;
-pub use paint_model::opaque_paint_cache_slot;
 pub use paint_model::paint_clip_path;
 pub use paint_model::path_hit_test;
 pub use paint_model::{basic_shape_path, contoured_border_geometry, contoured_rect};

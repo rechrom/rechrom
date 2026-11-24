@@ -110,10 +110,6 @@ pub trait ArtifactPropertyState<B: PaintArtifactCompositorTypes> {
     fn ClearChangedToRoot(&self, sequence: i32);
 }
 pub trait ArtifactPaintChunk<B: PaintArtifactCompositorTypes> {
-    /// `node` as a handle resolving its links through this chunk's
-    /// published property trees (for nodes reached from the chunk's display
-    /// items and hit-test data).
-    fn WithChunkTrees(&self, node: B::TransformNode) -> B::TransformNode;
     fn CanMatchOldChunk(&self) -> bool;
     fn SameRawTransform(&self, other: &B::PaintChunk) -> bool;
     fn UnaliasedTransform(&self) -> B::TransformNode;

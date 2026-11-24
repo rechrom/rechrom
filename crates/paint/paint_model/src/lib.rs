@@ -14,7 +14,6 @@ pub mod cull_rect;
 pub mod display_item_id;
 pub mod geometry;
 pub mod geometry_mapper;
-pub mod opaque_paint_cache_slot;
 pub mod paint_clip_path;
 pub mod paint_flags;
 pub mod paint_order;
