@@ -166,6 +166,14 @@ Deviations of S2-4/S2-5:
   must not run inside a writer scope (none does). Make them identity in S2-6.
 - `prepaint` unit tests still do not compile (pre-existing); the named
   S2-4 tests were not run.
+- Fixed after runtime verification (`fix(prepaint): refresh retained flat
+  transforms under live property nodes`): PrePaint's flat transform lists
+  (`InheritedContext`/`ChildContext::transforms`) are a Rechrom mirror of
+  the property tree. Retained nodes kept the flat values of the pass that
+  built them; with snapshots their retained contexts also kept that pass's
+  nodes, with live nodes they do not. Retained nodes now refresh the
+  inherited prefix of their flat lists. Any other retained flat geometry
+  that is combined with live node values is the same hazard class.
 
 Not landed (stopped here because D: had 1.4 GB free): S2-6. No iteration
 build and no runtime verification (section 6) have been done for S2-4/S2-5.
