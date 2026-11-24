@@ -1,10 +1,11 @@
-//! Concrete external gfx value mapping. Foundation owns matrix arithmetic;
-//! the injected Skia backend owns SkRRect operations. No trees are stored here.
-//! Moved from compositor/src/runtime/geometry.rs, which re-exports it and keeps
-//! the impls of compositor-local transform facets: CommitTypes::Transform names
-//! this type in both halves, so the shared gfx, property-tree, occlusion,
-//! damage, scrollbar and geometry-mapper facet impls live beside it.
-use super::geometry::{PointF, RRectF, RectF, Vector2dF};
+//! Concrete external gfx value mapping (ui/gfx/geometry/transform.h).
+//! Foundation owns matrix arithmetic; the injected Skia backend owns SkRRect
+//! operations. No trees are stored here. CommitTypes::Transform names this
+//! type in both halves, so it lives in the shared root with the impls of the
+//! shared gfx, property-tree and geometry-mapper facets. The impl packages
+//! implement their own facets (occlusion, damage, scrollbar) for it;
+//! `layerize::commit::transform` re-exports it.
+use compositor_tree::geometry::{self, PointF, RRectF, RectF, Vector2dF};
 use std::marker::PhantomData;
 /// Native SkRRect value operations used by gfx::MaskFilterInfo. This capability
 /// is separate from SkRegionBackend and has no fallback/approximation. A single
@@ -96,7 +97,7 @@ impl<R: RoundedRectTransformBackend> Transform<R> {
         ]
     }
 }
-impl<R: RoundedRectTransformBackend> super::geometry::Transform for Transform<R> {
+impl<R: RoundedRectTransformBackend> geometry::Transform for Transform<R> {
     fn FromColMajor(matrix: &[f64; 16]) -> Self {
         Self::FromColMajor(matrix)
     }
@@ -146,7 +147,7 @@ impl<R: RoundedRectTransformBackend> compositor_tree::property_types::PropertyTr
         self.source.IsInvertible()
     }
 }
-impl<R: RoundedRectTransformBackend> super::property_tree_services::PropertyTreeTransform
+impl<R: RoundedRectTransformBackend> compositor_tree::transform::PropertyTreeTransform
     for Transform<R>
 {
     fn PostConcat(&mut self, other: &Self) {
@@ -211,72 +212,6 @@ impl<R: RoundedRectTransformBackend> super::property_tree_services::PropertyTree
     }
     fn PostScale(&mut self, x: f32, y: f32) {
         self.source.PostScale(x, y);
-    }
-}
-impl<R: RoundedRectTransformBackend> compositor_draw::occlusion::OcclusionTransform
-    for Transform<R>
-{
-    fn InverseForOcclusion(&self, result: &mut Self) -> bool {
-        self.GetInverse(result)
-    }
-    fn MapEnclosingClippedRect(
-        &self,
-        rect: super::geometry::Rect,
-    ) -> super::geometry::Rect {
-        super::math_util::MathUtil::MapEnclosingClippedRect(self, rect)
-    }
-    fn ProjectEnclosingClippedRect(
-        &self,
-        rect: super::geometry::Rect,
-    ) -> super::geometry::Rect {
-        super::math_util::MathUtil::ProjectEnclosingClippedRect(self, rect)
-    }
-    fn OcclusionTransformToString(&self) -> String {
-        format!("{:?}", self.source)
-    }
-}
-impl<R: RoundedRectTransformBackend> compositor_draw::occlusion_context::OcclusionTransform
-    for Transform<R>
-{
-    fn NonDegeneratePreserves2dAxisAlignment(&self) -> bool {
-        self.source.NonDegeneratePreserves2dAxisAlignment()
-    }
-    fn Multiply(&self, other: &Self) -> Self {
-        let mut result = self.clone();
-        result.source.PreConcat(&other.source);
-        result
-    }
-    fn ToString(&self) -> String {
-        format!("{:?}", self.source)
-    }
-}
-impl<R: RoundedRectTransformBackend> compositor_input::scrollbar_controller_boundary::ScrollbarTransform
-    for Transform<R>
-{
-    fn GetInverse(&self, result: &mut Self) -> bool {
-        self.GetInverse(result)
-    }
-    fn ProjectPoint(
-        &self,
-        point: super::geometry::PointF,
-        clipped: &mut bool,
-    ) -> super::geometry::PointF {
-        super::math_util::MathUtil::ProjectPoint(self, point, clipped)
-    }
-    fn MapClippedRect(
-        &self,
-        rect: super::geometry::RectF,
-    ) -> super::geometry::RectF {
-        super::math_util::MathUtil::MapClippedRect(self, rect)
-    }
-}
-impl<R: RoundedRectTransformBackend> compositor_draw::damage_context::DamageTransform
-    for Transform<R>
-{
-    fn ToFlattenedSkMatrix(&self) -> compositor_draw::occlusion::SkMatrix {
-        compositor_draw::occlusion::SkMatrix {
-            values: self.FlattenedSkMatrix(),
-        }
     }
 }
 impl<R: RoundedRectTransformBackend>

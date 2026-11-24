@@ -165,10 +165,7 @@ const CLASSIFICATION: &[(&str, Class)] = &[
 
 /// Main-side dependencies on impl packages that S4 is still cutting:
 /// `(from, to, step that removes it)`. Do not add entries.
-const LAYERIZE_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[
-    ("layerize", "compositor_input", "S4-4c"),
-    ("layerize", "compositor_draw", "S4-4c"),
-];
+const LAYERIZE_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
 
 /// Shared-root dependencies on impl packages that S4 is still cutting.
 /// Do not add entries.
@@ -178,11 +175,6 @@ const SHARED_ROOT_IMPL_DEPENDENCY_ALLOWED: &[(&str, &str, &str)] = &[];
 /// Skia values, base types, image values).
 const SHARED_ROOT_VALUE_DEPENDENCIES: &[&str] =
     &["paint_model", "browser_tracing", "skia", "foundation", "image_resource"];
-
-/// The only `compositor_input` module layerize may still name: the
-/// ScrollbarTransform facet, which moves with gfx::Transform in S4-4c.
-/// Remove with `layerize_names_only_shared_modules`.
-const COMPOSITOR_INPUT_VALUE_MODULES: &[&str] = &["scrollbar_controller_boundary"];
 
 struct Manifest {
     path: String,
@@ -438,75 +430,4 @@ fn allowances_have_no_stale_entries() {
             "`{from}` no longer depends on `{to}`; remove its {step} allowance"
         );
     }
-}
-
-/// First path segments named after `prefix::` in `text` (code without `//`
-/// comments), expanding one `{...}` group.
-fn named_modules(text: &str, prefix: &str) -> Vec<String> {
-    let code: String = text.lines().map(|line| format!("{}\n", code(line))).collect();
-    let needle = format!("{prefix}::");
-    let mut out = Vec::new();
-    for (index, _) in code.match_indices(&needle) {
-        let preceded = code[..index]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_alphanumeric() || c == '_');
-        if preceded {
-            continue;
-        }
-        let rest = &code[index + needle.len()..];
-        let Some(group) = rest.strip_prefix('{') else {
-            out.push(rest.to_string());
-            continue;
-        };
-        let mut depth = 0;
-        let mut item = String::new();
-        for c in group.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' if depth == 0 => break,
-                '}' => depth -= 1,
-                ',' if depth == 0 => {
-                    out.push(std::mem::take(&mut item));
-                    continue;
-                }
-                _ => {}
-            }
-            item.push(c);
-        }
-        out.push(item);
-    }
-    out.into_iter()
-        .map(|item| {
-            item.trim()
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<String>()
-        })
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
-/// S4 transition guard: no new impl use of the mixed `compositor_input`
-/// appears while its values are being cut.
-#[test]
-fn layerize_names_only_shared_modules() {
-    let mut found = Vec::new();
-    files(&root().join("crates/layerize"), &mut found);
-    let mut violations = Vec::new();
-    for path in found.iter().filter(|p| {
-        p.extension().is_some_and(|e| e == "rs") && !relative(p).starts_with("crates/layerize/tests/")
-    }) {
-        let text = std::fs::read_to_string(path).unwrap();
-        for module in named_modules(&text, "compositor_input") {
-            if !COMPOSITOR_INPUT_VALUE_MODULES.contains(&module.as_str()) {
-                violations.push(format!("{}: compositor_input::{module}", relative(path)));
-            }
-        }
-    }
-    assert!(
-        violations.is_empty(),
-        "layerize may name only the shared modules of the mixed packages:\n{}",
-        violations.join("\n")
-    );
 }

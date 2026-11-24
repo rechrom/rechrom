@@ -616,6 +616,8 @@ version = "0.0.1"
 dependencies = [
  "compositor_animation",
  "compositor_tree",
+ "foundation",
+ "paint_model",
  "scroll_animation",
  "scroll_snap",
 ]
@@ -2313,8 +2315,6 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "compositor_animation",
- "compositor_draw",
- "compositor_input",
  "compositor_layerize",
  "compositor_tree",
  "compositor_values",

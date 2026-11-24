@@ -16,6 +16,26 @@ pub trait OcclusionTransform: Clone + Default + PartialEq {
 
 pub use compositor_values::sk_matrix::SkMatrix;
 
+// The occlusion facet of the shared gfx::Transform. Moved from
+// layerize::commit::transform with that value (coherence: the facet is this
+// package's).
+impl<R: compositor_values::transform::RoundedRectTransformBackend> OcclusionTransform
+    for compositor_values::transform::Transform<R>
+{
+    fn InverseForOcclusion(&self, result: &mut Self) -> bool {
+        self.GetInverse(result)
+    }
+    fn MapEnclosingClippedRect(&self, rect: Rect) -> Rect {
+        compositor_tree::math_util::MathUtil::MapEnclosingClippedRect(self, rect)
+    }
+    fn ProjectEnclosingClippedRect(&self, rect: Rect) -> Rect {
+        compositor_tree::math_util::MathUtil::ProjectEnclosingClippedRect(self, rect)
+    }
+    fn OcclusionTransformToString(&self) -> String {
+        format!("{:?}", self.as_source())
+    }
+}
+
 // Source: cc/trees/occlusion.h:17-39
 // Source: cc/trees/occlusion.cc:13
 #[derive(Clone, Default)]

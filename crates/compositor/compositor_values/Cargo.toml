@@ -13,3 +13,7 @@ scroll_animation = { path = "../scroll_animation" }
 compositor_tree = { path = "../compositor_tree" }
 # cc/animation CubicBezier, used by PageScaleAnimation.
 compositor_animation = { path = "../compositor_animation" }
+# gfx::Transform arithmetic (foundation) and the PaintModel geometry-mapper
+# and FloatClipRect facets gfx::Transform implements.
+foundation = { path = "../../foundation" }
+paint_model = { path = "../../paint/paint_model" }

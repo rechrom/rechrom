@@ -7,7 +7,6 @@
 pub mod color_space;
 pub mod commit_state;
 pub mod completion_event;
-mod float_clip_rect_transform;
 pub mod geometry;
 pub mod layer_impl_factory;
 pub mod layer_tree_debug_state;
@@ -37,7 +36,8 @@ pub mod skia_filters;
 pub mod skia_region;
 pub mod skia_value_backend;
 pub mod surface_range;
-pub mod transform;
+// gfx::Transform lives in the cc shared root (both halves name it).
+pub use compositor_values::transform;
 pub mod values;
 pub mod viz_metadata;
 

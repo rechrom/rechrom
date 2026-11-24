@@ -47,12 +47,14 @@ pub mod surface_id;
 
 // base, gfx, Skia and cc/raster values.
 pub mod color4f;
+mod float_clip_rect_transform;
 pub mod location;
 pub mod prioritized_tile;
 pub mod raster_source;
 pub mod render_surface_flags;
 pub mod sk_matrix;
 pub mod traced_value;
+pub mod transform;
 
 pub mod actively_scrolling_type {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
