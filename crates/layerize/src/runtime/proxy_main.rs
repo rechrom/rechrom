@@ -315,7 +315,11 @@ where
     pub fn new(endpoint: Arc<ProxyMainEndpoint<F>>, first_property_owner: u64) -> Self {
         Self {
             endpoint,
-            visible: true,
+            // Source: cc/trees/layer_tree_host.h `bool visible_ = false;`.
+            // The impl Scheduler also starts invisible; the widget's first
+            // SetVisible(true) (WidgetBase::WasShown) posts SetVisibleOnImpl,
+            // without which the Scheduler never sends a BeginMainFrame.
+            visible: false,
             block_on_next_commit: false,
             started: false,
             next_property_owner: first_property_owner,

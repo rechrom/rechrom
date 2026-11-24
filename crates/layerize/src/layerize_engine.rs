@@ -125,8 +125,8 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
 
 impl<F: LayerizeFamily> LayerizeEngine<F> {
     /// Creates the main LayerTreeHost and the canonical PAC with its scroll
-    /// callbacks, then attaches `PAC::RootLayer()` to the host (native
-    /// PAC::Update returns while the root has no host).
+    /// callbacks. `PAC::RootLayer()` is attached by the first
+    /// `UpdatePaintArtifact`.
     pub fn WithPaintServices(
         paint: Arc<CpuMainPaintServices<F::Skia>>,
         init: MainHostInit<F::MutatorHostHandle>,
@@ -152,7 +152,12 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
                 LayerContext::<F>::new(&mut hosts, paint.as_ref()).WithDerivedServices(paint.as_ref());
             paint.CreateCompositor(PacScrollCallbacks::Downgrade(&callbacks), &mut context)
         };
-        main.SetRootLayer(pac.RootLayer().cloned(), paint.as_ref(), paint.as_ref());
+        // PAC::RootLayer() is attached by the first UpdatePaintArtifact
+        // (LocalFrameView::PushPaintArtifactToCompositor ->
+        // ChromeClient::AttachRootLayer). Until then LayerTreeHost has no
+        // root and DoUpdateLayers returns early (layer_tree_host.cc:958-978),
+        // so a BeginMainFrame before the first paint never walks a root
+        // whose property-tree indices PAC::Update has not assigned.
         Self {
             main_frame_lifecycle: Default::default(),
             paint,
@@ -477,6 +482,14 @@ impl<F: LayerizeFamily<Skia = SkRegion>> LayerizeEngine<F> {
         input: PaintInput,
         sequence: &mut i32,
     ) -> Result<Option<Arc<canvas::CanvasChildRecordPublication>>, LayerizeError> {
+        // ChromeClient::AttachRootLayer on the first push, before PAC::Update
+        // (which returns while its root has no host).
+        if self.main.GetMut(&self.endpoint).root_layer().is_none() {
+            let root = self.pac.as_ref().unwrap().RootLayer().cloned();
+            self.main
+                .GetMut(&self.endpoint)
+                .SetRootLayer(root, self.paint.as_ref(), self.paint.as_ref());
+        }
         let had_canvas_children = self.pac.as_ref().unwrap().CanvasChildIds().next().is_some();
         let source_frame = u64::try_from(self.main.GetMut(&self.endpoint).pending_commit_state().source_frame_number)
             .expect("source main-frame number is nonnegative");
