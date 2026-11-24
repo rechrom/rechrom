@@ -135,7 +135,6 @@ pub mod layers {
     pub mod scroll_hit_test_rect;
     pub mod touch_action_region;
     pub mod draw_properties;
-    pub mod content_layer_client;
     pub mod append_quads_context;
     pub mod append_quads_data;
     pub mod draw_mode;

@@ -57,7 +57,7 @@ members = [
     "crates/raster",
     "crates/compositor/scroll_snap",
     "crates/compositor/scroll_animation",
-    "crates/compositor/compositor_layerize",
+    "crates/layerize/compositor_layerize",
     "crates/compositor/compositor_tree",
     "crates/compositor/compositor_tile",
     "crates/compositor/compositor_raster",

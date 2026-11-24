@@ -481,7 +481,6 @@ dependencies = [
  "compositor_draw",
  "compositor_frame",
  "compositor_input",
- "compositor_layerize",
  "compositor_raster",
  "compositor_resource",
  "compositor_scheduler",

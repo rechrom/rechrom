@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 browser_tracing = { path = "../../tracing" }
-compositor_tree = { path = "../compositor_tree" }
+compositor_tree = { path = "../../compositor/compositor_tree" }

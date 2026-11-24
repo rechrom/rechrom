@@ -12,7 +12,6 @@ chromeos = []
 scroll_animation = { path = "scroll_animation" }
 canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
-compositor_layerize = { path = "compositor_layerize" }
 layerize = { path = "../layerize" }
 compositor_tree = { path = "compositor_tree" }
 compositor_tile = { path = "compositor_tile" }

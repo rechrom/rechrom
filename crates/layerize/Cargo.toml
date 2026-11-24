@@ -25,7 +25,7 @@ compositor_frame = { path = "../compositor/compositor_frame" }
 compositor_resource = { path = "../compositor/compositor_resource" }
 skia = { path = "../skia" }
 # Blink ContentLayerClient (PictureLayer client) and PAC layerization policy.
-compositor_layerize = { path = "../compositor/compositor_layerize" }
+compositor_layerize = { path = "compositor_layerize" }
 # cc::FilterOperations (cc/paint) for the shared filter facets; the main half
 # also reads PaintArtifact once PAC moves here.
 paint = { path = "../paint" }
