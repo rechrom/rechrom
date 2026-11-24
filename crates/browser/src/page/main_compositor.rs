@@ -156,6 +156,30 @@ impl PageDomainServices {
                 .borrow_mut()
                 .ApplyCompositedAnimationProperties(update)
     }
+    /// cc::Animation::AddKeyframeModel / RemoveKeyframeModel on the main
+    /// AnimationHost (CompositorAnimations::StartAnimationOnCompositor and
+    /// CancelAnimationOnCompositor), then MutatorHostClient::
+    /// SetMutatorsNeedCommit -> LayerTreeHost::SetNeedsCommit; the
+    /// KeyframeModels reach the impl instance in the same commit as the
+    /// property-tree element ids (animation_host.cc:485-518). `false` when
+    /// the external runtime has not started the main half yet: as in Blink
+    /// without a compositor, the animation stays on the document thread.
+    pub(super) fn ApplySourcePropertyAnimation(
+        &self,
+        mutation: compositor::engine::PropertyAnimationMutation,
+    ) -> io::Result<bool> {
+        if self.external_presentation.get() {
+            if !self.HasMainCompositor() {
+                return Ok(false);
+            }
+        } else {
+            self.EnsureCompositor(None)?;
+        }
+        self.MainLayerize()
+            .borrow_mut()
+            .ApplySourcePropertyAnimation(mutation);
+        Ok(true)
+    }
     /// The layout zoom of the artifact last pushed to the main half (the
     /// impl side's InputRouter widget scale).
     pub(super) fn MainCompositorInputScale(&self) -> f64 {
