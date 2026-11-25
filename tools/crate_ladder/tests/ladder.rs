@@ -552,12 +552,13 @@ const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
     // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
     // MainPropertyTreeFeatures instantiated over it) is the impl
     // CpuCompositorTypes, because CommitTypes / CommitStateTypes /
-    // PushPropertiesTypes / ProxyTypes name impl owners (Layer =
-    // CompositorLayer and its ImplContext, RenderSurface = RenderSurfaceImpl
-    // in the shared PropertyTrees, SwapPromise, MicroBenchmarkImpl,
-    // UIResourceRequest / UIResourceBitmap, ImplInit, LayerTreeMutator) and
-    // LayerizeFamily::UpdateMainPropertyTrees runs the impl
-    // draw_property_utils. page.rs keeps only the PageDomainServices fields
+    // ProxyTypes still name impl owners (SwapPromise, MicroBenchmarkImpl,
+    // UIResourceRequest / UIResourceBitmap, ViewTransitionRequest,
+    // EventMetrics, the presentation callbacks, BeginMainFrameMetrics,
+    // MutatorHostHandle = AnimationHostOwner, ImplInit = ProxyImplInit,
+    // LayerTreeMutator), and impl code names CommitState<B> over the impl
+    // family. (The push target, the render surfaces and the main
+    // draw_property_utils update no longer do.) page.rs keeps only the PageDomainServices fields
     // and the external BeginMainFrame / impl-task entry points typed over
     // that family; main_compositor.rs additionally builds the main half
     // from CompositorConfig / CreateMainHostParams. The executor and frame
