@@ -832,7 +832,7 @@ fn FrameDOMHost(frame: &Rc<LocalFrame>, runtime: &Rc<LocalFrameRuntime>) -> DOMB
                     node,
                     offset,
                     behavior,
-                    compositor::ScrollSourceType::kAbsoluteScroll,
+                    compositor_values::scroll_source_type::ScrollSourceType::kAbsoluteScroll,
                 );
             }
         })),
@@ -843,7 +843,7 @@ fn FrameDOMHost(frame: &Rc<LocalFrame>, runtime: &Rc<LocalFrameRuntime>) -> DOMB
                     node,
                     offset,
                     ViewportScrollBehavior::Instant,
-                    compositor::ScrollSourceType::kAbsoluteScroll,
+                    compositor_values::scroll_source_type::ScrollSourceType::kAbsoluteScroll,
                 );
             }
         })),

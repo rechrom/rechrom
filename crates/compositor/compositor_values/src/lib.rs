@@ -17,6 +17,7 @@
 pub mod browser_controls_params;
 pub mod compositor_commit_data;
 pub mod hit_test_opaqueness;
+pub mod input_to_impl;
 pub mod input_types;
 pub mod layer_selection_bound;
 pub mod main_thread_scrolling_reason;

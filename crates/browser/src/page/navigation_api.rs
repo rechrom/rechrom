@@ -1736,7 +1736,7 @@ impl NavigationWindowEnvironment {
                         y: offset[1] as f64,
                     },
                     ViewportScrollBehavior::Instant,
-                    compositor::ScrollSourceType::kAbsoluteScroll,
+                    compositor_values::scroll_source_type::ScrollSourceType::kAbsoluteScroll,
                 );
             }
             return;
@@ -1759,7 +1759,7 @@ impl NavigationWindowEnvironment {
                         y: offset[1] as f64,
                     },
                     ViewportScrollBehavior::Instant,
-                    compositor::ScrollSourceType::kAbsoluteScroll,
+                    compositor_values::scroll_source_type::ScrollSourceType::kAbsoluteScroll,
                 );
             }
         }

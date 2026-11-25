@@ -68,7 +68,8 @@ impl Page {
             .SetScaleAndSettings(scale, settings);
         self.state.SyncVisualViewportPaintState();
         self.state.dirty.set(true);
-        self.RouteWheelCompositorInput(CompositorInput::SetPageScaleFactorAndLimits {
+        self.RouteMainCompositorMutation(
+            main_compositor::MainCompositorMutation::SetPageScaleFactorAndLimits {
             scale,
             minimum: settings.minimum_scale,
             maximum: settings.maximum_scale,
@@ -109,8 +110,8 @@ impl Page {
             .borrow_mut()
             .AnimateDoubleTapZoom(point, bounds, facts);
         if let Some(animation) = animation {
-            self.RouteWheelCompositorInput(CompositorInput::StartPageScaleAnimation {
-                target: compositor::adapter::geometry::Point::new(
+            self.RouteImplInput(InputToImpl::StartPageScaleAnimation {
+                target: compositor_tree::geometry::Point::new(
                     animation.target_position.x(),
                     animation.target_position.y(),
                 ),

@@ -23,6 +23,7 @@ compositor_resource = { path = "compositor_resource" }
 compositor_scheduler = { path = "compositor_scheduler" }
 compositor_input = { path = "compositor_input" }
 compositor_animation = { path = "compositor_animation" }
+compositor_values = { path = "compositor_values" }
 paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
 foundation = { path = "../foundation" }

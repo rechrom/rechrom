@@ -151,12 +151,8 @@ impl CompositorViewportState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollPhase {
-    Begin,
-    Update,
-    End,
-}
+/// The cc gesture-scroll phase lives with the input-queue values.
+pub use compositor_values::input_to_impl::ScrollPhase;
 /// Platform-neutral InputHandlerProxy gesture values. Deltas retain Blink's
 /// gesture signs until conversion by the impl input owner.
 #[derive(Clone, Copy, Debug)]

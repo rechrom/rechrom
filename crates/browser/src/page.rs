@@ -10,19 +10,17 @@ use layout::fragment::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
 pub use compositor::CompositorMainThreadEffect;
 use compositor::{
-    adapter::{
-        begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId},
-        geometry::{
-            PointF as CompositorPointF, Rect as CompositorRect, RectF as CompositorRectF,
-            Size as CompositorSize, Vector2dF,
-        },
-        layer_tree_impl::{Color4f as CompositorColor4f, ResourceId},
-        time::{TimeDelta as CompositorTimeDelta, TimeTicks as CompositorTimeTicks},
-    },
-    CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
-    CompositorFrameSubmission, CompositorInput, CompositorOutput, CompositorViewportState,
-    ScrollPhase,
+    adapter::layer_tree_impl::ResourceId, CompositorConfig, CompositorEngine, CompositorError,
+    CompositorExecutor, CompositorFrameSubmission, CompositorOutput, CompositorViewportState,
 };
+use compositor_tree::geometry::{
+    PointF as CompositorPointF, Rect as CompositorRect, RectF as CompositorRectF,
+    Size as CompositorSize, Vector2dF,
+};
+use compositor_values::begin_frame::{BeginFrameArgs, BeginFrameArgsType, BeginFrameId};
+use compositor_values::color4f::Color4f as CompositorColor4f;
+use compositor_values::input_to_impl::{InputToImpl, ScrollPhase};
+use scroll_animation::{TimeDelta as CompositorTimeDelta, TimeTicks as CompositorTimeTicks};
 use document::{
     DocumentEffects, DocumentEngine, LayoutMutation as DocumentLayoutMutation, ResourceRequest,
 };
@@ -263,9 +261,16 @@ struct VideoSurfaceEntry {
     frame_size: (u32, u32),
     layer: Arc<dyn paint::paint_engine::ForeignLayer>,
 }
+/// The Page's outgoing input queue, drained in FIFO order by the embedding's
+/// input router (WidgetInputHandlerManager's role), which moves each entry to
+/// the compositor task runner.
 pub enum PageBrowserInput {
     DocumentDetached { generation: u64 },
-    Compositor(compositor::CompositorMutation),
+    /// A document-thread request for the impl input handler.
+    ImplInput(InputToImpl),
+    /// A browser-dispatched scroll or pinch gesture for the impl input
+    /// handler; the input router converts it to its InputHandlerProxy call.
+    GestureScroll(interaction::input_event::WebGestureEvent),
     Gesture(interaction::input_event::WebGestureEvent),
 }
 pub type PageCompositorFrame = CompositorFrameSubmission;
@@ -703,7 +708,7 @@ struct PageDomainServices {
     // whenever the surface parameters change
     // (components/viz/common/surfaces/parent_local_surface_id_allocator.cc:
     // 74-96; cc/trees/unbounded_frame_sink_handler.cc:56-77).
-    compositor_local_surface_id: Cell<Option<compositor::runtime::types::LocalSurfaceId>>,
+    compositor_local_surface_id: Cell<Option<compositor_values::surface_id::LocalSurfaceId>>,
     compositor_surface_parameters: Cell<Option<(CompositorSize, u32)>>,
     // LayerTreeHost page scale limits (WebViewImpl -> LayerTreeHost).
     compositor_page_scale: Cell<(f32, f32, f32)>,
@@ -769,18 +774,18 @@ fn CompositorAnimationIdentity(effect_id: u64, property: &'static str) -> u64 {
 
 fn CompositorAnimationTimingFunction(
     easing: &animation::CSSTimingFunction,
-) -> compositor::engine::AnimationTimingFunction {
+) -> layerize::commit::animation::AnimationTimingFunction {
     match easing {
-        animation::CSSTimingFunction::Linear => compositor::engine::AnimationTimingFunction::Linear,
+        animation::CSSTimingFunction::Linear => layerize::commit::animation::AnimationTimingFunction::Linear,
         animation::CSSTimingFunction::CubicBezier([x1, y1, x2, y2]) => {
-            compositor::engine::AnimationTimingFunction::CubicBezier(
+            layerize::commit::animation::AnimationTimingFunction::CubicBezier(
                 scroll_animation::cubic_bezier::CubicBezier::new(*x1, *y1, *x2, *y2),
             )
         }
         animation::CSSTimingFunction::Steps {
             count,
             jump_at_start,
-        } => compositor::engine::AnimationTimingFunction::Steps {
+        } => layerize::commit::animation::AnimationTimingFunction::Steps {
             count: *count,
             jump_at_start: *jump_at_start,
         },
@@ -790,8 +795,8 @@ fn CompositorAnimationTimingFunction(
 fn CompositorPropertyAnimationMutation(
     candidate: &animation::CompositorAnimationCandidate,
     binding: &paint::CompositedAnimationPropertyBinding,
-    start_time: Option<compositor::adapter::time::TimeTicks>,
-) -> Option<(&'static str, compositor::engine::PropertyAnimationMutation)> {
+    start_time: Option<scroll_animation::TimeTicks>,
+) -> Option<(&'static str, layerize::commit::animation::PropertyAnimationMutation)> {
     let (property, curve, target_property) = match binding.property {
         paint::CompositedAnimationProperty::Transform => {
             let animation::CompositorPropertyCurve::Transform(keyframes) = candidate
@@ -801,10 +806,10 @@ fn CompositorPropertyAnimationMutation(
             else {
                 unreachable!()
             };
-            let mut curve = compositor::engine::KeyframedTransformAnimationCurve::default();
+            let mut curve = layerize::commit::animation::KeyframedTransformAnimationCurve::default();
             for (offset, value) in keyframes {
                 curve.AddKeyframe(
-                    compositor::adapter::time::TimeDelta::Microseconds(
+                    scroll_animation::TimeDelta::Microseconds(
                         (candidate.timing.duration.max(0.0) * offset * 1_000_000.0) as i64,
                     ),
                     value.clone(),
@@ -813,8 +818,8 @@ fn CompositorPropertyAnimationMutation(
             }
             (
                 "transform",
-                compositor::engine::CompositorAnimationCurve::Transform(curve),
-                compositor::engine::AnimationTargetProperty::TRANSFORM as i32,
+                layerize::commit::animation::CompositorAnimationCurve::Transform(curve),
+                layerize::commit::animation::AnimationTargetProperty::TRANSFORM as i32,
             )
         }
         paint::CompositedAnimationProperty::Opacity => {
@@ -825,10 +830,10 @@ fn CompositorPropertyAnimationMutation(
             else {
                 unreachable!()
             };
-            let mut curve = compositor::engine::KeyframedFloatAnimationCurve::default();
+            let mut curve = layerize::commit::animation::KeyframedFloatAnimationCurve::default();
             for (offset, value) in keyframes {
                 curve.AddKeyframe(
-                    compositor::adapter::time::TimeDelta::Microseconds(
+                    scroll_animation::TimeDelta::Microseconds(
                         (candidate.timing.duration.max(0.0) * offset * 1_000_000.0) as i64,
                     ),
                     *value,
@@ -837,40 +842,40 @@ fn CompositorPropertyAnimationMutation(
             }
             (
                 "opacity",
-                compositor::engine::CompositorAnimationCurve::Float(curve),
-                compositor::engine::AnimationTargetProperty::OPACITY as i32,
+                layerize::commit::animation::CompositorAnimationCurve::Float(curve),
+                layerize::commit::animation::AnimationTargetProperty::OPACITY as i32,
             )
         }
     };
     let identity = CompositorAnimationIdentity(candidate.effect_id, property);
     let direction = match candidate.timing.direction {
-        animation::CSSPlaybackDirection::Normal => compositor::engine::AnimationDirection::NORMAL,
-        animation::CSSPlaybackDirection::Reverse => compositor::engine::AnimationDirection::REVERSE,
+        animation::CSSPlaybackDirection::Normal => layerize::commit::animation::AnimationDirection::NORMAL,
+        animation::CSSPlaybackDirection::Reverse => layerize::commit::animation::AnimationDirection::REVERSE,
         animation::CSSPlaybackDirection::Alternate => {
-            compositor::engine::AnimationDirection::ALTERNATE_NORMAL
+            layerize::commit::animation::AnimationDirection::ALTERNATE_NORMAL
         }
         animation::CSSPlaybackDirection::AlternateReverse => {
-            compositor::engine::AnimationDirection::ALTERNATE_REVERSE
+            layerize::commit::animation::AnimationDirection::ALTERNATE_REVERSE
         }
     };
     let fill_mode = match candidate.timing.fill {
-        animation::CSSFillMode::None => compositor::engine::AnimationFillMode::NONE,
-        animation::CSSFillMode::Forwards => compositor::engine::AnimationFillMode::FORWARDS,
-        animation::CSSFillMode::Backwards => compositor::engine::AnimationFillMode::BACKWARDS,
-        animation::CSSFillMode::Both => compositor::engine::AnimationFillMode::BOTH,
+        animation::CSSFillMode::None => layerize::commit::animation::AnimationFillMode::NONE,
+        animation::CSSFillMode::Forwards => layerize::commit::animation::AnimationFillMode::FORWARDS,
+        animation::CSSFillMode::Backwards => layerize::commit::animation::AnimationFillMode::BACKWARDS,
+        animation::CSSFillMode::Both => layerize::commit::animation::AnimationFillMode::BOTH,
     };
     Some((
         property,
-        compositor::engine::PropertyAnimationMutation::Install {
+        layerize::commit::animation::PropertyAnimationMutation::Install {
             identity,
-            element: compositor::adapter::input_types::ElementId::new(
+            element: compositor_values::input_types::ElementId::new(
                 binding.element_id.GetInternalValue(),
             ),
             curve,
             target_property,
             iterations: candidate.timing.iterations,
             iteration_start: 0.0,
-            start_delay: compositor::adapter::time::TimeDelta::Microseconds(
+            start_delay: scroll_animation::TimeDelta::Microseconds(
                 (candidate.timing.delay * 1_000_000.0) as i64,
             ),
             direction,
@@ -879,7 +884,7 @@ fn CompositorPropertyAnimationMutation(
             start_time,
             hold_time: (candidate.timing.play_state == animation::CSSPlayState::Paused).then(
                 || {
-                    compositor::adapter::time::TimeDelta::Microseconds(
+                    scroll_animation::TimeDelta::Microseconds(
                         (candidate.local_time * 1_000_000.0) as i64,
                     )
                 },
@@ -969,10 +974,13 @@ struct PageState {
         BTreeMap<(animation::CSSAnimationKey, &'static str), CompositorAnimationInstallation>,
     >,
     pending_property_animation_replacements:
-        RefCell<Vec<compositor::engine::PropertyAnimationMutation>>,
+        RefCell<Vec<layerize::commit::animation::PropertyAnimationMutation>>,
     pending_property_animation_removals: RefCell<BTreeSet<u64>>,
     animation_begin_frame_requested: Cell<bool>,
     pending_compositor_mutations: RefCell<Vec<PageBrowserInput>>,
+    /// LayerTreeHost setters made outside the main half's own task (external
+    /// runtime); applied to this Page's LayerizeEngine after the transaction.
+    pending_main_compositor_mutations: RefCell<Vec<main_compositor::MainCompositorMutation>>,
     window_performance_timing: Rc<webapi::window_bindings::WindowPerformanceTiming>,
     programmatic_scroll_animators: std::cell::OnceCell<interaction::scroll::core::scroll::programmatic_scroll_animator::ProgrammaticScrollAnimatorRegistry>,
 }
@@ -2500,7 +2508,7 @@ impl PageState {
                     };
                     let start_time = candidate.sample_time.map(|sample_time| {
                         self.compositor_executor.TimeTicks(sample_time)
-                            - compositor::adapter::time::TimeDelta::Microseconds(
+                            - scroll_animation::TimeDelta::Microseconds(
                                 (candidate.local_time * 1_000_000.0) as i64,
                             )
                     });
@@ -2808,6 +2816,7 @@ impl PageState {
             pending_property_animation_removals: RefCell::new(pending_property_animation_removals),
             animation_begin_frame_requested: Cell::new(false),
             pending_compositor_mutations: RefCell::new(Vec::new()),
+            pending_main_compositor_mutations: RefCell::new(Vec::new()),
             window_performance_timing,
             programmatic_scroll_animators: Default::default(),
         });
@@ -3566,7 +3575,7 @@ impl PageState {
                     target_node_id,
                     offset,
                     behavior,
-                    compositor::ScrollSourceType::kAbsoluteScroll,
+                    compositor_values::scroll_source_type::ScrollSourceType::kAbsoluteScroll,
                 );
             })),
             write_scroll: Some(Box::new(move |target_node_id, offset| {
@@ -4936,7 +4945,7 @@ pub use compositor_input::{
     CanonicalFlingWheelInput, CompositorWheelResult, GestureCompositorInput,
     EmbedderCompositorConfig, GestureCompositorInputWithDispatchId, InputWidgetScale,
     NewCompositorServices,
-    PresentationFeedbackDetails, WheelCompositorInput,
+    ImplInput, PresentationFeedbackDetails, WheelCompositorInput,
 };
 use opening::PageOpenAdapter;
 use scripting::PageScripts;
@@ -6085,20 +6094,10 @@ impl Page {
             return Ok(());
         }
         let main = self.state.domain.clone();
-        let pending = std::mem::take(&mut *self.state.pending_compositor_mutations.borrow_mut());
-        let mut retained = Vec::with_capacity(pending.len());
-        for input in pending {
-            match input {
-                PageBrowserInput::Compositor(mutation) if mutation.IsMainThreadMutation() => {
-                    main.MutateMainCompositor(mutation)?
-                }
-                input => retained.push(input),
-            }
-        }
-        {
-            let mut queue = self.state.pending_compositor_mutations.borrow_mut();
-            retained.append(&mut queue);
-            *queue = retained;
+        let pending =
+            std::mem::take(&mut *self.state.pending_main_compositor_mutations.borrow_mut());
+        for mutation in pending {
+            main.MutateMainCompositor(mutation)?;
         }
         let effects = main.TakeMainCompositorEffects();
         self.ApplyCompositorWheelEffects(effects)
@@ -6658,9 +6657,7 @@ impl Page {
                 return Ok(interaction::InteractionResult { input_result: Some(interaction::dispatch::public::platform::web_input_event_result::WebInputEventResult::kHandledSystem), ..Default::default() });
             }
             if gesture.IsScrollEvent() {
-                self.RouteCompositorMutation(compositor::CompositorMutation::Input(
-                    compositor_input::GestureCompositorInput(gesture)?,
-                ))?;
+                self.RouteGestureScrollToImpl(gesture)?;
                 return Ok(interaction::InteractionResult::default());
             }
         }
@@ -6783,7 +6780,7 @@ impl Page {
                 for acknowledgement in
                     ::interaction::WheelDOMAcknowledgements(wheel, result.default_prevented)
                 {
-                    self.RouteWheelCompositorInput(CompositorInput::WheelDOMAcknowledgement {
+                    self.RouteImplInput(InputToImpl::WheelDOMAcknowledgement {
                         request: acknowledgement.request,
                         default_prevented: acknowledgement.default_prevented,
                     })?;
@@ -7640,7 +7637,7 @@ impl Page {
         let mut mutated = false;
         for identity in removals {
             mutated |= self.state.ApplySourcePropertyAnimation(
-                compositor::engine::PropertyAnimationMutation::Remove { identity },
+                layerize::commit::animation::PropertyAnimationMutation::Remove { identity },
             )?;
         }
         if mutated {
@@ -7771,7 +7768,7 @@ impl Page {
             let start_time = candidate.sample_time.map(|sample_time| {
                 self.state
                     .compositor_executor.TimeTicks(sample_time)
-                    - compositor::adapter::time::TimeDelta::Microseconds(
+                    - scroll_animation::TimeDelta::Microseconds(
                         (candidate.local_time * 1_000_000.0) as i64,
                     )
             });
@@ -7829,8 +7826,8 @@ impl Page {
                 std::mem::take(&mut *self.state.pending_compositor_mutations.borrow_mut());
             for input in pending {
                 match input {
-                    PageBrowserInput::Compositor(input) => self.RouteCompositorMutation(input)?,
-                    PageBrowserInput::Gesture(_) => {
+                    PageBrowserInput::ImplInput(input) => self.RouteImplInput(input)?,
+                    PageBrowserInput::Gesture(_) | PageBrowserInput::GestureScroll(_) => {
                         unreachable!("external browser input is drained by the embedding")
                     }
                     PageBrowserInput::DocumentDetached { .. } => {

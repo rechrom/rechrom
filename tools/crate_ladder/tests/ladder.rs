@@ -547,17 +547,15 @@ const IMPL_OWNER_MODULES: &[&str] = &[
 /// Document-side files that still name `compositor::`. Remove each entry in
 /// the commit that removes its last use.
 const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
-    // B5: values move to roots, Proxy construction to layerize::commit and
-    // the scrollbar gesture to the input queue.
+    // Still name the concrete cc family and impl-crate types: PageState holds
+    // the CompositorEngine executor/presentation glue and consumes
+    // CompositorMainThreadEffect; main_compositor names MainFamily,
+    // ProxyImplInit, CreateMainHostParams, BeginMainFrameState and
+    // ImplToMainTask. They clear once the family marker and the main-thread
+    // effect vocabulary move to value roots (with viz_common) and the
+    // presentation glue moves into the impl-owner modules.
     "crates/browser/src/page.rs",
-    "crates/browser/src/page/local_frame_scroll.rs",
-    "crates/browser/src/page/local_frame_window.rs",
     "crates/browser/src/page/main_compositor.rs",
-    "crates/browser/src/page/navigation_api.rs",
-    "crates/browser/src/page/page_scale.rs",
-    "crates/browser/src/page/pointer_scroll_controls.rs",
-    "crates/browser/src/page/programmatic_scroll.rs",
-    "crates/browser/src/page/scroll.rs",
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {

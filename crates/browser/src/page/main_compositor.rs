@@ -14,7 +14,6 @@
 //! LayerizeEngine for PaintArtifactCompositor::Update, video ForeignLayers and
 //! direct animation updates.
 use super::*;
-use compositor::CompositorMutation;
 use layerize::runtime::proxy_main::{MainFrameClient, ProxyMainClient};
 pub use layerize::runtime::proxy_main::MainFrameResult;
 
@@ -32,7 +31,29 @@ const _: () = {
     }
 };
 
-pub type MainToImplQueue = layerize::commit::proxy::ProxyTaskQueue<compositor::MainToImplTask>;
+/// LayerTreeHost setters the Page makes on its own main half (WebFrameWidget
+/// -> LayerTreeHost::SetPageScaleFactorAndLimits / SetHaveScrollEventHandlers
+/// / SetEventListenerProperties, and ProxyMain's deferral entry points). They
+/// never cross to the impl thread; the commit carries their effect. Only the
+/// page-scale setter has a Page producer today; the others keep the entry
+/// points the former CompositorMutation routing had.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MainCompositorMutation {
+    SetPageScaleFactorAndLimits {
+        scale: f32,
+        minimum: f32,
+        maximum: f32,
+    },
+    SetHaveScrollEventHandlers(bool),
+    SetEventListenerProperties {
+        class: compositor_values::event_listener_properties::EventListenerClass,
+        properties: compositor_values::event_listener_properties::EventListenerProperties,
+    },
+    FrameLifecycle(layerize::commit::paint_holding::FrameLifecycleMutation),
+}
+
+pub type MainToImplQueue =layerize::commit::proxy::ProxyTaskQueue<compositor::MainToImplTask>;
 pub type ImplToMainQueue = layerize::commit::proxy::ProxyTaskQueue<compositor::ImplToMainTask>;
 
 impl PageDomainServices {
@@ -217,7 +238,7 @@ impl PageDomainServices {
     /// without a compositor, the animation stays on the document thread.
     pub(super) fn ApplySourcePropertyAnimation(
         &self,
-        mutation: compositor::engine::PropertyAnimationMutation,
+        mutation: layerize::commit::animation::PropertyAnimationMutation,
     ) -> io::Result<bool> {
         if self.external_presentation.get() {
             if !self.HasMainCompositor() {
@@ -425,17 +446,16 @@ impl PageDomainServices {
         Ok(())
     }
 
-    /// The main-thread compositor mutations
-    /// (`CompositorMutation::IsMainThreadMutation`): LayerTreeHost setters
-    /// and frame-lifecycle deferrals queued by input routing.
-    pub(super) fn MutateMainCompositor(&self, mutation: CompositorMutation) -> io::Result<()> {
-        use compositor::FrameLifecycleMutation;
+    /// The main-thread compositor mutations: LayerTreeHost setters and
+    /// frame-lifecycle deferrals queued by input routing.
+    pub(super) fn MutateMainCompositor(&self, mutation: MainCompositorMutation) -> io::Result<()> {
+        use layerize::commit::paint_holding::FrameLifecycleMutation;
         match mutation {
-            CompositorMutation::Input(CompositorInput::SetPageScaleFactorAndLimits {
+            MainCompositorMutation::SetPageScaleFactorAndLimits {
                 scale,
                 minimum,
                 maximum,
-            }) => {
+            } => {
                 if !scale.is_finite()
                     || !minimum.is_finite()
                     || !maximum.is_finite()
@@ -455,23 +475,20 @@ impl PageDomainServices {
                     .SetPageScaleFactorAndLimits(scale, minimum, maximum);
             }
             // WebFrameWidgetImpl.cc:2220-2232 -> LayerTreeHost.
-            CompositorMutation::Input(CompositorInput::SetHaveScrollEventHandlers(value)) => self
+            MainCompositorMutation::SetHaveScrollEventHandlers(value) => self
                 .MainLayerize()
                 .borrow_mut()
                 .MainMut()
                 .SetHaveScrollEventHandlers(value),
-            CompositorMutation::Input(CompositorInput::SetEventListenerProperties {
+            MainCompositorMutation::SetEventListenerProperties {
                 class,
                 properties,
-            }) => self
+            } => self
                 .MainLayerize()
                 .borrow_mut()
                 .MainMut()
                 .SetEventListenerProperties(class, properties),
-            CompositorMutation::Input(_) => {
-                return Err(io::Error::other("impl input reached the main compositor half"))
-            }
-            CompositorMutation::FrameLifecycle(mutation) => {
+            MainCompositorMutation::FrameLifecycle(mutation) => {
                 let mut layerize = self.MainLayerize().borrow_mut();
                 match mutation {
                     // Source: cc/trees/proxy_main.cc:792-815.
@@ -533,7 +550,7 @@ impl PageDomainServices {
     /// ordinary targeted scrollbar paint invalidation.
     pub(super) fn ApplyScrollbarPaint(
         &self,
-        element: compositor::adapter::input_types::ElementId,
+        element: compositor_values::input_types::ElementId,
         opacity: f32,
         thumb_width: i32,
         needs_repaint: bool,
@@ -566,7 +583,7 @@ impl PageDomainServices {
     }
     pub(super) fn CreateVideoSurfaceForeignLayer(
         &self,
-        range: compositor::runtime::types::SurfaceRange,
+        range: compositor_values::surface_id::SurfaceRange,
     ) -> Arc<dyn paint::ForeignLayer> {
         self.MainLayerize()
             .borrow_mut()
@@ -794,7 +811,7 @@ impl ProxyMainClient<compositor::MainFamily> for LifecycleClient<'_> {
     }
 }
 impl MainFrameClient<compositor::MainFamily> for LifecycleClient<'_> {
-    fn Now(&self) -> compositor::adapter::time::TimeTicks {
+    fn Now(&self) -> scroll_animation::TimeTicks {
         self.now.Now()
     }
     fn UpdateRendering(&mut self, _args: &compositor::adapter::begin_frame::BeginFrameArgs) {

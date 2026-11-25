@@ -8,6 +8,10 @@ serde_json = "1"
 intersection_observer = { path = "../webapi/intersection_observer" }
 navigation_history = { path = "../document/navigation_history" }
 scroll_animation = { path = "../compositor/scroll_animation" }
+# cc value roots the document side names (element ids, scroll sources,
+# geometry, the input-queue messages).
+compositor_values = { path = "../compositor/compositor_values" }
+compositor_tree = { path = "../compositor/compositor_tree" }
 fileapi = { path = "../webapi/fileapi" }
 getrandom = "0.4"
 canvas = { path = "../canvas" }

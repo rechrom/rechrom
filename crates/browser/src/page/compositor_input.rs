@@ -4,6 +4,63 @@
 //! Chromium performs them in InputRouter (ui::ScaleWebInputEvent) and
 //! InputHandlerProxy before cc's InputHandler sees the event.
 use super::*;
+use compositor::CompositorInput;
+
+/// The InputHandlerProxy call of an input-queue message, made by the impl
+/// owner when the compositor task runner runs it (InputHandlerProxy::
+/// ContinueScrollBeginAfterMainThreadHitTest, the wheel DOM
+/// acknowledgement, the injected scrollbar gesture,
+/// LayerTreeHostImpl::StartPageScaleAnimation).
+pub fn ImplInput(input: InputToImpl) -> CompositorInput {
+    match input {
+        InputToImpl::ScrollbarGesture {
+            scroll_element_id,
+            delta,
+            granularity,
+            event_timestamp,
+            phase,
+        } => CompositorInput::ScrollbarGesture {
+            scroll_element_id,
+            delta,
+            granularity,
+            event_timestamp,
+            phase,
+        },
+        InputToImpl::WheelDOMAcknowledgement {
+            request,
+            default_prevented,
+        } => CompositorInput::WheelDOMAcknowledgement {
+            request,
+            default_prevented,
+        },
+        InputToImpl::ContinueWheelScroll {
+            request,
+            scroll_element_id,
+        } => CompositorInput::ContinueWheelScroll {
+            request,
+            scroll_element_id,
+        },
+        InputToImpl::StartPageScaleAnimation {
+            target,
+            use_anchor,
+            scale,
+            duration,
+        } => CompositorInput::StartPageScaleAnimation {
+            target,
+            use_anchor,
+            scale,
+            duration,
+        },
+    }
+}
+
+/// Rejects a gesture the impl input handler cannot take, on the sender's
+/// side, before it is queued.
+pub(crate) fn ValidateGestureCompositorInput(
+    gesture: &interaction::input_event::WebGestureEvent,
+) -> io::Result<()> {
+    GestureCompositorInput(gesture).map(drop)
+}
 
 /// The synchronous InputHandlerProxy results of one impl input call, sorted
 /// for the input owner, plus the main-thread effects the caller routes to
