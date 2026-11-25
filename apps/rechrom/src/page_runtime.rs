@@ -255,6 +255,12 @@ pub(crate) enum ImplCommand {
         dispatch_id: u64,
         result: InputEventResultState,
     },
+    /// The document's touch acknowledgement, posted from the event's
+    /// callback; this runner runs the host's DispatchEventCallback.
+    TouchAck {
+        unique_touch_event_id: u32,
+        consumed: bool,
+    },
     DebounceExpired,
     DocumentDetached {
         generation: u64,
@@ -658,6 +664,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let impl_self = impl_sender.clone();
     let impl_source = params.source.clone();
     let impl_frames = params.frames.clone();
+    let impl_events = params.events.clone();
     let impl_executor = threads.compositor_executor.clone();
     let impl_raster_executor = threads.raster_executor.clone();
     let impl_viewport = params.viewport;
@@ -683,6 +690,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     impl_raster_executor,
                     impl_source,
                     impl_frames,
+                    impl_events,
                     visual_properties_ack,
                 )
             }));
@@ -1508,6 +1516,9 @@ fn run_impl(
     raster_executor: Arc<dyn executor::Executor>,
     source: Arc<dyn BeginFrameSource>,
     frames: mpsc::Sender<window_runtime::Command>,
+    // The browser host's input-acknowledgement endpoint (the
+    // DispatchEventCallback this compositor thread runs).
+    events: Arc<dyn Fn(Document, Event) + Send + Sync>,
     visual_properties_ack: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), RuntimeFailure> {
     let pump_pending = Arc::new(AtomicBool::new(false));
@@ -1761,6 +1772,21 @@ fn run_impl(
                     InputEventResultSource::kMainThread,
                     result,
                     &main,
+                );
+            }
+            ImplCommand::TouchAck {
+                unique_touch_event_id,
+                consumed,
+            } => {
+                // CallCallback on the compositor thread: the browser's
+                // DispatchEventCallback receives the main-thread result
+                // (widget_input_handler_manager.cc:1209-1218).
+                events(
+                    document,
+                    Event::TouchDisposition {
+                        unique_touch_event_id,
+                        consumed,
+                    },
                 );
             }
             ImplCommand::DebounceExpired => {
@@ -3193,15 +3219,6 @@ fn run_document(
             // browser-UI commit acknowledgement.
             source.request_begin_frame();
         }
-        for disposition in page.TakeTouchDispositions() {
-            (params.events)(
-                params.document,
-                Event::TouchDisposition {
-                    unique_touch_event_id: disposition.unique_touch_event_id,
-                    consumed: disposition.consumed,
-                },
-            );
-        }
         for event in page.TakeDispatchedFrameInputs() {
             let _scope = browser_tracing::scope(browser_tracing::Context {
                 input_id: browser_tracing::instant_id(event.queued_at),
@@ -3352,6 +3369,13 @@ fn CompositorThreadCommand(task: browser::page::CompositorThreadTask) -> ImplCom
                 InputEventResultState::kNotConsumed
             },
         },
+        Task::TouchEventAck {
+            unique_touch_event_id,
+            consumed,
+        } => ImplCommand::TouchAck {
+            unique_touch_event_id,
+            consumed,
+        },
     }
 }
 /// The task of a command the stopped compositor thread handed back.
@@ -3375,6 +3399,13 @@ fn CompositorThreadTaskOf(command: ImplCommand) -> browser::page::CompositorThre
         } => Task::GestureEventAck {
             dispatch_id,
             consumed: result == InputEventResultState::kConsumed,
+        },
+        ImplCommand::TouchAck {
+            unique_touch_event_id,
+            consumed,
+        } => Task::TouchEventAck {
+            unique_touch_event_id,
+            consumed,
         },
         _ => unreachable!("posted compositor-thread task"),
     }

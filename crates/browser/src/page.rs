@@ -281,6 +281,13 @@ pub enum CompositorThreadTask {
     },
     /// DidHandleInputEventSentToMain of a browser-dispatched gesture.
     GestureEventAck { dispatch_id: u64, consumed: bool },
+    /// DidHandleInputEventSentToMain of a touch start or first touch move;
+    /// the compositor thread runs the browser's DispatchEventCallback
+    /// (CallCallback, widget_input_handler_manager.cc:1209-1218).
+    TouchEventAck {
+        unique_touch_event_id: u32,
+        consumed: bool,
+    },
 }
 /// The compositor thread's task runner as the Page holds it. The embedding
 /// injects the posting form over the same ordered queue its ProxyMain tasks
@@ -324,6 +331,12 @@ fn PostMainThreadEventAck(
         MainThreadEventAck::BrowserGesture(disposition) => {
             let _ = runner.PostTask(CompositorThreadTask::GestureEventAck {
                 dispatch_id: disposition.dispatch_id,
+                consumed: disposition.consumed,
+            });
+        }
+        MainThreadEventAck::Touch(disposition) => {
+            let _ = runner.PostTask(CompositorThreadTask::TouchEventAck {
+                unique_touch_event_id: disposition.unique_touch_event_id,
                 consumed: disposition.consumed,
             });
         }
