@@ -79,7 +79,6 @@ pub type PropertyTreesFor<B> = PropertyTrees<
 pub trait CommitStateTypes: CommitTypes {
     type BeginMainFrameMetrics;
     type DrawImage;
-    type MicroBenchmarkImpl;
     // `MainRootLayer` is the owner's scoped_refptr-equivalent strong handle.
     // The map field holds non-owning typed identities, like raw_ptr.
     type MainRootLayer: Clone;
@@ -210,7 +209,8 @@ pub struct CommitState<B: CommitStateTypes> {
     pub pending_presentation_callbacks: Vec<B::PresentationCallback>,
     // Source: cc/trees/commit_state.h:163.
     // Moved-from source unique_ptr slots remain present after FinishCommit.
-    pub benchmarks: Vec<Option<Box<B::MicroBenchmarkImpl>>>,
+    pub benchmarks:
+        Vec<Option<Box<dyn compositor_values::micro_benchmark_impl::MicroBenchmarkImpl>>>,
     // Source: cc/trees/commit_state.h:167.
     // std::move of each source unique_ptr retains null entries in this vector.
     pub view_transition_requests: Vec<Option<Box<B::ViewTransitionRequest>>>,

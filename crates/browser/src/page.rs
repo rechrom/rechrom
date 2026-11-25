@@ -249,17 +249,74 @@ struct VideoSurfaceEntry {
     frame_size: (u32, u32),
     layer: Arc<dyn paint::paint_engine::ForeignLayer>,
 }
-/// The Page's outgoing input queue, drained in FIFO order by the embedding's
-/// input router (WidgetInputHandlerManager's role), which moves each entry to
-/// the compositor task runner.
-pub enum PageBrowserInput {
+/// A task the document thread posts to the compositor thread (Blink's
+/// WidgetInputHandlerManager::InputThreadTaskRunner(), the compositor
+/// thread's default task runner in threaded mode,
+/// third_party/blink/renderer/platform/widget/input/
+/// widget_input_handler_manager.cc:1250-1260). Each is posted at the point
+/// Blink posts it and runs in posting order with the ProxyMain -> ProxyImpl
+/// tasks, which Blink posts to the same runner (WidgetBase::
+/// InitializeCompositing passes `DefaultTaskRunner()` as the impl task
+/// runner, platform/widget/widget_base.cc:239-245).
+pub enum CompositorThreadTask {
+    /// The document input target was replaced (the input router retires
+    /// its target-bound gesture state).
     DocumentDetached { generation: u64 },
     /// A document-thread request for the impl input handler.
     ImplInput(InputToImpl),
     /// A browser-dispatched scroll or pinch gesture for the impl input
-    /// handler; the input router converts it to its InputHandlerProxy call.
+    /// handler (WidgetInputHandlerManager::DispatchScrollGestureToCompositor,
+    /// widget_input_handler_manager.cc:626-638); the input router converts
+    /// it to its InputHandlerProxy call.
     GestureScroll(interaction::input_event::WebGestureEvent),
+    /// A Page-generated gesture for the input router.
     Gesture(interaction::input_event::WebGestureEvent),
+    /// DidHandleInputEventSentToMain of a queued wheel
+    /// (widget_input_handler_manager.cc:1171-1230).
+    WheelEventAck {
+        document_generation: u64,
+        result: interaction::input::public::mojom::input::input_event_result::InputEventResultState,
+    },
+    /// DidHandleInputEventSentToMain of a browser-dispatched gesture.
+    GestureEventAck { dispatch_id: u64, consumed: bool },
+}
+/// The compositor thread's task runner as the Page holds it. The embedding
+/// injects the posting form over the same ordered queue its ProxyMain tasks
+/// use; without one (single-thread compositing) it is the in-process form,
+/// which the Page runs as its own main-thread tasks, as Blink's
+/// InputThreadTaskRunner() falls back to the main-thread task runner
+/// (widget_input_handler_manager.cc:1257-1258).
+pub type CompositorTaskRunner = layerize::commit::proxy::ProxyTaskQueue<CompositorThreadTask>;
+fn PostMainThreadEventAck(
+    runner: &CompositorTaskRunner,
+    ack: interaction::frame_aligned_input_queue::MainThreadEventAck,
+) {
+    use interaction::frame_aligned_input_queue::MainThreadEventAck;
+    use interaction::input::public::mojom::input::input_event_result::InputEventResultState;
+    // A stopped compositor thread drops the posted task, as a deleted
+    // task runner does.
+    match ack {
+        MainThreadEventAck::Wheel(disposition) => {
+            let _ = runner.PostTask(CompositorThreadTask::WheelEventAck {
+                document_generation: disposition.document_generation,
+                result: disposition.result,
+            });
+            for request in disposition.requests {
+                let _ = runner.PostTask(CompositorThreadTask::ImplInput(
+                    InputToImpl::WheelDOMAcknowledgement {
+                        request,
+                        default_prevented: disposition.result == InputEventResultState::kConsumed,
+                    },
+                ));
+            }
+        }
+        MainThreadEventAck::BrowserGesture(disposition) => {
+            let _ = runner.PostTask(CompositorThreadTask::GestureEventAck {
+                dispatch_id: disposition.dispatch_id,
+                consumed: disposition.consumed,
+            });
+        }
+    }
 }
 /// A delegated video child surface submission. The Page producer allocates
 /// the stable public surface identity referenced by its SurfaceDrawQuad; the
@@ -688,6 +745,8 @@ struct PageDomainServices {
     // is only admitted inside it).
     in_main_compositor_frame: Cell<bool>,
     main_compositor_effects: RefCell<Vec<CompositorMainThreadEffect>>,
+    // The compositor thread's task runner (input-queue posts).
+    compositor_task_runner: RefCell<CompositorTaskRunner>,
     // PaintArtifactCompositor update sequence (paint_artifact_compositor.cc
     // g_s_property_tree_sequence_number role).
     compositor_pac_sequence: Cell<i32>,
@@ -964,10 +1023,6 @@ struct PageState {
         RefCell<Vec<layerize::commit::animation::PropertyAnimationMutation>>,
     pending_property_animation_removals: RefCell<BTreeSet<u64>>,
     animation_begin_frame_requested: Cell<bool>,
-    pending_compositor_mutations: RefCell<Vec<PageBrowserInput>>,
-    /// LayerTreeHost setters made outside the main half's own task (external
-    /// runtime); applied to this Page's LayerizeEngine after the transaction.
-    pending_main_compositor_mutations: RefCell<Vec<main_compositor::MainCompositorMutation>>,
     window_performance_timing: Rc<webapi::window_bindings::WindowPerformanceTiming>,
     programmatic_scroll_animators: std::cell::OnceCell<interaction::scroll::core::scroll::programmatic_scroll_animator::ProgrammaticScrollAnimatorRegistry>,
 }
@@ -2710,6 +2765,7 @@ impl PageState {
                     main_compositor_mutated_outside_lifecycle: Cell::new(false),
                     in_main_compositor_frame: Cell::new(false),
                     main_compositor_effects: RefCell::new(Vec::new()),
+                    compositor_task_runner: RefCell::new(CompositorTaskRunner::default()),
                     compositor_pac_sequence: Cell::new(0),
                     compositor_local_surface_id: Cell::new(None),
                     compositor_surface_parameters: Cell::new(None),
@@ -2802,8 +2858,6 @@ impl PageState {
             pending_property_animation_replacements: RefCell::new(Vec::new()),
             pending_property_animation_removals: RefCell::new(pending_property_animation_removals),
             animation_begin_frame_requested: Cell::new(false),
-            pending_compositor_mutations: RefCell::new(Vec::new()),
-            pending_main_compositor_mutations: RefCell::new(Vec::new()),
             window_performance_timing,
             programmatic_scroll_animators: Default::default(),
         });
@@ -5957,8 +6011,29 @@ impl Page {
         height: u32,
         scale: f64,
         to_impl: MainToImplQueue,
+        compositor_task_runner: CompositorTaskRunner,
     ) -> io::Result<()> {
         assert!(self.external_compositor && self.state.external_presentation.get());
+        assert!(
+            !compositor_task_runner.IsInProcess(),
+            "the embedding posts to its compositor thread"
+        );
+        // WidgetInputHandlerManager posts each main-thread acknowledgement
+        // from the event's callback (DidHandleInputEventSentToMain,
+        // widget_input_handler_manager.cc:1171-1230).
+        let acks = compositor_task_runner.clone();
+        self.begin_frame
+            .InputQueue()
+            .SetDidHandleInputEventSentToMain(Arc::new(move |ack| {
+                PostMainThreadEventAck(&acks, ack)
+            }));
+        let in_process = std::mem::replace(
+            &mut *self.state.compositor_task_runner.borrow_mut(),
+            compositor_task_runner,
+        );
+        while let Some(task) = in_process.TakeTask() {
+            self.state.PostCompositorTask(task);
+        }
         let viewport = PageDomainServices::InitialCompositorViewport(width, height, scale)?;
         let init = self
             .state
@@ -6006,11 +6081,6 @@ impl Page {
                 self.ApplyCompositorWheelEffects(effects)?;
                 before_lifecycle(self);
                 self.UpdateRendering(args)?;
-                // Main-thread compositor mutations queued by input routing
-                // (LayerTreeHost setters, deferrals) and the main-half
-                // effects of the lifecycle's synchronous calls belong to this
-                // main frame's commit.
-                self.ApplyPendingMainCompositorMutations()?;
                 if let Some(frame) = self.CurrentFrame() {
                     let artifact = frame.display_items.clone();
                     main.UpdateMainCompositorPaintArtifact(&artifact, width, height, scale)?;
@@ -6068,26 +6138,6 @@ impl Page {
                 })
                 .collect(),
         )
-    }
-
-    /// Applies the queued main-thread compositor mutations to the main half
-    /// on this thread (external runtime), keeping the impl-side ones queued
-    /// for the compositor thread.
-    pub fn ApplyPendingMainCompositorMutations(&mut self) -> io::Result<()> {
-        if !self.external_compositor {
-            return Ok(());
-        }
-        if !self.state.HasMainCompositor() {
-            return Ok(());
-        }
-        let main = self.state.domain.clone();
-        let pending =
-            std::mem::take(&mut *self.state.pending_main_compositor_mutations.borrow_mut());
-        for mutation in pending {
-            main.MutateMainCompositor(mutation)?;
-        }
-        let effects = main.TakeMainCompositorEffects();
-        self.ApplyCompositorWheelEffects(effects)
     }
 
     pub fn BindExternalCompositorPresentationClock(&self, clock: PageCompositorClockMapping) {
@@ -6631,9 +6681,7 @@ impl Page {
         if let interaction::input_event::InputEvent::Gesture(gesture) = input {
             if self.external_compositor && !browser_gesture_dispatched {
                 self.state
-                    .pending_compositor_mutations
-                    .borrow_mut()
-                    .push(PageBrowserInput::Gesture(gesture.clone()));
+                    .PostCompositorTask(CompositorThreadTask::Gesture(gesture.clone()));
                 return Ok(interaction::InteractionResult::default());
             }
             if self.interaction.WillHandleCursorControlGesture(gesture) {
@@ -7809,17 +7857,15 @@ impl Page {
 
     fn UpdateFrameIfNeededInternal(&mut self) -> io::Result<()> {
         if !self.external_compositor {
-            let pending =
-                std::mem::take(&mut *self.state.pending_compositor_mutations.borrow_mut());
-            for input in pending {
-                match input {
-                    PageBrowserInput::ImplInput(input) => self.RouteImplInput(input)?,
-                    PageBrowserInput::Gesture(_) | PageBrowserInput::GestureScroll(_) => {
-                        unreachable!("external browser input is drained by the embedding")
-                    }
-                    PageBrowserInput::DocumentDetached { .. } => {
-                        unreachable!("external document client detach is drained by the embedding")
-                    }
+            // Single-thread compositing: the tasks posted to the in-process
+            // compositor task runner run as main-thread tasks
+            // (widget_input_handler_manager.cc:1257-1258).
+            loop {
+                let task = self.state.compositor_task_runner.borrow().TakeTask();
+                match task {
+                    Some(CompositorThreadTask::ImplInput(input)) => self.RouteImplInput(input)?,
+                    Some(_) => unreachable!("only input-handler requests run in process"),
+                    None => break,
                 }
             }
         }

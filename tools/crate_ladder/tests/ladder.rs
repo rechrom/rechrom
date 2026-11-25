@@ -551,10 +551,10 @@ const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
     // Still name the concrete cc family: MainFamily (and the
     // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
     // MainPropertyTreeFeatures instantiated over it) is the impl
-    // CpuCompositorTypes. Of the commit family's associated types only
-    // CommitStateTypes::MicroBenchmarkImpl still names an impl owner (its
-    // DidCompleteCommit borrows the impl LayerTreeHostImpl context); the
-    // other payloads (SwapPromise, UI resources, ViewTransitionRequest,
+    // CpuCompositorTypes. No commit family associated type names an impl
+    // owner any more (CommitState::benchmarks holds the shared
+    // compositor_values::micro_benchmark_impl::MicroBenchmarkImpl); the
+    // payloads (SwapPromise, UI resources, ViewTransitionRequest,
     // EventMetrics, presentation callbacks, BeginMainFrameMetrics,
     // LayerTreeMutator, the AnimationHost, ProxyImplInit) are shared cc
     // owners in layerize::commit / compositor_values. Left: a shared commit

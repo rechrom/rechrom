@@ -33,11 +33,12 @@ const _: () = {
 };
 
 /// LayerTreeHost setters the Page makes on its own main half (WebFrameWidget
-/// -> LayerTreeHost::SetPageScaleFactorAndLimits / SetHaveScrollEventHandlers
-/// / SetEventListenerProperties, and ProxyMain's deferral entry points). They
-/// never cross to the impl thread; the commit carries their effect. Only the
-/// page-scale setter has a Page producer today; the others keep the entry
-/// points the former CompositorMutation routing had.
+/// -> LayerTreeHost::SetPageScaleFactorAndLimits / StartPageScaleAnimation /
+/// SetHaveScrollEventHandlers / SetEventListenerProperties, and ProxyMain's
+/// deferral entry points). They never cross to the impl thread; the commit
+/// carries their effect. Only the page-scale setters have Page producers
+/// today; the others keep the entry points the former CompositorMutation
+/// routing had.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum MainCompositorMutation {
@@ -45,6 +46,15 @@ pub(crate) enum MainCompositorMutation {
         scale: f32,
         minimum: f32,
         maximum: f32,
+    },
+    /// WebFrameWidgetImpl::StartPageScaleAnimation
+    /// (core/frame/web_frame_widget_impl.cc:1738-1744) ->
+    /// LayerTreeHost::StartPageScaleAnimation.
+    StartPageScaleAnimation {
+        target: compositor_tree::geometry::Point,
+        use_anchor: bool,
+        scale: f32,
+        duration: scroll_animation::TimeDelta,
     },
     SetHaveScrollEventHandlers(bool),
     SetEventListenerProperties {
@@ -474,6 +484,23 @@ impl PageDomainServices {
                     .borrow_mut()
                     .MainMut()
                     .SetPageScaleFactorAndLimits(scale, minimum, maximum);
+            }
+            MainCompositorMutation::StartPageScaleAnimation {
+                target,
+                use_anchor,
+                scale,
+                duration,
+            } => {
+                if !scale.is_finite() || scale <= 0. || duration.InMicroseconds() < 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid page scale animation",
+                    ));
+                }
+                self.MainLayerize()
+                    .borrow_mut()
+                    .MainMut()
+                    .StartPageScaleAnimation(target, use_anchor, scale, duration);
             }
             // WebFrameWidgetImpl.cc:2220-2232 -> LayerTreeHost.
             MainCompositorMutation::SetHaveScrollEventHandlers(value) => self

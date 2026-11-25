@@ -255,31 +255,6 @@ impl EngineAssembly {
                     stage: "main LayerTreeHost input reached the impl half",
                 });
             }
-            CompositorInput::StartPageScaleAnimation {
-                target,
-                use_anchor,
-                scale,
-                duration,
-            } => {
-                if !scale.is_finite() || scale <= 0. || duration.InMicroseconds() < 0 {
-                    return Err(Self::WheelContinuationError("invalid page scale animation"));
-                }
-                self.core
-                    .host
-                    .as_mut()
-                    .expect("resident Host")
-                    .BaseMutable()
-                    .StartPageScaleAnimation(
-                        target,
-                        use_anchor,
-                        scale,
-                        duration,
-                        &mut HostImplContext {
-                            services: &mut self.core.services,
-                        },
-                    );
-                return self.Poll();
-            }
             _ => {}
         }
         // InputHandlerProxy.cc:497-548 keeps the original event, then either
@@ -362,7 +337,6 @@ impl EngineAssembly {
                 CompositorInput::PinchUpdate { .. } => 2.0,
                 CompositorInput::PinchEnd { .. } => 3.0,
                 CompositorInput::SetPageScaleFactorAndLimits { .. }
-                | CompositorInput::StartPageScaleAnimation { .. }
                 | CompositorInput::WheelDOMAcknowledgement { .. }
                 | CompositorInput::ContinueWheelScroll { .. }
                 | CompositorInput::SetHaveScrollEventHandlers(_)
@@ -686,7 +660,6 @@ impl EngineAssembly {
                 }))
             }
             CompositorInput::SetPageScaleFactorAndLimits { .. }
-            | CompositorInput::StartPageScaleAnimation { .. }
             | CompositorInput::WheelDOMAcknowledgement { .. }
             | CompositorInput::ContinueWheelScroll { .. }
             | CompositorInput::SetHaveScrollEventHandlers(_)

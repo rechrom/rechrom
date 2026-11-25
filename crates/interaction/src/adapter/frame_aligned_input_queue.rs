@@ -171,6 +171,21 @@ pub struct BrowserGestureDisposition {
     pub dispatch_id: u64,
     pub consumed: bool,
 }
+/// The main-thread acknowledgement of a queued event, handed over when
+/// MainThreadEventQueue runs the event's callback.
+#[derive(Clone, Debug)]
+pub enum MainThreadEventAck {
+    Wheel(WheelDisposition),
+    BrowserGesture(BrowserGestureDisposition),
+}
+/// WidgetInputHandlerManager::DidHandleInputEventSentToMain
+/// (third_party/blink/renderer/platform/widget/input/
+/// widget_input_handler_manager.cc:1171-1230): the event's callback posts its
+/// acknowledgement to the compositor thread's default task runner at once
+/// (cc:1213-1218). The embedding binds the Page's compositor task runner
+/// here; without one (single-thread compositing) no compositor-thread input
+/// router consumes the acknowledgement.
+pub type DidHandleInputEventSentToMain = Arc<dyn Fn(MainThreadEventAck) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct FrameAlignedInputQueue {
@@ -187,12 +202,11 @@ impl Default for FrameAlignedInputQueue {
             widget_scale: AtomicU32::new(1.0f32.to_bits()),
             clock: Mutex::new(Arc::new(super::host_event_clock::HostEventClock)),
             touch_dispositions: Mutex::new(Vec::new()),
-            wheel_dispositions: Mutex::new(Vec::new()),
+            did_handle_input_event_sent_to_main: Mutex::new(None),
             recognizer: Mutex::new(FilteredGestureProvider::default()),
             document_generation: AtomicU64::new(1),
             generated_gestures: Mutex::new(Vec::new()),
             touch_admission: Mutex::new((None, false)),
-            browser_gesture_dispositions: Mutex::new(Vec::new()),
         });
         // The Page rendering-opportunity owner guarantees delivery, or drains
         // immediately when no BeginFrame source is attached. It does not use a
@@ -239,14 +253,13 @@ impl FrameAlignedInputQueue {
     pub fn TakeTouchDispositions(&self) -> Vec<TouchDisposition> {
         std::mem::take(&mut *self.ports.touch_dispositions.lock().unwrap())
     }
-    pub fn TakeWheelDispositions(&self) -> Vec<WheelDisposition> {
-        std::mem::take(&mut *self.ports.wheel_dispositions.lock().unwrap())
+    /// Binds the compositor-thread poster of main-thread acknowledgements
+    /// (WidgetInputHandlerManager's role).
+    pub fn SetDidHandleInputEventSentToMain(&self, post: DidHandleInputEventSentToMain) {
+        *self.ports.did_handle_input_event_sent_to_main.lock().unwrap() = Some(post);
     }
     pub fn InputDocumentGeneration(&self) -> u64 {
         self.ports.document_generation.load(Ordering::Acquire)
-    }
-    pub fn TakeBrowserGestureDispositions(&self) -> Vec<BrowserGestureDisposition> {
-        std::mem::take(&mut *self.ports.browser_gesture_dispositions.lock().unwrap())
     }
     pub fn SetTouchAction(&self, action: TouchAction) {
         self.ports.recognizer.lock().unwrap().SetTouchAction(action);
@@ -584,15 +597,13 @@ impl FrameAlignedInputQueue {
                 let requests = wheel.compositor_ack.clone();
                 let ports = self.ports.clone();
                 Some(Box::new(move |result, _, _, _| {
-                    ports
-                        .wheel_dispositions
-                        .lock()
-                        .unwrap()
-                        .push(WheelDisposition {
+                    ports.DidHandleInputEventSentToMain(MainThreadEventAck::Wheel(
+                        WheelDisposition {
                             document_generation,
                             requests,
                             result,
-                        });
+                        },
+                    ));
                 }))
             }
             InputEvent::Touch(touch)
@@ -637,12 +648,12 @@ impl FrameAlignedInputQueue {
                 let dispatch_id = browser_gesture_dispatch_id.unwrap();
                 let ports = self.ports.clone();
                 Some(Box::new(move |result, _, _, _| {
-                    ports.browser_gesture_dispositions.lock().unwrap().push(
+                    ports.DidHandleInputEventSentToMain(MainThreadEventAck::BrowserGesture(
                         BrowserGestureDisposition {
                             dispatch_id,
                             consumed: result == InputEventResultState::kConsumed,
                         },
-                    );
+                    ));
                 }))
             }
             _ => None,
@@ -891,13 +902,18 @@ struct HostPorts {
     widget_scale: AtomicU32,
     clock: Mutex<Arc<dyn super::host_event_clock::HostInputClock>>,
     touch_dispositions: Mutex<Vec<TouchDisposition>>,
-    wheel_dispositions: Mutex<Vec<WheelDisposition>>,
+    did_handle_input_event_sent_to_main: Mutex<Option<DidHandleInputEventSentToMain>>,
     recognizer: Mutex<FilteredGestureProvider>,
     generated_gestures: Mutex<Vec<WebGestureEvent>>,
     touch_admission: Mutex<(Option<Type>, bool)>,
-    browser_gesture_dispositions: Mutex<Vec<BrowserGestureDisposition>>,
 }
 impl HostPorts {
+    fn DidHandleInputEventSentToMain(&self, ack: MainThreadEventAck) {
+        let post = self.did_handle_input_event_sent_to_main.lock().unwrap().clone();
+        if let Some(post) = post {
+            post(ack);
+        }
+    }
     fn PublishGeneratedGestures(&self, generation: u64, events: Vec<WebGestureEvent>) {
         let scale = f32::from_bits(self.widget_scale.load(Ordering::Relaxed));
         let mut generated = self.generated_gestures.lock().unwrap();

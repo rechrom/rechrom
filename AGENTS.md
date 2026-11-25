@@ -75,14 +75,18 @@ document thread and pushes its artifact inside `ProxyMain::BeginMainFrame`; no
 | 8 | Viz → Renderer | `Aggregate(DeviceRect, &[SurfacePlacement]) -> VizOutput` (an `AggregatedFrame` of `AggregatedRenderPass`es). | Aggregate moved. |
 | 9 | Renderer → display | `HostOutput::Render(&mut VizOutput, B::Target) -> (RenderUpdate, B::Target)`; backend injected through `DirectRendererBackend`. | Borrowed host render target; the host presents. |
 
-Besides the Proxy queue, one typed input queue crosses to the compositor
-thread: document-thread requests for the impl input handler (injected
-scrollbar gestures, wheel DOM acknowledgements, main-thread hit-test replies)
-move as `compositor_values::input_to_impl::InputToImpl`, in FIFO order. The
-embedding's input router drains it (`PageBrowserInput`; Chromium's
-WidgetInputHandlerManager posting to InputHandlerProxy); the synchronous
-presenter runs each message where the compositor task runner would. The
-document side never builds a `CompositorMutation`.
+Besides the Proxy tasks, the document thread posts input tasks to the
+compositor thread: requests for the impl input handler (injected scrollbar
+gestures, wheel DOM acknowledgements, main-thread hit-test replies) as
+`compositor_values::input_to_impl::InputToImpl`, plus event
+acknowledgements and document detach (`browser::page::CompositorThreadTask`).
+The embedding injects the Page's `CompositorTaskRunner` over the same ordered
+queue as ProxyMain's tasks (Blink's compositor-thread default task runner);
+each task is posted where WidgetInputHandlerManager / WebFrameWidgetImpl post
+it, never collected for a later drain. The synchronous presenter runs each
+message where the compositor task runner would. Page-scale animations are
+LayerTreeHost state carried by the commit, not input tasks. The document side
+never builds a `CompositorMutation`.
 
 Borrowing across boundaries 1–5 is deliberate: it is how Chromium's in-process
 data flow keeps its performance. A boundary violation is code that goes

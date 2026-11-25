@@ -9,15 +9,18 @@
 //! widget_input_handler_manager.cc), the blocking-wheel DOM
 //! acknowledgement, and injected scrollbar gestures
 //! (WebFrameWidgetImpl::InjectScrollbarGestureScroll ->
-//! WidgetInputHandlerManager::DispatchScrollGestureEvent, core/frame/
-//! web_frame_widget_impl.cc) to the compositor task runner, which runs them
-//! in posting order. The values are moved; they hold no document state.
+//! WidgetInputHandlerManager::DispatchScrollGestureToCompositor, core/frame/
+//! web_frame_widget_impl.cc:4326-4355 -> widget_input_handler_manager.cc:
+//! 626-638) to the compositor task runner, which runs them in posting order.
+//! A page scale animation is not an input-queue message: Blink stores it on
+//! LayerTreeHost (cc/trees/layer_tree_host.cc:1627-1636) and the next
+//! commit carries it. The values are moved; they hold no document state.
 //! The impl owner converts each to its InputHandlerProxy call.
 
 use crate::ScrollGranularity;
-use compositor_tree::geometry::{Point, Vector2dF};
+use compositor_tree::geometry::Vector2dF;
 use compositor_tree::ElementId;
-use scroll_animation::{TimeDelta, TimeTicks};
+use scroll_animation::TimeTicks;
 
 /// cc gesture-scroll phase (begin / update / end).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,14 +50,5 @@ pub enum InputToImpl {
     ContinueWheelScroll {
         request: u64,
         scroll_element_id: Option<ElementId>,
-    },
-    /// A double-tap zoom's page scale animation. Chromium carries it on the
-    /// next commit (LayerTreeHost::StartPageScaleAnimation); Rechrom keeps
-    /// its existing delivery to the impl input handler in queue order.
-    StartPageScaleAnimation {
-        target: Point,
-        use_anchor: bool,
-        scale: f32,
-        duration: TimeDelta,
     },
 }

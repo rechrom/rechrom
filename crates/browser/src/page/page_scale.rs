@@ -109,16 +109,22 @@ impl Page {
             .web_view_zoom
             .borrow_mut()
             .AnimateDoubleTapZoom(point, bounds, facts);
+        // WebViewImpl::AnimateDoubleTapZoom -> WebFrameWidgetImpl::
+        // StartPageScaleAnimation (web_frame_widget_impl.cc:1738-1744):
+        // LayerTreeHost stores it for the next commit
+        // (cc/trees/layer_tree_host.cc:1627-1636).
         if let Some(animation) = animation {
-            self.RouteImplInput(InputToImpl::StartPageScaleAnimation {
-                target: compositor_tree::geometry::Point::new(
-                    animation.target_position.x(),
-                    animation.target_position.y(),
-                ),
-                use_anchor: animation.use_anchor,
-                scale: animation.scale,
-                duration: CompositorTimeDelta::Milliseconds(animation.duration_milliseconds),
-            })?;
+            self.RouteMainCompositorMutation(
+                main_compositor::MainCompositorMutation::StartPageScaleAnimation {
+                    target: compositor_tree::geometry::Point::new(
+                        animation.target_position.x(),
+                        animation.target_position.y(),
+                    ),
+                    use_anchor: animation.use_anchor,
+                    scale: animation.scale,
+                    duration: CompositorTimeDelta::Milliseconds(animation.duration_milliseconds),
+                },
+            )?;
         }
         Ok(())
     }

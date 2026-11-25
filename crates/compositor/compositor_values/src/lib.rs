@@ -36,6 +36,7 @@ pub mod touch_action_region;
 pub mod begin_main_frame_metrics;
 pub mod event_metrics;
 pub mod layer_tree_mutator;
+pub mod micro_benchmark_impl;
 pub mod swap_promise;
 
 // LayerTreeSettings fields, proxy and scheduler values named by both proxies.

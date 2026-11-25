@@ -531,7 +531,7 @@ pub struct LayerTreeHostImpl<B: HostImplTypes> {
     // Source: cc/trees/layer_tree_host_impl.h:1227.
     single_thread_synchronous_task_graph_runner_: Option<Box<B::SynchronousTaskGraphRunner>>,
     // Source: cc/trees/layer_tree_host_impl.h:1225.
-    pub(super) micro_benchmark_controller_: MicroBenchmarkControllerImpl<B::MicroBenchmarkImpl>,
+    pub(super) micro_benchmark_controller_: MicroBenchmarkControllerImpl,
     // Source: cc/trees/layer_tree_host_impl.h:1224.
     rendering_stats_instrumentation_: HostImplRenderingStatsId,
     // Source: cc/trees/layer_tree_host_impl.h:1222.
@@ -1466,7 +1466,10 @@ where
             .MarkUIResourceNotEvicted(uid, context);
     }
     // Source: cc/trees/layer_tree_host_impl.cc:5936-5939.
-    pub fn ScheduleMicroBenchmark(&mut self, benchmark: Box<B::MicroBenchmarkImpl>) {
+    pub fn ScheduleMicroBenchmark(
+        &mut self,
+        benchmark: Box<dyn compositor_values::micro_benchmark_impl::MicroBenchmarkImpl>,
+    ) {
         self.micro_benchmark_controller_.ScheduleRun(benchmark);
     }
     // Source: cc/trees/layer_tree_host_impl.cc:5941-5944.
@@ -7731,7 +7734,7 @@ pub(crate) struct HostImplRuntimeCore<'a, B: HostImplTypes> {
     pub(crate) single_thread_synchronous_task_graph_runner_:
         &'a mut Option<Box<B::SynchronousTaskGraphRunner>>,
     pub(crate) micro_benchmark_controller_:
-        &'a mut MicroBenchmarkControllerImpl<B::MicroBenchmarkImpl>,
+        &'a mut MicroBenchmarkControllerImpl,
     pub(crate) rendering_stats_instrumentation_: &'a mut HostImplRenderingStatsId,
     pub(crate) flashed_scrollbars_: &'a mut HashSet<ElementId>,
     pub(crate) dark_mode_filter_: &'a mut Option<HostImplDarkModeFilterId>,

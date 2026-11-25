@@ -512,7 +512,6 @@ const _: fn() = || {
 impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCompositorTypes<R> {
     type BeginMainFrameMetrics = compositor_values::begin_main_frame_metrics::BeginMainFrameMetrics;
     type DrawImage = super::paint::DrawImage;
-    type MicroBenchmarkImpl = super::host_owners::MicroBenchmark<R>;
     type MainRootLayer = LayerRef<Self>;
     type MainLayerRef = LayerBorrow<Self>;
     // The main AnimationHost itself (commit_state.h:205 raw_ptr<MutatorHost>);
