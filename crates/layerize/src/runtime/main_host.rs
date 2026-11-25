@@ -1,8 +1,7 @@
 //! The resident layer-list main-host subset required by PAC and TreeSynchronizer.
 //! Source algorithms are identified individually; this is not a Proxy/platform
 //! implementation. Request/sequence effects are independent injected capabilities.
-//! Moved from compositor/src/runtime/main_host.rs (MAIN_IMPL_SPLIT.md S1a-3
-//! B3); generic over the one `LayerizeFamily`.
+//! Moved from compositor/src/runtime/main_host.rs; generic over the one `LayerizeFamily`.
 use super::paint::{CpuForeignLayer, CpuPaintServices};
 use crate::{
     adapter::main_layer::{
@@ -50,7 +49,7 @@ pub type ViewTransitionElementResourceRects<F> =
 /// The endpoint schedules actual embedding work and preserves monitor/metrics
 /// notifications. It never owns a Layer, PAC, or this host. `Send + Sync`:
 /// the impl thread reaches it through the main host inside the protected
-/// sequence (S1B_PROXY_DESIGN.md B4).
+/// sequence.
 pub trait CpuMainHostEndpoint: ProtectedSequenceSynchronizer + Send + Sync {
     fn IsMainThread(&self) -> bool;
     fn CommitRequested(&self) -> bool;

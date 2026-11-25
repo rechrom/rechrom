@@ -1,5 +1,5 @@
 //! Out-of-line members of base-declared types whose Chromium bodies live in
-//! core/layout/table/ (R7a, crates/layout/PACKAGE_MAP.md §7). Base declares the
+//! core/layout/table/ (R7a). Base declares the
 //! types because the fragment tree (collapsed TableBorders), LayoutInputNode
 //! and the TableLayoutSupport slots name them; Rust cannot add inherent
 //! methods to them from this crate, so each family is an extension trait.

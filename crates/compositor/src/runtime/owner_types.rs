@@ -28,7 +28,7 @@ use crate::{
 };
 
 // The impl-built payloads of the ProxyMain/ProxyImpl messages
-// (layerize::commit::proxy, S1B_PROXY_DESIGN.md 1.1). The queued DrawImage
+// (layerize::commit::proxy). The queued DrawImage
 // is not posted yet and stays a unit value.
 impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
     // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
@@ -45,7 +45,7 @@ impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTyp
     type EmbedderNotification = crate::engine::CompositorEmbedderNotification;
 }
 
-// The main half's binding to this family (MAIN_IMPL_SPLIT.md, option h). The
+// The main half's binding to this family. The
 // main traits (MainLayerTypes, ScrollbarLayerTypes, ...) are blanket impls
 // over LayerizeFamily in layerize (runtime/main_family.rs).
 impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily

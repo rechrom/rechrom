@@ -7,8 +7,7 @@ publish = false
 # Main-thread compositor half (Blink PaintArtifactCompositor and the cc
 # LayerTreeHost side). It depends only on the cc shared roots, never on the
 # `compositor` facade or an impl package; the impl half depends on
-# `layerize::commit` only. See crates/compositor/MAIN_IMPL_SPLIT.md and
-# S4_CRATE_CLASSIFICATION.md (guard: tests/layerize_boundary.rs).
+# `layerize::commit` only (guard: tests/layerize_boundary.rs).
 [dependencies]
 compositor_tree = { path = "../compositor/compositor_tree" }
 # cc shared values (cc/input, LayerTreeSettings fields, viz, gfx) named by

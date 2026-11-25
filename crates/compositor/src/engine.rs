@@ -532,7 +532,7 @@ impl From<layerize::commit::main_effects::PacScrollEffect> for CompositorMainThr
 pub type ImmutablePaintRecord =
     crate::runtime::paint::CpuPaintRecord<crate::runtime::skia::SkRegion>;
 
-/// The single Layerize family of this compositor (S1B_PROXY_DESIGN.md 1).
+/// The single Layerize family of this compositor.
 pub type MainFamily = crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>;
 /// ProxyMain -> ProxyImpl task of this family.
 pub type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
@@ -550,7 +550,7 @@ pub type MainPropertyTreeFeatures = crate::runtime::render::RenderServices;
 pub type MainAnimationHost = crate::runtime::animation_host::AnimationHostOwner;
 
 // Compile-time thread-safety of the commit values that cross to, or are read
-// by, the impl thread during the commit (S1B_PROXY_DESIGN.md B4): the main
+// by, the impl thread during the commit: the main
 // LayerTreeHost's ThreadUnsafeCommitState (read by FinishCommit), the moved
 // CommitState and the posted Proxy tasks. The lent main LayerTreeHost itself
 // is asserted where the Page constructs it (browser `page::main_compositor`).

@@ -6,7 +6,7 @@
 //! of the commit on the main thread (local_frame_view.cc:2965-2975,3348;
 //! cc/trees/proxy_main.cc BeginMainFrame). This crate is that half. The impl
 //! half (`compositor`) may name only [`commit`], the values that cross the
-//! ProxyMain -> ProxyImpl commit. See crates/compositor/MAIN_IMPL_SPLIT.md.
+//! ProxyMain -> ProxyImpl commit.
 
 mod adapter;
 pub mod third_party;

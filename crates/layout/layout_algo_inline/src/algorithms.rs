@@ -1,5 +1,5 @@
 // Out-of-line members of base-declared types whose Chromium bodies live in
-// core/layout/inline/ (R5, crates/layout/PACKAGE_MAP.md §7). Base declares the
+// core/layout/inline/ (R5). Base declares the
 // types because the fragment tree and LayoutInputNode name them; Rust cannot
 // add inherent methods to them from this crate, so each family is an
 // extension trait. Every inline module imports this prelude (and block's

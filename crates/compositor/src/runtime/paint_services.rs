@@ -1,7 +1,6 @@
 //! Impl half of the production Paint value capabilities. The main paint
 //! services (`CpuMainPaintServices`: PAC, chunk conversion, GeometryMapper,
-//! main Layer services) are owned by layerize's LayerizeEngine
-//! (MAIN_IMPL_SPLIT.md S1a-3 B3).
+//! main Layer services) are owned by layerize's LayerizeEngine.
 use super::types::{CpuCompositorTypes, CpuSkiaBackend};
 use layerize::commit::paint::CpuPaintValueServices;
 use std::sync::Arc;

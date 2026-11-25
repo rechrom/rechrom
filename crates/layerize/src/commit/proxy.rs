@@ -1,5 +1,5 @@
 //! Values that cross between ProxyMain (the document thread, layerize) and
-//! ProxyImpl (the compositor thread) for one commit (S1B_PROXY_DESIGN.md 1.1).
+//! ProxyImpl (the compositor thread) for one commit.
 //! Source: cc/trees/proxy_main.cc, cc/trees/proxy_impl.cc.
 
 use crate::{

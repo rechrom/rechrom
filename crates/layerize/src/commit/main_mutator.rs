@@ -1,5 +1,4 @@
-//! The main-thread cc::AnimationHost as the main half sees it (S1b-5 of
-//! S1B_PROXY_DESIGN.md, B6).
+//! The main-thread cc::AnimationHost as the main half sees it.
 //!
 //! Chromium creates two AnimationHost instances per compositor: Blink's
 //! LayerTreeView owns the main one (`AnimationHost::CreateMainInstance`,

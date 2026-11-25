@@ -8367,7 +8367,7 @@ impl Page {
             && child_paint.is_empty()
         {
             self.state.SyncVisualViewportPaintState();
-            // B5 gate (S1B_PROXY_DESIGN.md): the main half holds a resident
+            // B5 gate: the main half holds a resident
             // PaintArtifact, in both presentation modes.
             let direct_compositor_ready = self
                 .state

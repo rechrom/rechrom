@@ -1,7 +1,6 @@
 //! Engine-local Proxy effect endpoint for the canonical main LayerTreeHost.
 //! No reference to a main/impl Host or Page can be recovered from this object.
-//! Moved from compositor/src/runtime/main_endpoint.rs (MAIN_IMPL_SPLIT.md
-//! S1a-3 B3). The impl half supplies the sequence, effect queue, task runner
+//! Moved from compositor/src/runtime/main_endpoint.rs. The impl half supplies the sequence, effect queue, task runner
 //! and AnimationHost query through `MainHostEffectSink`; it keeps the
 //! AnimationHost mutations itself.
 //!
@@ -10,7 +9,7 @@
 //! WaitForProtectedSequenceCompletion, layer_tree_host.cc:329-336,520-570)
 //! is started on the owner sequence by WillCommit storing the commit
 //! completion event and concluded on the impl side by signaling it
-//! (S1B_PROXY_DESIGN.md B4). The event lives here rather than on the host so
+//!. The event lives here rather than on the host so
 //! the impl side can query it without borrowing the host.
 use super::main_host::CpuMainHostEndpoint;
 use crate::commit::{

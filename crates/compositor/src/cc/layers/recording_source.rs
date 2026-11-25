@@ -1,2 +1,2 @@
-// The main-thread translation lives in layerize (MAIN_IMPL_SPLIT.md S1a-3).
+// The main-thread translation lives in layerize.
 pub use layerize::commit::layers::recording_source::*;

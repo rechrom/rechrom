@@ -274,7 +274,7 @@ pub(crate) enum ImplCommand {
     Proxy(compositor::MainToImplTask),
     /// The document finished ProxyMain::BeginMainFrame: the frame
     /// provenance, delegated video frames and input scale of that main frame
-    /// (they belong to the main frame, S1B_PROXY_DESIGN.md B2).
+    /// (they belong to the main frame).
     MainFrameFinished {
         content: ContentFrameProvenance,
         child_frames: Vec<PageChildCompositorFrame>,
@@ -1315,7 +1315,7 @@ impl ImplPresentation {
 
     /// The document thread finished ProxyMain::BeginMainFrame. Its
     /// provenance, delegated video frames and input scale belong to the main
-    /// frame (S1B_PROXY_DESIGN.md B2: they ride with the commit).
+    /// frame: they ride with the commit.
     fn main_frame_finished(
         &mut self,
         mut content: ContentFrameProvenance,
@@ -1487,7 +1487,7 @@ fn merge_resize(target: &mut Option<ResizeProvenance>, incoming: Option<ResizePr
 
 // The Page impl executor owns cc's impl half (ProxyImpl, Scheduler, input).
 // The main half runs on the document thread; the only main-tree path between
-// them is cc's commit over the Proxy tasks (S1B_PROXY_DESIGN.md S1b-7). Its
+// them is cc's commit over the Proxy tasks. Its
 // move-only frame output crosses the Page FrameSink queue to the
 // window-owned Viz sequence.
 fn run_impl(
@@ -2578,7 +2578,7 @@ fn run_document(
     // The main compositor half lives on this thread; ProxyMain posts its
     // tasks to the compositor thread and Start waits for ProxyImpl
     // (proxy_main.cc:898-914). Never wait here while holding a lock the
-    // compositor thread needs (S1B_PROXY_DESIGN.md R3).
+    // compositor thread needs.
     let to_impl = {
         let sender = Mutex::new(impl_sender.clone());
         browser::page::MainToImplQueue::Posting(Arc::new(move |task| {
@@ -2736,7 +2736,7 @@ fn run_document(
             // PaintArtifactCompositor::Update, UpdateLayers and WillCommit;
             // the commit or abort is posted to ProxyImpl. The artifact is
             // painted after this main frame's ApplyCompositorChanges, so it
-            // cannot roll back a newer impl scroll (S1B_PROXY_DESIGN.md B2).
+            // cannot roll back a newer impl scroll.
             Ok(Command::Main(MainThreadEvent::BeginMainFrame { frame, state })) => {
                 let started = Instant::now();
                 main_frame_count += 1;

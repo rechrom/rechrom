@@ -1,6 +1,5 @@
 //! ProxyImpl: the impl-thread half of cc's threaded Proxy
-//! (cc/trees/proxy_impl.{h,cc} at 6c1d401fcca5e1b0030563a90c2f2bba168e0c15),
-//! S1b-7 of S1B_PROXY_DESIGN.md.
+//! (cc/trees/proxy_impl.{h,cc} at 6c1d401fcca5e1b0030563a90c2f2bba168e0c15).
 //!
 //! As in Chromium, the impl owner of LayerTreeHostImpl and the Scheduler
 //! client is ProxyImpl; here that is `EngineCore`, whose SchedulerClient

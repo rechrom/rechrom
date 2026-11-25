@@ -60,8 +60,7 @@ owners**. Boundary 6 is the only document → compositor thread crossing and
 cross threads and **move** each frame. Nothing is copied or snapshotted.
 
 The Page constructs and runs `LayerizeEngine` and its `ProxyMain` on its
-document thread and pushes its artifact inside `ProxyMain::BeginMainFrame`
-(`crates/compositor/MAIN_IMPL_SPLIT.md`, `S1B_PROXY_DESIGN.md`); no
+document thread and pushes its artifact inside `ProxyMain::BeginMainFrame`; no
 `PaintArtifact` crosses to the compositor thread.
 
 | # | Boundary | Interface | How data crosses |
@@ -215,8 +214,7 @@ property trees, cc paint records and display lists, proxy messages,
 over `F: LayerizeFamily` only. Blink paint property nodes are read only here.
 Layerize packages depend only on the cc shared roots (below), never on a
 Compositor impl package or the `compositor` facade. Guard:
-`crates/layerize/tests/layerize_boundary.rs` (package classification:
-`crates/compositor/S4_CRATE_CLASSIFICATION.md`).
+`crates/layerize/tests/layerize_boundary.rs`.
 
 **Compositor**: cc's impl side, two loops driven by `compositor_scheduler`
 (BeginFrame state machine; commit, activation and draw action selection),

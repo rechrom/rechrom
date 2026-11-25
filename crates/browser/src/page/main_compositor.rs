@@ -1,5 +1,4 @@
-//! The Page's main compositor half on the document thread (S1b-7 of
-//! crates/compositor/S1B_PROXY_DESIGN.md): Blink's LayerTreeView /
+//! The Page's main compositor half on the document thread: Blink's LayerTreeView /
 //! WebFrameWidget compositor state. The Page domain (`PageDomainServices`)
 //! holds `layerize::LayerizeEngine` (main LayerTreeHost,
 //! PaintArtifactCompositor, main AnimationHost) and its `ProxyMain`
@@ -24,7 +23,7 @@ pub(crate) type MainLayerize = layerize::LayerizeEngine<compositor::MainFamily>;
 pub(crate) type MainProxy = layerize::runtime::proxy_main::ProxyMain<compositor::MainFamily>;
 
 // The main LayerTreeHost is lent to the impl thread inside the protected
-// commit sequence (S1B_PROXY_DESIGN.md B4).
+// commit sequence.
 #[allow(dead_code)]
 const _: () = {
     fn assert_send_ref<T: Send + ?Sized>(_: &T) {}

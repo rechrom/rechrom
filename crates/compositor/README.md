@@ -20,8 +20,7 @@ draw-property calculation, and impl scrolling. It does not own PaintArtifact
 production or layerization, a concrete pixel backend, Viz aggregation, render
 targets, presentation, platform graphics APIs, or OS threads.
 
-Package classes (`S4_CRATE_CLASSIFICATION.md`, guarded by
-`crates/layerize/tests/layerize_boundary.rs`):
+Package classes (guarded by `crates/layerize/tests/layerize_boundary.rs`):
 
 - cc shared roots: `scroll_snap`, `scroll_animation`, `compositor_tree` (cc
   property trees), `compositor_animation` (cc/animation, main and impl

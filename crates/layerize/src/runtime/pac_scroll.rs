@@ -7,7 +7,7 @@
 //!   paint_artifact_compositor.cc:1173-1174
 //!
 //! The callback retains only a typed FIFO (Arc/Mutex/atomic so the main tree
-//! that names it can be lent to the impl thread, S1B_PROXY_DESIGN.md B6). It does not retain PAC, Host,
+//! that names it can be lent to the impl thread). It does not retain PAC, Host,
 //! PropertyTrees, a Page, or any layer/tile owner.
 
 use crate::commit::{

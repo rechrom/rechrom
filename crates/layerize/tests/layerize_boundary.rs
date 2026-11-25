@@ -1,11 +1,11 @@
-//! Main/impl compositor split guard (crates/compositor/MAIN_IMPL_SPLIT.md).
+//! Main/impl compositor split guard.
 //!
 //! `layerize` is the main-thread half and never depends on `compositor`.
 //! The impl half (`crates/compositor`) may name only `layerize::commit` and
 //! must not name Blink paint property nodes, which stay on the main thread.
 //! Cargo cannot express either rule, so this scans manifests and sources.
 //!
-//! The S4 package classification (crates/compositor/S4_CRATE_CLASSIFICATION.md)
+//! The S4 package classification
 //! extends this: every package under `crates/compositor/` and
 //! `crates/layerize/` is a cc shared value root, an impl package, a main
 //! package or one of the two facades, and dependencies follow the class.
@@ -141,7 +141,7 @@ enum Class {
 
 use Class::*;
 
-/// The S4 classification (S4_CRATE_CLASSIFICATION.md section 2). Every
+/// The S4 classification. Every
 /// package whose manifest lives under crates/compositor/ or crates/layerize/
 /// appears exactly once.
 const CLASSIFICATION: &[(&str, Class)] = &[

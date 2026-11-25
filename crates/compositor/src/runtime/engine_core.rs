@@ -31,7 +31,7 @@ type Root = CpuCompositorTypes<SkRegion>;
 /// All constructor inputs are actual owners/capabilities, never test stand-ins.
 /// This is private to compositor: Page only provides executors/pixel primitives.
 pub(crate) struct EngineCore {
-    // ProxyImpl state (S1B_PROXY_DESIGN.md S1b-4): the posted DataForCommit
+    // ProxyImpl state: the posted DataForCommit
     // and the ProxyImpl -> ProxyMain task queue.
     pub(crate) proxy_impl: super::proxy_impl::ProxyImpl,
     pub(crate) host: Option<ClientLayerTreeHostImpl<Root>>,

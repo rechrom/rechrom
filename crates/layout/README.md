@@ -325,7 +325,7 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_base/src/fragmentation/` (its control data, `BreakAppeal` and
   `EarlyBreak`, in `layout_base/src/fragment/fragmentation/`); the former
   `layout_algo_fragmentation` package was folded in because nothing dispatches
-  into it (PACKAGE_MAP.md §5.2). Fragment-builder setup, finalization,
+  into it. Fragment-builder setup, finalization,
   child-break selection, breakpoint advancement, soft-break attempts,
   fragmentainer constraint-space construction, and stitched-fragment offset
   projection retain coarse out-of-line sampling frames. The source-compatible
@@ -354,7 +354,7 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_base/src/internal/layout_object_builder/layout_algo_inline_collapsible_whitespace.rs` (with the other 18
   editing-query files, R5 part 2); its linear sibling walk retains its
   sampling frame instead of generic tree self time.
-  Ownership follows Chromium's directories (R5 part 2, `PACKAGE_MAP.md` §7):
+  Ownership follows Chromium's directories (R5 part 2):
   the `core/layout/*.cc` object model (LayoutText, LayoutInline,
   LayoutTextCombine, LayoutBR, LayoutWordBreak, LayoutCounter,
   LayoutRubyAsBlock and their member bodies) is base code in
@@ -594,7 +594,7 @@ old `layoutng_*` source-package names at the repository boundary.
   data holds the real base types (`Member<LayoutBox>`, `Member<Element>`,
   ...) and keeps its behaviour as inherent methods with Chromium's names.
   Paint and Interaction name the result through the facade's `layout::result`
-  module. The former `layout_fragment` crate is gone (`PACKAGE_MAP.md` §7).
+  module. The former `layout_fragment` crate is gone.
   The fragment area owns the source-result lifetime handle and fragment-local
   revision policy, plus engine-neutral retained-paint boundary values such as
   fragment identity/geometry, sticky and scroll geometry, inline client
@@ -1066,7 +1066,7 @@ every table module. Table slots, all filled by
 `table_support` is validated by `validate_performance_ownership` like the
 other support groups.
 The grid, flex, block, out-of-flow, float, forms and list packages have no
-link-time coupling with base either (R7a, `PACKAGE_MAP.md` §7). Members of
+link-time coupling with base either (R7a). Members of
 base-declared types whose bodies are those packages' algorithms are extension
 traits in the package (`UnpositionedListMarkerAlgorithms`,
 `BlockNodeFormsAlgorithms`, `InlineContainingBlockUtilsAlgorithms`,

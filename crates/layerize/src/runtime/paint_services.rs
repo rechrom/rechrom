@@ -3,7 +3,7 @@
 //! value lease `CpuImplPaintServices` and the TreeSynchronizer trace binding).
 //! This owner holds independent raster value/diagnostic leases, never a Page,
 //! Layer, PAC or PaintArtifact backpointer. The family-generic impls bound
-//! only `F: LayerizeFamily<Skia = R>` (MAIN_IMPL_SPLIT.md, option h).
+//! only `F: LayerizeFamily<Skia = R>`.
 use super::{
     paint::{self, CpuGeometryMapper},
     types::PaintSkiaBackend,

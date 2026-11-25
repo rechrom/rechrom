@@ -1,6 +1,5 @@
 //! ProxyMain: the main-thread half of cc's threaded Proxy
-//! (cc/trees/proxy_main.{h,cc} at 6c1d401fcca5e1b0030563a90c2f2bba168e0c15),
-//! S1b-7 of S1B_PROXY_DESIGN.md.
+//! (cc/trees/proxy_main.{h,cc} at 6c1d401fcca5e1b0030563a90c2f2bba168e0c15).
 //!
 //! It owns the main-side state of the main-frame pipeline. Requests reach
 //! ProxyImpl as posted `MainToImpl` tasks (`ProxyTaskQueue`: a cross-thread

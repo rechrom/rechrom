@@ -19,7 +19,7 @@
 // side is dropped without completing its work (a panicking impl
 // FinishCommit, or an impl thread that exits with the commit still queued).
 // The waiter observes it through `WasAbandoned` instead of touching a
-// half-pushed main tree (S1B_PROXY_DESIGN.md 2.2).
+// half-pushed main tree.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;

@@ -1,5 +1,4 @@
-//! `LayerizeEngine`: the owner of the main-thread compositor state
-//! (MAIN_IMPL_SPLIT.md S1a-3 B3).
+//! `LayerizeEngine`: the owner of the main-thread compositor state.
 //!
 //! Chromium keeps the LayerTreeHost, PaintArtifactCompositor, the previously
 //! pushed artifact, the cc::ScrollCallbacks client and the main-frame
@@ -51,8 +50,7 @@ use std::{ptr::NonNull, sync::Arc};
 /// (`commit::proxy::ProtectedCommitLease`) and this owner derive their
 /// accesses from the same pointer. Every owner-side access goes through the
 /// single waiting accessor `Get` / `GetMut`, which first waits for the
-/// protected sequence (LayerTreeHost::WaitForProtectedSequenceCompletion,
-/// decision D2; S1B_PROXY_DESIGN.md R1).
+/// protected sequence (LayerTreeHost::WaitForProtectedSequenceCompletion).
 struct MainHostOwner<F: LayerizeFamily>(NonNull<CpuMainLayerHost<F>>);
 impl<F: LayerizeFamily> MainHostOwner<F> {
     fn new(host: Box<CpuMainLayerHost<F>>) -> Self {
@@ -87,7 +85,7 @@ impl<F: LayerizeFamily> Drop for MainHostOwner<F> {
 }
 
 // Compile-time thread-safety of the family-independent main-half owners the
-// impl thread reads inside the protected sequence (S1B_PROXY_DESIGN.md B4).
+// impl thread reads inside the protected sequence.
 // The family-bound assertions are in the compositor, which names the family.
 #[allow(dead_code)]
 const _: () = {
@@ -112,7 +110,7 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
     scroll_effects: PacScrollEffects,
     // The main LayerTreeHost (declared after PAC: its root is detached in
     // Shutdown after PAC destruction). A stable allocation: the protected
-    // commit lease (S1B_PROXY_DESIGN.md B4) points at it.
+    // commit lease points at it.
     main: MainHostOwner<F>,
     endpoint: Arc<EngineMainEndpoint>,
     // The main cc::AnimationHost (AnimationHost::CreateMainInstance), owned

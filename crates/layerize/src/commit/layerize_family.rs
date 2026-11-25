@@ -1,5 +1,4 @@
-//! The binding of the main half to the one concrete compositor family
-//! (MAIN_IMPL_SPLIT.md, "Plan correction", option h).
+//! The binding of the main half to the one concrete compositor family.
 //!
 //! The family type stays in the compositor, because it also implements impl
 //! traits of the compositor sub-crates (orphan rule). The compositor

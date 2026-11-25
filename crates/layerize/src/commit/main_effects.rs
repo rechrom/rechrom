@@ -56,8 +56,7 @@ pub enum MainHostEffect {
 /// main half runs on, the posted Proxy effects and the main task runner (the
 /// main AnimationHost is `MainHostInit::mutator`, S1b-5). No Host, Layer or Page reference can
 /// be recovered from it. `Send + Sync`: the endpoint that holds it is read
-/// from the impl thread inside the protected sequence (S1B_PROXY_DESIGN.md
-/// B4).
+/// from the impl thread inside the protected sequence.
 pub trait MainHostEffectSink: Send + Sync {
     fn RunsTasksInCurrentSequence(&self) -> bool;
     fn PostEffect(&self, effect: MainHostEffect);
@@ -78,7 +77,7 @@ pub struct MainHostInit<M> {
     pub threaded: bool,
     pub background_color: Option<compositor_values::color4f::Color4f>,
     /// The impl half runs on the same sequence as this host (in-process
-    /// Proxy transport, S1B_PROXY_DESIGN.md D1): protected-sequence waits
+    /// Proxy transport): protected-sequence waits
     /// return immediately, as for CompositorMode::SINGLE_THREADED.
     pub impl_on_owner_sequence: bool,
     pub sink: std::sync::Arc<dyn MainHostEffectSink>,

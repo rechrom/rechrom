@@ -4,7 +4,7 @@
 // reaches it back only through the registry slots `registration::Register`
 // fills; there is no link-time (`extern "Rust"` / `#[no_mangle]`) coupling.
 // Members of base-declared types whose bodies live here are extension traits
-// (`algorithms`). See crates/layout/PACKAGE_MAP.md, R5 status.
+// (`algorithms`).
 // Translated Chromium identifiers keep their C++ spelling.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 

@@ -1631,7 +1631,7 @@ pub trait ScrollCallbacks: Send + Sync {
 // Arc<RwLock> is solely the source scoped_refptr<SyncedProperty> value shared by
 // active/pending trees. Trees and all their nodes remain independently resident.
 // RwLock instead of RefCell: the main tree is lent to the impl thread inside
-// the protected sequence (S1B_PROXY_DESIGN.md B6); the lock is uncontended.
+// the protected sequence; the lock is uncontended.
 pub type SyncedScrollOffsetMap = BTreeMap<ElementId, Arc<RwLock<SyncedScrollOffset>>>;
 pub struct ScrollTree {
     base_: PropertyTree<ScrollNode>,

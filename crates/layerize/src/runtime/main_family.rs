@@ -1,5 +1,5 @@
 //! The main-half traits of the one concrete compositor family, implemented
-//! once for every `F: LayerizeFamily` (MAIN_IMPL_SPLIT.md option h, point 3).
+//! once for every `F: LayerizeFamily`.
 //! Moved from compositor/src/runtime/{picture_types,owner_types}.rs, where
 //! they were impls for `CpuCompositorTypes<R>`; `F::Skia` is that `R`.
 //!
