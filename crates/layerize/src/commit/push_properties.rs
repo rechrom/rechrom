@@ -51,11 +51,13 @@ pub trait LayerValue: Clone + Default + PartialEq + Send + Sync {
     fn IsEmpty(&self) -> bool;
 }
 
-/// The concrete types named by the LayerImpl setters that
-/// Layer::PushPropertiesTo calls: the push target (`CommitTypes::Layer`), the
-/// impl-tree borrow it writes through and the pushed rare-input values.
+/// The concrete values Layer::PushPropertiesTo pushes into its LayerImpl
+/// (the pushed rare-input values). The push target itself is a type
+/// parameter of the push (`MainLayerImpl`): Chromium pushes into a
+/// polymorphic `LayerImpl*` (cc/layers/layer.cc:1510-1594), which the main
+/// side names only through these traits.
 pub trait PushPropertiesTypes:
-    CommitTypes<Layer: MainLayerImpl<Self>, RegionBackend: SkRegionBackend + Send + Sync + 'static>
+    CommitTypes<RegionBackend: SkRegionBackend + Send + Sync + 'static>
 {
     /// Native cc::NodeId, with kInvalidNodeId as Default.
     type NodeId: Copy + Default + Send + Sync + 'static;
@@ -65,13 +67,6 @@ pub trait PushPropertiesTypes:
     type FilterQuality: Copy + Default + PartialEq + Send + Sync + 'static;
     /// Native DynamicRangeLimitMixture, with kHigh as Default.
     type DynamicRangeLimit: Copy + Default + PartialEq + Send + Sync + 'static;
-    /// Current impl-side tree/services borrow. Native Layer::PushDirtyProperties
-    /// receives the actual target tree; an implementation must split its layer
-    /// owner from the remaining resident tree fields before constructing this.
-    /// Never retained by either main Layer or the target LayerImpl.
-    type ImplContext<'a>: MainLayerImplTree<Self>
-    where
-        Self: 'a;
 }
 
 /// Exact live LayerImpl operations consumed by cc/layers/layer.cc:1510-1622.
@@ -81,67 +76,77 @@ pub trait PushPropertiesTypes:
 pub trait MainLayerImplTree<B: PushPropertiesTypes> {
     fn source_frame_number(&self) -> i32;
 }
+/// The push target: the impl LayerImpl that Layer::PushPropertiesTo writes
+/// and Layer::CreateLayerImpl allocates. The impl layer implements it; main
+/// layers are generic over it (static dispatch, no per-setter indirection).
 pub trait MainLayerImpl<B: PushPropertiesTypes>: Sized {
-    fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetHasTransformNode(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetEffectTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetClipTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetScrollTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>);
-    fn SetElementId(&mut self, element: ElementId, impl_tree: &mut B::ImplContext<'_>);
-    fn SetBackgroundColor(&mut self, color: Color4f, impl_tree: &mut B::ImplContext<'_>);
-    fn SetSafeOpaqueBackgroundColor(&mut self, color: Color4f, impl_tree: &mut B::ImplContext<'_>);
-    fn SetBounds(&mut self, bounds: &Size, impl_tree: &mut B::ImplContext<'_>);
-    fn SetOffsetToTransformParent(&mut self, offset: Vector2dF, impl_tree: &mut B::ImplContext<'_>);
-    fn SetDrawsContent(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetHitTestOpaqueness(&mut self, value: HitTestOpaqueness, impl_tree: &mut B::ImplContext<'_>);
-    fn NoteLayerPropertyChanged(&mut self, impl_tree: &mut B::ImplContext<'_>);
+    /// Current impl-side tree/services borrow. Native Layer::PushDirtyProperties
+    /// receives the actual target tree; an implementation must split its layer
+    /// owner from the remaining resident tree fields before constructing this.
+    /// Never retained by either main Layer or the target LayerImpl.
+    type ImplContext<'a>: MainLayerImplTree<B>
+    where
+        Self: 'a;
+    fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetHasTransformNode(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetEffectTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetClipTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetScrollTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetElementId(&mut self, element: ElementId, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetBackgroundColor(&mut self, color: Color4f, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetSafeOpaqueBackgroundColor(&mut self, color: Color4f, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetBounds(&mut self, bounds: &Size, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetOffsetToTransformParent(&mut self, offset: Vector2dF, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetDrawsContent(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetHitTestOpaqueness(&mut self, value: HitTestOpaqueness, impl_tree: &mut Self::ImplContext<'_>);
+    fn NoteLayerPropertyChanged(&mut self, impl_tree: &mut Self::ImplContext<'_>);
     fn SetTouchActionRegion(
         &mut self,
         value: &TouchActionRegion<Region<B::RegionBackend>>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
-    fn SetContentsOpaque(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetContentsOpaqueForText(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn SetShouldCheckBackfaceVisibility(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>);
-    fn LifecycleAllowsPropertyTreeAccess(&self, impl_tree: &mut B::ImplContext<'_>) -> bool;
-    fn UnionUpdateRect(&mut self, rect: &Rect, impl_tree: &mut B::ImplContext<'_>);
+    fn SetContentsOpaque(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetContentsOpaqueForText(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetShouldCheckBackfaceVisibility(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>);
+    fn LifecycleAllowsPropertyTreeAccess(&self, impl_tree: &mut Self::ImplContext<'_>) -> bool;
+    fn UnionUpdateRect(&mut self, rect: &Rect, impl_tree: &mut Self::ImplContext<'_>);
     fn UpdateDebugInfo(
         &mut self,
         info: Option<&mut LayerDebugInfo<B::NodeId>>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
-    fn SetFilterQuality(&mut self, value: B::FilterQuality, impl_tree: &mut B::ImplContext<'_>);
+    fn SetFilterQuality(&mut self, value: B::FilterQuality, impl_tree: &mut Self::ImplContext<'_>);
     fn SetDynamicRangeLimit(
         &mut self,
         value: B::DynamicRangeLimit,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
     fn SetMainThreadScrollHitTestRegion(
         &mut self,
         value: &Region<B::RegionBackend>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
     fn SetNonCompositedScrollHitTestRects(
         &mut self,
         value: &[ScrollHitTestRect],
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
     fn SetCaptureBounds(
         &mut self,
         value: &B::RegionCaptureBounds,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
     fn SetTrackedElementRects(
         &mut self,
         value: &B::TrackedElementRects,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
     fn SetWheelEventHandlerRegion(
         &mut self,
         value: &Region<B::RegionBackend>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     );
-    fn SetCanvasChildId(&mut self, value: ElementId, impl_tree: &mut B::ImplContext<'_>);
-    fn ResetRareProperties(&mut self, impl_tree: &mut B::ImplContext<'_>);
-    fn SetNeedsPushProperties(&mut self, value: u8, impl_tree: &mut B::ImplContext<'_>);
+    fn SetCanvasChildId(&mut self, value: ElementId, impl_tree: &mut Self::ImplContext<'_>);
+    fn ResetRareProperties(&mut self, impl_tree: &mut Self::ImplContext<'_>);
+    fn SetNeedsPushProperties(&mut self, value: u8, impl_tree: &mut Self::ImplContext<'_>);
 }

@@ -110,13 +110,13 @@ impl<B: MainLayerTypes> ScrollbarLayerBase<B> {
 }
 impl<B: ScrollbarLayerTypes> ScrollbarLayerBase<B> {
     // Source: cc/layers/scrollbar_layer_base.h:44-46; cc/layers/scrollbar_layer_base.cc:82-96.
-    pub fn PushDirtyPropertiesTo(
+    pub fn PushDirtyPropertiesTo<T: crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<B>>(
         &self,
-        target: &mut B::Layer,
+        target: &mut T,
         dirty: u8,
         commit: &mut CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        tree: &mut B::ImplContext<'_>,
+        tree: &mut T::ImplContext<'_>,
     ) {
         self.base_
             .PushDirtyPropertiesTo(target, dirty, commit, c, tree);

@@ -16,7 +16,6 @@ use std::sync::Arc;
 pub trait PictureLayerTypes:
     MainLayerTypes<
     DerivedServices: PictureLayerServices<Self>,
-    Layer: PictureLayerImplTarget<Self>,
     MicroBenchmark: PictureLayerMicroBenchmark<Self>,
     NodeInfo: PictureLayerNodeInfo,
 >
@@ -73,8 +72,8 @@ pub trait PictureLayerServices<B: PictureLayerTypes>:
 /// live here; no main-layer/impl-layer algorithm is an external Paint service.
 pub trait PictureLayerImplTarget<B: PictureLayerTypes>: MainLayerImpl<B> {
     fn set_has_non_animated_image_update_rect(&mut self);
-    fn set_gpu_raster_max_texture_size(&mut self, size: Size, tree: &mut B::ImplContext<'_>);
-    fn SetIsBackdropFilterMask(&mut self, value: bool, tree: &mut B::ImplContext<'_>);
+    fn set_gpu_raster_max_texture_size(&mut self, size: Size, tree: &mut Self::ImplContext<'_>);
+    fn SetIsBackdropFilterMask(&mut self, value: bool, tree: &mut Self::ImplContext<'_>);
     fn StageNewRasterSourceForCommit(
         &mut self,
         source: Arc<<B::Recording as RecordingSourceTypes>::RasterSource>,

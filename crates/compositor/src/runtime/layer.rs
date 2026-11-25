@@ -94,40 +94,42 @@ impl<B> crate::adapter::main_layer::MainLayerImpl<B> for CompositorLayer<B>
 where
     B: PictureLayerImplTypes
         + SolidColorScrollbarLayerImplTypes
-        + crate::adapter::layer_tree_impl::LayerTreeTypes<Layer = CompositorLayer<B>>,
-    for<'a> B: crate::adapter::main_layer::MainLayerTypes<
-        ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
-    >,
+        + crate::adapter::layer_tree_impl::LayerTreeTypes<Layer = CompositorLayer<B>>
+        + crate::adapter::main_layer::MainLayerTypes,
 {
-    fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>) {
+    type ImplContext<'a>
+        = crate::adapter::layer_impl::LayerImplContext<'a, B>
+    where
+        Self: 'a;
+    fn SetTransformTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetTransformTreeIndex(index, impl_tree);
     }
-    fn SetHasTransformNode(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetHasTransformNode(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetHasTransformNode(value, impl_tree);
     }
-    fn SetEffectTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetEffectTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetEffectTreeIndex(index, impl_tree);
     }
-    fn SetClipTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetClipTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetClipTreeIndex(index, impl_tree);
     }
-    fn SetScrollTreeIndex(&mut self, index: i32, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetScrollTreeIndex(&mut self, index: i32, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetScrollTreeIndex(index, impl_tree);
     }
-    fn SetElementId(&mut self, element: ElementId, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetElementId(&mut self, element: ElementId, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetElementId(element, impl_tree);
     }
     fn SetBackgroundColor(
         &mut self,
         color: crate::adapter::layer_tree_impl::Color4f,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut().SetBackgroundColor(color, impl_tree);
     }
     fn SetSafeOpaqueBackgroundColor(
         &mut self,
         color: crate::adapter::layer_tree_impl::Color4f,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetSafeOpaqueBackgroundColor(color, impl_tree);
@@ -135,29 +137,29 @@ where
     fn SetBounds(
         &mut self,
         bounds: &crate::adapter::geometry::Size,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut().SetBounds(*bounds, impl_tree);
     }
     fn SetOffsetToTransformParent(
         &mut self,
         offset: Vector2dF,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetOffsetToTransformParent(offset, impl_tree);
     }
-    fn SetDrawsContent(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetDrawsContent(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetDrawsContent(value, impl_tree);
     }
     fn SetHitTestOpaqueness(
         &mut self,
         value: crate::cc::input::hit_test_opaqueness::HitTestOpaqueness,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut().SetHitTestOpaqueness(value, impl_tree);
     }
-    fn NoteLayerPropertyChanged(&mut self, impl_tree: &mut B::ImplContext<'_>) {
+    fn NoteLayerPropertyChanged(&mut self, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().NoteLayerPropertyChanged(impl_tree);
     }
     fn SetTouchActionRegion(
@@ -165,46 +167,46 @@ where
         value: &crate::cc::layers::touch_action_region::TouchActionRegion<
             <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetTouchActionRegion(value.clone(), impl_tree);
     }
-    fn SetContentsOpaque(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetContentsOpaque(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetContentsOpaque(value, impl_tree);
     }
-    fn SetContentsOpaqueForText(&mut self, value: bool, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetContentsOpaqueForText(&mut self, value: bool, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut()
             .SetContentsOpaqueForText(value, impl_tree);
     }
     fn SetShouldCheckBackfaceVisibility(
         &mut self,
         value: bool,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetShouldCheckBackfaceVisibility(value, impl_tree);
     }
-    fn LifecycleAllowsPropertyTreeAccess(&self, impl_tree: &mut B::ImplContext<'_>) -> bool {
+    fn LifecycleAllowsPropertyTreeAccess(&self, impl_tree: &mut Self::ImplContext<'_>) -> bool {
         impl_tree.tree.LifecycleAllowsPropertyTreeAccess()
     }
-    fn UnionUpdateRect(&mut self, rect: &Rect, impl_tree: &mut B::ImplContext<'_>) {
+    fn UnionUpdateRect(&mut self, rect: &Rect, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().UnionUpdateRect(*rect, impl_tree);
     }
     fn UpdateDebugInfo(
         &mut self,
         info: Option<&mut crate::cc::layers::layer::LayerDebugInfo<B::NodeId>>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut().UpdateDebugInfo(info, impl_tree);
     }
-    fn SetFilterQuality(&mut self, value: B::FilterQuality, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetFilterQuality(&mut self, value: B::FilterQuality, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetFilterQuality(value, impl_tree);
     }
     fn SetDynamicRangeLimit(
         &mut self,
         value: B::DynamicRangeLimit,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut().SetDynamicRangeLimit(value, impl_tree);
     }
@@ -213,7 +215,7 @@ where
         value: &crate::cc::base::region::Region<
             <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetMainThreadScrollHitTestRegion(value, impl_tree);
@@ -221,7 +223,7 @@ where
     fn SetNonCompositedScrollHitTestRects(
         &mut self,
         value: &[crate::cc::layers::scroll_hit_test_rect::ScrollHitTestRect],
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetNonCompositedScrollHitTestRects(value, impl_tree);
@@ -229,7 +231,7 @@ where
     fn SetCaptureBounds(
         &mut self,
         value: &B::RegionCaptureBounds,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetCaptureBounds(value.clone(), impl_tree);
@@ -237,7 +239,7 @@ where
     fn SetTrackedElementRects(
         &mut self,
         value: &B::TrackedElementRects,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetTrackedElementRects(value.clone(), impl_tree);
@@ -247,18 +249,18 @@ where
         value: &crate::cc::base::region::Region<
             <B as layerize::commit::CommitTypes>::RegionBackend,
         >,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut Self::ImplContext<'_>,
     ) {
         self.impl_base_mut()
             .SetWheelEventHandlerRegion(value, impl_tree);
     }
-    fn SetCanvasChildId(&mut self, value: ElementId, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetCanvasChildId(&mut self, value: ElementId, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().SetCanvasChildId(value, impl_tree);
     }
-    fn ResetRareProperties(&mut self, impl_tree: &mut B::ImplContext<'_>) {
+    fn ResetRareProperties(&mut self, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut().ResetRareProperties(impl_tree);
     }
-    fn SetNeedsPushProperties(&mut self, value: u8, impl_tree: &mut B::ImplContext<'_>) {
+    fn SetNeedsPushProperties(&mut self, value: u8, impl_tree: &mut Self::ImplContext<'_>) {
         self.impl_base_mut()
             .SetNeedsPushProperties(value, impl_tree);
     }
@@ -1297,11 +1299,10 @@ impl<B> crate::adapter::picture_layer::PictureLayerImplTarget<B> for CompositorL
 where
  B:crate::adapter::picture_layer::PictureLayerTypes+PictureLayerImplTypes+SolidColorScrollbarLayerImplTypes+crate::adapter::layer_tree_impl::LayerTreeTypes<Layer=CompositorLayer<B>>,
  B::Recording:crate::adapter::recording_source::RecordingSourceTypes<RasterSource=<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource>,
- for<'a>B:layerize::commit::push_properties::PushPropertiesTypes<ImplContext<'a>=crate::adapter::layer_impl::LayerImplContext<'a,B>>,
 {
  fn set_has_non_animated_image_update_rect(&mut self){self.picture_impl_mut().expect("native Picture target").set_has_non_animated_image_update_rect()}
- fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}
- fn SetIsBackdropFilterMask(&mut self,value:bool,tree:&mut B::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").SetIsBackdropFilterMask(value,tree)}
+ fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut Self::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}
+ fn SetIsBackdropFilterMask(&mut self,value:bool,tree:&mut Self::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").SetIsBackdropFilterMask(value,tree)}
  fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<B::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
  fn set_should_batch_updated_tiles(&mut self){self.picture_impl_mut().expect("native Picture target").set_should_batch_updated_tiles()}
 }

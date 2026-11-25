@@ -45,10 +45,6 @@ pub trait CommitTypes: Sized + 'static {
     type CopyOutputRequest: PropertyTreeCopyOutputRequest;
     // cc::Region backend shared by Layer and LayerImpl invalidation state.
     type RegionBackend;
-    // The impl-side LayerImpl that Layer::PushPropertiesTo writes and
-    // Layer::CreateLayerImpl allocates (the push target).
-    // Source: cc/layers/layer.h CreateLayerImpl, PushPropertiesTo.
-    type Layer;
     // Source: cc/trees/commit_state.h:77,101,104,126,132,140-152.
     type SurfaceRange: Clone + Ord + Send + Sync + 'static;
     type DisplayColorSpaces: Clone + Default + PartialEq;

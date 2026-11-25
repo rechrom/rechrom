@@ -23,7 +23,7 @@ pub trait IteratorContext {
             .GetRenderSurface(effect_id)
             .is_some()
     }
-    fn LayerAtReverseIndex(&self, index: usize) -> Option<&<Self::Types as layerize::commit::CommitTypes>::Layer>;
+    fn LayerAtReverseIndex(&self, index: usize) -> Option<&<Self::Types as LayerTreeTypes>::Layer>;
     fn property_trees(&self) -> &crate::adapter::layer_tree_impl::PropertyTreesFor<Self::Types>;
 }
 impl<B: LayerTreeTypes> IteratorContext for LayerTreeImpl<B> {

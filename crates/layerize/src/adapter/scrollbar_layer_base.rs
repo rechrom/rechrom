@@ -10,7 +10,7 @@ use crate::cc::{
     layers::layer::{LayerBorrow, LayerRef},
 };
 use std::sync::Arc;
-pub trait ScrollbarLayerTypes: MainLayerTypes<Layer: ScrollbarLayerImplTarget<Self>> {
+pub trait ScrollbarLayerTypes: MainLayerTypes {
     type ScrollbarCanvas: ?Sized;
     type Scrollbar: Scrollbar<Self::ScrollbarCanvas> + Send + Sync + 'static;
     /// Source: PaintedScrollbarLayer::RasterizeScrollbarPart. The concrete CPU
@@ -60,8 +60,8 @@ pub enum ScrollbarConstructorUnavailable {
 pub trait ScrollbarLayerImplTarget<B: ScrollbarLayerTypes>: MainLayerImpl<B> {
     fn scrollbar_orientation(&self) -> ScrollbarOrientation;
     fn scrollbar_is_left_side_vertical(&self) -> bool;
-    fn scrollbar_SetHasFindInPageTickmarks(&mut self, value: bool, tree: &mut B::ImplContext<'_>);
-    fn scrollbar_SetScrollElementId(&mut self, value: ElementId, tree: &mut B::ImplContext<'_>);
+    fn scrollbar_SetHasFindInPageTickmarks(&mut self, value: bool, tree: &mut Self::ImplContext<'_>);
+    fn scrollbar_SetScrollElementId(&mut self, value: ElementId, tree: &mut Self::ImplContext<'_>);
 }
 /// Native static_cast to the actual solid-color subtype; implementation only
 /// exposes that resident object's native fields/setter, never substitutes one.

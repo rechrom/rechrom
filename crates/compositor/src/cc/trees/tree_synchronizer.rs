@@ -188,7 +188,8 @@ impl TreeSynchronizer {
         tree_context: &mut super::layer_tree_impl::LayerTreeContext<'_, B>,
         context: &mut C,
     ) where
-        for<'a> B: crate::adapter::main_layer::MainLayerTypes<
+        for<'a> B::Layer: crate::adapter::main_layer::MainLayerImpl<
+            B,
             ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
         >,
     {

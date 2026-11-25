@@ -9,7 +9,7 @@
 //! parameter `R`.
 //!
 //! The supertrait fixes the commit values the main half names to its own
-//! value types and requires the push targets the main layers write, so that
+//! value types, so that
 //! `F: LayerizeFamily` alone proves every main trait through those blanket
 //! impls (and their associated types normalize).
 //!
@@ -29,12 +29,6 @@ use super::{
     transform::Transform,
     viz_metadata::{RegionCaptureBounds, TrackedElementRects},
 };
-use crate::adapter::{
-    painted_scrollbar_layer::PaintedScrollbarLayerImplTarget,
-    picture_layer::PictureLayerImplTarget, solid_color_layer::SolidColorLayerImplTarget,
-    solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget,
-    surface_layer::SurfaceLayerImplTarget,
-};
 
 pub trait LayerizeFamily:
     PushPropertiesTypes<
@@ -53,11 +47,6 @@ pub trait LayerizeFamily:
         DynamicRangeLimit = DynamicRangeLimit,
         LocalSurfaceId = LocalSurfaceId,
         ViewTransitionRequest: MainViewTransitionRequest,
-        Layer: PictureLayerImplTarget<Self>
-                   + SolidColorLayerImplTarget<Self>
-                   + PaintedScrollbarLayerImplTarget<Self>
-                   + SolidColorScrollbarLayerImplTarget<Self>
-                   + SurfaceLayerImplTarget<Self>,
     > + CommitStateTypes<
         MainRootLayer = crate::cc::layers::layer::LayerRef<Self>,
         MainLayerRef = crate::cc::layers::layer::LayerBorrow<Self>,

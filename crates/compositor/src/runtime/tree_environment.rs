@@ -11,7 +11,7 @@ use crate::{
     adapter::{
         input_types::ElementId,
         layer_tree_host_impl::*,
-        layer_tree_impl::{LayerTreeHostId, LayerTreeId, PropertyTreesFor},
+        layer_tree_impl::{LayerTreeHostId, LayerTreeId},
     },
     cc::{
         layers::render_surface_impl::RenderSurfaceImpl,
@@ -165,7 +165,7 @@ impl HostImplTreeHostServices<CompositorTypes> for TreeEnvironmentServices {
         &mut self,
         state: &ThreadUnsafeCommitState<CompositorTypes>,
         target: &mut MutatorHost,
-        trees: &PropertyTreesFor<CompositorTypes>,
+        trees: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<CompositorTypes>,
     ) {
         // layer_tree_impl.cc:814-817: the main AnimationHost is reached only
         // through the leased ThreadUnsafeCommitState (S1b-5).

@@ -2476,7 +2476,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplTreeHostServices<B> for C
         &mut self,
         state: &B::UnsafeCommitState,
         target: &mut <B as crate::adapter::layer_tree_impl::LayerTreeTypes>::MutatorHost,
-        trees: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        trees: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
     ) {
         self.tree_environment
             .PushMutatorPropertiesTo(state, target, trees)

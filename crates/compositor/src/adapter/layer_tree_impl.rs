@@ -121,13 +121,15 @@ pub trait LayerTreeTypes:
     + CommitTypes<
         Transform: ImplTreeTransform,
         RegionBackend: SkRegionBackend,
-        Layer: LayerTreeLayer<Self>,
         Filters: super::draw_property::DrawFilters,
         SwapPromise: SwapPromise<<Self as CommitTypes>::CompositorFrameMetadata>,
         UIResourceRequest: LayerTreeUIResourceRequest<Self>,
         ViewTransitionRequest: LayerTreeViewTransitionRequest,
     >
 {
+    /// The resident cc::LayerImpl (the push target of main
+    /// Layer::PushPropertiesTo and the allocation of Layer::CreateLayerImpl).
+    type Layer: LayerTreeLayer<Self>;
     /// cc::RenderSurfaceImpl, owned by the impl EffectTree::render_surfaces_
     /// (cc/trees/property_tree.h). The main trees carry none.
     type RenderSurface: PropertyTreeRenderSurface
@@ -725,7 +727,7 @@ pub trait LayerTreeHost<B: LayerTreeTypes>:
     fn PushMutatorPropertiesFrom(
         &mut self,
         unsafe_state: &B::UnsafeCommitState,
-        trees: &PropertyTreesFor<B>,
+        trees: &MainPropertyTreesFor<B>,
     );
     fn CreateRenderSurface(&mut self, tree: LayerTreeId, id: ElementId) -> Box<B::RenderSurface>;
 }

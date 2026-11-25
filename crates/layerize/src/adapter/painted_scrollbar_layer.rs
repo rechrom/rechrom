@@ -8,7 +8,7 @@ use super::{
 };
 
 pub trait PaintedScrollbarLayerTypes:
-    ScrollbarLayerTypes<Layer: PaintedScrollbarLayerImplTarget<Self>>
+    ScrollbarLayerTypes
 {
 }
 

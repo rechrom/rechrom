@@ -31,18 +31,23 @@ impl<B: SolidColorLayerTypes> SolidColorLayer<B> {
     pub fn base(&self) -> &Layer<B> {
         &self.base_
     }
+    // Source: cc/layers/solid_color_layer.h:25-26; cc/layers/solid_color_layer.cc:14-17.
+    pub(crate) fn CreateLayerImpl<L>(
+        &self,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+    ) -> Box<L> {
+        tree.CreateSolidColorLayer(self.base_.id())
+    }
 }
 impl<B: SolidColorLayerTypes> LayerObject<B> for SolidColorLayer<B> {
     fn base(&self) -> &Layer<B> {
         &self.base_
     }
-    // Source: cc/layers/solid_color_layer.h:25-26; cc/layers/solid_color_layer.cc:14-17.
-    fn CreateLayerImpl(
-        &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-        _c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
-        tree.CreateSolidColorLayer(self.base_.id())
+    fn DerivedLayer(&self) -> super::layer::DerivedLayerRef<'_, B>
+    where
+        B: super::layer::DerivedLayerTypes,
+    {
+        super::layer::DerivedLayerRef::SolidColor(self)
     }
     // Source: cc/layers/solid_color_layer.h:28; cc/layers/solid_color_layer.cc:27-31.
     fn SetBackgroundColor(&self, color: Color4f, c: &mut LayerContext<'_, B>) {

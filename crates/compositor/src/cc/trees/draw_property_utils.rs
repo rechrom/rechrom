@@ -4,16 +4,15 @@
 // found in the LICENSE file.
 // Source: cc/trees/draw_property_utils.h:1-124; cc/trees/draw_property_utils.cc:1-51.
 use super::{
-    clip_node::{ClipNode, ConditionalClip},
+    clip_node::ConditionalClip,
     effect_node::{EffectNode, RenderSurfaceReason, RenderSurfaceReasonToString},
     property_ids::*,
-    property_tree::{ClipTree, EffectTree, EffectTreeContext, TransformTree, TransformTreeContext},
+    property_tree::{ClipTree, TransformTree},
     transform_node::TransformNode,
-    viewport_property_ids::ViewportPropertyIds,
 };
 use crate::adapter::{
     draw_property::*,
-    geometry::{Rect, RectF, ToEnclosingRectIgnoringError, Transform, Vector2dF},
+    geometry::{Rect, RectF, Transform, Vector2dF},
     property_tree::{PropertyTreeFilters, PropertyTreeTransform},
     property_types::{MaskFilterInfo, ViewTransitionElementResourceId},
 };
@@ -1560,7 +1559,6 @@ pub fn IsLayerBackFaceVisibleForTesting<C: DrawContext>(
     p: &DrawPropertyTrees<C>,
 ) -> bool {
     IsLayerBackFaceVisible::<C>(context, layer, p, false)
-}
 }
 // Source: cc/trees/draw_property_utils.h:54-55; cc/trees/draw_property_utils.cc:1535-1551.
 struct LayerUpdateListAdapter<'a, C: DrawContext> {

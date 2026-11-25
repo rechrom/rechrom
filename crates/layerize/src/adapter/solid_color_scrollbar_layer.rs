@@ -5,11 +5,11 @@ use super::{
     scrollbar_layer_base::{ScrollbarLayerImplTarget, ScrollbarLayerTypes},
 };
 pub trait SolidColorScrollbarLayerTypes:
-    ScrollbarLayerTypes<Layer: SolidColorScrollbarLayerImplTarget<Self>>
+    ScrollbarLayerTypes
 {
 }
 pub trait SolidColorScrollbarLayerImplTarget<B: SolidColorScrollbarLayerTypes>:
     ScrollbarLayerImplTarget<B>
 {
-    fn scrollbar_set_color(&mut self, color: Color4f, tree: &mut B::ImplContext<'_>);
+    fn scrollbar_set_color(&mut self, color: Color4f, tree: &mut Self::ImplContext<'_>);
 }

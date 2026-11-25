@@ -10,7 +10,13 @@ use crate::cc::trees::{
     layer_tree_impl::LayerTreeImpl,
 };
 pub trait SyncTypes:
-    CommitStateTypes + super::main_layer::MainLayerTypes + super::layer_impl::LayerImplTypes
+    CommitStateTypes
+    + super::main_layer::MainLayerTypes
+    + super::layer_impl::LayerImplTypes
+    + layerize::commit::layers::layer::DerivedLayerTypes
+    + super::layer_tree_impl::LayerTreeTypes<
+        Layer: layerize::commit::layers::layer::MainLayerPushTarget<Self>,
+    >
 {
     type MainLayer: SyncMainLayer<Self>;
     /// Lends the pending tree to main layers as the LayerImplFactory of
@@ -20,11 +26,13 @@ pub trait SyncTypes:
         context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, Self>,
         callback: impl FnOnce(
             &mut dyn super::main_layer::LayerImplFactory<
-                <Self as layerize::commit::CommitTypes>::Layer,
+                <Self as super::layer_tree_impl::LayerTreeTypes>::Layer,
             >,
         ) -> Output,
     ) -> Output;
 }
+/// The impl-tree borrow the push target writes through.
+pub type PushImplContext<'a, B> = <<B as super::layer_tree_impl::LayerTreeTypes>::Layer as super::main_layer::MainLayerImpl<B>>::ImplContext<'a>;
 pub trait SyncMainLayer<B: SyncTypes> {
     fn id(&self, c: &super::main_layer::LayerContext<'_, B>) -> i32;
     fn transform_tree_index_is_valid(
@@ -58,7 +66,7 @@ pub trait SyncMainLayer<B: SyncTypes> {
         target: &mut B::Layer,
         commit: &mut CommitState<B>,
         c: &mut super::main_layer::LayerContext<'_, B>,
-        impl_context: &mut B::ImplContext<'_>,
+        impl_context: &mut PushImplContext<'_, B>,
     );
 }
 pub trait SyncImplLayer<B: SyncTypes>: LayerTreeLayer<B> {

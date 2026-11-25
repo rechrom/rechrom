@@ -279,23 +279,18 @@ pub trait LayerObject<B: MainLayerTypes>: Send + Sync {
     fn RunMicroBenchmark(&self, benchmark: &mut B::MicroBenchmark, _c: &mut LayerContext<'_, B>) {
         self.base().RunMicroBenchmark(benchmark);
     }
-    fn CreateLayerImpl(
-        &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-        _c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
-        self.base().CreateLayerImpl(tree)
-    }
-    fn PushDirtyPropertiesTo(
-        &self,
-        target: &mut B::Layer,
-        dirty: u8,
-        commit: &mut crate::cc::trees::commit_state::CommitState<B>,
-        c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
-    ) {
-        self.base()
-            .PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree);
+    /// The most-derived Layer class, for the two virtuals whose argument is
+    /// the impl push target: Layer::CreateLayerImpl (cc/layers/layer.h:
+    /// 1012-1013) and Layer::PushPropertiesTo (cc/layers/layer.h:1006-1008)
+    /// with their overrides. Chromium passes a polymorphic `LayerImpl*` /
+    /// `LayerTreeImpl*`; here the target is a type parameter of the push
+    /// (static dispatch), so the one virtual call selects the derived class
+    /// and the push itself is monomorphic.
+    fn DerivedLayer(&self) -> DerivedLayerRef<'_, B>
+    where
+        B: DerivedLayerTypes,
+    {
+        DerivedLayerRef::Layer(self.base())
     }
     fn Update(&self, c: &mut LayerContext<'_, B>) -> bool {
         self.base().Update(c)
@@ -318,6 +313,121 @@ pub trait LayerObject<B: MainLayerTypes>: Send + Sync {
 impl<B: MainLayerTypes> LayerObject<B> for Layer<B> {
     fn base(&self) -> &Layer<B> {
         self
+    }
+}
+
+/// The type families of every concrete main Layer class.
+pub trait DerivedLayerTypes:
+    crate::adapter::picture_layer::PictureLayerTypes
+    + crate::adapter::solid_color_layer::SolidColorLayerTypes
+    + crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerTypes
+    + crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
+    + crate::adapter::surface_layer::SurfaceLayerTypes
+{
+}
+impl<B> DerivedLayerTypes for B where
+    B: crate::adapter::picture_layer::PictureLayerTypes
+        + crate::adapter::solid_color_layer::SolidColorLayerTypes
+        + crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerTypes
+        + crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
+        + crate::adapter::surface_layer::SurfaceLayerTypes
+{
+}
+/// The LayerImpl a main Layer pushes into: every setter the Layer
+/// PushPropertiesTo overrides call (cc/layers/layer.cc:1510-1594,
+/// picture_layer.cc:43-74, painted_scrollbar_layer.cc, solid_color_scrollbar_layer.cc,
+/// surface_layer.cc, scrollbar_layer_base.cc PushPropertiesTo). Chromium's
+/// overrides static_cast the `LayerImpl*` to their impl class; the impl
+/// layer implements every facet.
+pub trait MainLayerPushTarget<B: DerivedLayerTypes>:
+    crate::adapter::picture_layer::PictureLayerImplTarget<B>
+    + crate::adapter::solid_color_layer::SolidColorLayerImplTarget<B>
+    + crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<B>
+    + crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<B>
+    + crate::adapter::surface_layer::SurfaceLayerImplTarget<B>
+{
+}
+impl<B: DerivedLayerTypes, T> MainLayerPushTarget<B> for T where
+    T: crate::adapter::picture_layer::PictureLayerImplTarget<B>
+        + crate::adapter::solid_color_layer::SolidColorLayerImplTarget<B>
+        + crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<B>
+        + crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<B>
+        + crate::adapter::surface_layer::SurfaceLayerImplTarget<B>
+{
+}
+/// The most-derived class of a resident main Layer (LayerObject::DerivedLayer).
+pub enum DerivedLayerRef<'a, B: DerivedLayerTypes> {
+    Layer(&'a Layer<B>),
+    Picture(&'a super::picture_layer::PictureLayer<B>),
+    SolidColor(&'a super::solid_color_layer::SolidColorLayer<B>),
+    PaintedScrollbar(&'a super::painted_scrollbar_layer::PaintedScrollbarLayer<B>),
+    SolidColorScrollbar(&'a super::solid_color_scrollbar_layer::SolidColorScrollbarLayer<B>),
+    Surface(&'a super::surface_layer::SurfaceLayer<B>),
+}
+impl<B: DerivedLayerTypes> dyn LayerObject<B> + '_ {
+    // Source: cc/layers/layer.h:1012-1013 (virtual CreateLayerImpl) and the
+    // overrides in picture_layer.cc:38-41, solid_color_layer.cc:14-17,
+    // surface_layer.cc, painted_scrollbar_layer.cc and
+    // solid_color_scrollbar_layer.cc:16-21.
+    pub fn CreateLayerImpl<L>(
+        &self,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+        _c: &mut LayerContext<'_, B>,
+    ) -> Box<L> {
+        match self.DerivedLayer() {
+            DerivedLayerRef::Layer(layer) => layer.CreateLayerImpl(tree),
+            DerivedLayerRef::Picture(layer) => layer.CreateLayerImpl(tree),
+            DerivedLayerRef::SolidColor(layer) => layer.CreateLayerImpl(tree),
+            DerivedLayerRef::PaintedScrollbar(layer) => layer.CreateLayerImpl(tree),
+            DerivedLayerRef::SolidColorScrollbar(layer) => layer.CreateLayerImpl(tree),
+            DerivedLayerRef::Surface(layer) => layer.CreateLayerImpl(tree),
+        }
+    }
+    // Source: cc/layers/layer.h:1006-1008 (virtual PushPropertiesTo, whose
+    // overrides each start with the base Layer::PushDirtyPropertiesTo).
+    pub fn PushDirtyPropertiesTo<T: MainLayerPushTarget<B>>(
+        &self,
+        target: &mut T,
+        dirty: u8,
+        commit: &mut crate::cc::trees::commit_state::CommitState<B>,
+        c: &mut LayerContext<'_, B>,
+        impl_tree: &mut T::ImplContext<'_>,
+    ) {
+        match self.DerivedLayer() {
+            DerivedLayerRef::Layer(layer) => {
+                layer.PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree)
+            }
+            DerivedLayerRef::Picture(layer) => {
+                layer.PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree)
+            }
+            DerivedLayerRef::SolidColor(layer) => layer
+                .base()
+                .PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree),
+            DerivedLayerRef::PaintedScrollbar(layer) => {
+                layer.PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree)
+            }
+            DerivedLayerRef::SolidColorScrollbar(layer) => {
+                layer.PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree)
+            }
+            DerivedLayerRef::Surface(layer) => {
+                layer.PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree)
+            }
+        }
+    }
+    // Source: cc/layers/layer.cc:1583-1594.
+    pub fn PushPropertiesTo<T: MainLayerPushTarget<B>>(
+        &self,
+        target: &mut T,
+        commit: &mut crate::cc::trees::commit_state::CommitState<B>,
+        c: &mut LayerContext<'_, B>,
+        impl_tree: &mut T::ImplContext<'_>,
+    ) {
+        let base = self.base();
+        c.Services().TraceLayer("Layer::PushPropertiesTo", None);
+        debug_assert!(base.IsAttached());
+        let changed = *base.changed_properties_.Read(&base.sync(c));
+        self.PushDirtyPropertiesTo(target, changed, commit, c, impl_tree);
+        *base.changed_properties_.Write(&base.sync(c)) = 0;
     }
 }
 pub struct LayerRef<B: MainLayerTypes>(Arc<dyn LayerObject<B>>);
@@ -2713,13 +2823,13 @@ impl<B: MainLayerTypes> Layer<B> {
         }
     }
     // Source: cc/layers/layer.cc:1510-1581.
-    pub fn PushDirtyPropertiesTo(
+    pub fn PushDirtyPropertiesTo<T: MainLayerImpl<B>>(
         &self,
-        layer: &mut B::Layer,
+        layer: &mut T,
         dirty: u8,
         commit: &mut crate::cc::trees::commit_state::CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut T::ImplContext<'_>,
     ) {
         let trees = &commit.property_trees;
         if dirty & Self::kChangedPropertyTreeIndex != 0 {
@@ -2785,21 +2895,6 @@ impl<B: MainLayerTypes> Layer<B> {
         }
         layer.SetNeedsPushProperties(dirty, impl_tree);
     }
-    // Source: cc/layers/layer.cc:1583-1594.
-    pub fn PushPropertiesTo(
-        &self,
-        receiver: &(impl LayerObject<B> + ?Sized),
-        layer: &mut B::Layer,
-        commit: &mut crate::cc::trees::commit_state::CommitState<B>,
-        c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
-    ) {
-        c.Services().TraceLayer("Layer::PushPropertiesTo", None);
-        debug_assert!(self.IsAttached());
-        let changed = *self.changed_properties_.Read(&self.sync(c));
-        receiver.PushDirtyPropertiesTo(layer, changed, commit, c, impl_tree);
-        *self.changed_properties_.Write(&self.sync(c)) = 0;
-    }
     // Source: cc/layers/layer.cc:1596-1617.
     pub fn TakeCopyRequests(
         &self,
@@ -2832,10 +2927,10 @@ impl<B: MainLayerTypes> Layer<B> {
         inputs.copy_requests.clear();
     }
     // Source: cc/layers/layer.cc:1619-1622.
-    pub fn CreateLayerImpl(
+    pub fn CreateLayerImpl<L>(
         &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-    ) -> Box<B::Layer> {
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+    ) -> Box<L> {
         tree.CreateLayer(self.id())
     }
     // Source: cc/layers/layer.cc:1755-1771.
@@ -3340,34 +3435,34 @@ impl<B: MainLayerTypes> LayerRef<B> {
     ) {
         self.0.RunMicroBenchmark(benchmark, c);
     }
-    pub fn CreateLayerImpl(
+}
+impl<B: DerivedLayerTypes> LayerRef<B> {
+    pub fn CreateLayerImpl<L>(
         &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
         c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
+    ) -> Box<L> {
         self.0.CreateLayerImpl(tree, c)
     }
-    pub fn PushDirtyPropertiesTo(
+    pub fn PushDirtyPropertiesTo<T: MainLayerPushTarget<B>>(
         &self,
-        target: &mut B::Layer,
+        target: &mut T,
         dirty: u8,
         commit: &mut crate::cc::trees::commit_state::CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut T::ImplContext<'_>,
     ) {
         self.0
             .PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree);
     }
-    pub fn PushPropertiesTo(
+    pub fn PushPropertiesTo<T: MainLayerPushTarget<B>>(
         &self,
-        target: &mut B::Layer,
+        target: &mut T,
         commit: &mut crate::cc::trees::commit_state::CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut T::ImplContext<'_>,
     ) {
-        self.0
-            .base()
-            .PushPropertiesTo(self.0.as_ref(), target, commit, c, impl_tree);
+        self.0.PushPropertiesTo(target, commit, c, impl_tree);
     }
 }
 
