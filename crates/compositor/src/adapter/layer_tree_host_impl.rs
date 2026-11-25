@@ -230,7 +230,7 @@ pub trait HostImplTypes:
         task_limit:usize,running_on_renderer:bool,
         settings:crate::cc::tiles::tile_manager_settings::TileManagerSettings,
     )->Self::TileManager;
-    fn QueueResidentImageDecode(manager:&mut Self::TileManager,image:&Self::DrawImage,callback:HostImageDecodeCallback,speculative:bool,context:&mut HostImplContext<'_,Self>);
+    fn QueueResidentImageDecode(manager:&mut Self::TileManager,image:&crate::adapter::commit_state::MainDrawImage<Self>,callback:HostImageDecodeCallback,speculative:bool,context:&mut HostImplContext<'_,Self>);
     fn DisallowResidentImageCheckering(manager:&mut Self::TileManager,image:&Self::PaintImage,context:&mut HostImplContext<'_,Self>);
     fn ConfigureResidentTileResources(host:&mut crate::cc::trees::layer_tree_host_impl::LayerTreeHostImpl<Self>,context:&mut HostImplContext<'_,Self>);
     fn ResidentTileDidActivate(manager:&mut Self::TileManager,context:&mut HostImplContext<'_,Self>);
@@ -2074,8 +2074,10 @@ pub mod host_impl_chunk_g {
     // DecodingMode=HostImageDecodingMode. Reuse CommitStateTypes::DrawImage, no second type.
     pub trait HostImplGTypes:
         HostImplCTypes
-        + crate::adapter::commit_state::CommitStateTypes<
-            DrawImage: HostDrawImage<PaintImage = <Self as HostImplCTypes>::PaintImage>,
+        + crate::adapter::layer_tree_impl::LayerTreeTypes<
+            Main: crate::adapter::commit_state::CommitStateTypes<
+                DrawImage: HostDrawImage<PaintImage = <Self as HostImplCTypes>::PaintImage>,
+            >,
         > + Sized
     {
         type LayerTreeMutator;
@@ -2152,11 +2154,11 @@ pub mod host_impl_chunk_g {
         fn TraceQueueImageDecode(&mut self, image: &B::PaintImage, frame_index: usize);
         fn CreateDrawImageForDecode(
             &mut self,
-            image: &B::DrawImage,
+            image: &crate::adapter::commit_state::MainDrawImage<B>,
             scale_adjustment: f32,
             frame_index: usize,
             color: HostTargetColorParams<B::ColorSpace>,
-        ) -> B::DrawImage;
+        ) -> crate::adapter::commit_state::MainDrawImage<B>;
         fn SendExplicitDecodeRequestsImmediately(&self) -> bool;
         fn DelegateNotifyImageDecodeRequestFinished(
             &mut self,

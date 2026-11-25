@@ -49,6 +49,9 @@ pub mod managed_memory_policy;
 pub mod scheduler_settings;
 pub mod tile_manager_settings;
 pub mod tile_priority;
+// The Page compositor configuration and widget viewport values (Blink
+// LayerTreeView::Initialize inputs, VisualProperties).
+pub mod compositor_config;
 
 // viz values.
 pub mod begin_frame;

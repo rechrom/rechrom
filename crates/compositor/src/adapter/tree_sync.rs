@@ -9,13 +9,20 @@ use crate::cc::trees::{
     commit_state::{CommitState, ThreadUnsafeCommitState},
     layer_tree_impl::LayerTreeImpl,
 };
+/// The main family of an impl family: the cc::Layer side of its commit.
+pub type SyncMain<B> = <B as super::layer_tree_impl::LayerTreeTypes>::Main;
+/// The main-side context of a main-layer call over the commit's main family.
+pub type MainLayerContext<'a, B> = super::main_layer::LayerContext<'a, SyncMain<B>>;
+/// The main layers are pushed from through the main family's own layer
+/// traits (DerivedLayerTypes), never through LayerizeFamily (see
+/// LayerTreeTypes::Main).
 pub trait SyncTypes:
-    CommitStateTypes
-    + super::main_layer::MainLayerTypes
-    + super::layer_impl::LayerImplTypes
-    + layerize::commit::layers::layer::DerivedLayerTypes
+    super::layer_impl::LayerImplTypes
     + super::layer_tree_impl::LayerTreeTypes<
-        Layer: layerize::commit::layers::layer::MainLayerPushTarget<Self>,
+        Main: layerize::commit::layers::layer::DerivedLayerTypes,
+        Layer: layerize::commit::layers::layer::MainLayerPushTarget<
+            <Self as super::layer_tree_impl::LayerTreeTypes>::Main,
+        >,
     >
 {
     type MainLayer: SyncMainLayer<Self>;
@@ -32,40 +39,40 @@ pub trait SyncTypes:
     ) -> Output;
 }
 /// The impl-tree borrow the push target writes through.
-pub type PushImplContext<'a, B> = <<B as super::layer_tree_impl::LayerTreeTypes>::Layer as super::main_layer::MainLayerImpl<B>>::ImplContext<'a>;
+pub type PushImplContext<'a, B> = <<B as super::layer_tree_impl::LayerTreeTypes>::Layer as super::main_layer::MainLayerImpl<SyncMain<B>>>::ImplContext<'a>;
 pub trait SyncMainLayer<B: SyncTypes> {
-    fn id(&self, c: &super::main_layer::LayerContext<'_, B>) -> i32;
+    fn id(&self, c: &MainLayerContext<'_, B>) -> i32;
     fn transform_tree_index_is_valid(
         &self,
         trees: &MainPropertyTreesFor<B>,
-        c: &super::main_layer::LayerContext<'_, B>,
+        c: &MainLayerContext<'_, B>,
     ) -> bool;
     fn effect_tree_index_is_valid(
         &self,
         trees: &MainPropertyTreesFor<B>,
-        c: &super::main_layer::LayerContext<'_, B>,
+        c: &MainLayerContext<'_, B>,
     ) -> bool;
     fn clip_tree_index_is_valid(
         &self,
         trees: &MainPropertyTreesFor<B>,
-        c: &super::main_layer::LayerContext<'_, B>,
+        c: &MainLayerContext<'_, B>,
     ) -> bool;
     fn scroll_tree_index_is_valid(
         &self,
         trees: &MainPropertyTreesFor<B>,
-        c: &super::main_layer::LayerContext<'_, B>,
+        c: &MainLayerContext<'_, B>,
     ) -> bool;
     fn CreateLayerImpl(
         &self,
         tree: &mut LayerTreeImpl<B>,
         tree_context: &mut crate::cc::trees::layer_tree_impl::LayerTreeContext<'_, B>,
-        c: &mut super::main_layer::LayerContext<'_, B>,
+        c: &mut MainLayerContext<'_, B>,
     ) -> Box<B::Layer>;
     fn PushPropertiesTo(
         &self,
         target: &mut B::Layer,
-        commit: &mut CommitState<B>,
-        c: &mut super::main_layer::LayerContext<'_, B>,
+        commit: &mut CommitState<SyncMain<B>>,
+        c: &mut MainLayerContext<'_, B>,
         impl_context: &mut PushImplContext<'_, B>,
     );
 }
@@ -95,12 +102,12 @@ pub trait SynchronizationContext<B: SyncTypes>: SynchronizationTrace {
     /// owner and current main context; neither reference may escape the call.
     fn ForEachMainLayer(
         &mut self,
-        state: &ThreadUnsafeCommitState<B>,
-        callback: impl FnMut(&B::MainLayer, &mut super::main_layer::LayerContext<'_, B>),
+        state: &ThreadUnsafeCommitState<SyncMain<B>>,
+        callback: impl FnMut(&B::MainLayer, &mut MainLayerContext<'_, B>),
     );
     fn WithMainLayer<Output>(
         &mut self,
-        identity: B::MainLayerRef,
-        callback: impl FnOnce(&B::MainLayer, &mut super::main_layer::LayerContext<'_, B>) -> Output,
+        identity: <SyncMain<B> as CommitStateTypes>::MainLayerRef,
+        callback: impl FnOnce(&B::MainLayer, &mut MainLayerContext<'_, B>) -> Output,
     ) -> Output;
 }

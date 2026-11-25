@@ -22,7 +22,7 @@ use crate::adapter::{
 fn AssertValidMainPropertyTreeIndices<B: SyncTypes>(
     layer: &B::MainLayer,
     trees: &MainPropertyTreesFor<B>,
-    c: &crate::adapter::main_layer::LayerContext<'_, B>,
+    c: &MainLayerContext<'_, B>,
 ) {
     debug_assert!(layer.transform_tree_index_is_valid(trees, c));
     debug_assert!(layer.effect_tree_index_is_valid(trees, c));
@@ -67,8 +67,8 @@ pub enum TreeSynchronizer {}
 impl TreeSynchronizer {
     // Source: cc/trees/tree_synchronizer.cc:66-100.
     pub fn SynchronizeTreesFromMain<B: SyncTypes, C: SynchronizationContext<B>>(
-        commit: &CommitState<B>,
-        unsafe_state: &ThreadUnsafeCommitState<B>,
+        commit: &CommitState<SyncMain<B>>,
+        unsafe_state: &ThreadUnsafeCommitState<SyncMain<B>>,
         pending: &mut LayerTreeImpl<B>,
         tree_context: &mut super::layer_tree_impl::LayerTreeContext<'_, B>,
         context: &mut C,
@@ -182,14 +182,14 @@ impl TreeSynchronizer {
     }
     // Source: cc/trees/tree_synchronizer.cc:155-169.
     pub fn PushLayerPropertiesFromMain<B: SyncTypes, C: SynchronizationContext<B>>(
-        commit: &mut CommitState<B>,
-        unsafe_state: &ThreadUnsafeCommitState<B>,
+        commit: &mut CommitState<SyncMain<B>>,
+        unsafe_state: &ThreadUnsafeCommitState<SyncMain<B>>,
         tree: &mut LayerTreeImpl<B>,
         tree_context: &mut super::layer_tree_impl::LayerTreeContext<'_, B>,
         context: &mut C,
     ) where
         for<'a> B::Layer: crate::adapter::main_layer::MainLayerImpl<
-            B,
+            SyncMain<B>,
             ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
         >,
     {

@@ -1,12 +1,12 @@
-//! The binding of the main half to the one concrete compositor family.
+//! The binding of the main half to the one concrete commit family.
 //!
-//! The family type stays in the compositor, because it also implements impl
-//! traits of the compositor sub-crates (orphan rule). The compositor
-//! implements this trait for it. Main traits that move into layerize are
-//! implemented by blanket impls over `F: LayerizeFamily`
-//! (`runtime/main_family.rs`), and main code that named the concrete family
-//! becomes generic over `F`, using `F::Skia` where it used the Skia backend
-//! parameter `R`.
+//! The family type is `commit_family::CommitFamily<R>`, which implements
+//! this trait; the impl (compositor) family names it as its `Main` and is not
+//! a LayerizeFamily. Main traits are implemented by blanket impls over
+//! `F: LayerizeFamily` (`runtime/main_family.rs`), and main code is generic
+//! over `F`, using `F::Skia` for the Skia backend parameter `R`. Impl code
+//! never bounds its `Main` by this trait (its equalities would duplicate the
+//! impl family's own); it names the narrow main traits instead.
 //!
 //! The supertrait fixes the commit values the main half names to its own
 //! value types, so that

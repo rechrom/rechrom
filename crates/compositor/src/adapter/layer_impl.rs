@@ -5,7 +5,7 @@ use super::{
     geometry::{Rect, Size, Vector2dF},
     input_types::ElementId,
     layer_tree_impl::{LayerTreeId, PropertyTreesFor, ResourceId},
-    main_layer::{MainLayerImplTree, MainLayerTypes},
+    main_layer::{MainLayerImplTree, PushPropertiesTypes},
     occlusion::SkBlendMode,
     property_types::MaskFilterInfo,
 };
@@ -33,10 +33,21 @@ pub enum LayerType {
     kViewTransitionContent,
 }
 pub trait LayerImplTypes:
-    MainLayerTypes<
+    PushPropertiesTypes<
         NodeId: LayerImplNodeId,
         Transform: LayerImplTransform,
-    > + super::layer_tree_impl::LayerTreeTypes<Layer: LayerImplOwner<Self>>
+    > + super::layer_tree_impl::LayerTreeTypes<
+        Layer: LayerImplOwner<Self>,
+        // The values main Layer::PushPropertiesTo pushes are this family's
+        // (see LayerTreeTypes::Main).
+        Main: PushPropertiesTypes<
+            NodeId = <Self as PushPropertiesTypes>::NodeId,
+            RegionCaptureBounds = <Self as PushPropertiesTypes>::RegionCaptureBounds,
+            TrackedElementRects = <Self as PushPropertiesTypes>::TrackedElementRects,
+            FilterQuality = <Self as PushPropertiesTypes>::FilterQuality,
+            DynamicRangeLimit = <Self as PushPropertiesTypes>::DynamicRangeLimit,
+        >,
+    >
     + FrameDataTypes<ResourceId = ResourceId, RenderPass: LayerImplRenderPass<Self>>
 {
     type SharedQuadState: LayerImplSharedQuadState<Self::Transform>;
@@ -59,7 +70,7 @@ pub trait LayerImplTypes:
 pub trait LayerImplDeletionTrace {
     fn LayerDeleted(&self, layer_id: i32, stable_id: i32);
 }
-pub trait LayerImplReadTree<B: LayerImplTypes>: MainLayerImplTree<B> {
+pub trait LayerImplReadTree<B: LayerImplTypes>: MainLayerImplTree<B::Main> {
     fn id(&self) -> LayerTreeId;
     fn IsActiveTree(&self) -> bool;
     fn TreesInVizInClientProcess(&self) -> bool;
@@ -202,7 +213,7 @@ impl<B: LayerImplTypes> LayerImplContext<'_, B> {
         LayerImplReadContext { tree: self.tree }
     }
 }
-impl<B: LayerImplTypes> MainLayerImplTree<B> for LayerImplContext<'_, B> {
+impl<B: LayerImplTypes> MainLayerImplTree<B::Main> for LayerImplContext<'_, B> {
     fn source_frame_number(&self) -> i32 {
         self.tree.source_frame_number()
     }

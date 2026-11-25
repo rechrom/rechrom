@@ -545,35 +545,6 @@ const IMPL_OWNER_MODULES: &[&str] = &[
     "crates/browser/src/page/compositor_input.rs",
 ];
 
-/// Document-side files that still name `compositor::`. Remove each entry in
-/// the commit that removes its last use.
-const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
-    // Still name the concrete cc family: MainFamily (and the
-    // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
-    // MainPropertyTreeFeatures instantiated over it) is the impl
-    // CpuCompositorTypes. No commit family associated type names an impl
-    // owner any more (CommitState::benchmarks holds the shared
-    // compositor_values::micro_benchmark_impl::MicroBenchmarkImpl); the
-    // payloads (SwapPromise, UI resources, ViewTransitionRequest,
-    // EventMetrics, presentation callbacks, BeginMainFrameMetrics,
-    // LayerTreeMutator, the AnimationHost, ProxyImplInit) are shared cc
-    // owners in layerize::commit / compositor_values. Left: a shared commit
-    // family type in layerize::commit that the impl family refers to (impl
-    // code names CommitState<B> / LayerBorrow<B> and the push target over the
-    // impl family), and the main-half construction values. (The push
-    // target, the render surfaces and the main draw_property_utils update
-    // no longer name impl owners.) page.rs keeps only the PageDomainServices fields
-    // and the external BeginMainFrame / impl-task entry points typed over
-    // that family; main_compositor.rs additionally builds the main half
-    // from CompositorConfig / CreateMainHostParams. The executor and frame
-    // glue live in the impl-owner modules, the main-thread effects are
-    // Page values (page/main_compositor_effect.rs) and the impl
-    // notifications are layerize::commit values. Clears once those owners
-    // leave the shared family for an impl-side family.
-    "crates/browser/src/page.rs",
-    "crates/browser/src/page/main_compositor.rs",
-];
-
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -601,23 +572,15 @@ fn page_document_side_names_no_compositor() {
     let mut found = vec![browser.join("page.rs")];
     rust_files(&browser.join("page"), &mut found);
     let mut violations = Vec::new();
-    let mut seen = BTreeSet::new();
     for path in found {
         let relative = path.strip_prefix(root()).unwrap().to_string_lossy().replace('\\', "/");
         if IMPL_OWNER_MODULES.contains(&relative.as_str()) {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        if !names_compositor(&text) {
-            continue;
-        }
-        if PAGE_COMPOSITOR_ALLOWED.contains(&relative.as_str()) {
-            seen.insert(relative);
-        } else {
+        if names_compositor(&text) {
             violations.push(relative);
         }
     }
-    let stale: Vec<_> = PAGE_COMPOSITOR_ALLOWED.iter().filter(|f| !seen.contains(**f)).collect();
     assert!(violations.is_empty(), "Page document-side files naming compositor::\n{}", violations.join("\n"));
-    assert!(stale.is_empty(), "stale Page compositor allowances: {stale:?}");
 }

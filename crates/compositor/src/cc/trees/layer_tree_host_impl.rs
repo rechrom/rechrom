@@ -6843,7 +6843,7 @@ mod source_chunk_g {
         pub fn QueueImageDecode(
             &mut self,
             request_id: i32,
-            image: &B::DrawImage,
+            image: &crate::adapter::commit_state::MainDrawImage<B>,
             speculative: bool,
             context: &mut HostImplContext<'_, B>,
         ) {
@@ -16940,7 +16940,7 @@ struct HostPictureSiblingTree<
     host: &'a dyn crate::adapter::picture_layer_impl::PictureLayerReadHost<B>,
 }
 impl<B: HostImplTypes + crate::adapter::picture_layer_impl::PictureLayerImplTypes>
-    crate::adapter::main_layer::MainLayerImplTree<B> for HostPictureSiblingTree<'_, B>
+    crate::adapter::main_layer::MainLayerImplTree<B::Main> for HostPictureSiblingTree<'_, B>
 {
     fn source_frame_number(&self) -> i32 {
         self.tree.source_frame_number()

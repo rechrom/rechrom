@@ -27,69 +27,37 @@ use crate::{
     },
 };
 
-// The impl-built payloads of the ProxyMain/ProxyImpl messages
-// (layerize::commit::proxy). The queued DrawImage
-// is not posted yet and stays a unit value.
-impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
-    // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
-    type ProxySwapPromise = Box<layerize::commit::swap_promise::SwapPromise>;
-    // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
-    type LayerTreeMutator = compositor_values::layer_tree_mutator::LayerTreeMutator;
-    // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
-    type ImplInit = Box<layerize::commit::proxy::ProxyImplInit>;
-    type ProxyDrawImage = ();
-}
+/// The commit family this impl family's main half is (cc's one Layer /
+/// CommitState type set; layerize::commit::CommitFamily). The main payloads
+/// of the Proxy messages, the main-layer traits and the UI-resource
+/// construction are that family's; this family adds only the LayerImpl side.
+type Main<R> = layerize::commit::CommitFamily<R>;
 
-// The main half's binding to this family. The
-// main traits (MainLayerTypes, ScrollbarLayerTypes, ...) are blanket impls
-// over LayerizeFamily in layerize (runtime/main_family.rs).
-impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
-    for CpuCompositorTypes<R>
-{
-    type Skia = R;
-    // Source: cc/resources/ui_resource_bitmap.cc UIResourceBitmap(SkBitmap).
-    fn CreateUIResourceBitmap(
-        pixel_size: crate::adapter::geometry::Size,
-        pixels: Vec<u8>,
-        row_bytes: usize,
-        opaque: bool,
-    ) -> super::host_resources::UIBitmap {
-        super::host_resources::UIBitmap::FromPixels(pixel_size, pixels, row_bytes, opaque)
-    }
-    // Source: cc/resources/ui_resource_request.h:17-56.
-    fn CreateUIResourceRequest(
-        kind: crate::adapter::layer_tree_impl::UIResourceRequestType,
-        id: crate::adapter::layer_tree_impl::UIResourceId,
-        bitmap: super::host_resources::UIBitmap,
-    ) -> super::host_owners::UIResourceRequest {
-        super::host_owners::UIResourceRequest { kind, id, bitmap }
-    }
-    fn UIResourceBitmapSize(bitmap: &super::host_resources::UIBitmap) -> crate::adapter::geometry::Size {
-        use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
-        bitmap.GetSize()
-    }
-}
+// The impl family reads the commit values the main family carries in their
+// own types (cc/trees/commit_state.h names one concrete type per value).
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
-    type Transform = Transform<R>;
-    type RegionBackend = R;
-    type UIResourceBitmap = layerize::commit::ui_resource::UIBitmap;
-    type Filters = R::Filters;
-    type Path = R::Path;
-    type CopyOutputRequest = super::types::CopyOutputRequest;
-    type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
-    type LocalSurfaceId = super::types::LocalSurfaceId;
-    type SurfaceRange = super::types::SurfaceRange;
-    type SwapPromise = layerize::commit::swap_promise::SwapPromise;
-    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>;
-    type UIResourceRequest = layerize::commit::ui_resource::UIResourceRequest;
-    type PresentationCallback = layerize::commit::presentation_time_callback::PresentationCallback;
+    type Transform = <Main<R> as layerize::commit::CommitTypes>::Transform;
+    type RegionBackend = <Main<R> as layerize::commit::CommitTypes>::RegionBackend;
+    type UIResourceBitmap = <Main<R> as layerize::commit::CommitTypes>::UIResourceBitmap;
+    type Filters = <Main<R> as layerize::commit::CommitTypes>::Filters;
+    type Path = <Main<R> as layerize::commit::CommitTypes>::Path;
+    type CopyOutputRequest = <Main<R> as layerize::commit::CommitTypes>::CopyOutputRequest;
+    type DisplayColorSpaces = <Main<R> as layerize::commit::CommitTypes>::DisplayColorSpaces;
+    type LocalSurfaceId = <Main<R> as layerize::commit::CommitTypes>::LocalSurfaceId;
+    type SurfaceRange = <Main<R> as layerize::commit::CommitTypes>::SurfaceRange;
+    type SwapPromise = <Main<R> as layerize::commit::CommitTypes>::SwapPromise;
+    type CompositorFrameMetadata =
+        <Main<R> as layerize::commit::CommitTypes>::CompositorFrameMetadata;
+    type UIResourceRequest = <Main<R> as layerize::commit::CommitTypes>::UIResourceRequest;
+    type PresentationCallback = <Main<R> as layerize::commit::CommitTypes>::PresentationCallback;
     type SuccessfulPresentationCallback =
-        layerize::commit::presentation_time_callback::SuccessfulPresentationCallback;
-    type EventMetrics = compositor_values::event_metrics::EventMetrics;
-    type DelegatedInkMetadata = super::metadata::DelegatedInkMetadata;
-    type ViewTransitionRequest = layerize::commit::view_transition_request::ViewTransitionRequest;
+        <Main<R> as layerize::commit::CommitTypes>::SuccessfulPresentationCallback;
+    type EventMetrics = <Main<R> as layerize::commit::CommitTypes>::EventMetrics;
+    type DelegatedInkMetadata = <Main<R> as layerize::commit::CommitTypes>::DelegatedInkMetadata;
+    type ViewTransitionRequest = <Main<R> as layerize::commit::CommitTypes>::ViewTransitionRequest;
 }
 impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
+    type Main = Main<R>;
     type Layer = CompositorLayer<Self>;
     type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
     type LayerTraceValue = super::host::TraceValue;
@@ -157,8 +125,8 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     ) -> Self::OcclusionContext<'a> {
         super::draw::OcclusionContext::new(layers, trees, surfaces)
     }
-    type CommitState = CommitState<Self>;
-    type UnsafeCommitState = ThreadUnsafeCommitState<Self>;
+    type CommitState = CommitState<Main<R>>;
+    type UnsafeCommitState = ThreadUnsafeCommitState<Main<R>>;
     type Synchronizer = crate::cc::trees::tree_synchronizer::TreeSynchronizer;
     type PictureLayer = PictureLayerImpl<Self>;
     type ScrollbarLayer = ScrollbarLayerImplBase<Self>;
@@ -196,14 +164,17 @@ impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
 impl<R: CpuSkiaBackend> layerize::commit::push_properties::PushPropertiesTypes
     for CpuCompositorTypes<R>
 {
-    type NodeId = super::types::NodeId;
-    type RegionCaptureBounds = super::metadata::RegionCaptureBounds;
-    type TrackedElementRects = super::metadata::TrackedElementRects;
-    type FilterQuality = super::paint::FilterQuality;
-    type DynamicRangeLimit = super::paint::DynamicRangeLimit;
+    type NodeId = <Main<R> as layerize::commit::push_properties::PushPropertiesTypes>::NodeId;
+    type RegionCaptureBounds =
+        <Main<R> as layerize::commit::push_properties::PushPropertiesTypes>::RegionCaptureBounds;
+    type TrackedElementRects =
+        <Main<R> as layerize::commit::push_properties::PushPropertiesTypes>::TrackedElementRects;
+    type FilterQuality = <Main<R> as layerize::commit::push_properties::PushPropertiesTypes>::FilterQuality;
+    type DynamicRangeLimit =
+        <Main<R> as layerize::commit::push_properties::PushPropertiesTypes>::DynamicRangeLimit;
 }
 impl<R: CpuSkiaBackend>
-    crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<CpuCompositorTypes<R>>
+    crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<Main<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
     fn scrollbar_orientation(&self) -> crate::cc::input::scrollbar::ScrollbarOrientation {
@@ -243,7 +214,7 @@ impl<R: CpuSkiaBackend>
     }
 }
 impl<R: CpuSkiaBackend>
-    crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<CpuCompositorTypes<R>>
+    crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<Main<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
     fn painted_SetInternalContentsScaleAndBounds(
@@ -286,9 +257,8 @@ fn painted_scrollbar<R: CpuSkiaBackend>(
     layer
 }
 impl<R: CpuSkiaBackend>
-    crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<
-        CpuCompositorTypes<R>,
-    > for CompositorLayer<CpuCompositorTypes<R>>
+    crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<Main<R>>
+    for CompositorLayer<CpuCompositorTypes<R>>
 {
     fn scrollbar_set_color(
         &mut self,
@@ -301,7 +271,7 @@ impl<R: CpuSkiaBackend>
         layer.set_color(color);
     }
 }
-impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<CpuCompositorTypes<R>>
+impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Main<R>>
     for CompositorLayer<CpuCompositorTypes<R>>
 {
     fn SurfaceSetRange(
@@ -377,24 +347,19 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer_impl::SurfaceLayerImplType
         range.end
     }
 }
+// viz::SurfaceRange's operations are the main family's (one definition,
+// components/viz/common/surfaces/surface_range.cc).
 impl<R: CpuSkiaBackend> layerize::commit::surface_range::SurfaceRangeTypes
     for CpuCompositorTypes<R>
 {
     fn DefaultSurfaceRange() -> Self::SurfaceRange {
-        Default::default()
+        <Main<R> as layerize::commit::surface_range::SurfaceRangeTypes>::DefaultSurfaceRange()
     }
     fn SurfaceRangesEqual(a: &Self::SurfaceRange, b: &Self::SurfaceRange) -> bool {
-        a == b
+        <Main<R> as layerize::commit::surface_range::SurfaceRangeTypes>::SurfaceRangesEqual(a, b)
     }
     fn SurfaceRangeIsValid(range: &Self::SurfaceRange) -> bool {
-        let valid = |id: &super::types::SurfaceId| {
-            id.frame_sink_id.client_id != 0
-                && id.frame_sink_id.sink_id != 0
-                && id.local_surface_id.parent_sequence_number != 0
-                && id.local_surface_id.child_sequence_number != 0
-                && id.local_surface_id.embed_token != [0, 0]
-        };
-        valid(&range.end) && range.start.as_ref().is_none_or(valid)
+        <Main<R> as layerize::commit::surface_range::SurfaceRangeTypes>::SurfaceRangeIsValid(range)
     }
 }
 impl<R: CpuSkiaBackend>
@@ -419,7 +384,7 @@ impl<R: CpuSkiaBackend> crate::adapter::render_surface_impl::RenderSurfaceTypes
 {
 }
 impl<R: CpuSkiaBackend> crate::adapter::tree_sync::SyncTypes for CpuCompositorTypes<R> {
-    type MainLayer = LayerBorrow<Self>;
+    type MainLayer = LayerBorrow<Main<R>>;
     fn WithLayerImplFactory<Output>(
         tree: &mut LayerTreeImpl<Self>,
         context: &mut LayerTreeContext<'_, Self>,
@@ -505,19 +470,9 @@ impl<R: CpuSkiaBackend> crate::adapter::main_layer::LayerImplFactory<CompositorL
 // This non-test assertion intentionally fails if any selected native owner,
 // live factory or external value capability is still absent at registration.
 const _: fn() = || {
-    fn require<B: LayerTreeTypes + MainLayerTypes + LayerImplTypes>() {}
+    fn require<B: LayerTreeTypes<Main: MainLayerTypes> + LayerImplTypes>() {}
     require::<CpuCompositorTypes<crate::runtime::skia::SkRegion>>();
 };
-
-impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCompositorTypes<R> {
-    type BeginMainFrameMetrics = compositor_values::begin_main_frame_metrics::BeginMainFrameMetrics;
-    type DrawImage = super::paint::DrawImage;
-    type MainRootLayer = LayerRef<Self>;
-    type MainLayerRef = LayerBorrow<Self>;
-    // The main AnimationHost itself (commit_state.h:205 raw_ptr<MutatorHost>);
-    // its MutatorEvents are LayerTreeHostImpl::TakeMutatorEvents' value.
-    type MutatorHostHandle = layerize::commit::animation_host::AnimationHostOwner;
-}
 
 /// Assembly entry to the canonical most-derived PictureLayerImpl constructor.
 /// The current resident tree is field-split by the same source-backed factory
@@ -541,8 +496,8 @@ pub fn CreateCpuPictureLayer<R: CpuSkiaBackend>(
 /// LayerRef::SetSurfaceRange and never owns the child frame.
 pub fn CreateCpuSurfaceLayer<R: CpuSkiaBackend>(
     services: &dyn crate::adapter::main_layer::MainLayerServices,
-) -> LayerRef<CpuCompositorTypes<R>> {
-    crate::cc::layers::surface_layer::SurfaceLayer::<CpuCompositorTypes<R>>::Create(services)
+) -> LayerRef<Main<R>> {
+    crate::cc::layers::surface_layer::SurfaceLayer::<Main<R>>::Create(services)
 }
 
 /// Concrete native LayerImpl scroll entry with the same scoped current/rest

@@ -230,11 +230,15 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
 and `ProxyMain`. Its public `layerize::commit` module is the commit vocabulary
 shared with the impl side (`CommitState`, `ThreadUnsafeCommitState`, cc
 property trees, cc paint records and display lists, proxy messages,
-`CompletionEvent`, push-target traits, `LayerizeFamily`, and the cc owners
+`CompletionEvent`, push-target traits, `LayerizeFamily` and its one
+concrete `CommitFamily`, and the cc owners
 both hosts hold: the one `AnimationHost` class for the main and the impl
 instance, `MutatorHost`, `SwapPromise`, UI-resource and view-transition
 requests). Main code is generic
-over `F: LayerizeFamily` only. Blink paint property nodes are read only here.
+over `F: LayerizeFamily` only; the impl family names `CommitFamily` as its
+`Main`, whose associated-type bounds alone equate the main values with its
+own (impl code never bounds `Main` by `LayerizeFamily`). Blink paint
+property nodes are read only here.
 Layerize packages depend only on the cc shared roots (below), never on a
 Compositor impl package or the `compositor` facade. Guard:
 `crates/layerize/tests/layerize_boundary.rs`.
@@ -291,7 +295,8 @@ with `ProxyImpl` receiving the commit.
   synchronous presenter), connected only by the Proxy task queues. No type
   or factory groups the two halves: the Page constructs `LayerizeEngine` and
   `ProxyMain` itself (cc `LayerTreeHost::CreateThreaded`) from the plain
-  `compositor::MainHostParams` values (settings, paint feature state, main
+  `layerize::runtime::main_host_params::MainHostParams` values (settings,
+  shared with the impl through `GenerateLayerTreeSettings`, paint feature state, main
   `AnimationHost` instance, identity), and `ProxyMain::Start` posts the
   `ProxyImplInit` from which the impl owner calls `CompositorEngine::new`.
 - `CompositorOutput` carries no main-thread effects. Impl → main

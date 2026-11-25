@@ -8,6 +8,25 @@ use std::cmp::Ordering;
 pub use compositor_values::overlay_transform::OverlayTransform;
 pub use compositor_values::unguessable_token::UnguessableToken;
 
+/// base::UnguessableToken::Create (base/unguessable_token.cc): 128 bits from
+/// the OS cryptographic source, never the empty token. Both halves' viz
+/// LocalSurfaceId embed tokens come from it (the main widget's parent id and
+/// the impl ParentLocalSurfaceIdAllocator). Moved from
+/// compositor/src/runtime/host_core.rs OsSurfaceTokenSource.
+pub fn CreateUnguessableToken() -> UnguessableToken {
+    loop {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).expect("OS entropy for LocalSurfaceId token");
+        let token = UnguessableToken([
+            u64::from_ne_bytes(bytes[..8].try_into().expect("token half")),
+            u64::from_ne_bytes(bytes[8..].try_into().expect("token half")),
+        ]);
+        if !token.is_empty() {
+            return token;
+        }
+    }
+}
+
 // Source dependency: cc/trees/layer_tree_host.h
 // PropertyChangeForcesCommitCriteria.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

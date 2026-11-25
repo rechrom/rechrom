@@ -88,6 +88,30 @@ pub trait PropertyTreeFeatures {
     fn SizeOopifEffectSurfacesAtExternalScale(&self) -> bool;
 }
 
+/// The feature values property-tree computation reads on either thread
+/// (features::kSizeOopifEffectSurfacesAtExternalScale, cc/base/features.h,
+/// read by draw_property_utils.cc and property_tree.cc). The main half's
+/// UpdateLayers reads only these, never the impl's render services.
+#[derive(Clone, Copy, Debug)]
+pub struct PropertyTreeFeatureValues {
+    pub size_oopif_effect_surfaces_at_external_scale: bool,
+}
+impl PropertyTreeFeatureValues {
+    /// The desktop CPU embedding's feature state (also the impl
+    /// RenderConfig's). Moved from compositor/src/runtime/engine_factory.rs
+    /// FactoryOptions::cpu_default.
+    pub fn CpuDesktop() -> Self {
+        Self {
+            size_oopif_effect_surfaces_at_external_scale: true,
+        }
+    }
+}
+impl PropertyTreeFeatures for PropertyTreeFeatureValues {
+    fn SizeOopifEffectSurfacesAtExternalScale(&self) -> bool {
+        self.size_oopif_effect_surfaces_at_external_scale
+    }
+}
+
 pub trait PropertyTreeScrollLayerTree<T: PropertyTreeTransform> {
     fn DidUpdateScrollOffset(
         &mut self,

@@ -23,7 +23,9 @@ use layerize::commit::{
         ProxyTaskQueue,
     },
 };
-type Root = CpuCompositorTypes<SkRegion>;
+/// The commit family the Proxy messages and CommitState are instantiated
+/// over: the impl family's `Main`.
+type Root = <CpuCompositorTypes<SkRegion> as crate::adapter::layer_tree_impl::LayerTreeTypes>::Main;
 
 /// Ensures that the commit CompletionEvent is always signaled.
 /// Source: cc/trees/proxy_impl.cc:81-120. Rust extension (S1b-2): a commit

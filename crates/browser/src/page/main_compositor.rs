@@ -14,13 +14,19 @@
 //! LayerizeEngine for PaintArtifactCompositor::Update, video ForeignLayers and
 //! direct animation updates.
 use super::*;
-use compositor::{CompositorConfig, CompositorError, CompositorViewportState};
+use compositor_values::compositor_config::{CompositorConfig, CompositorViewportState};
+use layerize::commit::MainFamily;
 use layerize::runtime::proxy_main::{MainFrameClient, ProxyMainClient};
 pub use layerize::runtime::proxy_main::MainFrameResult;
 
 /// The main half of the Page compositor: Blink's LayerTreeView role.
-pub(crate) type MainLayerize = layerize::LayerizeEngine<compositor::MainFamily>;
-pub(crate) type MainProxy = layerize::runtime::proxy_main::ProxyMain<compositor::MainFamily>;
+pub(crate) type MainLayerize = layerize::LayerizeEngine<MainFamily>;
+pub(crate) type MainProxy = layerize::runtime::proxy_main::ProxyMain<MainFamily>;
+/// The ProxyMain -> ProxyImpl and ProxyImpl -> ProxyMain tasks and the posted
+/// BeginMainFrameAndCommitState of the main family.
+pub(crate) type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
+pub(crate) type ImplToMainTask = layerize::commit::proxy::ImplToMain<MainFamily>;
+pub(crate) type BeginMainFrameState = layerize::commit::proxy::BeginMainFrameAndCommitState<MainFamily>;
 
 // The main LayerTreeHost is lent to the impl thread inside the protected
 // commit sequence.
@@ -64,8 +70,8 @@ pub(crate) enum MainCompositorMutation {
     FrameLifecycle(layerize::commit::paint_holding::FrameLifecycleMutation),
 }
 
-pub type MainToImplQueue =layerize::commit::proxy::ProxyTaskQueue<compositor::MainToImplTask>;
-pub type ImplToMainQueue = layerize::commit::proxy::ProxyTaskQueue<compositor::ImplToMainTask>;
+pub type MainToImplQueue =layerize::commit::proxy::ProxyTaskQueue<MainToImplTask>;
+pub type ImplToMainQueue = layerize::commit::proxy::ProxyTaskQueue<ImplToMainTask>;
 
 impl PageDomainServices {
     /// The compositor configuration of the Page's main half (and of the
@@ -113,19 +119,18 @@ impl PageDomainServices {
     /// `to_impl` (LayerTreeHost::CreateThreaded, cc/trees/layer_tree_host.cc:
     /// the main LayerTreeHost, then its ProxyMain; Blink's
     /// LayerTreeView::Initialize supplies the settings and the main
-    /// AnimationHost, here `compositor::CreateMainHostParams`), and returns
-    /// the ProxyImpl construction values that ProxyMain::Start posts with
-    /// Initialize (proxy_main.cc:80-89,898-914).
+    /// AnimationHost, here `layerize::runtime::main_host_params`), and
+    /// returns the ProxyImpl construction values that ProxyMain::Start posts
+    /// with Initialize (proxy_main.cc:80-89,898-914).
     pub(super) fn CreateMainCompositor(
         &self,
         config: CompositorConfig,
         to_impl: MainToImplQueue,
-    ) -> io::Result<Box<compositor::ProxyImplInit>> {
+    ) -> io::Result<Box<layerize::commit::proxy::ProxyImplInit>> {
         assert!(self.layerize.get().is_none(), "one main compositor half per Page");
         let main_tasks: layerize::commit::main_callbacks::TaskRunner =
             Arc::new(PageMainTaskRunner(self.compositor_executor.clone()));
-        let params = compositor::CreateMainHostParams(&config)
-            .map_err(|error| io::Error::other(error.to_string()))?;
+        let params = layerize::runtime::main_host_params::CreateMainHostParams(&config)?;
         let in_process = to_impl.IsInProcess();
         let endpoint = layerize::runtime::proxy_main::ProxyMainEndpoint::new(
             to_impl,
@@ -154,7 +159,7 @@ impl PageDomainServices {
         )
         .map_err(|error| io::Error::other(error.to_string()))?;
         let proxy = MainProxy::new(endpoint, params.first_property_owner);
-        let init = Box::new(compositor::ProxyImplInit::new(
+        let init = Box::new(layerize::commit::proxy::ProxyImplInit::new(
             params.id,
             &params.animation_host,
             layerize.PaintValues(),
@@ -165,7 +170,7 @@ impl PageDomainServices {
         let _ = self.layerize.set(RefCell::new(layerize));
         let _ = self.main_property_tree_features.set(features);
         self.compositor_local_surface_id
-            .set(Some(compositor::engine::NewParentLocalSurfaceId()));
+            .set(Some(layerize::commit::main_effects::NewParentLocalSurfaceId()));
         Ok(init)
     }
 
@@ -182,7 +187,7 @@ impl PageDomainServices {
 
     /// ProxyMain::Start (proxy_main.cc:898-914). `init` is posted with
     /// Initialize and waited for; an in-process embedding passes `None`.
-    pub(super) fn StartMainCompositor(&self, init: Option<Box<compositor::ProxyImplInit>>) {
+    pub(super) fn StartMainCompositor(&self, init: Option<Box<layerize::commit::proxy::ProxyImplInit>>) {
         self.proxy_main
             .get()
             .expect("created main compositor half")
@@ -207,7 +212,7 @@ impl PageDomainServices {
     }
     fn MainEndpoint(
         &self,
-    ) -> &Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<compositor::MainFamily>> {
+    ) -> &Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<MainFamily>> {
         self.proxy_main_endpoint
             .get()
             .expect("created main compositor half")
@@ -301,7 +306,7 @@ impl PageDomainServices {
     /// The Send + Sync request side of ProxyMain, for frame sources.
     pub(super) fn MainCompositorRequests(
         &self,
-    ) -> Option<Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<compositor::MainFamily>>>
+    ) -> Option<Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<MainFamily>>>
     {
         self.proxy_main_endpoint.get().cloned()
     }
@@ -439,11 +444,11 @@ impl PageDomainServices {
         let mut layerize = self.MainLayerize().borrow_mut();
         let input = layerize
             .PrepareInput(artifact.clone())
-            .map_err(|error| io::Error::other(CompositorError::from(error).to_string()))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let mut sequence = self.compositor_pac_sequence.get();
         let publication = layerize
             .UpdatePaintArtifact(artifact, input, &mut sequence)
-            .map_err(|error| io::Error::other(CompositorError::from(error).to_string()))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         self.compositor_pac_sequence.set(sequence);
         drop(layerize);
         if let Some(publication) = publication {
@@ -620,7 +625,7 @@ impl PageDomainServices {
 
     /// Runs a ProxyImpl -> ProxyMain task other than BeginMainFrame. The
     /// LayerTreeHostClient notifications are queued as effects.
-    pub(super) fn RunMainCompositorImplTask(&self, task: compositor::ImplToMainTask) {
+    pub(super) fn RunMainCompositorImplTask(&self, task: ImplToMainTask) {
         let mut client = EffectClient {
             effects: Vec::new(),
         };
@@ -639,7 +644,7 @@ impl PageDomainServices {
     /// and mutator events were applied and their effects handed to it.
     pub(super) fn BeginMainCompositorFrame(
         &self,
-        state: Box<compositor::BeginMainFrameState>,
+        state: Box<BeginMainFrameState>,
         update_rendering: &mut dyn FnMut(Vec<CompositorMainThreadEffect>),
     ) -> MainFrameResult {
         let mut client = LifecycleClient {
@@ -684,7 +689,7 @@ impl PageDomainServices {
 /// compositor effects. A single-sequence presenter delivers the same values
 /// synchronously (SingleThreadProxy calls LayerTreeHost directly).
 pub(super) fn ImplNotificationEffect(
-    task: compositor::ImplToMainTask,
+    task: ImplToMainTask,
 ) -> Option<CompositorMainThreadEffect> {
     use layerize::commit::proxy::CompositorEmbedderNotification as N;
     use layerize::commit::proxy::ImplToMain;
@@ -750,11 +755,11 @@ pub(super) fn ImplNotificationEffect(
 struct EffectClient {
     effects: Vec<CompositorMainThreadEffect>,
 }
-impl ProxyMainClient<compositor::MainFamily> for EffectClient {
+impl ProxyMainClient<MainFamily> for EffectClient {
     fn CommitDeferralChanged(
         &mut self,
         deferred: bool,
-        reason: compositor::PaintHoldingReason,
+        reason: layerize::commit::paint_holding::PaintHoldingReason,
     ) {
         self.effects
             .push(CompositorMainThreadEffect::CommitDeferralChanged { deferred, reason });
@@ -794,7 +799,7 @@ impl ProxyMainClient<compositor::MainFamily> for EffectClient {
                 commit_finish_time: timestamps.finish,
             });
     }
-    fn ImplNotification(&mut self, task: compositor::ImplToMainTask) {
+    fn ImplNotification(&mut self, task: ImplToMainTask) {
         self.effects.extend(ImplNotificationEffect(task));
     }
     fn DidCompositorScroll(&mut self, effect: layerize::commit::main_effects::PacScrollEffect) {
@@ -807,8 +812,8 @@ struct LifecycleClient<'a> {
     now: Arc<PageCompositorExecutor>,
     update_rendering: &'a mut dyn FnMut(Vec<CompositorMainThreadEffect>),
 }
-impl ProxyMainClient<compositor::MainFamily> for LifecycleClient<'_> {
-    fn CommitDeferralChanged(&mut self, deferred: bool, reason: compositor::PaintHoldingReason) {
+impl ProxyMainClient<MainFamily> for LifecycleClient<'_> {
+    fn CommitDeferralChanged(&mut self, deferred: bool, reason: layerize::commit::paint_holding::PaintHoldingReason) {
         self.effects.CommitDeferralChanged(deferred, reason)
     }
     fn ApplyViewportChanges(
@@ -831,14 +836,14 @@ impl ProxyMainClient<compositor::MainFamily> for LifecycleClient<'_> {
     ) {
         self.effects.DidCommit(source_frame_number, timestamps)
     }
-    fn ImplNotification(&mut self, task: compositor::ImplToMainTask) {
+    fn ImplNotification(&mut self, task: ImplToMainTask) {
         self.effects.ImplNotification(task)
     }
     fn DidCompositorScroll(&mut self, effect: layerize::commit::main_effects::PacScrollEffect) {
         self.effects.DidCompositorScroll(effect)
     }
 }
-impl MainFrameClient<compositor::MainFamily> for LifecycleClient<'_> {
+impl MainFrameClient<MainFamily> for LifecycleClient<'_> {
     fn Now(&self) -> scroll_animation::TimeTicks {
         self.now.Now()
     }

@@ -56,7 +56,7 @@ impl<R: CpuSkiaBackend> PictureLayerImplTypes for CpuCompositorTypes<R> {
     }
 }
 impl<R: CpuSkiaBackend>
-    crate::adapter::solid_color_layer::SolidColorLayerImplTarget<CpuCompositorTypes<R>>
+    crate::adapter::solid_color_layer::SolidColorLayerImplTarget<layerize::commit::CommitFamily<R>>
     for super::layer::CompositorLayer<CpuCompositorTypes<R>>
 {
 }

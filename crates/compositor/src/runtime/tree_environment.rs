@@ -163,7 +163,7 @@ impl HostImplTreeHostServices<CompositorTypes> for TreeEnvironmentServices {
     }
     fn PushMutatorPropertiesTo(
         &mut self,
-        state: &ThreadUnsafeCommitState<CompositorTypes>,
+        state: &ThreadUnsafeCommitState<crate::MainFamily>,
         target: &mut MutatorHost,
         trees: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<CompositorTypes>,
     ) {

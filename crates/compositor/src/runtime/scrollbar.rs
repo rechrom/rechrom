@@ -71,7 +71,7 @@ impl LayerImplPushContext for Mutation<'_> {
         self.trees.is_active()
     }
     fn TreesInVizInClientProcess(&self) -> bool {
-        self.capabilities.picture.trees_in_viz && !self.settings.trees_in_viz_in_viz_process
+        self.capabilities.picture.settings.trees_in_viz && !self.settings.trees_in_viz_in_viz_process
     }
     fn IsCCSlimmingEnabled(&self) -> bool {
         self.capabilities.picture.cc_slimming
@@ -88,7 +88,7 @@ impl ScrollbarOpacityContext<B> for Mutation<'_> {
         self.settings.trees_in_viz_in_viz_process
     }
     fn TreeAnimationsInVizInVizProcess(&self) -> bool {
-        self.capabilities.picture.tree_animations_in_viz
+        self.capabilities.picture.settings.tree_animations_in_viz
             && self.settings.trees_in_viz_in_viz_process
     }
     fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<B> {
