@@ -33,6 +33,8 @@ pub mod touch_action_region;
 
 // LayerTreeSettings fields, proxy and scheduler values named by both proxies.
 pub mod commit_earlyout_reason;
+pub mod frame_sequence_metrics;
+pub mod frame_skipped_reason;
 pub mod gpu_memory_allocation;
 pub mod layer_tree_settings_features;
 pub mod managed_memory_policy;

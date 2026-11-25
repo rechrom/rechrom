@@ -14,6 +14,7 @@
 //! LayerizeEngine for PaintArtifactCompositor::Update, video ForeignLayers and
 //! direct animation updates.
 use super::*;
+use compositor::{CompositorConfig, CompositorError, CompositorViewportState};
 use layerize::runtime::proxy_main::{MainFrameClient, ProxyMainClient};
 pub use layerize::runtime::proxy_main::MainFrameResult;
 
@@ -658,7 +659,7 @@ impl PageDomainServices {
 pub(super) fn ImplNotificationEffect(
     task: compositor::ImplToMainTask,
 ) -> Option<CompositorMainThreadEffect> {
-    use compositor::CompositorEmbedderNotification as N;
+    use layerize::commit::proxy::CompositorEmbedderNotification as N;
     use layerize::commit::proxy::ImplToMain;
     Some(match task {
         ImplToMain::DidPresentCompositorFrame {

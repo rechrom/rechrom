@@ -67,22 +67,9 @@ impl<B: HostImplTypes> FrameSequenceTrackers<B> {
     }
 }
 
-// Source dependency: cc/metrics/frame_sequence_metrics.h:92-111;
-// cc/metrics/frame_sequence_tracker_collection.h:29-31. These are native owned
-// result values, not a second tracker or a copy of compositor owner state.
-#[derive(Clone, Debug)]
-pub struct Jank {
-    pub start_time: crate::adapter::time::TimeTicks,
-    pub duration: crate::adapter::time::TimeDelta,
-}
-#[derive(Clone, Debug, Default)]
-pub struct CustomReportData {
-    pub frames_expected_v3: u32,
-    pub frames_dropped_v3: u32,
-    pub jank_count_v3: u32,
-    pub janks: Vec<Jank>,
-}
-pub type CustomTrackerResults = std::collections::BTreeMap<i32, CustomReportData>;
+// The custom tracker result values the impl reports to the main thread
+// (cc/metrics/frame_sequence_metrics.h) are cc shared values.
+pub use compositor_values::frame_sequence_metrics::{CustomReportData, CustomTrackerResults, Jank};
 // Source dependency: cc/metrics/event_metrics.h:39-74,272-278,725-729.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]

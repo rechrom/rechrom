@@ -29,14 +29,8 @@ use crate::{
 };
 use std::sync::Arc;
 
-// Source: cc/scheduler/scheduler.h:48-53
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameSkippedReason {
-    kRecoverLatency,
-    kNoDamage,
-    kWaitingOnMain,
-    kDrawThrottled,
-}
+// Source: cc/scheduler/scheduler.h:48-53 (a cc shared value).
+pub use compositor_values::frame_skipped_reason::FrameSkippedReason;
 
 // Source: cc/scheduler/scheduler.h:55-94
 // Native non-const client callbacks borrow the embedding's actual sibling

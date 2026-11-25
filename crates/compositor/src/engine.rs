@@ -12,6 +12,7 @@ pub use layerize::commit::paint_holding::{
     CommitDeferralReason, FrameLifecycleMutation, PaintHoldingReason,
 };
 pub use crate::runtime::metadata::FrameTimingDetails as CompositorFrameTimingDetails;
+pub use layerize::commit::proxy::CompositorEmbedderNotification;
 use crate::{
     adapter::{
         begin_frame::BeginFrameArgs,
@@ -224,107 +225,6 @@ pub enum CompositorMutation {
     FrameLifecycle(FrameLifecycleMutation),
     Input(CompositorInput),
 }
-/// A backend can acknowledge a buffer without knowing a display time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PresentationUnavailableReason {
-    BackendHasNoTimestamp,
-    OffscreenTarget,
-    DiscardedBeforePresentation,
-}
-#[derive(Clone, Debug)]
-pub enum CompositorMainThreadEffect {
-    /// ProxyImpl::ScheduledActionCommit records this immediately after
-    /// FinishCommit, before the separate PostCommit and draw actions.
-    MainFrameCommitCompleted {
-        commit_finish_time: TimeTicks,
-    },
-    PresentationFeedbackUnavailable {
-        frame_token: u32,
-        surface_id: u64,
-        viz_submission: u64,
-        reason: PresentationUnavailableReason,
-    },
-    PresentationPromiseSwapped {
-        request: u64,
-        frame_token: u32,
-        swap_time: TimeTicks,
-    },
-    PresentationPromiseDidNotSwap {
-        request: u64,
-        failure_time: TimeTicks,
-    },
-    FramePresented {
-        frame_token: u32,
-        details: CompositorFrameTimingDetails,
-    },
-    MainFrameUpdatesDeferralChanged {
-        deferred: bool,
-    },
-    CommitDeferralChanged {
-        deferred: bool,
-        reason: PaintHoldingReason,
-    },
-    MainFrameCommitDeferred {
-        reason: CommitDeferralReason,
-    },
-    ScrollAnimationCompleted(scroll_animation::compositor_mutation::ScrollAnimationCompletion),
-    /// InputHandlerProxy's main-thread hit-test request
-    /// (`CompositorInputEffect::WheelRequiresMainThreadHitTest`), which the
-    /// main thread answers with `CompositorInput::ContinueWheelScroll`.
-    WheelRequiresMainThreadHitTest {
-        request: u64,
-        position: PointF,
-    },
-    CanvasChildPaintRecords(Arc<canvas::CanvasChildRecordPublication>),
-    UpdateCompositorScrollState(CompositorScrollState),
-    LayerTreeFrameSinkLost,
-    PageScaleAnimationCompleted,
-    ViewportScaleChanged {
-        scale: f32,
-        delta: f32,
-        pinch_active: bool,
-        inner_scroll_delta: Vector2dF,
-    },
-    VideoBeginFrame {
-        controller: u64,
-        args: BeginFrameArgs,
-    },
-    VideoNeedsBeginFrames {
-        needs: bool,
-    },
-    CompositorMetrics {
-        results: CustomTrackerResults,
-    },
-    FrameNotProduced {
-        ack: crate::adapter::scheduler_host::BeginFrameAck,
-        reason: crate::cc::scheduler::scheduler::FrameSkippedReason,
-    },
-    /// A single-sequence embedding ran ProxyMain::BeginMainFrame; the Page
-    /// schedules its lifecycle (the threaded embedding runs it inside).
-    BeginMainFrame,
-    SaveActiveEventMetrics,
-    UpdateDeferMainFrameUpdate,
-    ImageDecodeFinished {
-        request_id: i32,
-        speculative: bool,
-        succeeded: bool,
-    },
-    BeginFrameSourcePaused {
-        paused: bool,
-    },
-    ScrollOffsetChanged {
-        sequence: u64,
-        element: ElementId,
-        offset: PointF,
-        source: ScrollSourceType,
-        snap: Option<TargetSnapAreaElementIds>,
-    },
-    ScrollbarsHiddenChanged {
-        element: ElementId,
-        hidden: bool,
-    },
-}
-
 /// The InputHandlerProxy results of one impl input call, returned to the
 /// input owner that made it (content/renderer/input/input_handler_proxy.cc:
 /// the event disposition callback, DidHandleInputEventAndOverscroll, and
@@ -342,30 +242,6 @@ pub enum CompositorInputEffect {
     /// ScrollBegin needs the main thread's hit test
     /// (InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest).
     WheelRequiresMainThreadHitTest { request: u64, position: PointF },
-}
-
-/// The Rechrom impl -> main notifications without a ProxyMain method
-/// (`layerize::commit::proxy::ProxyTypes::EmbedderNotification`).
-#[derive(Clone, Debug)]
-pub enum CompositorEmbedderNotification {
-    /// ReportTimeSwapPromise::DidSwap (cc/trees/swap_promise.h).
-    PresentationPromiseSwapped {
-        request: u64,
-        frame_token: u32,
-        swap_time: TimeTicks,
-    },
-    /// ReportTimeSwapPromise::DidNotSwap.
-    PresentationPromiseDidNotSwap { request: u64, failure_time: TimeTicks },
-    /// LayerTreeFrameSink::DidNotProduceFrame.
-    FrameNotProduced {
-        ack: crate::adapter::scheduler_host::BeginFrameAck,
-        reason: crate::cc::scheduler::scheduler::FrameSkippedReason,
-    },
-    /// The video frame provider's BeginFrame (VideoFrameSubmitter).
-    VideoBeginFrame { controller: u64, args: BeginFrameArgs },
-    VideoNeedsBeginFrames { needs: bool },
-    /// LayerTreeHostClient custom tracker metrics.
-    CompositorMetrics { results: CustomTrackerResults },
 }
 
 /// Move-only frame output: no separate raster bundle or resource snapshot.
@@ -468,31 +344,6 @@ impl From<layerize::commit::layerize_error::LayerizeError> for CompositorError {
         }
     }
 }
-impl From<layerize::commit::main_effects::PacScrollEffect> for CompositorMainThreadEffect {
-    fn from(effect: layerize::commit::main_effects::PacScrollEffect) -> Self {
-        use layerize::commit::main_effects::PacScrollEffect as E;
-        match effect {
-            E::DidCompositorScroll {
-                sequence,
-                element,
-                offset,
-                source,
-                snap,
-            } => Self::ScrollOffsetChanged {
-                sequence,
-                element,
-                offset,
-                source,
-                snap,
-            },
-            E::DidUpdateCompositorScrollState(state) => Self::UpdateCompositorScrollState(state),
-            E::DidChangeScrollbarsHidden { element, hidden } => {
-                Self::ScrollbarsHiddenChanged { element, hidden }
-            }
-        }
-    }
-}
-
 /// Public commands intentionally carry no layer, tiling, job or graph owner.
 /// Construction remains explicit until the real canonical assembly is ready;
 /// no command reports success with a fabricated frame or skipped commit.

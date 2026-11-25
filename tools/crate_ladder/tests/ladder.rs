@@ -551,14 +551,20 @@ const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
     // Still name the concrete cc family: MainFamily (and the ProxyImplInit,
     // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
     // MainPropertyTreeFeatures instantiated over it) is the impl
-    // CpuCompositorTypes, because CommitTypes / CommitStateTypes name impl
-    // owners (Layer = CompositorLayer, RenderSurface = RenderSurfaceImpl in
-    // the shared PropertyTrees, SwapPromise, MicroBenchmarkImpl,
-    // UIResourceRequest). page.rs also holds the CompositorEngine executor
-    // and presentation glue and consumes CompositorMainThreadEffect. Frame
-    // values already come from viz_common. Clears once those owners leave
-    // CommitTypes for an impl-side family and the glue moves into the
-    // impl-owner modules.
+    // CpuCompositorTypes, because CommitTypes / CommitStateTypes /
+    // PushPropertiesTypes / ProxyTypes name impl owners (Layer =
+    // CompositorLayer and its ImplContext, RenderSurface = RenderSurfaceImpl
+    // in the shared PropertyTrees, SwapPromise, MicroBenchmarkImpl,
+    // UIResourceRequest / UIResourceBitmap, ImplInit, LayerTreeMutator) and
+    // LayerizeFamily::UpdateMainPropertyTrees runs the impl
+    // draw_property_utils. page.rs keeps only the PageDomainServices fields
+    // and the external BeginMainFrame / impl-task entry points typed over
+    // that family; main_compositor.rs additionally builds the main half
+    // from CompositorConfig / CreateMainHostParams. The executor and frame
+    // glue live in the impl-owner modules, the main-thread effects are
+    // Page values (page/main_compositor_effect.rs) and the impl
+    // notifications are layerize::commit values. Clears once those owners
+    // leave the shared family for an impl-side family.
     "crates/browser/src/page.rs",
     "crates/browser/src/page/main_compositor.rs",
 ];

@@ -8,11 +8,8 @@ pub(crate) mod canvas_2d;
 use paint::{PaintLifecycle as _, PaintPropertyUpdates as _, PaintResourceUpdates as _};
 use layout::fragment::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
-pub use compositor::CompositorMainThreadEffect;
-use compositor::{
-    CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
-    CompositorFrameSubmission, CompositorOutput, CompositorViewportState,
-};
+mod main_compositor_effect;
+pub use main_compositor_effect::{CompositorMainThreadEffect, PresentationUnavailableReason};
 use viz_common::ResourceId;
 use compositor_tree::geometry::{
     PointF as CompositorPointF, Rect as CompositorRect, RectF as CompositorRectF,
@@ -120,6 +117,16 @@ impl PageCompositorExecutor {
         }
     }
 
+    /// base::TimeTicks::Now() in this Page's compositor clock domain.
+    fn Now(&self) -> CompositorTimeTicks {
+        self.TimeTicks(std::time::Instant::now())
+    }
+
+    /// Posts `task` to the sequence this executor runs.
+    fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
+        let _ = self.executor.execute(task);
+    }
+
     /// Convert an Instant into cc's one absolute TimeTicks domain without
     /// advancing that domain's clock. In particular, converting a future
     /// BeginFrame deadline must not make Now() equal that deadline.
@@ -164,26 +171,6 @@ impl interaction::dispatch::core::dom::events::event::EventClock for PageInterac
             .since_origin()
             .InMicroseconds();
         interaction::input::base::time::time::TimeTicks::FromInternalValue(micros)
-    }
-}
-impl CompositorExecutor for PageCompositorExecutor {
-    fn Now(&self) -> CompositorTimeTicks {
-        self.TimeTicks(std::time::Instant::now())
-    }
-
-    fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
-        let _ = self.executor.execute(task);
-    }
-
-    fn ExecuteAfter(&self, delay: CompositorTimeDelta, task: Box<dyn FnOnce() + Send>) {
-        let delay = delay.InMicroseconds().max(0) as u64;
-        let _ = self
-            .executor
-            .execute_after(std::time::Duration::from_micros(delay), task);
-    }
-
-    fn RunsTasksInCurrentSequence(&self) -> bool {
-        std::thread::current().id() == self.sequence
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -274,7 +261,6 @@ pub enum PageBrowserInput {
     GestureScroll(interaction::input_event::WebGestureEvent),
     Gesture(interaction::input_event::WebGestureEvent),
 }
-pub type PageCompositorFrame = CompositorFrameSubmission;
 /// A delegated video child surface submission. The Page producer allocates
 /// the stable public surface identity referenced by its SurfaceDrawQuad; the
 /// window-owned Viz service consumes this frame before the parent frame.
@@ -4945,7 +4931,7 @@ pub(crate) mod compositor_input;
 pub use compositor_input::{
     CanonicalFlingWheelInput, CompositorWheelResult, GestureCompositorInput,
     EmbedderCompositorConfig, GestureCompositorInputWithDispatchId, InputWidgetScale,
-    NewCompositorServices,
+    NewCompositorServices, PageCompositorFrame,
     ImplInput, PresentationFeedbackDetails, WheelCompositorInput,
 };
 use opening::PageOpenAdapter;

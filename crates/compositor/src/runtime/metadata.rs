@@ -343,44 +343,9 @@ impl<B: HostImplDTypes<RegionCaptureId = RegionCaptureCropId>>
         self.0.insert(id, bounds);
     }
 }
-// Source dependency: ui/gfx/presentation_feedback.h:21-109.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PresentationFeedback {
-    pub timestamp: TimeTicks,
-    pub interval: TimeDelta,
-    pub flags: u32,
-    pub available_timestamp: TimeTicks,
-    pub ready_timestamp: TimeTicks,
-    pub latch_timestamp: TimeTicks,
-    pub writes_done_timestamp: TimeTicks,
-    #[cfg(target_vendor = "apple")]
-    pub ca_layer_error_code: i32,
-    pub display_trace_id: Option<i64>,
-}
-// Source dependency: ui/gfx/swap_result.h:32-57.
-#[derive(Clone, Debug, Default)]
-pub struct SwapTimings {
-    pub swap_start: TimeTicks,
-    pub swap_end: TimeTicks,
-    pub viz_scheduled_draw: TimeTicks,
-    pub gpu_started_draw: TimeTicks,
-    pub gpu_task_ready: TimeTicks,
-    pub gpu_started_overlay: TimeTicks,
-}
-// Source dependency: components/viz/common/frame_timing_details.h:15-41.
-#[derive(Clone, Debug, Default)]
-pub struct FrameTimingDetails {
-    pub received_compositor_frame_timestamp: TimeTicks,
-    pub embedded_frame_timestamp: TimeTicks,
-    pub draw_start_timestamp: TimeTicks,
-    pub swap_timings: SwapTimings,
-    pub presentation_feedback: PresentationFeedback,
-    pub frame_id: crate::adapter::begin_frame::BeginFrameId,
-    pub start_update_display_tree: TimeTicks,
-    pub start_prepare_to_draw: TimeTicks,
-    pub start_draw_layers: TimeTicks,
-    pub submit_compositor_frame: TimeTicks,
-}
+// gfx::PresentationFeedback, gfx::SwapTimings and viz::FrameTimingDetails are
+// components/viz/common values (viz_common::frame_timing_details).
+pub use viz_common::frame_timing_details::{FrameTimingDetails, PresentationFeedback, SwapTimings};
 impl crate::adapter::layer_tree_host_impl::HostFrameTimingDetails for FrameTimingDetails {
     fn PresentationTimestamp(&self) -> TimeTicks {
         self.presentation_feedback.timestamp

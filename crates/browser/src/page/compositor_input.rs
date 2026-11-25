@@ -4,7 +4,34 @@
 //! Chromium performs them in InputRouter (ui::ScaleWebInputEvent) and
 //! InputHandlerProxy before cc's InputHandler sees the event.
 use super::*;
-use compositor::CompositorInput;
+use compositor::{CompositorConfig, CompositorExecutor, CompositorInput};
+
+/// The move-only frame an impl owner presents (CompositorEngine output).
+pub type PageCompositorFrame = compositor::CompositorFrameSubmission;
+
+/// The impl half's injected task runner and clock (LayerTreeHostImpl's
+/// TaskRunnerProvider, cc/trees/layer_tree_host_impl.cc Create) over the
+/// Page's executor and its TimeTicks domain.
+impl CompositorExecutor for PageCompositorExecutor {
+    fn Now(&self) -> CompositorTimeTicks {
+        PageCompositorExecutor::Now(self)
+    }
+
+    fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
+        PageCompositorExecutor::Execute(self, task)
+    }
+
+    fn ExecuteAfter(&self, delay: CompositorTimeDelta, task: Box<dyn FnOnce() + Send>) {
+        let delay = delay.InMicroseconds().max(0) as u64;
+        let _ = self
+            .executor
+            .execute_after(std::time::Duration::from_micros(delay), task);
+    }
+
+    fn RunsTasksInCurrentSequence(&self) -> bool {
+        std::thread::current().id() == self.sequence
+    }
+}
 
 /// The InputHandlerProxy call of an input-queue message, made by the impl
 /// owner when the compositor task runner runs it (InputHandlerProxy::
@@ -146,7 +173,7 @@ pub fn GestureCompositorInputWithDispatchId(
 pub fn PresentationFeedbackDetails(
     feedback: PageFramePresentationFeedback,
     clock: PageCompositorClockMapping,
-) -> Result<(u32, compositor::engine::CompositorFrameTimingDetails), CompositorMainThreadEffect> {
+) -> Result<(u32, viz_common::frame_timing_details::FrameTimingDetails), CompositorMainThreadEffect> {
     let PageFramePresentationFeedback {
         surface_id,
         viz_submission,
@@ -165,13 +192,13 @@ pub fn PresentationFeedbackDetails(
         };
         let reason = match reason {
             PagePresentationUnavailableReason::BackendHasNoTimestamp => {
-                compositor::PresentationUnavailableReason::BackendHasNoTimestamp
+                PresentationUnavailableReason::BackendHasNoTimestamp
             }
             PagePresentationUnavailableReason::OffscreenTarget => {
-                compositor::PresentationUnavailableReason::OffscreenTarget
+                PresentationUnavailableReason::OffscreenTarget
             }
             PagePresentationUnavailableReason::DiscardedBeforePresentation => {
-                compositor::PresentationUnavailableReason::DiscardedBeforePresentation
+                PresentationUnavailableReason::DiscardedBeforePresentation
             }
         };
         return Err(CompositorMainThreadEffect::PresentationFeedbackUnavailable {
@@ -181,7 +208,7 @@ pub fn PresentationFeedbackDetails(
             reason,
         });
     };
-    let mut details = compositor::engine::CompositorFrameTimingDetails::default();
+    let mut details = viz_common::frame_timing_details::FrameTimingDetails::default();
     details.frame_id = frame_id;
     details.presentation_feedback.timestamp = clock.TimeTicks(timestamp);
     details.presentation_feedback.interval =
