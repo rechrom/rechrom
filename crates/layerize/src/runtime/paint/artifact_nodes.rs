@@ -172,8 +172,8 @@ where
 {
     fn IsForeignLayer(&self) -> bool {
         let t = self.id.r#type.0;
-        (paint::display_item_id::DisplayItemIdType::kForeignLayerFirst.0
-            ..=paint::display_item_id::DisplayItemIdType::kForeignLayerLast.0)
+        (paint_model::display_item_id::DisplayItemIdType::kForeignLayerFirst.0
+            ..=paint_model::display_item_id::DisplayItemIdType::kForeignLayerLast.0)
             .contains(&t)
     }
     fn ForeignLayerBorrow(&self) -> crate::cc::layers::layer::LayerBorrow<B> {
@@ -190,7 +190,7 @@ where
             .map(|n| TransformNode::from_arc(n.clone()))
     }
     fn GetType(&self) -> ArtifactDisplayItemType {
-        use paint::display_item_id::DisplayItemIdType as T;
+        use paint_model::display_item_id::DisplayItemIdType as T;
         use ArtifactDisplayItemType as D;
         let t = self.id.r#type;
         if t == T::kFixedAttachmentBackground {

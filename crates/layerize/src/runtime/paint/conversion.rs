@@ -21,7 +21,7 @@ where
         PaintFlags = CpuPaintFlags<R>,
         PaintFilter = CpuPaintFilter,
         RoundedRect = crate::adapter::geometry::RRectF,
-        PaintPath = std::sync::Arc<paint::paint_clip_path::PaintClipPath>,
+        PaintPath = std::sync::Arc<paint_model::paint_clip_path::PaintClipPath>,
     >,
     B::ChunkMapper: ChunkGeometryMapper<Transform = crate::runtime::geometry::Transform<R>>,
 {
@@ -135,7 +135,7 @@ where
         PaintFlags = CpuPaintFlags<R>,
         PaintFilter = CpuPaintFilter,
         RoundedRect = crate::adapter::geometry::RRectF,
-        PaintPath = std::sync::Arc<paint::paint_clip_path::PaintClipPath>,
+        PaintPath = std::sync::Arc<paint_model::paint_clip_path::PaintClipPath>,
     >,
     B::ChunkMapper: ChunkGeometryMapper<Transform = crate::runtime::geometry::Transform<R>>,
 {
@@ -158,7 +158,7 @@ where
             PaintFlags = CpuPaintFlags<R>,
             PaintFilter = CpuPaintFilter,
             RoundedRect = crate::adapter::geometry::RRectF,
-            PaintPath = std::sync::Arc<paint::paint_clip_path::PaintClipPath>,
+            PaintPath = std::sync::Arc<paint_model::paint_clip_path::PaintClipPath>,
         > + crate::adapter::picture_layer::PictureLayerTypes<
             Recording = CpuRecordingTypes<R>,
             NodeInfo = NodeInfo,

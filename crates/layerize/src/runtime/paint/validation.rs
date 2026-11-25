@@ -44,7 +44,7 @@ pub enum PaintInputError {
     EffectFilter {
         node: Arc<paint_property_tree::EffectPaintPropertyNode>,
         backdrop: bool,
-        blocker: paint::property_filter_operations::FilterInputBlocker,
+        blocker: paint_model::property_filter_operations::FilterInputBlocker,
     },
     ClipPath {
         node: Arc<paint_property_tree::ClipPaintPropertyNode>,
@@ -212,7 +212,7 @@ fn ValidateArtifactGraph(
                 ops: artifact.items.len(),
             });
         }
-        use paint::display_item_id::DisplayItemIdType as T;
+        use paint_model::display_item_id::DisplayItemIdType as T;
         if (T::kForeignLayerFirst.0..=T::kForeignLayerLast.0).contains(&item.id.r#type.0)
             && (item.kind != super::RecordedDisplayItemKind::ForeignLayer
                 || item.foreign_layer.is_none())

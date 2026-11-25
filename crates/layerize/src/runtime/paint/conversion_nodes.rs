@@ -3,7 +3,7 @@
 use super::*;
 use crate::{adapter::{paint_chunks_to_cc_layer::*,pending_layer::PendingClipNode,geometry::{Rect,RectF,RRectF,Vector2dF},input_types::ElementId},runtime::types::PaintSkiaBackend};
 use crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache;
-fn rect(p: paint::paint_engine::PaintRect) -> Rect {
+fn rect(p: paint_model::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
         p.x as f32,
         p.y as f32,
@@ -55,7 +55,7 @@ where
     B: PaintChunksTypes<
         ClipNode = Self,
         RoundedRect = RRectF,
-        PaintPath = Arc<paint::paint_clip_path::PaintClipPath>,
+        PaintPath = Arc<paint_model::paint_clip_path::PaintClipPath>,
     >,
 {
     fn UnaliasedParent(&self) -> Option<Self> {
@@ -69,7 +69,7 @@ where
                 .map(|p| Vector2dF::new(p.x as f32, p.y as f32)),
         }
     }
-    fn ClipPath(&self) -> Option<Arc<paint::paint_clip_path::PaintClipPath>> {
+    fn ClipPath(&self) -> Option<Arc<paint_model::paint_clip_path::PaintClipPath>> {
         read(|a| self.node().ClipPath(a).cloned())
     }
 }
@@ -78,8 +78,8 @@ where
     R: PaintSkiaBackend,
     B: PaintChunksTypes<
         EffectNode = Self,
-        FilterOperations = paint::cc::paint::filter_operations::FilterOperations,
-        PaintPath = Arc<paint::paint_clip_path::PaintClipPath>,
+        FilterOperations = paint_model::cc::paint::filter_operations::FilterOperations,
+        PaintPath = Arc<paint_model::paint_clip_path::PaintClipPath>,
     >,
 {
     fn UnaliasedParent(&self) -> Option<Self> {
@@ -110,9 +110,9 @@ where
             self.node().BackdropFilter(a).cloned()
         })
     }
-    fn BackdropFilterBounds(&self) -> Arc<paint::paint_clip_path::PaintClipPath> {
+    fn BackdropFilterBounds(&self) -> Arc<paint_model::paint_clip_path::PaintClipPath> {
         read(|a| {
-            Arc::new(paint::paint_clip_path::PaintClipPath::from_path(
+            Arc::new(paint_model::paint_clip_path::PaintClipPath::from_path(
                 self.node().state(a)
                     .backdrop_filter_bounds
                     .as_ref()

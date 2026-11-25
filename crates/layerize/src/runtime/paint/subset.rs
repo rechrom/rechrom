@@ -161,7 +161,7 @@ impl crate::adapter::paint_artifact_compositor::ArtifactChunkSubset for PaintChu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paint::display_item_id::{DisplayItemId, DisplayItemIdType};
+    use paint_model::display_item_id::{DisplayItemId, DisplayItemIdType};
 
     fn item() -> DisplayItem {
         DisplayItem {

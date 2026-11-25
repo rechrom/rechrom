@@ -70,7 +70,7 @@ pub enum CpuPaintColorFilter {
 fn rect(r: PaintRect) -> RectF {
     RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
 }
-fn rrect(r: PaintRect, radii: paint::paint_engine::PaintCornerRadii) -> RRectF {
+fn rrect(r: PaintRect, radii: paint_input_types::paint_input::PaintCornerRadii) -> RRectF {
     RRectF {
         rect: rect(r),
         corner_radii: [
@@ -83,9 +83,9 @@ fn rrect(r: PaintRect, radii: paint::paint_engine::PaintCornerRadii) -> RRectF {
     }
 }
 fn clip_path<R: PaintSkiaBackend>(
-    path: Arc<paint::paint_clip_path::PaintPath>,
+    path: Arc<paint_model::paint_clip_path::PaintPath>,
 ) -> Arc<CpuClipPath<R>> {
-    let authored = paint::paint_clip_path::PaintClipPath::from_path(path);
+    let authored = paint_model::paint_clip_path::PaintClipPath::from_path(path);
     Arc::new(CpuClipPath::<R>::FromPaintPath(&authored))
 }
 fn flags<R: PaintSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
@@ -99,7 +99,7 @@ fn flags<R: PaintSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
     f.setAntiAlias(op.antialias);
     f.setBlendMode(blend(op.blend_mode));
     f.setDynamicRangeLimit(
-        paint::cc::paint::paint_flags::DynamicRangeLimitMixture::new(
+        paint_model::cc::paint::paint_flags::DynamicRangeLimitMixture::new(
             op.dynamic_range_limit.standard_mix,
             op.dynamic_range_limit.constrained_high_mix,
         ),
@@ -270,9 +270,9 @@ fn LowerSvgDecoratedLine<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec
             op.shadow_offset.y as f32,
         ));
         if op.blur_radius > 0. {
-            let mut ops = paint::cc::paint::filter_operations::FilterOperations::default();
+            let mut ops = paint_model::cc::paint::filter_operations::FilterOperations::default();
             ops.Append(
-                &paint::cc::paint::filter_operation::FilterOperation::CreateBlurFilter(
+                &paint_model::cc::paint::filter_operation::FilterOperation::CreateBlurFilter(
                     (op.blur_radius * 0.5) as f32,
                 ),
             );
@@ -312,7 +312,7 @@ struct WavyParams {
 
 struct WavyGeometry<R: PaintSkiaBackend> {
     params: WavyParams,
-    path: paint::paint_clip_path::PaintPath,
+    path: paint_model::paint_clip_path::PaintPath,
     bounds: [f32; 4],
     tile_record_color: Option<Color4f>,
     tile_record: CpuPaintRecord<R>,
@@ -360,7 +360,7 @@ impl<R: PaintSkiaBackend> WavyGeometry<R> {
             let mut stroke = CpuPaintFlags::default();
             stroke.setAntiAlias(true);
             stroke.setColor(color);
-            stroke.setStyle(paint::cc::paint::paint_flags::Style::kStroke_Style);
+            stroke.setStyle(paint_model::cc::paint::paint_flags::Style::kStroke_Style);
             stroke.setStrokeWidth(self.params.thickness);
             tile.push(CpuPaintOp::DrawPath {
                 path: Arc::new(R::FromPaintPath(&self.path)),
@@ -425,9 +425,9 @@ fn LowerWavy<R: PaintSkiaBackend>(
             op.shadow_offset.y as f32,
         ));
         if op.blur_radius > 0. {
-            let mut ops = paint::cc::paint::filter_operations::FilterOperations::default();
+            let mut ops = paint_model::cc::paint::filter_operations::FilterOperations::default();
             ops.Append(
-                &paint::cc::paint::filter_operation::FilterOperation::CreateBlurFilter(
+                &paint_model::cc::paint::filter_operation::FilterOperation::CreateBlurFilter(
                     (op.blur_radius * 0.5) as f32,
                 ),
             );
@@ -493,7 +493,7 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
     bounds: [f32; 4],
     out: &mut Vec<CpuPaintOp<R>>,
 ) {
-    use paint::cc::paint::paint_flags::{Cap, Join};
+    use paint_model::cc::paint::paint_flags::{Cap, Join};
     let op = source.op();
     let vertical = op.rect.width == 0. && op.rect.height != 0.;
     let width = if vertical {
@@ -504,7 +504,7 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
     let centerline = paint::wavy_geometry::WavyCenterlinePath(
         wave,
         width,
-        paint::paint_clip_path::Offset {
+        paint_model::paint_clip_path::Offset {
             x: 0.0,
             y: op.wavy_offset + 0.5,
         },
@@ -556,9 +556,9 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
             op.shadow_offset.y as f32,
         ));
         if op.blur_radius > 0. {
-            let mut ops = paint::cc::paint::filter_operations::FilterOperations::default();
+            let mut ops = paint_model::cc::paint::filter_operations::FilterOperations::default();
             ops.Append(
-                &paint::cc::paint::filter_operation::FilterOperation::CreateBlurFilter(
+                &paint_model::cc::paint::filter_operation::FilterOperation::CreateBlurFilter(
                     (op.blur_radius * 0.5) as f32,
                 ),
             );
@@ -611,21 +611,21 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
     out.push(CpuPaintOp::Restore);
 }
 
-fn svg_cap(value: paint::paint_engine::SvgStrokeLineCap) -> paint::cc::paint::paint_flags::Cap {
-    use paint::cc::paint::paint_flags::Cap;
+fn svg_cap(value: paint_input_types::paint_input::SvgStrokeLineCap) -> paint_model::cc::paint::paint_flags::Cap {
+    use paint_model::cc::paint::paint_flags::Cap;
     match value {
-        paint::paint_engine::SvgStrokeLineCap::kButt => Cap::kButt_Cap,
-        paint::paint_engine::SvgStrokeLineCap::kRound => Cap::kRound_Cap,
-        paint::paint_engine::SvgStrokeLineCap::kSquare => Cap::kSquare_Cap,
+        paint_input_types::paint_input::SvgStrokeLineCap::kButt => Cap::kButt_Cap,
+        paint_input_types::paint_input::SvgStrokeLineCap::kRound => Cap::kRound_Cap,
+        paint_input_types::paint_input::SvgStrokeLineCap::kSquare => Cap::kSquare_Cap,
     }
 }
 
-fn svg_join(value: paint::paint_engine::SvgStrokeLineJoin) -> paint::cc::paint::paint_flags::Join {
-    use paint::cc::paint::paint_flags::Join;
+fn svg_join(value: paint_input_types::paint_input::SvgStrokeLineJoin) -> paint_model::cc::paint::paint_flags::Join {
+    use paint_model::cc::paint::paint_flags::Join;
     match value {
-        paint::paint_engine::SvgStrokeLineJoin::kMiter => Join::kMiter_Join,
-        paint::paint_engine::SvgStrokeLineJoin::kRound => Join::kRound_Join,
-        paint::paint_engine::SvgStrokeLineJoin::kBevel => Join::kBevel_Join,
+        paint_input_types::paint_input::SvgStrokeLineJoin::kMiter => Join::kMiter_Join,
+        paint_input_types::paint_input::SvgStrokeLineJoin::kRound => Join::kRound_Join,
+        paint_input_types::paint_input::SvgStrokeLineJoin::kBevel => Join::kBevel_Join,
     }
 }
 
@@ -679,9 +679,9 @@ mod wavy_tests {
         op.is_shadow = true;
         assert!(!IsSimpleSolidFillPaint(&op));
         op.is_shadow = false;
-        op.blend_mode = paint::paint_property_tree::PaintBlendMode::kMultiply;
+        op.blend_mode = paint_model::paint_property_tree::PaintBlendMode::kMultiply;
         assert!(!IsSimpleSolidFillPaint(&op));
-        op.blend_mode = paint::paint_property_tree::PaintBlendMode::kNormal;
+        op.blend_mode = paint_model::paint_property_tree::PaintBlendMode::kNormal;
         op.paint_shader = Some(Default::default());
         assert!(!IsSimpleSolidFillPaint(&op));
     }
@@ -711,9 +711,9 @@ mod wavy_tests {
         )
         .unwrap();
         let canonical_filters =
-            paint::property_filter_operations::PropertyFilterOperations::Ready {
-                operations: paint::cc::paint::filter_operations::FilterOperations::new(vec![
-                    paint::cc::paint::filter_operation::FilterOperation::CreateOpacityFilter(0.5),
+            paint_model::property_filter_operations::PropertyFilterOperations::Ready {
+                operations: paint_model::cc::paint::filter_operations::FilterOperations::new(vec![
+                    paint_model::cc::paint::filter_operation::FilterOperation::CreateOpacityFilter(0.5),
                 ]),
                 origin_tainted: false,
             };
@@ -958,7 +958,7 @@ fn LowerMask<R: PaintSkiaBackend>(
         });
         if layer.clip_radii.HasRadius() {
             out.push(CpuPaintOp::ClipPath {
-                path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(
+                path: clip_path::<R>(paint_model::paint_clip_path::rounded_bounds(
                     layer.clip_rect,
                     layer.clip_radii,
                 )),
@@ -1006,7 +1006,7 @@ fn LowerMask<R: PaintSkiaBackend>(
     out.push(CpuPaintOp::Restore);
 }
 fn LowerBoxShadow<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPaintOp<R>>) {
-    use paint::cc::paint::draw_looper::{kOverrideAlphaFlag, DrawLooperBuilder, Point};
+    use paint_model::cc::paint::draw_looper::{kOverrideAlphaFlag, DrawLooperBuilder, Point};
     let op = source.op();
     // Source: third_party/blink/renderer/core/paint/box_painter_base.cc:276-377,502-578.
     let mut builder = DrawLooperBuilder::default();
@@ -1039,7 +1039,7 @@ fn LowerBoxShadow<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPai
             out.push(CpuPaintOp::DrawRRect(inner, f));
         } else {
             out.push(CpuPaintOp::ClipPath {
-                path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(
+                path: clip_path::<R>(paint_model::paint_clip_path::rounded_bounds(
                     op.rect,
                     op.corner_radii,
                 )),
@@ -1097,7 +1097,7 @@ fn LowerBoxShadow<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPai
         }
         if hole.width > 0. && hole.height > 0. {
             out.push(CpuPaintOp::ClipPath {
-                path: clip_path::<R>(paint::paint_clip_path::rounded_bounds(hole, radii)),
+                path: clip_path::<R>(paint_model::paint_clip_path::rounded_bounds(hole, radii)),
                 difference: true,
                 antialias: true,
             });
@@ -1159,8 +1159,8 @@ fn OutsetWithCornerCorrection(value: &mut RRectF, outset: f32) {
     }
 }
 
-fn blend(m: paint::paint_property_tree::PaintBlendMode) -> BlendMode {
-    use paint::paint_property_tree::PaintBlendMode::*;
+fn blend(m: paint_model::paint_property_tree::PaintBlendMode) -> BlendMode {
+    use paint_model::paint_property_tree::PaintBlendMode::*;
     match m {
         kNormal => BlendMode::kSrcOver,
         kPlusLighter => BlendMode::kPlus,

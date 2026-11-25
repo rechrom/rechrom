@@ -17,7 +17,7 @@ pub use paint::paint_engine::{
     DisplayItem as PaintOp, PaintArtifact, PaintChunk, RecordedDisplayItem as DisplayItem,
     RecordedDisplayItemKind,
 };
-use paint::paint_property_tree;
+use paint_model::paint_property_tree;
 // cc/paint values (PaintRecord, PaintOpBuffer, DisplayItemList facets) are
 // commit vocabulary shared with the impl half.
 pub use crate::commit::paint::*;
@@ -46,7 +46,7 @@ mod layer_services;
 pub use layer_services::*;
 mod subset;
 mod validation;
-pub use paint::paint_property_tree::PaintPropertyChangeType as PaintPropertyChange;
+pub use paint_model::paint_property_tree::PaintPropertyChangeType as PaintPropertyChange;
 pub use subset::PaintChunkSubset;
 pub use validation::{PaintInputError, ValidateArtifact};
 // Skia CPU paint platform (moved from compositor/src/runtime/paint/services.rs).

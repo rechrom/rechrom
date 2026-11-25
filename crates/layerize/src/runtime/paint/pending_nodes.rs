@@ -173,7 +173,7 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
     ) -> Option<crate::cc::trees::sticky_position_constraint::StickyPositionConstraint> {
         read(|a| {
             self.node().GetStickyConstraint(a).map(|v| {
-                let r = |p: paint::paint_engine::PaintRect| {
+                let r = |p: paint_model::PaintRect| {
                     RectF::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32)
                 };
                 crate::cc::trees::sticky_position_constraint::StickyPositionConstraint {
@@ -280,7 +280,7 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
     }
 }
 impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNode<R> {
-    type Filters = paint::cc::paint::filter_operations::FilterOperations;
+    type Filters = paint_model::cc::paint::filter_operations::FilterOperations;
     type Path = R::Path;
     type PaintPropertyChange = paint_property_tree::PaintPropertyChangeType;
     type ClipNode = ClipNode<R>;

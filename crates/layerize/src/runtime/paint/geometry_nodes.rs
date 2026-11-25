@@ -7,9 +7,9 @@ use crate::{
     },
     runtime::{geometry::Transform, types::PaintSkiaBackend},
 };
-use paint::paint_property_tree;
+use paint_model::paint_property_tree;
 use std::sync::Arc;
-fn rect(value: paint::paint_engine::PaintRect) -> Rect {
+fn rect(value: paint_model::PaintRect) -> Rect {
     ToEnclosingRect(RectF::new(
         value.x as f32,
         value.y as f32,

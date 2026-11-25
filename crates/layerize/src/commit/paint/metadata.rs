@@ -3,7 +3,7 @@
 //! once at insertion, and nested queries borrow their resident buffer metadata.
 use super::*;
 use crate::commit::{geometry::Path as _, skia_value_backend::PaintSkiaBackend, ContentColorUsage};
-use paint::cc::paint::{
+use paint_model::cc::paint::{
     paint_flags::{Cap, Style},
     paint_op::{MetadataFlags, PaintOpMetadata, PaintOpMetadataFields},
     paint_op_buffer::PaintOpBufferMetadata,
@@ -11,12 +11,12 @@ use paint::cc::paint::{
 };
 
 pub fn visit_shader_images(
-    shader: &paint::paint_engine::PaintShader,
+    shader: &paint_input_types::paint_input::PaintShader,
     visit: &mut dyn FnMut(u64),
 ) {
     if let Some(pattern) = &shader.pattern {
         visit_pattern_images(&pattern.commands, visit);
-    } else if shader.kind == paint::paint_engine::PaintShaderKind::kPattern
+    } else if shader.kind == paint_input_types::paint_input::PaintShaderKind::kPattern
         && shader.resource_id != 0
     {
         // cc/paint/paint_shader.cc:319-349.  kImage directly owns one
@@ -27,10 +27,10 @@ pub fn visit_shader_images(
     }
 }
 fn visit_pattern_images(
-    commands: &[paint::paint_engine::SvgPatternCommand],
+    commands: &[paint_input_types::paint_input::SvgPatternCommand],
     visit: &mut dyn FnMut(u64),
 ) {
-    use paint::paint_engine::SvgPatternCommand::*;
+    use paint_input_types::paint_input::SvgPatternCommand::*;
     for command in commands {
         match command {
             DrawImage(image) => {
@@ -154,15 +154,15 @@ pub fn flag_images<R: PaintSkiaBackend>(
     }
 }
 pub fn filter_has_images(
-    filter: &dyn paint::cc::paint::filter_operation::PaintFilter,
+    filter: &dyn paint_model::cc::paint::filter_operation::PaintFilter,
 ) -> bool {
-    use paint::cc::paint::filter_operation::PaintFilterReplay::*;
+    use paint_model::cc::paint::filter_operation::PaintFilterReplay::*;
     match filter.ReplayGraph() {
         Operations(ops) => ops
             .operations()
             .iter()
             .filter_map(|o| {
-                (o.r#type() == paint::cc::paint::filter_operation::FilterType::REFERENCE)
+                (o.r#type() == paint_model::cc::paint::filter_operation::FilterType::REFERENCE)
                     .then(|| o.image_filter().as_deref())
                     .flatten()
             })
@@ -251,7 +251,7 @@ impl<'a, R: PaintSkiaBackend> MetadataFields<'a, R> {
     pub fn new(op: CpuPaintOpRef<'a, R>) -> Self {
         let path = match op {
             CpuPaintOpRef::PaintRecord { op, .. } if !op.path.is_empty() => {
-                let authored = paint::paint_clip_path::PaintClipPath::from_authored(
+                let authored = paint_model::paint_clip_path::PaintClipPath::from_authored(
                     &op.path,
                     &[],
                     op.even_odd,

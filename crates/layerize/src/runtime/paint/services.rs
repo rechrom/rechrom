@@ -14,8 +14,8 @@ use crate::{
         paint_services::{CpuPaintFeatures, CpuPaintPlatform, CpuMainPaintServices},
     },
 };
-use paint::cc::paint::blend_mode::BlendMode;
-use paint::cc::paint::{
+use paint_model::cc::paint::blend_mode::BlendMode;
+use paint_model::cc::paint::{
     paint_op_buffer::PaintOpBufferMetadata,
     paint_op_buffer_iterator::{PaintOpBufferView, PaintOpView},
     solid_color_analyzer::SolidColorAnalyzer,
@@ -272,7 +272,7 @@ impl Recorder {
         p: &mut RasterPlaybackParams<'_, SkRegion>,
         offsets: Option<&[usize]>,
     ) {
-        use paint::cc::paint::discardable_image_map::{
+        use paint_model::cc::paint::discardable_image_map::{
             ImageGatheringCanvas,
         };
         for index in 0..offsets.map_or(b.Used(), |o| o.len()) {

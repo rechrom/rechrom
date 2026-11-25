@@ -8,10 +8,10 @@ use super::{
     layer_value_backend::DrawFilters,
 };
 use foundation::gfx;
-use paint::cc::paint::filter_operation::{
+use paint_model::cc::paint::filter_operation::{
     FilterMapTransform as FilterMapTransformContract, FilterType,
 };
-use paint::cc::paint::filter_operations::FilterOperations;
+use paint_model::cc::paint::filter_operations::FilterOperations;
 use skia::src::core::{SkMatrix::SkMatrix, SkPoint::SkPoint};
 
 /// Feature-selected native matrix used only for FilterOperation::mapVector.

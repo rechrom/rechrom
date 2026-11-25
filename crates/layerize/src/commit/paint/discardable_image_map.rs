@@ -20,7 +20,7 @@ fn image_decoding_mode(mode: paint::paint_engine::PaintImageDecodingMode) -> Ima
         paint::paint_engine::PaintImageDecodingMode::kAsync => ImageDecodingMode::kAsync,
     }
 }
-use paint::cc::paint::{
+use paint_model::cc::paint::{
     discardable_image_map::*,
     paint_op_buffer_iterator::PaintOpView,
 };
@@ -496,7 +496,7 @@ impl ImageGatheringCanvas<CpuDiscardableBackend> for MapCanvas {
 #[derive(Clone, Copy)]
 pub enum MapShader<'a> {
     Converted(&'a CpuPaintShader),
-    PaintRecord(&'a paint::paint_engine::PaintShader, &'a PaintRecord),
+    PaintRecord(&'a paint_input_types::paint_input::PaintShader, &'a PaintRecord),
 }
 fn actual_shader_images(s: MapShader<'_>, visit: &mut dyn FnMut(&PaintRecord, u64)) {
     match s {
@@ -525,7 +525,7 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
     type Canvas = MapCanvas;
     type Flags<'a> = CpuPaintOpRef<'a, SkRegion>;
     type Shader<'a> = MapShader<'a>;
-    type Filter<'a> = &'a dyn paint::cc::paint::filter_operation::PaintFilter;
+    type Filter<'a> = &'a dyn paint_model::cc::paint::filter_operation::PaintFilter;
     type SkottieImages<'a> = std::iter::Empty<(CpuPaintImage, CpuFilterQuality)>;
     fn MakeNoDrawCanvas(&self, r: ImageRectValue) -> MapCanvas {
         make_canvas(r.0)
@@ -570,7 +570,7 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
         clip: ImageRectValue,
         ctm: &ImageMapMatrix,
     ) -> ImageRectValue {
-        ImageRectValue(paint::cc::paint::paint_op::ComputePaintRect(
+        ImageRectValue(paint_model::cc::paint::paint_op::ComputePaintRect(
             &PaintRectProjection {
                 op,
                 clip: clip.0,
@@ -629,10 +629,10 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
     fn ImageQuality(&self, op: CpuPaintOpRef<'_, SkRegion>) -> CpuFilterQuality {
         if let Some(f) = super::metadata::flags(op) {
             return match f.getFilterQuality() {
-                paint::cc::paint::paint_flags::FilterQuality::kNone => CpuFilterQuality::kNone,
-                paint::cc::paint::paint_flags::FilterQuality::kLow => CpuFilterQuality::kLow,
-                paint::cc::paint::paint_flags::FilterQuality::kMedium => CpuFilterQuality::kMedium,
-                paint::cc::paint::paint_flags::FilterQuality::kHigh => CpuFilterQuality::kHigh,
+                paint_model::cc::paint::paint_flags::FilterQuality::kNone => CpuFilterQuality::kNone,
+                paint_model::cc::paint::paint_flags::FilterQuality::kLow => CpuFilterQuality::kLow,
+                paint_model::cc::paint::paint_flags::FilterQuality::kMedium => CpuFilterQuality::kMedium,
+                paint_model::cc::paint::paint_flags::FilterQuality::kHigh => CpuFilterQuality::kHigh,
             };
         }
         match op {
@@ -710,7 +710,7 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
     fn ShaderType(&self, s: MapShader<'_>) -> ShaderType {
         if matches!(s, MapShader::Converted(CpuPaintShader::ImagePattern { .. }))
             || matches!(s, MapShader::PaintRecord(shader, _)
-                if shader.kind == paint::paint_engine::PaintShaderKind::kPattern
+                if shader.kind == paint_input_types::paint_input::PaintShaderKind::kPattern
                     && shader.resource_id != 0
                     && shader.pattern.is_none())
         {
@@ -726,7 +726,7 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
                 CpuPaintImage::FromPaintResource(r, id).expect("validated image")
             }
             MapShader::PaintRecord(shader, record)
-                if shader.kind == paint::paint_engine::PaintShaderKind::kPattern
+                if shader.kind == paint_input_types::paint_input::PaintShaderKind::kPattern
                     && shader.pattern.is_none()
                     && shader.resource_id != 0 =>
             {
@@ -850,7 +850,7 @@ struct PaintRectProjection<'a> {
     clip: Rect,
     ctm: &'a ImageMapMatrix,
 }
-impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
+impl paint_model::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
     type Rect = Rect;
     type FloatRect = RectF;
     fn GetBounds(&self) -> Option<RectF> {
@@ -858,7 +858,7 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
             CpuPaintOpRef::PaintRecord { op, .. } => {
                 use paint::paint_engine::DisplayItemType as N;
                 if matches!(op.r#type, N::kDrawPath | N::kStrokePath) {
-                    let p = paint::paint_clip_path::PaintClipPath::from_authored(
+                    let p = paint_model::paint_clip_path::PaintClipPath::from_authored(
                         &op.path,
                         &[],
                         op.even_odd,
@@ -906,7 +906,7 @@ impl paint::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<'_> {
             .all(|v| v.is_finite())
     }
     fn ComputeFastBounds(&self, mut r: RectF) -> Option<RectF> {
-        use paint::cc::paint::paint_flags::{Cap, Join, Style};
+        use paint_model::cc::paint::paint_flags::{Cap, Join, Style};
         let (width, miter, cap, join) = if let Some(f) = super::metadata::flags(self.op) {
             // A native filter without a published fast-bounds primitive cannot
             // promise one. The canonical source takes its full-clip branch.
@@ -1093,7 +1093,7 @@ pub fn raster_state(
                 op.antialias,
             ),
             N::kClipPath => {
-                let p = paint::paint_clip_path::PaintClipPath::from_authored(
+                let p = paint_model::paint_clip_path::PaintClipPath::from_authored(
                     &op.path,
                     &[],
                     op.even_odd,

@@ -52,7 +52,7 @@ pub use worklet::*;
 #[derive(Clone)]
 pub struct PaintRecord {
     items: Arc<Vec<PaintOp>>,
-    resources: Option<Arc<paint::paint_engine::PaintResources>>,
+    resources: Option<Arc<paint_input_types::PaintResources>>,
     // Resource pixels may change without replacing `resources`; the sidecar
     // is replaced on every such change and keeps SameSource exact.
     content_revisions: Arc<Vec<Vec<(u64, u64)>>>,
@@ -80,7 +80,7 @@ impl PaintRecord {
         })
     }
     /// The producer's immutable resource catalog sampled by these operations.
-    pub fn resources(&self) -> Option<&Arc<paint::paint_engine::PaintResources>> {
+    pub fn resources(&self) -> Option<&Arc<paint_input_types::PaintResources>> {
         self.resources.as_ref()
     }
     pub fn ops(&self) -> &[PaintOp] {

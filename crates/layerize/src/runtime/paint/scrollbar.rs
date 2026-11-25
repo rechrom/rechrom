@@ -28,7 +28,7 @@ pub struct Scrollbar {
 
 impl Scrollbar {
     pub fn from_paint(value: &paint::paint_engine::ScrollbarDisplayItemData) -> Self {
-        let rect = |r: paint::paint_engine::PaintRect| {
+        let rect = |r: paint_model::PaintRect| {
             Rect::new(
                 r.x.round() as i32,
                 r.y.round() as i32,
