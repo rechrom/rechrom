@@ -1589,7 +1589,10 @@ impl<
         std::mem::take(&mut self.copy_requests_)
     }
     // Source: cc/trees/property_tree.cc:1716-1723.
-    pub fn AssignFrom(&mut self, from: &Self) -> &mut Self {
+    pub fn AssignFrom<R2: PropertyTreeRenderSurface>(
+        &mut self,
+        from: &EffectTree<F, P, R2, C>,
+    ) -> &mut Self {
         self.base_.AssignFrom(&from.base_);
         self.render_surfaces_.resize_with(self.size(), || None);
         self
@@ -2622,8 +2625,13 @@ impl<
     ) -> (&ScrollTree, &TransformTree<T>, &PropertyTreesState) {
         (&self.scroll_tree_, &self.transform_tree_, &self.state_)
     }
-    // Source: cc/trees/property_tree.cc:2465-2491.
-    pub fn AssignFrom(&mut self, from: &Self) -> &mut Self {
+    // Source: cc/trees/property_tree.cc:2465-2491. The source trees may be
+    // the main LayerTreeHost's (no render surfaces) or another impl tree's;
+    // render surfaces are never copied (EffectTree::AssignFrom).
+    pub fn AssignFrom<R2: PropertyTreeRenderSurface>(
+        &mut self,
+        from: &PropertyTrees<T, F, P, R2, C>,
+    ) -> &mut Self {
         self.transform_tree_.AssignFrom(&from.transform_tree_);
         self.effect_tree_.AssignFrom(&from.effect_tree_);
         self.clip_tree_.AssignFrom(&from.clip_tree_);
@@ -2887,7 +2895,10 @@ impl<
         self.CollectChangeState();
     }
     // Source: cc/trees/property_tree.cc:2729-2740.
-    pub fn ApplyChangeStateFrom(&mut self, source: &mut Self) {
+    pub fn ApplyChangeStateFrom<R2: PropertyTreeRenderSurface>(
+        &mut self,
+        source: &mut PropertyTrees<T, F, P, R2, C>,
+    ) {
         self.state_.changed_ |= source.changed();
         self.state_.needs_rebuild_ |= source.needs_rebuild();
         self.state_.full_tree_damaged_ |= source.full_tree_damaged();

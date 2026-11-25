@@ -41,7 +41,21 @@ pub trait LayerTreeSelectionBound {
 pub use crate::cc::layers::picture_layer_impl::ImageInvalidationResult;
 pub use crate::cc::trees::swap_promise::{DidNotSwapAction, DidNotSwapReason, SwapPromise};
 
-pub use layerize::commit::{CommitTypes, PropertyTreesFor};
+pub use layerize::commit::CommitTypes;
+/// The main LayerTreeHost's PropertyTrees (no render surfaces), as carried by
+/// CommitState and read by the main layers during the commit.
+pub use layerize::commit::PropertyTreesFor as MainPropertyTreesFor;
+/// The impl LayerTreeImpl's cc::PropertyTrees: the shared trees plus the
+/// EffectTree::render_surfaces_ only the impl side owns
+/// (cc/trees/property_tree.h; EffectTree::operator= does not copy them,
+/// property_tree.cc:1716-1723).
+pub type PropertyTreesFor<B> = PropertyTrees<
+    <B as CommitTypes>::Transform,
+    <B as CommitTypes>::Filters,
+    <B as CommitTypes>::Path,
+    <B as LayerTreeTypes>::RenderSurface,
+    <B as CommitTypes>::CopyOutputRequest,
+>;
 pub trait LayerTreePictureContext<B: LayerTreeTypes>:
     super::picture_layer_impl::PictureLayerReadContext
 {
@@ -109,17 +123,17 @@ pub trait LayerTreeTypes:
         RegionBackend: SkRegionBackend,
         Layer: LayerTreeLayer<Self>,
         Filters: super::draw_property::DrawFilters,
-        RenderSurface: LayerTreeSurfaceTransform<Transform = <Self as CommitTypes>::Transform>
-                           + LayerTreeRenderSurface<Self>
-                           + super::draw_property::DrawSurface<
-            <Self as CommitTypes>::Transform,
-            Types = Self,
-        >,
         SwapPromise: SwapPromise<<Self as CommitTypes>::CompositorFrameMetadata>,
         UIResourceRequest: LayerTreeUIResourceRequest<Self>,
         ViewTransitionRequest: LayerTreeViewTransitionRequest,
     >
 {
+    /// cc::RenderSurfaceImpl, owned by the impl EffectTree::render_surfaces_
+    /// (cc/trees/property_tree.h). The main trees carry none.
+    type RenderSurface: PropertyTreeRenderSurface
+        + LayerTreeSurfaceTransform<Transform = <Self as CommitTypes>::Transform>
+        + LayerTreeRenderSurface<Self>
+        + super::draw_property::DrawSurface<<Self as CommitTypes>::Transform, Types = Self>;
     type LayerSourceContext<'a>: LayerTreeSourceContext<Self>
     where
         Self: 'a;
@@ -783,8 +797,8 @@ pub trait LayerTreeScrollStore<B: LayerTreeTypes> {
 /// Field-level access to the live main-thread CommitState. Moves are explicit;
 /// no aggregate commit/tree snapshot is fabricated at this boundary.
 pub trait LayerTreeCommitState<B: LayerTreeTypes> {
-    fn property_trees(&self) -> &PropertyTreesFor<B>;
-    fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<B>;
+    fn property_trees(&self) -> &MainPropertyTreesFor<B>;
+    fn property_trees_mut(&mut self) -> &mut MainPropertyTreesFor<B>;
     fn next_commit_forces_redraw(&self) -> bool;
     fn next_commit_forces_recalculate_raster_scales(&self) -> bool;
     fn needs_full_tree_sync(&self) -> bool;
@@ -963,10 +977,10 @@ pub fn MakeDictIntoImplicitSnapshot(
 impl<B: super::commit_state::CommitStateTypes + LayerTreeTypes> LayerTreeCommitState<B>
     for crate::cc::trees::commit_state::CommitState<B>
 {
-    fn property_trees(&self) -> &PropertyTreesFor<B> {
+    fn property_trees(&self) -> &MainPropertyTreesFor<B> {
         &self.property_trees
     }
-    fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<B> {
+    fn property_trees_mut(&mut self) -> &mut MainPropertyTreesFor<B> {
         &mut self.property_trees
     }
     fn next_commit_forces_redraw(&self) -> bool {

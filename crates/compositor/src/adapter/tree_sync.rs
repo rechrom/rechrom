@@ -3,7 +3,7 @@
 //! owner. Only stable identities, never copied layer state, cross this boundary.
 use super::{
     commit_state::CommitStateTypes,
-    layer_tree_impl::{LayerTreeLayer, LayerTreeLayerList, PropertyTreesFor},
+    layer_tree_impl::{LayerTreeLayer, LayerTreeLayerList, MainPropertyTreesFor},
 };
 use crate::cc::trees::{
     commit_state::{CommitState, ThreadUnsafeCommitState},
@@ -29,22 +29,22 @@ pub trait SyncMainLayer<B: SyncTypes> {
     fn id(&self, c: &super::main_layer::LayerContext<'_, B>) -> i32;
     fn transform_tree_index_is_valid(
         &self,
-        trees: &PropertyTreesFor<B>,
+        trees: &MainPropertyTreesFor<B>,
         c: &super::main_layer::LayerContext<'_, B>,
     ) -> bool;
     fn effect_tree_index_is_valid(
         &self,
-        trees: &PropertyTreesFor<B>,
+        trees: &MainPropertyTreesFor<B>,
         c: &super::main_layer::LayerContext<'_, B>,
     ) -> bool;
     fn clip_tree_index_is_valid(
         &self,
-        trees: &PropertyTreesFor<B>,
+        trees: &MainPropertyTreesFor<B>,
         c: &super::main_layer::LayerContext<'_, B>,
     ) -> bool;
     fn scroll_tree_index_is_valid(
         &self,
-        trees: &PropertyTreesFor<B>,
+        trees: &MainPropertyTreesFor<B>,
         c: &super::main_layer::LayerContext<'_, B>,
     ) -> bool;
     fn CreateLayerImpl(

@@ -24,7 +24,7 @@ impl<B: SyncTypes> SyncMainLayer<B> for LayerBorrow<B> {
     }
     fn transform_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| {
@@ -33,21 +33,21 @@ impl<B: SyncTypes> SyncMainLayer<B> for LayerBorrow<B> {
     }
     fn effect_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| layer.base().effect_tree_index_is_valid(p, c))
     }
     fn clip_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| layer.base().clip_tree_index_is_valid(p, c))
     }
     fn scroll_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| layer.base().scroll_tree_index_is_valid(p, c))

@@ -78,7 +78,6 @@ impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> 
     type UIResourceBitmap = super::host_resources::UIBitmap;
     type Filters = R::Filters;
     type Path = R::Path;
-    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
     type CopyOutputRequest = super::types::CopyOutputRequest;
     type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
     type LocalSurfaceId = super::types::LocalSurfaceId;
@@ -97,6 +96,7 @@ impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> 
     type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
 }
 impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
+    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
     type LayerTraceValue = super::host::TraceValue;
     type LayerStorage<'a> = LayerStorage<'a, CompositorLayer<Self>>;
     type LayerRemaining<'a> = LayerStorageRemaining<'a, CompositorLayer<Self>>;
