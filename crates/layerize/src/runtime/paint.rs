@@ -126,7 +126,7 @@ impl PaintInput {
     }
     pub fn record(&self, index: usize) -> Option<PaintRecord> {
         let item = self.artifact.display_items.get(index)?;
-        PaintRecord::from_item(&self.artifact, item)
+        paint::paint_engine::PaintRecordForItem(&self.artifact, item)
     }
 }
 

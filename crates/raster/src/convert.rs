@@ -480,7 +480,7 @@ impl ToSkia for paint_input_types::paint_input::SvgPatternCommand {
                     .expect("unresolved SVG pattern reference filter reached raster conversion");
                 let graph = crate::svg_filter_graph::TranslateSvgFilterGraph(
                     &filter.graph,
-                    paint::paint_engine::PaintRect {
+                    paint_model::PaintRect {
                         x,
                         y,
                         width,
@@ -632,7 +632,7 @@ impl ToSkia for paint_input_types::paint_input::PaintMaskComposite {
         }
     }
 }
-impl ToSkia for paint::paint_engine::PaintRect {
+impl ToSkia for paint_model::PaintRect {
     type Output = target::PaintRect;
     fn to_skia(&self) -> Self::Output {
         target::PaintRect {
@@ -643,7 +643,7 @@ impl ToSkia for paint::paint_engine::PaintRect {
         }
     }
 }
-impl ToSkia for paint::paint_engine::DisplayItemType {
+impl ToSkia for paint_model::paint_op::PaintOpType {
     type Output = target::CommandKind;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -702,7 +702,7 @@ impl ToSkia for image_resource::ImageOrientation {
         }
     }
 }
-impl ToSkia for paint::paint_engine::DisplayMaskLayer {
+impl ToSkia for paint_model::DisplayMaskLayer {
     type Output = target::MaskLayer;
     fn to_skia(&self) -> Self::Output {
         assert!(
@@ -733,7 +733,7 @@ impl ToSkia for paint::paint_engine::DisplayMaskLayer {
         }
     }
 }
-impl ToSkia for paint::paint_engine::DisplayItem {
+impl ToSkia for paint_model::display_item::DisplayItem {
     type Output = target::DrawCommand;
     fn to_skia(&self) -> Self::Output {
         target::DrawCommand {
@@ -810,7 +810,8 @@ impl ToSkia for paint::paint_engine::DisplayItem {
     }
 }
 
-pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceContext<'_> {
+#[cfg(test)]
+pub(crate) fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceContext<'_> {
     record_resources(list.resources.as_deref())
 }
 
@@ -875,7 +876,8 @@ mod font_identity_tests {
     use foundation::ETextDecorationSkipInk;
     use paint_input_types::{PaintGlyph, PaintGlyphRun, PaintResources};
     use paint_input_types::layout_input::{FontFace, FontVariation, Offset};
-    use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact};
+    use paint_model::{display_item::DisplayItem, paint_op::PaintOpType as DisplayItemType};
+    use paint::paint_engine::PaintArtifact;
     use std::sync::Arc;
 
     #[test]
@@ -894,7 +896,7 @@ mod font_identity_tests {
             64.0 / 127.0
         );
 
-        let mask = paint::paint_engine::DisplayMaskLayer {
+        let mask = paint_model::DisplayMaskLayer {
             use_dark_mode_for_image: true,
             dynamic_range_limit: foundation::DynamicRangeLimit::from_mix(0.75, 0.125),
             ..Default::default()
@@ -1022,7 +1024,7 @@ mod font_identity_tests {
             is_text_decoration: true,
             decoration_thickness: 2.25,
             skip_ink: ETextDecorationSkipInk::kAll,
-            decoration_ink_bounds: Some(paint::paint_engine::PaintRect {
+            decoration_ink_bounds: Some(paint_model::PaintRect {
                 x: 4.0,
                 y: 31.0,
                 width: 80.0,
@@ -1130,7 +1132,7 @@ mod font_identity_tests {
             }]),
             ..Default::default()
         };
-        let render = |artifact: &PaintArtifact| crate::RasterizePaintArtifact(artifact, 180, 48);
+        let render = |artifact: &PaintArtifact| crate::RasterizePaintOps(&artifact.items, artifact.resources.as_deref(), 180, 48);
         let mislabeled = render(&artifact);
         assert!(mislabeled
             .chunks_exact(4)

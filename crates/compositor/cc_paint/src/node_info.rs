@@ -2,7 +2,7 @@
 //! The value is the native cc::NodeInfo shape and owns no DOM or Paint object.
 
 use super::display_item_list_types::DisplayNodeInfo;
-use crate::commit::geometry::Rect;
+use crate::geometry::Rect;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NodeInfo {

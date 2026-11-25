@@ -348,7 +348,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> crate::adapter::paint_chu
         item: &paint::DisplayItem,
     ) -> paint::CpuPaintRecord<R> {
         paint::CpuPaintRecord::from_source(
-            paint::PaintRecord::from_item(a, item).expect("validated native record range"),
+            ::paint::paint_engine::PaintRecordForItem(a, item).expect("validated native record range"),
             self.values.clone(),
         )
     }

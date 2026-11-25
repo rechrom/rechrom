@@ -4,8 +4,8 @@
 //! so these values are commit vocabulary; impl-only facets of them are
 //! implemented in the compositor (runtime/paint/picture.rs).
 use super::{
-    display_item_list::DisplayItemList, display_item_list_types::DirectlyCompositedImageInfo,
-    CpuPaintOpBuffer, CpuPaintRecord, CpuPaintTypes,
+    display_item_list_types::DirectlyCompositedImageInfo, ContentDisplayItemList,
+    CpuPaintOpBuffer, CpuPaintRecord, NodeInfo,
 };
 use crate::{
     adapter::{
@@ -24,16 +24,6 @@ use std::{
     ops::Deref,
     sync::{Arc, RwLock, RwLockReadGuard},
 };
-pub type ContentDisplayItemList<R> = DisplayItemList<CpuPaintTypes<R>>;
-pub use super::CpuDrawImage as DrawImage;
-pub use super::CpuFilterQuality as FilterQuality;
-pub use super::node_info::NodeInfo;
-// Source: cc/paint/paint_flags.h:95-133. The native high limit is (0,0).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct DynamicRangeLimit {
-    pub standard_mix: f32,
-    pub constrained_high_mix: f32,
-}
 pub struct Picture<R: PaintSkiaBackend> {
     pub record: CpuPaintRecord<R>,
     pub bounds: Rect,

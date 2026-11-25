@@ -44,7 +44,7 @@ fn page() -> Page {
 }
 
 fn first_pixel(page: &Page) -> [u8; 4] {
-    let pixels = raster::RasterizePaintArtifactTransparent(
+    let pixels = browser::paint_artifact_raster::RasterizePaintArtifactTransparent(
         &page.CurrentFrame().unwrap().display_items,
         160,
         96,

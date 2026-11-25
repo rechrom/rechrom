@@ -4,7 +4,8 @@
 //! under which LayerTreeHostImpl::FinishCommit reads main-thread state.
 //! Nothing here names Blink paint types.
 
-pub mod color_space;
+// ui/gfx/color_space.h moved to the cc value root.
+pub use compositor_values::color_space;
 pub mod commit_state;
 pub mod completion_event;
 pub mod geometry;
@@ -28,12 +29,12 @@ pub mod paint;
 pub mod protected_sequence_synchronizer;
 pub mod proxy;
 pub mod push_properties;
-pub mod rtree;
+// cc/base/rtree and the Skia region backend moved with cc/paint.
+pub use cc_paint::{rtree, skia_region};
 pub mod scroll_elasticity;
 pub mod scroll_elasticity_utils;
 pub mod scroll_node;
 pub mod skia_filters;
-pub mod skia_region;
 pub mod skia_value_backend;
 pub mod surface_range;
 // gfx::Transform lives in the cc shared root (both halves name it).

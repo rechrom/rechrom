@@ -183,7 +183,8 @@ and retained-state proofs) → `paint_record` (backend-neutral PaintOps) →
 `paint_chunk` (DisplayItem grouping) → `paint_commit` (completes the
 `PaintArtifact`). `paint` is the facade and lifecycle orchestrator.
 Shared roots: `paint_model` (property-tree, coordinate, path, low-level paint
-values; names no Layout type), `paint_skia` (Skia path values for geometry
+values and the recorded paint op `DisplayItem` / `PaintOpType`; names no
+Layout type), `paint_skia` (Skia path values for geometry
 services). core/paint code that reads Layout fragments (PaintLayer
 classification, fragment border edges and radii) lives in `prepaint`.
 `PaintEngine` exposes focused interfaces: `PaintLifecycle` (PrePaint, Paint,
@@ -249,8 +250,10 @@ with `ProxyImpl` receiving the commit.
   trees and their nodes), `compositor_animation` (cc/animation, one
   AnimationHost class for the main and the impl instance) and
   `compositor_values` (cc input, settings, viz and gfx values named by both
-  sides, including `gfx::Transform` and the `InputToImpl` input-queue
-  messages) live under `crates/compositor/`. They
+  sides, including `gfx::Transform`, `gfx::ColorSpace` and the
+  `InputToImpl` input-queue messages) and `cc_paint` (cc/paint: PaintRecord,
+  DisplayItemList, image values, the SkRegion/SkPath value backend;
+  re-exported as `layerize::commit::paint`) live under `crates/compositor/`. They
   carry only source-aligned values and algorithms used by both sides, depend
   only on each other and on value crates (`paint_model` geometry,
   `foundation`, `skia`, `browser_tracing`, `image_resource`), and never own

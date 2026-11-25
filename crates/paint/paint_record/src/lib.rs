@@ -84,7 +84,8 @@ pub mod video_painter;
 pub mod wavy_geometry;
 
 pub use artifact::{
-    DocumentPaintArtifactRecord, ImageDependencyIndex, ImagePaintDependency, PaintMutation,
+    DocumentPaintArtifactRecord, DocumentRecordArtifact, NewDocumentPaintArtifactRecord,
+    PaintRecordForArtifact, PaintRecordForItem, ImageDependencyIndex, ImagePaintDependency, PaintMutation,
     PaintMutationResult, PaintRecording, PaintResourceUpdate,
 };
 pub use display_item::{

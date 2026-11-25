@@ -8,7 +8,7 @@ use super::{backend::*, *};
 mod drag_image;
 pub use drag_image::{ResizeAndOrientDragImage, ResizeDragImageBitmap, ScaleCachedDragImage};
 mod canvas_2d;
-use crate::convert::{record_resources, resources, ToSkia};
+use crate::convert::{record_resources, ToSkia};
 use crate::raster_commands::commands::{
     self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
     ImageOrientation, MaskLayer, PaintBlendMode, PaintMaskComposite, PaintMaskMode,
@@ -28,7 +28,6 @@ use compositor::{
         PaintRecord, RasterPlaybackParams,
     },
 };
-use paint::paint_engine::PaintArtifact;
 use skia::{
     include::core::{
         SkAlphaType::SkAlphaType,
@@ -1405,7 +1404,7 @@ fn color(value: command::Color) -> SkColor4f {
 }
 
 fn forced_dark_background_color(value: command::Color) -> command::Color {
-    let filtered = paint::paint_auto_dark_mode::InvertColorIfEnabled(
+    let filtered = paint_model::dark_mode_filter::InvertColorIfEnabled(
         true,
         paint_input_types::layout_input_types::Color::default(),
         paint_input_types::layout_input_types::Color {
@@ -1414,7 +1413,7 @@ fn forced_dark_background_color(value: command::Color) -> command::Color {
             blue: value.blue,
             alpha: value.alpha,
         },
-        paint::paint_auto_dark_mode::ElementRole::kBackground,
+        paint_model::dark_mode_filter::ElementRole::kBackground,
     );
     command::Color {
         red: filtered.red,
@@ -1454,8 +1453,8 @@ fn css_blend(mode: PaintBlendMode) -> SkBlendMode {
     }
 }
 
-fn sk_blend_mode(mode: paint::cc::paint::blend_mode::BlendMode) -> SkBlendMode {
-    use paint::cc::paint::blend_mode::BlendMode as Paint;
+fn sk_blend_mode(mode: paint_model::cc::paint::blend_mode::BlendMode) -> SkBlendMode {
+    use paint_model::cc::paint::blend_mode::BlendMode as Paint;
     match mode {
         Paint::kClear => SkBlendMode::kClear,
         Paint::kSrc => SkBlendMode::kSrc,
@@ -1614,8 +1613,8 @@ fn converted_rrect(value: &compositor::adapter::geometry::RRectF) -> SkRRect {
     result
 }
 
-fn translated_tile_mode(value: paint::cc::paint::tile_mode::TileMode) -> SkTileMode {
-    use paint::cc::paint::tile_mode::TileMode as Paint;
+fn translated_tile_mode(value: paint_model::cc::paint::tile_mode::TileMode) -> SkTileMode {
+    use paint_model::cc::paint::tile_mode::TileMode as Paint;
     match value {
         Paint::kClamp => SkTileMode::kClamp,
         Paint::kRepeat => SkTileMode::kRepeat,
@@ -1850,20 +1849,20 @@ fn converted_paint_core(flags: &CpuPaintFlags<SkRegion>, alpha: f32) -> SkPaint 
     paint.setDither(flags.isDither());
     paint.setBlendMode(sk_blend_mode(flags.getBlendMode()));
     paint.setStyle(match flags.getStyle() {
-        paint::cc::paint::paint_flags::Style::kFill_Style => Style::kFill_Style,
-        paint::cc::paint::paint_flags::Style::kStroke_Style => Style::kStroke_Style,
+        paint_model::cc::paint::paint_flags::Style::kFill_Style => Style::kFill_Style,
+        paint_model::cc::paint::paint_flags::Style::kStroke_Style => Style::kStroke_Style,
     });
     paint.setStrokeWidth(flags.getStrokeWidth());
     paint.setStrokeMiter(flags.getStrokeMiter());
     paint.setStrokeCap(match flags.getStrokeCap() {
-        paint::cc::paint::paint_flags::Cap::kButt_Cap => Cap::kButt_Cap,
-        paint::cc::paint::paint_flags::Cap::kRound_Cap => Cap::kRound_Cap,
-        paint::cc::paint::paint_flags::Cap::kSquare_Cap => Cap::kSquare_Cap,
+        paint_model::cc::paint::paint_flags::Cap::kButt_Cap => Cap::kButt_Cap,
+        paint_model::cc::paint::paint_flags::Cap::kRound_Cap => Cap::kRound_Cap,
+        paint_model::cc::paint::paint_flags::Cap::kSquare_Cap => Cap::kSquare_Cap,
     });
     paint.setStrokeJoin(match flags.getStrokeJoin() {
-        paint::cc::paint::paint_flags::Join::kMiter_Join => Join::kMiter_Join,
-        paint::cc::paint::paint_flags::Join::kRound_Join => Join::kRound_Join,
-        paint::cc::paint::paint_flags::Join::kBevel_Join => Join::kBevel_Join,
+        paint_model::cc::paint::paint_flags::Join::kMiter_Join => Join::kMiter_Join,
+        paint_model::cc::paint::paint_flags::Join::kRound_Join => Join::kRound_Join,
+        paint_model::cc::paint::paint_flags::Join::kBevel_Join => Join::kBevel_Join,
     });
     paint
 }
@@ -1904,8 +1903,8 @@ fn converted_restore_paint(flags: &CpuPaintFlags<SkRegion>, alpha: f32) -> io::R
     Ok(paint)
 }
 
-fn filter_tile_mode(mode: paint::cc::paint::filter_operation::BlurTileMode) -> SkTileMode {
-    use paint::cc::paint::filter_operation::BlurTileMode as Source;
+fn filter_tile_mode(mode: paint_model::cc::paint::filter_operation::BlurTileMode) -> SkTileMode {
+    use paint_model::cc::paint::filter_operation::BlurTileMode as Source;
     match mode {
         Source::kClamp => SkTileMode::kClamp,
         Source::kRepeat => SkTileMode::kRepeat,
@@ -1999,13 +1998,13 @@ fn svg_arithmetic_filter_variants(
 }
 
 fn translated_filter_operations_in_space(
-    operations: &paint::cc::paint::filter_operations::FilterOperations,
+    operations: &paint_model::cc::paint::filter_operations::FilterOperations,
     matrix: &SkM44,
     mut input: Option<Arc<dyn SkImageFilter>>,
     mut linear_rgb: bool,
 ) -> io::Result<TranslatedFilterValue> {
-    use paint::cc::paint::filter_operation::FilterType;
-    use paint::cc::paint::render_surface_filters::{ColorMatrixKind, CssColorMatrix};
+    use paint_model::cc::paint::filter_operation::FilterType;
+    use paint_model::cc::paint::render_surface_filters::{ColorMatrixKind, CssColorMatrix};
     use skia::src::effects::{colorfilters, imagefilters};
 
     let scale_x = matrix.rc(0, 0).hypot(matrix.rc(0, 1));
@@ -2130,7 +2129,7 @@ fn translated_filter_operations_in_space(
 }
 
 fn translated_filter_operations(
-    operations: &paint::cc::paint::filter_operations::FilterOperations,
+    operations: &paint_model::cc::paint::filter_operations::FilterOperations,
     matrix: &SkM44,
     input: Option<Arc<dyn SkImageFilter>>,
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
@@ -2273,7 +2272,7 @@ fn translated_command_filters(
     matrix: &SkM44,
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
     use command::PaintFilterType;
-    use paint::cc::paint::render_surface_filters::{ColorMatrixKind, CssColorMatrix};
+    use paint_model::cc::paint::render_surface_filters::{ColorMatrixKind, CssColorMatrix};
     use skia::src::effects::{colorfilters, imagefilters};
 
     let scale_x = matrix.rc(0, 0).hypot(matrix.rc(0, 1));
@@ -2420,19 +2419,19 @@ fn translated_command_filters(
 /// used by the destination Canvas; no render-pass, resource or target owner is
 /// retained by the returned immutable filter graph.
 pub fn BuildTranslatedFilterOperations(
-    operations: &paint::cc::paint::filter_operations::FilterOperations,
+    operations: &paint_model::cc::paint::filter_operations::FilterOperations,
     matrix: &SkM44,
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
     translated_filter_operations(operations, matrix, None)
 }
 
 fn translated_filter_graph(
-    filter: &dyn paint::cc::paint::filter_operation::PaintFilter,
+    filter: &dyn paint_model::cc::paint::filter_operation::PaintFilter,
     matrix: &SkM44,
     input: Option<Arc<dyn SkImageFilter>>,
     input_linear_rgb: bool,
 ) -> io::Result<TranslatedFilterValue> {
-    use paint::cc::paint::filter_operation::PaintFilterReplay;
+    use paint_model::cc::paint::filter_operation::PaintFilterReplay;
     match filter.ReplayGraph() {
         PaintFilterReplay::Operations(operations) => {
             translated_filter_operations_in_space(operations, matrix, input, input_linear_rgb)
@@ -2496,7 +2495,7 @@ fn translated_filter_graph(
 }
 
 fn translated_filter_graph_srgb(
-    filter: &dyn paint::cc::paint::filter_operation::PaintFilter,
+    filter: &dyn paint_model::cc::paint::filter_operation::PaintFilter,
     matrix: &SkM44,
     input: Option<Arc<dyn SkImageFilter>>,
 ) -> io::Result<Option<Arc<dyn SkImageFilter>>> {
@@ -3133,8 +3132,8 @@ fn decoded_pattern_local_matrix(
 
 fn translated_reference_filter(
     operation: &paint_input_types::paint_input::PaintFilterOperation,
-    reference_box: paint::PaintRect,
-    reference_viewport: Option<paint::PaintRect>,
+    reference_box: paint_model::PaintRect,
+    reference_viewport: Option<paint_model::PaintRect>,
     reference_origin: paint_input_types::layout_input::Offset,
     reference_scale: f64,
     matrix: &SkM44,
@@ -3900,7 +3899,7 @@ fn luma_image_filter(
 #[derive(Clone)]
 struct TranslatedLooperPaint(SkPaint);
 
-impl paint::cc::paint::draw_looper::LooperPaint for TranslatedLooperPaint {
+impl paint_model::cc::paint::draw_looper::LooperPaint for TranslatedLooperPaint {
     fn setAlpha(&mut self, alpha: u8) {
         self.0.setAlphaf(f32::from(alpha) * (1. / 255.));
     }
@@ -3916,8 +3915,8 @@ impl paint::cc::paint::draw_looper::LooperPaint for TranslatedLooperPaint {
 
     fn setColorFilterSRGBBlend(
         &mut self,
-        color: paint::cc::paint::color::Color4f,
-        mode: paint::cc::paint::blend_mode::BlendMode,
+        color: paint_model::cc::paint::color::Color4f,
+        mode: paint_model::cc::paint::blend_mode::BlendMode,
     ) {
         let color = SkColor4f {
             fR: color.red,
@@ -4533,19 +4532,19 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
     /// already built by PrePaint; Raster never becomes a second filter owner.
     fn execute_display_item(
         &mut self,
-        item: &paint::paint_engine::DisplayItem,
+        item: &paint_model::display_item::DisplayItem,
         resources: &ResourceContext<'_>,
         alpha: f32,
         record: Option<&PaintRecord>,
         params: Option<&mut RasterPlaybackParams<'_, SkRegion>>,
     ) {
-        if item.r#type == paint::paint_engine::DisplayItemType::kCustomData {
+        if item.r#type == paint_model::paint_op::PaintOpType::kCustomData {
             if let Err(error) = self.replay_canvas_custom_data(item.custom_data_id) {
                 self.error.get_or_insert(error);
             }
             return;
         }
-        if item.r#type == paint::paint_engine::DisplayItemType::kSaveLayerFilter
+        if item.r#type == paint_model::paint_op::PaintOpType::kSaveLayerFilter
             && !item.text_shadow_filters.is_empty()
         {
             if self.error.is_some() {
@@ -4614,7 +4613,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 stop.color.alpha *= alpha;
             }
         }
-        if item.r#type != paint::paint_engine::DisplayItemType::kSaveLayerFilter
+        if item.r#type != paint_model::paint_op::PaintOpType::kSaveLayerFilter
             || item.canonical_filters.is_empty()
         {
             if command.image_orientation == ImageOrientation::kDefault {
@@ -5201,8 +5200,8 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         folded_alpha: f32,
         record: &CpuPaintRecord<SkRegion>,
         tile_rect: &compositor::adapter::geometry::RectF,
-        tile_mode_x: paint::cc::paint::tile_mode::TileMode,
-        tile_mode_y: paint::cc::paint::tile_mode::TileMode,
+        tile_mode_x: paint_model::cc::paint::tile_mode::TileMode,
+        tile_mode_y: paint_model::cc::paint::tile_mode::TileMode,
         local_matrix: Option<&compositor::runtime::geometry::Transform<SkRegion>>,
         params: &mut RasterPlaybackParams<'_, SkRegion>,
     ) -> io::Result<()> {
@@ -5411,8 +5410,8 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         // by the shader's scale/translation and clipped by the DrawRect. Route
         // that source-equivalent case through Skia's image blitter instead of
         // rebuilding the general per-pixel shader pipeline for every cc tile.
-        if tile_mode_x == paint::cc::paint::tile_mode::TileMode::kDecal
-            && tile_mode_y == paint::cc::paint::tile_mode::TileMode::kDecal
+        if tile_mode_x == paint_model::cc::paint::tile_mode::TileMode::kDecal
+            && tile_mode_y == paint_model::cc::paint::tile_mode::TileMode::kDecal
             && shader_matrix.isScaleTranslate()
         {
             shader_trace.set("direct_image", 1.);
@@ -6399,7 +6398,7 @@ impl DisplayCanvas for TranslatedCanvas<'_, '_> {
     }
 }
 
-impl paint::cc::paint::draw_looper::LooperCanvas for TranslatedCanvas<'_, '_> {
+impl paint_model::cc::paint::draw_looper::LooperCanvas for TranslatedCanvas<'_, '_> {
     type Matrix = SkM44;
 
     fn getSaveCount(&self) -> i32 {
@@ -6456,7 +6455,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
         if local_ctm {
             self.simple(CommandKind::kSave);
         }
-        use paint::cc::paint::paint_op_buffer_iterator::{FoldedOp, PlaybackFoldingIterator};
+        use paint_model::cc::paint::paint_op_buffer_iterator::{FoldedOp, PlaybackFoldingIterator};
         for item in PlaybackFoldingIterator::new(buffer, offsets) {
             if self.error.is_some() {
                 break;
@@ -7095,18 +7094,25 @@ pub fn ReplayDisplayItemListIntoTranslatedTarget(
     replay.finish_replay()
 }
 
-fn rasterize_paint_artifact(
-    list: &PaintArtifact,
+/// Replays one Paint recording: its ops and the resource catalog they sample,
+/// the cc::PaintRecord a DrawingDisplayItem or
+/// SVGImage::PaintRecordForCurrentFrame hands to raster
+/// (third_party/blink/renderer/core/svg/graphics/svg_image.cc). Raster never
+/// receives the producer's PaintArtifact (chunks, property nodes).
+fn rasterize_paint_ops(
+    ops: &[paint_model::display_item::DisplayItem],
+    resources: Option<&paint_input_types::PaintResources>,
     width: u32,
     height: u32,
     scale: f64,
     transparent: bool,
 ) -> io::Result<Vec<u8>> {
-    rasterize_paint_artifact_xy(list, width, height, (scale, scale), transparent)
+    rasterize_paint_ops_xy(ops, resources, width, height, (scale, scale), transparent)
 }
 
-fn rasterize_paint_artifact_xy(
-    list: &PaintArtifact,
+fn rasterize_paint_ops_xy(
+    ops: &[paint_model::display_item::DisplayItem],
+    resources: Option<&paint_input_types::PaintResources>,
     width: u32,
     height: u32,
     scale: (f64, f64),
@@ -7142,10 +7148,10 @@ fn rasterize_paint_artifact_xy(
             .map_err(|error| raster_error("translated paint artifact clear failed", error))?;
     }
     target.scale(scale.0 as f32, scale.1 as f32);
-    let command_resources = resources(list);
+    let command_resources = crate::convert::record_resources(resources);
     let replay_result = {
         let mut canvas = TranslatedCanvas::new(&mut target, false, 1.);
-        for item in list.items.iter() {
+        for item in ops {
             canvas.execute_display_item(item, &command_resources, 1.0, None, None);
         }
         canvas.unwind_to_depth(0);
@@ -7158,32 +7164,40 @@ fn rasterize_paint_artifact_xy(
     Ok(pixels)
 }
 
-/// Rasterize a Paint publication onto an opaque white RGBA target. This is a
-/// standalone inspection/export entry point; production tile raster continues
-/// to enter through [`RasterEngine`] with compositor-selected work.
-#[cfg(any(test, feature = "artifact_test_support"))]
-pub fn RasterizePaintArtifact(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
-    rasterize_paint_artifact(list, width, height, 1., false)
-        .expect("translated PaintArtifact rasterization failed")
+/// Rasterize one Paint recording's ops onto an opaque white RGBA target. This
+/// is a standalone inspection/export entry point; production tile raster
+/// continues to enter through [`RasterEngine`] with compositor-selected work.
+pub fn RasterizePaintOps(
+    ops: &[paint_model::display_item::DisplayItem],
+    resources: Option<&paint_input_types::PaintResources>,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    rasterize_paint_ops(ops, resources, width, height, 1., false)
+        .expect("translated paint-op rasterization failed")
 }
 
-/// Rasterize a Paint publication onto an opaque white scaled RGBA target.
-#[cfg(any(test, feature = "artifact_test_support"))]
-pub fn RasterizePaintArtifactWithScale(
-    list: &PaintArtifact,
+/// Rasterize one Paint recording's ops onto an opaque white scaled target.
+pub fn RasterizePaintOpsWithScale(
+    ops: &[paint_model::display_item::DisplayItem],
+    resources: Option<&paint_input_types::PaintResources>,
     width: u32,
     height: u32,
     scale: f64,
 ) -> Vec<u8> {
-    rasterize_paint_artifact(list, width, height, scale, false)
-        .expect("translated scaled PaintArtifact rasterization failed")
+    rasterize_paint_ops(ops, resources, width, height, scale, false)
+        .expect("translated scaled paint-op rasterization failed")
 }
 
-/// Rasterize a Paint publication onto a transparent RGBA target.
-#[cfg(any(test, feature = "artifact_test_support"))]
-pub fn RasterizePaintArtifactTransparent(list: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
-    rasterize_paint_artifact(list, width, height, 1., true)
-        .expect("translated transparent PaintArtifact rasterization failed")
+/// Rasterize one Paint recording's ops onto a transparent RGBA target.
+pub fn RasterizePaintOpsTransparent(
+    ops: &[paint_model::display_item::DisplayItem],
+    resources: Option<&paint_input_types::PaintResources>,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    rasterize_paint_ops(ops, resources, width, height, 1., true)
+        .expect("translated transparent paint-op rasterization failed")
 }
 
 fn PrepareRasterPlayback(
@@ -7374,6 +7388,23 @@ impl RasterBackend for TranslatedSkiaBackend {
 #[cfg(all(test, target_vendor = "apple"))]
 mod tests {
     use super::*;
+
+    fn rasterize_paint_artifact(
+        artifact: &paint::paint_engine::PaintArtifact,
+        width: u32,
+        height: u32,
+        scale: f64,
+        transparent: bool,
+    ) -> io::Result<Vec<u8>> {
+        rasterize_paint_ops(
+            &artifact.items,
+            artifact.resources.as_deref(),
+            width,
+            height,
+            scale,
+            transparent,
+        )
+    }
 
     #[test]
     fn font_backend_factory_reuses_a_shared_face_across_documents() {
@@ -7722,7 +7753,8 @@ mod tests {
                 SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
             },
         };
-        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+        use paint_model::{display_item::DisplayItem, paint_op::PaintOpType as DisplayItemType, PaintRect};
+        use paint::paint_engine::PaintArtifact;
 
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
@@ -7753,7 +7785,7 @@ mod tests {
             height: 16.0,
         };
         let canonical_filters =
-            paint::property_filter_operations::PropertyFilterOperations::from_authored(
+            paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
                 &[reference],
                 Some(box_rect),
                 Some(box_rect),
@@ -7807,7 +7839,7 @@ mod tests {
                 SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
             },
         };
-        use paint::paint_engine::PaintRect;
+        use paint_model::PaintRect;
 
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
@@ -7836,7 +7868,7 @@ mod tests {
             height: 16.0,
             ..Default::default()
         };
-        let canonical = paint::property_filter_operations::PropertyFilterOperations::from_authored(
+        let canonical = paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
             &[reference],
             Some(reference_box),
             Some(reference_box),
@@ -7875,7 +7907,7 @@ mod tests {
                 SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
             },
         };
-        use paint::paint_engine::PaintRect;
+        use paint_model::PaintRect;
 
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
@@ -7913,7 +7945,7 @@ mod tests {
             height: 16.0,
             ..Default::default()
         };
-        let canonical = paint::property_filter_operations::PropertyFilterOperations::from_authored(
+        let canonical = paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
             &[reference],
             Some(reference_box),
             Some(reference_box),
@@ -7936,7 +7968,8 @@ mod tests {
             layout_input::{Offset, PaintShadow},
             layout_input_types::Color,
         };
-        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+        use paint_model::{display_item::DisplayItem, paint_op::PaintOpType as DisplayItemType, PaintRect};
+        use paint::paint_engine::PaintArtifact;
 
         let artifact = PaintArtifact {
             items: Arc::new(vec![
@@ -8012,7 +8045,8 @@ mod tests {
                 SvgFilterUnits,
             },
         };
-        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+        use paint_model::{display_item::DisplayItem, paint_op::PaintOpType as DisplayItemType, PaintRect};
+        use paint::paint_engine::PaintArtifact;
 
         let variants = svg_arithmetic_filter_variants(
             [0.0, 2.0, 0.0, -0.5],
@@ -8080,7 +8114,7 @@ mod tests {
             ..Default::default()
         };
         let canonical_filters =
-            paint::property_filter_operations::PropertyFilterOperations::from_authored(
+            paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
                 &[reference],
                 Some(reference_box),
                 Some(reference_box),
@@ -8134,7 +8168,7 @@ mod tests {
                 SvgFilterUnits,
             },
         };
-        use paint::PaintRect;
+        use paint_model::PaintRect;
 
         let flood = |result: &str, color: Color, origin_tainted| SvgFilterPrimitive {
             input: SvgFilterInput::kSourceGraphic,
@@ -8172,7 +8206,7 @@ mod tests {
                 ..Default::default()
             };
             let canonical =
-                paint::property_filter_operations::PropertyFilterOperations::from_authored(
+                paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
                     &[operation],
                     Some(reference_box),
                     Some(reference_box),
@@ -8233,7 +8267,7 @@ mod tests {
                 SvgFilterUnits, SvgLightSource, SvgLightingType, SvgTurbulenceType,
             },
         };
-        use paint::paint_engine::PaintRect;
+        use paint_model::PaintRect;
 
         let kinds = [
             SvgFilterPrimitiveKind::kDropShadow {
@@ -8387,7 +8421,7 @@ mod tests {
                 ..Default::default()
             };
             let canonical =
-                paint::property_filter_operations::PropertyFilterOperations::from_authored(
+                paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
                     &[reference],
                     Some(reference_box),
                     Some(reference_box),
@@ -8413,7 +8447,8 @@ mod tests {
                 PaintReflectionMaskLayer,
             },
         };
-        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+        use paint_model::{display_item::DisplayItem, paint_op::PaintOpType as DisplayItemType, PaintRect};
+        use paint::paint_engine::PaintArtifact;
 
         let render = |reflection_has_mask, reflection_mask_layers| {
             let reflection = PaintFilterOperation {
@@ -8425,7 +8460,7 @@ mod tests {
                 ..Default::default()
             };
             let canonical_filters =
-                paint::property_filter_operations::PropertyFilterOperations::from_authored(
+                paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
                     &[reflection],
                     None,
                     None,
@@ -8526,10 +8561,11 @@ mod tests {
             layout_input_types::Color,
             paint_input::{PaintFilterOperation, PaintFilterType},
         };
-        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+        use paint_model::{display_item::DisplayItem, paint_op::PaintOpType as DisplayItemType, PaintRect};
+        use paint::paint_engine::PaintArtifact;
 
         let canonical_filters =
-            paint::property_filter_operations::PropertyFilterOperations::from_authored(
+            paint_model::property_filter_operations::PropertyFilterOperations::from_authored(
                 &[PaintFilterOperation {
                     r#type: PaintFilterType::kOpacity,
                     amount: 0.5,
@@ -9161,10 +9197,21 @@ pub fn ImageBitmapRespectingOrientation(
     })
 }
 
+/// SVGImage::PaintRecordForCurrentFrame's record as raster receives it: the
+/// recorded ops, the resource catalog they sample and the size of the
+/// coordinate space they were recorded in. The producer's PaintArtifact stays
+/// with the SVG document lifecycle.
+#[derive(Clone, Copy)]
+pub struct DocumentPaintRecord<'a> {
+    pub ops: &'a [paint_model::display_item::DisplayItem],
+    pub resources: Option<&'a paint_input_types::PaintResources>,
+    pub record_size: image_resource::IntrinsicSize,
+}
+
 /// SVGImageForContainer's immutable current-frame paint record is replayed by
 /// the normal raster owner. Cursor selection never owns a Canvas or raster loop.
 pub fn RasterizeDocumentImageBitmap(
-    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    record: DocumentPaintRecord<'_>,
     width: u32,
     height: u32,
 ) -> io::Result<image_resource::ImmutableImageBitmap> {
@@ -9180,7 +9227,8 @@ pub fn RasterizeDocumentImageBitmap(
             f64::from(height) / f64::from(record.record_size.height)
         },
     );
-    let pixels = rasterize_paint_artifact_xy(&record.artifact, width, height, scale, true)?;
+    let pixels =
+        rasterize_paint_ops_xy(record.ops, record.resources, width, height, scale, true)?;
     ImageBitmapRespectingOrientation(&image_resource::PaintImage {
         width,
         height,
@@ -9195,7 +9243,7 @@ pub fn RasterizeDocumentImageBitmap(
 /// intrinsic/container-sized intermediate bitmap. The final image paint's
 /// opacity applies once to the completed record, not once per display item.
 pub fn RasterizeDocumentDragImage(
-    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    record: DocumentPaintRecord<'_>,
     source_size: (u32, u32),
     scale: (f32, f32),
     opacity: f32,
@@ -9206,8 +9254,9 @@ pub fn RasterizeDocumentDragImage(
     {
         return Ok(None);
     }
-    let pixels = rasterize_paint_artifact_xy(
-        &record.artifact,
+    let pixels = rasterize_paint_ops_xy(
+        record.ops,
+        record.resources,
         width,
         height,
         (
@@ -9236,7 +9285,7 @@ pub fn RasterizeDocumentDragImage(
 /// Cached SVG drag image: preserve Create's current-frame bitmap until the
 /// following source ImageOperations resize, including its premultiplied alpha.
 pub fn ScaleDocumentDragImage(
-    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    record: DocumentPaintRecord<'_>,
     size: (u32, u32),
     scale: f32,
 ) -> io::Result<Option<image_resource::ImmutableImageBitmap>> {
@@ -9244,8 +9293,9 @@ pub fn ScaleDocumentDragImage(
     {
         return Ok(None);
     }
-    let pixels = rasterize_paint_artifact_xy(
-        &record.artifact,
+    let pixels = rasterize_paint_ops_xy(
+        record.ops,
+        record.resources,
         size.0,
         size.1,
         (

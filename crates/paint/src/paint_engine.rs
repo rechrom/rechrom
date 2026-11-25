@@ -52,7 +52,8 @@ pub use paint_chunk::{
 };
 
 pub use paint_commit::{
-    DocumentPaintArtifactRecord, ImageDependencyIndex, ImagePaintDependency, PaintArtifact,
+    DocumentPaintArtifactRecord, DocumentRecordArtifact, NewDocumentPaintArtifactRecord,
+    PaintRecordForArtifact, PaintRecordForItem, ImageDependencyIndex, ImagePaintDependency, PaintArtifact,
     PaintCompositorViewport, PaintCompositorViewportMode, PaintMutation, PaintMutationResult,
     PaintOutput, PaintResourceUpdate,
 };
@@ -64,18 +65,18 @@ fn document_image_container_proof_uses_the_artifacts_own_catalog() {
     requested.preferred_color_scheme_is_explicit = true;
     let initial = image_resource::ContainerKey::new(24, 24, 1.0, 2.0);
     let record = |key: &image_resource::ContainerKey| {
-        Arc::new(DocumentPaintArtifactRecord {
-            artifact: Arc::new(PaintArtifact::default()),
-            intrinsic_size: image_resource::IntrinsicSize {
+        Arc::new(NewDocumentPaintArtifactRecord(
+            Arc::new(PaintArtifact::default()),
+            image_resource::IntrinsicSize {
                 width: key.width,
                 height: key.height,
             },
-            record_size: image_resource::IntrinsicSize {
+            image_resource::IntrinsicSize {
                 width: key.width,
                 height: key.height,
             },
-            container_key: key.clone(),
-        }) as Arc<dyn image_resource::DocumentPaintRecord>
+            key.clone(),
+        )) as Arc<dyn image_resource::DocumentPaintRecord>
     };
     let mut artifact = PaintArtifact {
         items: vec![DisplayItem {

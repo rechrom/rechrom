@@ -2,7 +2,8 @@
 //! No traversal summary is rebuilt when a getter is called: analysis happens
 //! once at insertion, and nested queries borrow their resident buffer metadata.
 use super::*;
-use crate::commit::{geometry::Path as _, skia_value_backend::PaintSkiaBackend, ContentColorUsage};
+use crate::{geometry::Path as _, skia_backend::RecordSkiaBackend};
+use compositor_values::surface_id::ContentColorUsage;
 use paint_model::cc::paint::{
     paint_flags::{Cap, Style},
     paint_op::{MetadataFlags, PaintOpMetadata, PaintOpMetadataFields},
@@ -59,7 +60,7 @@ fn visit_pattern_images(
         }
     }
 }
-pub fn shader_image_id<R: PaintSkiaBackend>(
+pub fn shader_image_id<R: RecordSkiaBackend>(
     shader: &CpuPaintShader<R>,
 ) -> Option<(&PaintRecord, u64)> {
     let (source, mask) = shader.source()?;
@@ -71,7 +72,7 @@ pub fn shader_image_id<R: PaintSkiaBackend>(
         _ => None,
     }
 }
-pub fn shader_has_images<R: PaintSkiaBackend>(shader: &CpuPaintShader<R>) -> bool {
+pub fn shader_has_images<R: RecordSkiaBackend>(shader: &CpuPaintShader<R>) -> bool {
     if shader_image_id(shader).is_some() {
         return true;
     }
@@ -90,7 +91,7 @@ pub fn shader_has_images<R: PaintSkiaBackend>(shader: &CpuPaintShader<R>) -> boo
     }
     result
 }
-pub fn flags<R: PaintSkiaBackend>(op: CpuPaintOpRef<'_, R>) -> Option<&CpuPaintFlags<R>> {
+pub fn flags<R: RecordSkiaBackend>(op: CpuPaintOpRef<'_, R>) -> Option<&CpuPaintFlags<R>> {
     match op {
         CpuPaintOpRef::Converted(
             CpuPaintOp::DrawPath { flags: f, .. }
@@ -129,7 +130,7 @@ pub fn image_usage(
     // eager bitmap too; lazy generation controls decoding hints, not this bit.
     true
 }
-pub fn flag_images<R: PaintSkiaBackend>(
+pub fn flag_images<R: RecordSkiaBackend>(
     op: CpuPaintOpRef<'_, R>,
     usage: &mut ContentColorUsage,
 ) -> bool {
@@ -179,7 +180,7 @@ pub fn filter_has_images(
             .any(|layer| layer.image.is_some()),
     }
 }
-pub struct MetadataFields<'a, R: PaintSkiaBackend> {
+pub struct MetadataFields<'a, R: RecordSkiaBackend> {
     op: CpuPaintOpRef<'a, R>,
     path: R::Path,
 }
@@ -187,12 +188,12 @@ pub struct MetadataFields<'a, R: PaintSkiaBackend> {
 #[cfg(test)]
 mod tests {
     use super::{image_usage, visit_shader_images};
-    use crate::commit::{paint::PaintRecord, ContentColorUsage};
+    use crate::PaintRecord;
+    use compositor_values::surface_id::ContentColorUsage;
     use canvas::CanvasPaintResource;
     use paint_input_types::PaintResources;
-    use paint::paint_engine::{
-        PaintArtifact, PaintShader, PaintShaderKind, SvgPatternCommand, SvgPatternData,
-        SvgPatternImage,
+    use paint_input_types::paint_input::{
+        PaintShader, PaintShaderKind, SvgPatternCommand, SvgPatternData, SvgPatternImage,
     };
     use std::sync::Arc;
 
@@ -226,8 +227,9 @@ mod tests {
     #[test]
     fn eager_canvas_snapshot_is_not_a_discardable_image() {
         let resource_id = 1 << 63;
-        let record = PaintRecord::from_artifact(Arc::new(PaintArtifact {
-            resources: Some(Arc::new(PaintResources {
+        let record = PaintRecord::new(
+            Arc::new(Vec::new()),
+            Some(Arc::new(PaintResources {
                 canvases: vec![CanvasPaintResource {
                     dom_node_id: 1,
                     resource_id,
@@ -240,14 +242,16 @@ mod tests {
                 }].into(),
                 ..Default::default()
             })),
-            ..Default::default()
-        }));
+            Arc::new(Vec::new()),
+            0..0,
+        )
+        .unwrap();
         let mut usage = ContentColorUsage::kSRGB;
         assert!(!image_usage(&record, resource_id, &mut usage));
         assert_eq!(usage, ContentColorUsage::kSRGB);
     }
 }
-impl<'a, R: PaintSkiaBackend> MetadataFields<'a, R> {
+impl<'a, R: RecordSkiaBackend> MetadataFields<'a, R> {
     pub fn new(op: CpuPaintOpRef<'a, R>) -> Self {
         let path = match op {
             CpuPaintOpRef::PaintRecord { op, .. } if !op.path.is_empty() => {
@@ -271,8 +275,8 @@ impl<'a, R: PaintSkiaBackend> MetadataFields<'a, R> {
         Self { op, path }
     }
 }
-pub struct MetadataFlagView<'a, R: PaintSkiaBackend>(CpuPaintOpRef<'a, R>);
-impl<R: PaintSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<'_, R> {
+pub struct MetadataFlagView<'a, R: RecordSkiaBackend>(CpuPaintOpRef<'a, R>);
+impl<R: RecordSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<'_, R> {
     fn IsValid(&self) -> bool {
         flags(self.0).is_none_or(|f| f.IsValid())
     }
@@ -301,11 +305,11 @@ impl<R: PaintSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<
         match self.0 {
             CpuPaintOpRef::PaintRecord { op, .. } => matches!(
                 op.r#type,
-                paint::paint_engine::DisplayItemType::kStrokePath
-                    | paint::paint_engine::DisplayItemType::kStrokeRect
-                    | paint::paint_engine::DisplayItemType::kStrokeEllipse
-                    | paint::paint_engine::DisplayItemType::kStrokeLine
-                    | paint::paint_engine::DisplayItemType::kStrokeWavyLine
+                paint_model::paint_op::PaintOpType::kStrokePath
+                    | paint_model::paint_op::PaintOpType::kStrokeRect
+                    | paint_model::paint_op::PaintOpType::kStrokeEllipse
+                    | paint_model::paint_op::PaintOpType::kStrokeLine
+                    | paint_model::paint_op::PaintOpType::kStrokeWavyLine
             ),
             _ => flags(self.0).is_some_and(|f| f.getStyle() == Style::kStroke_Style),
         }
@@ -320,7 +324,7 @@ impl<R: PaintSkiaBackend> MetadataFlags<ContentColorUsage> for MetadataFlagView<
         flag_images(self.0, usage)
     }
 }
-impl<R: PaintSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFields<'_, R> {
+impl<R: RecordSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataFields<'_, R> {
     type Flags<'a>
         = MetadataFlagView<'a, R>
     where
@@ -393,7 +397,7 @@ impl<R: PaintSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataF
     fn IsDiscardableImage(&self, usage: &mut ContentColorUsage) -> bool {
         match self.op {
             CpuPaintOpRef::PaintRecord { op, record }
-                if op.r#type == paint::paint_engine::DisplayItemType::kDrawImageRect =>
+                if op.r#type == paint_model::paint_op::PaintOpType::kDrawImageRect =>
             {
                 image_usage(record, op.resource_id, usage)
             }
@@ -401,13 +405,13 @@ impl<R: PaintSkiaBackend> PaintOpMetadataFields<ContentColorUsage> for MetadataF
         }
     }
 }
-pub fn analyze<R: PaintSkiaBackend>(
+pub fn analyze<R: RecordSkiaBackend>(
     op: CpuPaintOpRef<'_, R>,
     metadata: &mut PaintOpBufferMetadata<ContentColorUsage>,
 ) {
     metadata.AnalyzeAddedOp(&PaintOpMetadata(&MetadataFields::new(op)));
 }
-pub fn project<R: PaintSkiaBackend>(buffer: &CpuPaintOpBuffer<R>) -> CpuBufferMetadata {
+pub fn project<R: RecordSkiaBackend>(buffer: &CpuPaintOpBuffer<R>) -> CpuBufferMetadata {
     let m = buffer.canonical_metadata();
     CpuBufferMetadata {
         num_slow_paths_up_to_min_for_MSAA: m.num_slow_paths_up_to_min_for_MSAA(),

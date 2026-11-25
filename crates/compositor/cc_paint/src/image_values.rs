@@ -3,14 +3,14 @@
 //! animation/completion metadata projection is constructed.
 use super::{CpuPaintImage, CpuPaintImageValue, CpuPaintRecordImage, CpuWorkletInput, PaintRecord};
 use super::image_metadata::PaintImageId;
-use crate::commit::ContentColorUsage;
+use compositor_values::surface_id::ContentColorUsage;
 use std::sync::Arc;
 #[derive(Debug)]
 pub enum CpuPaintImageInputError {
     MissingResource(u64),
     Metadata {
         resource: u64,
-        blocker: paint::paint_engine::ImageMetadataUnavailable,
+        blocker: image_resource::PaintImageMetadataUnavailable,
     },
     DocumentColorSpaceNotPublished(u64),
     AnimationFramesNotPublished(u64),
@@ -44,7 +44,7 @@ struct ImageLease {
     animation_metadata: Option<super::image_metadata::AnimatedImageMetadata>,
 }
 impl ImageLease {
-    fn image(&self) -> &paint::paint_engine::LayoutPaintImage {
+    fn image(&self) -> &paint_input_types::layout_input::PaintImage {
         &self
             .record
             .resources()
@@ -55,7 +55,7 @@ impl ImageLease {
 impl CpuPaintImage {
     pub fn WithDecodingMode(
         mut self,
-        mode: crate::commit::color_space::HostImageDecodingMode,
+        mode: compositor_values::color_space::HostImageDecodingMode,
     ) -> Self {
         self.1 = mode;
         self
@@ -77,7 +77,7 @@ impl CpuPaintImage {
     pub fn FromPaintResourceForContainer(
         record: &PaintRecord,
         resource: u64,
-        container: Option<&paint::paint_engine::DocumentImageContainerKey>,
+        container: Option<&image_resource::ContainerKey>,
     ) -> Result<Self, CpuPaintImageInputError> {
         let (catalog_index, image) = record
             .resources()
@@ -89,7 +89,7 @@ impl CpuPaintImage {
             })
             .ok_or(CpuPaintImageInputError::MissingResource(resource))?;
         let metadata =
-            |e: &paint::paint_engine::ImageMetadataUnavailable| CpuPaintImageInputError::Metadata {
+            |e: &image_resource::PaintImageMetadataUnavailable| CpuPaintImageInputError::Metadata {
                 resource,
                 blocker: e.clone(),
             };
@@ -104,10 +104,10 @@ impl CpuPaintImage {
                         .CompositorMetadata()
                         .ok()
                         .and_then(|metadata| match &metadata.animation {
-                            paint::paint_engine::PaintImageAnimationMetadata::Known(info) => {
+                            image_resource::PaintImageAnimationMetadata::Known(info) => {
                                 Some(info.frame_count == frames.len())
                             }
-                            paint::paint_engine::PaintImageAnimationMetadata::Unavailable(_) => {
+                            image_resource::PaintImageAnimationMetadata::Unavailable(_) => {
                                 None
                             }
                         })
@@ -121,10 +121,10 @@ impl CpuPaintImage {
                 .expect("animation facts validated above")
                 .animation
             {
-                paint::paint_engine::PaintImageAnimationMetadata::Known(info) => {
+                image_resource::PaintImageAnimationMetadata::Known(info) => {
                     info.repetition_count
                 }
-                paint::paint_engine::PaintImageAnimationMetadata::Unavailable(_) => unreachable!(),
+                image_resource::PaintImageAnimationMetadata::Unavailable(_) => unreachable!(),
             };
             Some(super::image_metadata::AnimatedImageMetadata {
                 paint_image_id: image.paint_image_id,
@@ -151,27 +151,27 @@ impl CpuPaintImage {
             None
         };
         let document_record = match &image.content {
-            paint::paint_engine::PaintImageContent::Bitmap(_) => None,
-            paint::paint_engine::PaintImageContent::Document(content) => {
+            image_resource::PaintImageContent::Bitmap(_) => None,
+            image_resource::PaintImageContent::Document(content) => {
                 let key = container.or(image.document_container_key.as_ref()).ok_or(
                     CpuPaintImageInputError::DocumentColorSpaceNotPublished(resource),
                 )?;
                 let erased = content.exact_record_for(key).ok_or(
                     CpuPaintImageInputError::DocumentColorSpaceNotPublished(resource),
                 )?;
-                let record = paint::paint_engine::downcast_document_paint_record::<
-                    paint::paint_engine::DocumentPaintArtifactRecord,
+                let record = image_resource::downcast_document_paint_record::<
+                    super::DocumentImagePaintRecord,
                 >(erased)
                 .ok_or(CpuPaintImageInputError::DocumentColorSpaceNotPublished(
                     resource,
                 ))?;
                 Some(CpuPaintRecordImage {
-                    record: PaintRecord::from_artifact(record.artifact.clone()),
-                    intrinsic_size: crate::commit::geometry::SizeF::new(
+                    record: record.record.clone(),
+                    intrinsic_size: crate::geometry::SizeF::new(
                         record.intrinsic_size.width as f32,
                         record.intrinsic_size.height as f32,
                     ),
-                    record_size: crate::commit::geometry::SizeF::new(
+                    record_size: crate::geometry::SizeF::new(
                         record.record_size.width as f32,
                         record.record_size.height as f32,
                     ),
@@ -190,7 +190,7 @@ impl CpuPaintImage {
                     .collect(),
                 animation_metadata,
             }),
-            crate::commit::color_space::HostImageDecodingMode::kUnspecified,
+            compositor_values::color_space::HostImageDecodingMode::kUnspecified,
         ))
     }
 }
@@ -217,10 +217,10 @@ impl CpuPaintImageValue for ImageLease {
             )
         })?;
         let converted = match input.alpha_type {
-            paint::paint_engine::PaintImageAlphaType::Unpremultiplied => {
+            image_resource::PaintImageAlphaType::Unpremultiplied => {
                 skia::raster_target::premultiply_n32_rgba8888(input.width, input.height, pixels)
             }
-            paint::paint_engine::PaintImageAlphaType::Premultiplied => {
+            image_resource::PaintImageAlphaType::Premultiplied => {
                 skia::raster_target::native_n32_from_premultiplied_rgba8888(
                     input.width,
                     input.height,
@@ -244,8 +244,8 @@ impl CpuPaintImageValue for ImageLease {
         self.document_record.clone()
     }
 
-    fn size(&self) -> crate::commit::geometry::Size {
-        crate::commit::geometry::Size::new(self.image().width as i32, self.image().height as i32)
+    fn size(&self) -> crate::geometry::Size {
+        crate::geometry::Size::new(self.image().width as i32, self.image().height as i32)
     }
     fn animation_metadata(
         &self,

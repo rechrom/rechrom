@@ -621,15 +621,15 @@ impl SVGDocumentAnimation {
             .ok_or_else(|| io::Error::other("document image revision exhausted"))?;
         let timeline_time = sample.timeline_time;
         self.last_sample = Some(sample);
-        let record = Arc::new(paint::paint_engine::DocumentPaintArtifactRecord {
+        let record = Arc::new(paint::paint_engine::NewDocumentPaintArtifactRecord(
             artifact,
             intrinsic_size,
-            record_size: IntrinsicSize {
+            IntrinsicSize {
                 width: self.container.width,
                 height: self.container.height,
             },
-            container_key: self.container.clone(),
-        });
+            self.container.clone(),
+        ));
         let frame = Arc::new(DocumentImageFrame {
             resource_id: self.resource_id,
             revision: self.revision,

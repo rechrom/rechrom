@@ -9,13 +9,12 @@ mod translated;
 pub use translated::SkiaFontBackendFactory;
 pub use translated::{
     BuildTranslatedFilterOperations, Canvas2DRasterBackendFactory,
-    ImageBitmapRespectingOrientation, RasterizeDocumentDragImage, RasterizeDocumentImageBitmap,
+    ImageBitmapRespectingOrientation, DocumentPaintRecord, RasterizeDocumentDragImage, RasterizeDocumentImageBitmap,
     ReplayDisplayItemListIntoTranslatedTarget, ResizeAndOrientDragImage, ResizeDragImageBitmap,
     ScaleCachedDragImage, ScaleDocumentDragImage,
 };
-#[cfg(any(test, feature = "artifact_test_support"))]
 pub use translated::{
-    RasterizePaintArtifact, RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
+    RasterizePaintOps, RasterizePaintOpsTransparent, RasterizePaintOpsWithScale,
 };
 mod ui_translated;
 use backend::{RasterBackend, RasterBackendTarget};

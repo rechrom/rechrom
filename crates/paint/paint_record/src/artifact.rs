@@ -213,16 +213,56 @@ impl ImageDependencyIndex {
     }
 }
 
-/// Concrete immutable record emitted by document_image and consumed only by
-/// raster replay. It contains no retained DOM, layout engine or timeline.
-#[derive(Clone)]
-pub struct DocumentPaintArtifactRecord {
-    pub artifact: Arc<PaintRecording>,
-    pub intrinsic_size: image_resource::IntrinsicSize,
-    /// Coordinate space used by the nested recording. Responsive SVG may
-    /// paint at a container size different from its intrinsic dimensions.
-    pub record_size: image_resource::IntrinsicSize,
-    pub container_key: image_resource::ContainerKey,
+/// The cc::PaintRecord over a whole recording: its shared ops, resource
+/// catalog and resource-revision sidecar (no copy).
+/// Source: cc/paint/paint_record.h; svg_image.cc PaintRecordForCurrentFrame.
+pub fn PaintRecordForArtifact(artifact: &Arc<PaintRecording>) -> cc_paint::PaintRecord {
+    cc_paint::PaintRecord::new(
+        Arc::clone(&artifact.items),
+        artifact.resources.clone(),
+        Arc::clone(&artifact.image_content_revisions),
+        0..artifact.items.len(),
+    )
+    .expect("a recording covers its own ops")
+}
+
+/// The cc::PaintRecord of one DrawingDisplayItem: its op range of the shared
+/// recording. None when the item's range is outside the recording.
+pub fn PaintRecordForItem(
+    artifact: &Arc<PaintRecording>,
+    item: &RecordedDisplayItem,
+) -> Option<cc_paint::PaintRecord> {
+    cc_paint::PaintRecord::new(
+        Arc::clone(&artifact.items),
+        artifact.resources.clone(),
+        Arc::clone(&artifact.image_content_revisions),
+        item.record_begin..item.record_end,
+    )
+}
+
+/// Concrete immutable record emitted by document_image: the cc PaintRecord
+/// raster and image decode replay, with the producing recording kept as its
+/// opaque owner. It contains no retained DOM, layout engine or timeline.
+pub type DocumentPaintArtifactRecord = cc_paint::DocumentImagePaintRecord;
+
+pub fn NewDocumentPaintArtifactRecord(
+    artifact: Arc<PaintRecording>,
+    intrinsic_size: image_resource::IntrinsicSize,
+    record_size: image_resource::IntrinsicSize,
+    container_key: image_resource::ContainerKey,
+) -> DocumentPaintArtifactRecord {
+    cc_paint::DocumentImagePaintRecord {
+        record: PaintRecordForArtifact(&artifact),
+        intrinsic_size,
+        record_size,
+        container_key,
+        producer: artifact,
+    }
+}
+
+/// The producing recording of a document image record.
+pub fn DocumentRecordArtifact(record: &DocumentPaintArtifactRecord) -> Option<&PaintRecording> {
+    record.producer.downcast_ref::<PaintRecording>()
 }
 
 #[derive(Clone)]

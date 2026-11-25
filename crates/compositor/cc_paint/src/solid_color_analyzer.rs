@@ -2,7 +2,7 @@
 //! Classification remains entirely in paint_model::cc::paint::solid_color_analyzer.
 #![allow(non_snake_case)]
 use super::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef};
-use crate::commit::skia_region::SkRegion;
+use crate::skia_region::SkRegion;
 use paint_model::cc::paint::blend_mode::BlendMode;
 use paint_model::cc::paint::solid_color_analyzer::*;
 use skia::{
@@ -24,14 +24,14 @@ impl CpuSolidColorBackend {
 #[derive(Clone)]
 pub struct Matrix(pub(crate) SkM44);
 struct MatrixRef<'a>(&'a SkM44);
-impl crate::commit::geometry::Matrix44 for MatrixRef<'_> {
+impl crate::geometry::Matrix44 for MatrixRef<'_> {
     fn rc(&self, r: usize, c: usize) -> f32 {
         self.0.rc(r, c)
     }
 }
 impl AnalysisMatrix for Matrix {
     fn Preserves2DAxisAlignment(&self) -> bool {
-        crate::commit::math_util::MathUtil::SkM44Preserves2DAxisAlignment(&MatrixRef(&self.0))
+        compositor_tree::math_util::MathUtil::SkM44Preserves2DAxisAlignment(&MatrixRef(&self.0))
     }
     fn invert(&self) -> Option<Self> {
         {
@@ -164,7 +164,7 @@ impl AnalysisShape for RectShape {
             && a.bottom >= r.bottom
     }
 }
-pub struct RRectShape(crate::commit::skia_region::SkRoundedRect);
+pub struct RRectShape(crate::skia_region::SkRoundedRect);
 impl AnalysisShape for RRectShape {
     fn contains(&self, r: AnalysisRect) -> bool {
         {
@@ -214,8 +214,8 @@ impl AnalysisFlags for Flags<'_> {
                 op.paint_shader.is_some()
                     || matches!(
                         op.r#type,
-                        paint::paint_engine::DisplayItemType::kDrawGradientRect
-                            | paint::paint_engine::DisplayItemType::kDrawTiledGradient
+                        paint_model::paint_op::PaintOpType::kDrawGradientRect
+                            | paint_model::paint_op::PaintOpType::kDrawTiledGradient
                     )
             }
             CpuPaintOpRef::Converted(
@@ -266,11 +266,11 @@ impl AnalysisFlags for Flags<'_> {
         match self.0 {
             CpuPaintOpRef::PaintRecord { op, .. } => !matches!(
                 op.r#type,
-                paint::paint_engine::DisplayItemType::kStrokeRect
-                    | paint::paint_engine::DisplayItemType::kStrokeEllipse
-                    | paint::paint_engine::DisplayItemType::kStrokePath
-                    | paint::paint_engine::DisplayItemType::kStrokeLine
-                    | paint::paint_engine::DisplayItemType::kStrokeWavyLine
+                paint_model::paint_op::PaintOpType::kStrokeRect
+                    | paint_model::paint_op::PaintOpType::kStrokeEllipse
+                    | paint_model::paint_op::PaintOpType::kStrokePath
+                    | paint_model::paint_op::PaintOpType::kStrokeLine
+                    | paint_model::paint_op::PaintOpType::kStrokeWavyLine
             ),
             CpuPaintOpRef::Converted(
                 CpuPaintOp::DrawRect(_, f)
@@ -353,7 +353,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
         }
     }
     fn RRect<'a>(&'a self, op: CpuPaintOpRef<'a, SkRegion>) -> RRectShape {
-        use crate::commit::geometry::{RRectF, RectF, Vector2dF};
+        use crate::geometry::{RRectF, RectF, Vector2dF};
         let value = match op {
             CpuPaintOpRef::PaintRecord { op, .. } => {
                 let radii = op.corner_radii;
@@ -378,7 +378,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
             ) => *value,
             _ => panic!("source rounded rect op required"),
         };
-        RRectShape(crate::commit::skia_region::MakeSkRoundedRect(&value))
+        RRectShape(crate::skia_region::MakeSkRoundedRect(&value))
     }
     fn DrawColor(&self, op: CpuPaintOpRef<'_, SkRegion>) -> (Color, BlendMode) {
         match op {
@@ -395,7 +395,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
         match op {
             CpuPaintOpRef::PaintRecord { op, .. } => matches!(
                 op.r#type,
-                paint::paint_engine::DisplayItemType::kClipOutRect
+                paint_model::paint_op::PaintOpType::kClipOutRect
             ),
             CpuPaintOpRef::Converted(CpuPaintOp::ClipRect { difference, .. }) => *difference,
             _ => panic!("source ClipRect required"),
@@ -407,7 +407,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
         canvas: &mut NoDrawCanvas,
         _original: &Matrix,
     ) {
-        use paint::paint_engine::DisplayItemType as T;
+        use paint_model::paint_op::PaintOpType as T;
         match op {
             CpuPaintOpRef::PaintRecord { op, .. } => match op.r#type {
                 T::kSave => canvas.save(),

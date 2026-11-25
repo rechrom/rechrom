@@ -1209,7 +1209,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
             image_resource::PaintImageContent::Bitmap(_) => unreachable!(),
         };
         assert!(std::sync::Arc::ptr_eq(&first_record, second_record));
-        let current_pixels = raster::RasterizePaintArtifactTransparent(
+        let current_pixels = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
             &page.CurrentFrame().unwrap().display_items,
             321,
             200,
@@ -1235,7 +1235,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         });
         fresh.Open("https://stream.test/", 4096, 4096).unwrap();
         finish(&mut fresh);
-        let fresh_pixels = raster::RasterizePaintArtifactTransparent(
+        let fresh_pixels = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
             &fresh.CurrentFrame().unwrap().display_items,
             321,
             200,

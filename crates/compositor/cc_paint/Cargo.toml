@@ -1,0 +1,20 @@
+[package]
+name = "cc_paint"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# cc/paint: recorded paint values shared by Blink paint conversion (layerize),
+# the cc impl side, raster and viz (PictureDrawQuad's DisplayItemList).
+[dependencies]
+canvas = { path = "../../canvas" }
+compositor_animation = { path = "../compositor_animation" }
+compositor_tree = { path = "../compositor_tree" }
+compositor_values = { path = "../compositor_values" }
+foundation = { path = "../../foundation" }
+image_resource = { path = "../../image_resource" }
+paint_input_types = { path = "../../layout/paint_input_types" }
+paint_model = { path = "../../paint/paint_model" }
+paint_skia = { path = "../../paint/paint_skia" }
+scroll_animation = { path = "../scroll_animation" }
+skia = { path = "../../skia" }

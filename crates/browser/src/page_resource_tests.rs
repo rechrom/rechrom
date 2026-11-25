@@ -283,7 +283,7 @@ fn body() {
         ));
     }
     let reference = include_str!("../../../artifacts/cpp-reference/page-resources/results.tsv");
-    let pixels = raster::RasterizePaintArtifactTransparent(&items, 160, 96);
+    let pixels = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(&items, 160, 96);
     let expected = include_bytes!("../../../artifacts/cpp-reference/page-resources/frame.rgba");
     let differing = pixels
         .chunks_exact(4)

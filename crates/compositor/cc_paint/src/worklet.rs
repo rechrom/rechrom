@@ -1,6 +1,6 @@
 //! Native immutable Paint worklet input/value ownership. The external input
 //! supplies actual property keys and repaint semantics; cc owns the record map.
-use crate::commit::input_types::ElementId;
+use compositor_values::input_types::ElementId;
 use compositor_values::color4f::Color4f;
 use std::sync::Arc;
 // Source: cc/paint/paint_worklet_input.h:24-28,43-63;

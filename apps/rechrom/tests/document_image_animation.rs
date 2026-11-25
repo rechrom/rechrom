@@ -4,6 +4,13 @@ use image_resource::{
     ContainerKey, DocumentImageDecoder, DocumentImageEffect, DocumentImageMutation,
 };
 
+fn artifact_of(
+    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+) -> &paint::paint_engine::PaintArtifact {
+    paint::paint_engine::DocumentRecordArtifact(record)
+        .expect("document image records hold a Paint recording")
+}
+
 const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32">
 <style>@keyframes move{from{transform:translateX(0px)}to{transform:translateX(20px)}}rect{animation:move 1s linear infinite;fill:red}</style>
 <rect width="16" height="16"/></svg>"#;
@@ -36,8 +43,7 @@ fn svg_presentation_transform_and_fill_reach_document_paint_record() {
             paint::paint_engine::DocumentPaintArtifactRecord,
         >(&frame.record)
         .unwrap();
-        let paths = record
-            .artifact
+        let paths = artifact_of(&record)
             .items
             .iter()
             .filter(|item| item.r#type == paint::paint_engine::DisplayItemType::kDrawPath)
@@ -46,7 +52,7 @@ fn svg_presentation_transform_and_fill_reach_document_paint_record() {
         assert!((paths[0].color.red - 0x15 as f32 / 255.0).abs() < 1e-6);
         assert!((paths[0].color.green - 0x91 as f32 / 255.0).abs() < 1e-6);
         assert!((paths[1].color.blue - 0x42 as f32 / 255.0).abs() < 1e-6);
-        assert!(record.artifact.items.iter().any(|item| {
+        assert!(artifact_of(&record).items.iter().any(|item| {
             item.r#type == paint::paint_engine::DisplayItemType::kConcat
                 && (item.transform.values[0] - 0.35).abs() < 1e-9
                 && (item.transform.values[12] + 111.5).abs() < 1e-9
@@ -109,7 +115,7 @@ fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
             paint::paint_engine::DocumentPaintArtifactRecord,
         >(&next.record)
         .unwrap();
-        assert!(old_record.artifact != next_record.artifact);
+        assert!(artifact_of(&old_record) != artifact_of(&next_record));
         assert_eq!(created.initial_frame.revision, 1);
         assert!(!Arc::ptr_eq(&created.initial_frame.record, &next.record));
     });
@@ -151,7 +157,7 @@ fn container_configuration_versions_the_record_cache_key() {
         .unwrap();
         assert_eq!(old_record.record_size.width, 64);
         assert_eq!(next_record.record_size.width, 128);
-        assert!(old_record.artifact.items != next_record.artifact.items);
+        assert!(artifact_of(&old_record).items != artifact_of(&next_record).items);
     });
 }
 
@@ -185,7 +191,7 @@ fn svg_user_agent_rules_survive_repeated_isolated_document_lifecycles() {
                 .unwrap();
                 for (scale, x, y) in [(0.35, 10.0, 20.0), (2.0, 60.0, 40.0)] {
                     assert!(
-                        record.artifact.items.iter().any(|item| {
+                        artifact_of(&record).items.iter().any(|item| {
                             item.r#type == paint::paint_engine::DisplayItemType::kConcat
                                 && (item.transform.values[0] - scale).abs() < 1e-9
                                 && (item.transform.values[5] - scale).abs() < 1e-9

@@ -57,7 +57,6 @@ viz = { path = "../viz" }
 
 [dev-dependencies]
 open = { path = "../open", features = ["test_support"] }
-raster = { path = "../raster", features = ["artifact_test_support"] }
 
 [features]
 default = ["inline_layout"]

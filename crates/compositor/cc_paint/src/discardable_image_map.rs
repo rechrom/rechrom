@@ -4,20 +4,20 @@
 use super::*;
 use super::image_metadata::AnimatedImageMetadata as CpuAnimatedImageMetadata;
 use super::image_metadata::*;
-use crate::commit::{
+use crate::{
     geometry::{Path as _, Rect, RectF, ToEnclosingRect, Vector2dF},
     rtree::RTree,
     skia_region::SkRegion,
-    ScrollOffsetMap,
 };
+use compositor_values::prioritized_tile::ScrollOffsetMap;
 
-fn image_decoding_mode(mode: paint::paint_engine::PaintImageDecodingMode) -> ImageDecodingMode {
+fn image_decoding_mode(mode: image_resource::ImageDecodingMode) -> ImageDecodingMode {
     match mode {
-        paint::paint_engine::PaintImageDecodingMode::kUnspecified => {
+        image_resource::ImageDecodingMode::kUnspecified => {
             ImageDecodingMode::kUnspecified
         }
-        paint::paint_engine::PaintImageDecodingMode::kSync => ImageDecodingMode::kSync,
-        paint::paint_engine::PaintImageDecodingMode::kAsync => ImageDecodingMode::kAsync,
+        image_resource::ImageDecodingMode::kSync => ImageDecodingMode::kSync,
+        image_resource::ImageDecodingMode::kAsync => ImageDecodingMode::kAsync,
     }
 }
 use paint_model::cc::paint::{
@@ -448,7 +448,7 @@ impl MapCanvas {
     }
     fn clip_path(
         &mut self,
-        path: &<SkRegion as crate::commit::skia_value_backend::MainSkiaBackend>::Path,
+        path: &<SkRegion as crate::skia_backend::RecordSkiaBackend>::Path,
         difference: bool,
         aa: bool,
     ) {
@@ -542,17 +542,17 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
                 self.HasDiscardableImages(list.paint_op_buffer())
             }
             CpuPaintOpRef::PaintRecord { op, record }
-                if op.r#type == paint::paint_engine::DisplayItemType::kDrawImageRect =>
+                if op.r#type == paint_model::paint_op::PaintOpType::kDrawImageRect =>
             {
                 super::metadata::image_usage(
                     record,
                     op.resource_id,
-                    &mut crate::commit::ContentColorUsage::kSRGB,
+                    &mut compositor_values::surface_id::ContentColorUsage::kSRGB,
                 )
             }
             _ => super::metadata::flag_images(
                 op,
-                &mut crate::commit::ContentColorUsage::kSRGB,
+                &mut compositor_values::surface_id::ContentColorUsage::kSRGB,
             ),
         }
     }
@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn image_use_preserves_all_decoding_modes_for_cc_analysis() {
-        use paint::paint_engine::PaintImageDecodingMode as DecodingMode;
+        use image_resource::ImageDecodingMode as DecodingMode;
         assert_eq!(
             image_decoding_mode(DecodingMode::kUnspecified),
             ImageDecodingMode::kUnspecified
@@ -856,7 +856,7 @@ impl paint_model::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<
     fn GetBounds(&self) -> Option<RectF> {
         let r = match self.op {
             CpuPaintOpRef::PaintRecord { op, .. } => {
-                use paint::paint_engine::DisplayItemType as N;
+                use paint_model::paint_op::PaintOpType as N;
                 if matches!(op.r#type, N::kDrawPath | N::kStrokePath) {
                     let p = paint_model::paint_clip_path::PaintClipPath::from_authored(
                         &op.path,
@@ -936,9 +936,8 @@ impl paint_model::cc::paint::paint_op::PaintRectBackend for PaintRectProjection<
             if !op.canonical_filters.is_empty() {
                 return None;
             }
-            use paint::paint_engine::{
-                DisplayItemType as N, SvgStrokeLineCap as C, SvgStrokeLineJoin as J,
-            };
+            use paint_input_types::paint_input::{SvgStrokeLineCap as C, SvgStrokeLineJoin as J};
+            use paint_model::paint_op::PaintOpType as N;
             let stroke = matches!(
                 op.r#type,
                 N::kStrokePath
@@ -1057,7 +1056,7 @@ pub fn raster_state(
     c: &mut MapCanvas,
     _original: &ImageMapMatrix,
 ) {
-    use paint::paint_engine::DisplayItemType as N;
+    use paint_model::paint_op::PaintOpType as N;
     match op {
         CpuPaintOpRef::PaintRecord { op, .. } => match op.r#type {
             N::kSave
@@ -1099,7 +1098,7 @@ pub fn raster_state(
                     op.even_odd,
                     Default::default(),
                 );
-                let mut p = <SkRegion as crate::commit::skia_value_backend::MainSkiaBackend>::FromPaintPath(
+                let mut p = <SkRegion as crate::skia_backend::RecordSkiaBackend>::FromPaintPath(
                     p.single_path().unwrap(),
                 );
                 if p.is_inverse_fill_type() != op.inverse_winding {

@@ -13,7 +13,8 @@ pub mod scroll_paint_update;
 
 pub use paint_model::{PaintCompositorViewport, PaintCompositorViewportMode};
 pub use paint_record::{
-    DocumentPaintArtifactRecord, ImageDependencyIndex, ImagePaintDependency, PaintMutation,
+    DocumentPaintArtifactRecord, DocumentRecordArtifact, NewDocumentPaintArtifactRecord,
+    PaintRecordForArtifact, PaintRecordForItem, ImageDependencyIndex, ImagePaintDependency, PaintMutation,
     PaintMutationResult, PaintResourceUpdate,
 };
 

@@ -27,6 +27,7 @@ mod page_parser_invalidation_tests;
 mod page_resource_tests;
 #[cfg(test)]
 mod page_tests;
+pub mod paint_artifact_raster;
 mod persistent_layout;
 mod plugin_registry;
 pub mod style_services;
