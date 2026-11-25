@@ -115,14 +115,9 @@ impl FrameSorter {
     }
 }
 
-// Source: cc/resources/ui_resource_request.h:17-56. The bitmap is a shared
-// immutable native allocation. The producer supplies the native empty bitmap
-// for a DELETE request, preserving its source field/getter shape.
-pub struct UIResourceRequest {
-    pub kind: crate::adapter::layer_tree_impl::UIResourceRequestType,
-    pub id: UIResourceId,
-    pub bitmap: super::host_resources::UIBitmap,
-}
+// Source: cc/resources/ui_resource_request.h:17-56, a shared cc value; the
+// LayerTreeImpl request facet below is impl-side.
+pub use layerize::commit::ui_resource::UIResourceRequest;
 impl<
         B: crate::adapter::layer_tree_impl::LayerTreeTypes<
             UIResourceBitmap = super::host_resources::UIBitmap,
@@ -165,85 +160,15 @@ impl TaskRunnerProvider {
         }
     }
 }
-pub struct SwapPromise<R: super::types::CpuSkiaBackend>(
-    pub  Box<
-        dyn crate::cc::trees::swap_promise::SwapPromise<
-            super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
-        >,
-    >,
-    pub std::marker::PhantomData<fn() -> R>,
-);
-impl<R: super::types::CpuSkiaBackend> crate::adapter::commit_types::SwapPromise for SwapPromise<R> {}
-impl<R: super::types::CpuSkiaBackend>
-    crate::cc::trees::swap_promise::SwapPromise<
-        super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
-    > for SwapPromise<R>
-{
-    fn DidActivate(&mut self) {
-        self.0.DidActivate()
-    }
-    fn WillSwap(
-        &mut self,
-        metadata: &mut super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
-    ) {
-        self.0.WillSwap(metadata)
-    }
-    fn DidSwap(&mut self) {
-        self.0.DidSwap()
-    }
-    fn DidNotSwap(
-        &mut self,
-        reason: crate::cc::trees::swap_promise::DidNotSwapReason,
-        time: crate::adapter::time::TimeTicks,
-    ) -> crate::cc::trees::swap_promise::DidNotSwapAction {
-        self.0.DidNotSwap(reason, time)
-    }
-    fn OnCommit(&mut self) {
-        self.0.OnCommit()
-    }
-    fn GetTraceId(&self) -> i64 {
-        self.0.GetTraceId()
-    }
-}
-/// The actual native request owns its callback and capture parameters. Calls
-/// only expose the exact request API consumed by the canonical compositor.
-pub trait ViewTransitionRequestBackend:
-    crate::adapter::layer_tree_impl::LayerTreeViewTransitionRequest
-    + crate::adapter::layer_tree_host_impl::HostMetadataTransitionRequest
-{
-    // Source: cc/view_transition/view_transition_request.h:35-36,70-72,89-91.
-    fn TakeFinishedCallback(&mut self) -> Option<ViewTransitionCaptureCallback>;
-    fn maybe_cross_frame_sink(&self) -> bool;
-    fn SetContentRect(
-        &self,
-        id: crate::adapter::property_types::ViewTransitionElementResourceId,
-        rect: crate::adapter::geometry::RectF,
-    );
-    fn ConstructDirective(
-        &self,
-        elements: &std::collections::BTreeMap<
-            crate::adapter::property_types::ViewTransitionElementResourceId,
-            super::frame::RenderPassId,
-        >,
-        colors: &super::resources::RasterDisplayColorSpaces,
-        delay: bool,
-    ) -> super::metadata::TransitionDirective;
-}
-pub struct ViewTransitionRequest(pub Box<dyn ViewTransitionRequestBackend + Send + Sync>);
-impl ViewTransitionRequest {
-    pub(crate) fn ConstructDirective(
-        &self,
-        elements: &std::collections::BTreeMap<
-            crate::adapter::property_types::ViewTransitionElementResourceId,
-            super::frame::RenderPassId,
-        >,
-        colors: &super::resources::RasterDisplayColorSpaces,
-        delay: bool,
-    ) -> super::metadata::TransitionDirective {
-        self.0.ConstructDirective(elements, colors, delay)
-    }
-}
-pub type ViewTransitionCaptureCallback = Box<dyn FnOnce(&crate::adapter::layer_tree_host_impl::host_impl_chunk_c::HostViewTransitionElementResourceRects) + Send + Sync>;
+/// The std::unique_ptr<cc::SwapPromise> the commit carries is a shared cc
+/// owner (cc/trees/swap_promise.h).
+pub use layerize::commit::swap_promise::SwapPromise;
+/// cc::ViewTransitionRequest is a shared cc owner
+/// (cc/view_transition/view_transition_request.h); its LayerTreeImpl and
+/// frame-metadata facets are the impl traits below.
+pub use layerize::commit::view_transition_request::{
+    ViewTransitionCaptureCallback, ViewTransitionRequest, ViewTransitionRequestBackend,
+};
 impl crate::adapter::layer_tree_impl::LayerTreeViewTransitionRequest for ViewTransitionRequest {
     fn IsSave(&self) -> bool {
         self.0.IsSave()
@@ -253,30 +178,6 @@ impl crate::adapter::layer_tree_impl::LayerTreeViewTransitionRequest for ViewTra
     }
     fn sequence_id(&self) -> u32 {
         self.0.sequence_id()
-    }
-}
-// The main LayerTreeHost's view of the same request (layerize main_host).
-impl layerize::commit::main_callbacks::MainViewTransitionRequest for ViewTransitionRequest {
-    type ElementResourceRects =
-        crate::adapter::layer_tree_host_impl::host_impl_chunk_c::HostViewTransitionElementResourceRects;
-    type FinishedCallback = ViewTransitionCaptureCallback;
-    fn sequence_id(&self) -> u32 {
-        self.0.sequence_id()
-    }
-    fn token(&self) -> [u64; 2] {
-        self.0.token()
-    }
-    fn IsSave(&self) -> bool {
-        self.0.IsSave()
-    }
-    fn IsAnimateRenderer(&self) -> bool {
-        self.0.IsAnimateRenderer()
-    }
-    fn maybe_cross_frame_sink(&self) -> bool {
-        self.0.maybe_cross_frame_sink()
-    }
-    fn TakeFinishedCallback(&mut self) -> Option<ViewTransitionCaptureCallback> {
-        self.0.TakeFinishedCallback()
     }
 }
 impl crate::adapter::layer_tree_host_impl::HostMetadataTransitionRequest for ViewTransitionRequest {
@@ -525,16 +426,10 @@ impl MutatorEvents {
         self.0.IsEmpty()
     }
 }
-/// Native animation-worklet mutator. HostImpl transfers this owner to the
-/// animation subsystem; no animation state or mutation algorithm is copied.
-/// `Send`: ProxyMain::SetMutator hands the mutator from the main thread to
-/// ProxyImpl::InitializeMutatorOnImpl by PostTask (cc/trees/proxy_main.cc
-/// SetMutator, proxy_impl.cc InitializeMutatorOnImpl), so the source
-/// contract is a sendable owner.
-pub trait LayerTreeMutatorBackend: Send {
-    fn HasMutators(&mut self) -> bool;
-}
-pub struct LayerTreeMutator(pub Box<dyn LayerTreeMutatorBackend>);
+/// cc::LayerTreeMutator (cc/trees/layer_tree_mutator.h) is a shared cc owner:
+/// the main thread creates it and ProxyMain::SetMutator moves it to the impl
+/// AnimationHost.
+pub use compositor_values::layer_tree_mutator::{LayerTreeMutator, LayerTreeMutatorBackend};
 /// HostImpl itself only owns/transfers the painter. Dispatch is performed by
 /// the external PaintWorklet subsystem, on this same native allocation.
 pub trait PaintWorkletLayerPainterBackend<R: super::types::CpuSkiaBackend = super::skia::SkRegion> {

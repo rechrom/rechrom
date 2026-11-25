@@ -84,8 +84,9 @@ impl HostScrollLatency for LatencyInfo {
 }
 /// Source: cc/metrics/events_metrics_manager.h:38-39. Returning None has native
 /// nullptr semantics; ownership of a real metrics event is moved to the caller.
-pub trait EventMetricsBackend: Send {}
-pub type EventMetrics = Box<dyn EventMetricsBackend>;
+/// cc/metrics/event_metrics.h is a shared cc value (the main LayerTreeHost
+/// queues it in CommitState).
+pub use compositor_values::event_metrics::{EventMetrics, EventMetricsBackend};
 pub type EventMetricsDoneCallback = Box<dyn FnOnce(bool) -> Option<EventMetrics>>;
 /// Native scope objects execute their external destruction behavior on Drop.
 /// No fabricated default monitor exists and neither can expose a tree/host.

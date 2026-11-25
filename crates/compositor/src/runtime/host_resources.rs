@@ -5,14 +5,9 @@ use super::{
     resources::{RasterColorSpace, RasterSharedImage, RasterSyncToken, RasterTransferableResource},
     types::{CpuCompositorTypes, CpuSkiaBackend},
 };
-use crate::adapter::{
-    geometry::Size,
-    layer_tree_host_impl::{
-        HostImplResourceTypes, HostUIBitmapFormat, HostUIResourceBitmap, HostUIResourceImageInfo,
-        HostUIResourceTypes, HostUISharedMapping,
-    },
+use crate::adapter::layer_tree_host_impl::{
+    HostImplResourceTypes, HostUIResourceImageInfo, HostUIResourceTypes, HostUISharedMapping,
 };
-use std::sync::Arc;
 
 /// A default native WritableSharedMemoryMapping is invalid. A valid mapping is
 /// the actual external allocation and stays exclusively owned until dropped.
@@ -22,60 +17,8 @@ pub trait SharedMemoryMappingBackend {
 }
 #[derive(Default)]
 pub struct SharedMemoryMapping(pub Option<Box<dyn SharedMemoryMappingBackend>>);
-#[derive(Clone)]
-pub struct UIBitmap(pub Arc<dyn HostUIResourceBitmap + Send + Sync>);
-impl HostUIResourceBitmap for UIBitmap {
-    fn GetFormat(&self) -> HostUIBitmapFormat {
-        self.0.GetFormat()
-    }
-    fn GetSize(&self) -> Size {
-        self.0.GetSize()
-    }
-    fn GetOpaque(&self) -> bool {
-        self.0.GetOpaque()
-    }
-    fn GetPixels(&self) -> &[u8] {
-        self.0.GetPixels()
-    }
-    fn row_bytes(&self) -> usize {
-        self.0.row_bytes()
-    }
-}
-
-pub struct RawUIBitmap {
-    size: Size,
-    pixels: Vec<u8>,
-    row_bytes: usize,
-    opaque: bool,
-}
-impl RawUIBitmap {
-    pub fn new(size: Size, pixels: Vec<u8>, row_bytes: usize, opaque: bool) -> Self {
-        debug_assert_eq!(pixels.len(), row_bytes * size.height().max(0) as usize);
-        Self {
-            size,
-            pixels,
-            row_bytes,
-            opaque,
-        }
-    }
-}
-impl HostUIResourceBitmap for RawUIBitmap {
-    fn GetFormat(&self) -> HostUIBitmapFormat {
-        HostUIBitmapFormat::RGBA8
-    }
-    fn GetSize(&self) -> Size {
-        self.size
-    }
-    fn GetOpaque(&self) -> bool {
-        self.opaque
-    }
-    fn GetPixels(&self) -> &[u8] {
-        &self.pixels
-    }
-    fn row_bytes(&self) -> usize {
-        self.row_bytes
-    }
-}
+// cc::UIResourceBitmap is a shared cc value (cc/resources/ui_resource_bitmap.h).
+pub use layerize::commit::ui_resource::{RawUIBitmap, UIBitmap};
 // The UI-resource raster values the injected raster service produces
 // (cc_raster::ui_resource); the image-info facet is LayerTreeHostImpl's.
 pub use cc_raster::ui_resource::{SourceBitmap, UICanvas, UIImage, UIImageInfo, UISurface, UiImage};

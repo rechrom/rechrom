@@ -591,18 +591,8 @@ use std::sync::{Arc, Weak};
 
 // Source dependencies: cc/resources/ui_resource_bitmap.h; native gfx/Skia/GPU
 // owners remain external to cc. The enum is the source UIResourceBitmap format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HostUIBitmapFormat {
-    RGBA8,
-    ETC1,
-}
-pub trait HostUIResourceBitmap {
-    fn GetFormat(&self) -> HostUIBitmapFormat;
-    fn GetSize(&self) -> Size;
-    fn GetOpaque(&self) -> bool;
-    fn GetPixels(&self) -> &[u8];
-    fn row_bytes(&self) -> usize;
-}
+// The bitmap is a shared cc value (the main LayerTreeHost creates it).
+pub use layerize::commit::ui_resource::{HostUIBitmapFormat, HostUIResourceBitmap};
 // gpu::SharedImageUsageSet bits the UI-resource raster capability takes.
 pub use cc_raster::ui_resource::HostUISharedImageUsage;
 pub trait HostUISharedImage<T> {

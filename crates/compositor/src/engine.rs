@@ -471,7 +471,7 @@ impl CompositorEngine {
         &mut self,
         reason: crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason,
         main_thread_start_time: TimeTicks,
-        swap_promises: Vec<Box<crate::runtime::host_owners::SwapPromise<crate::runtime::skia::SkRegion>>>,
+        swap_promises: Vec<Box<crate::runtime::host_owners::SwapPromise>>,
         scroll_and_viewport_changes_synced: bool,
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.BeginMainFrameAborted(

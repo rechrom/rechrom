@@ -8,7 +8,6 @@ use super::{
     execution::{EngineTask, EngineTaskQueue},
     host_owners::SwapPromise,
     input::{LatencyInfo, LatencyInfoSwapPromiseMonitor},
-    skia::SkRegion,
 };
 use crate::{
     adapter::{
@@ -59,7 +58,7 @@ impl LatencyMonitorRegistry {
     pub(crate) fn Notify(
         &self,
         id: HostImplLatencyMonitorId,
-    ) -> Option<Box<SwapPromise<SkRegion>>> {
+    ) -> Option<Box<SwapPromise>> {
         let mut state = self
             .state
             .lock()
@@ -74,7 +73,7 @@ impl LatencyMonitorRegistry {
         let promise = LatencyInfoSwapPromise {
             latency: Some(latency.CloneForSwapPromise()),
         };
-        Some(Box::new(SwapPromise(Box::new(promise), std::marker::PhantomData)))
+        Some(Box::new(SwapPromise(Box::new(promise))))
     }
 
     pub(crate) fn Remove(&self, id: HostImplLatencyMonitorId) {

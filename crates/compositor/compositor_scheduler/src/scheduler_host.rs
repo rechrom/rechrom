@@ -160,20 +160,9 @@ pub trait SchedulerHost: SchedulerServices {
     fn SchedulerStateTrace(&self, state: SchedulerTrace);
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct BeginMainFrameMetrics {
-    pub handle_input_events: TimeDelta,
-    pub animate: TimeDelta,
-    pub style_update: TimeDelta,
-    pub layout_update: TimeDelta,
-    pub accessibility: TimeDelta,
-    pub prepaint: TimeDelta,
-    pub compositing_inputs: TimeDelta,
-    pub paint: TimeDelta,
-    pub composite_commit: TimeDelta,
-    pub update_layers: TimeDelta,
-    pub should_measure_smoothness: bool,
-}
+// cc/metrics/begin_main_frame_metrics.h is a shared cc value (the main
+// LayerTreeHost fills it, CommitState carries it to the impl scheduler).
+pub use compositor_values::begin_main_frame_metrics::BeginMainFrameMetrics;
 /// Event/feedback contents belong to the metrics owner. Scheduler only carries
 /// the host-owned identity through to that owner's reporting controller.
 #[derive(Clone, Debug)]

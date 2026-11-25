@@ -1,9 +1,9 @@
 //! Platform sequence affinity and callback argument types stay with the owner.
 //! The queue never executes callbacks and does not create or schedule threads.
 pub use compositor_frame::presentation_callback_buffer::SequenceChecker;
-// `Send`: main-thread presentation callbacks are posted back from the impl
-// thread (cc/trees/proxy_main.cc DidPresentCompositorFrame).
-pub type Callback<F> = Box<dyn FnOnce(&F) + Send>;
+// The callback types are shared with the main LayerTreeHost
+// (cc/trees/presentation_time_callback_buffer.h).
+pub use layerize::commit::presentation_time_callback::{Callback, SuccessfulCallbackWithDetails};
 /// Source OnceCallback payload. The first-scroll binding carries only weak
 /// identity and scalar event data, and executes in the current Host call scope.
 pub enum SuccessfulCallback {
@@ -18,4 +18,3 @@ impl From<Box<dyn FnOnce(super::time::TimeTicks) + Send>> for SuccessfulCallback
         Self::External(callback)
     }
 }
-pub type SuccessfulCallbackWithDetails<D> = Box<dyn FnOnce(&D) + Send>;
