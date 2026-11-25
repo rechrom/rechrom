@@ -11,6 +11,7 @@ pub mod compositor_frame_metadata;
 pub mod compositor_render_pass;
 pub mod copy_output_request;
 pub mod draw_quad;
+pub mod frame_timing_details;
 pub mod latency_info;
 pub mod offset_tag;
 pub mod raster_resource_lease;

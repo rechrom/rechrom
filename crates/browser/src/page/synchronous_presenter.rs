@@ -549,7 +549,7 @@ impl SynchronousPresenter {
                 frame_token,
                 surface_id: self.surface.0,
                 viz_submission: accepted.submission,
-                reason: compositor::PresentationUnavailableReason::OffscreenTarget,
+                reason: PresentationUnavailableReason::OffscreenTarget,
             },
         );
         Ok((true, returned))

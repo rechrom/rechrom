@@ -37,12 +37,7 @@ impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTyp
     type LayerTreeMutator = super::host_owners::LayerTreeMutator;
     // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
     type ImplInit = Box<super::engine_factory::ProxyImplInit<R>>;
-    // ProxyMain::DidPresentCompositorFrame's viz::FrameTimingDetails
-    // (cc/trees/proxy_main.h:71-78); the presentation callback lists already
-    // ran on the impl sequence (LayerTreeHost.cc:998-1003 order).
-    type PresentationFeedback = super::metadata::FrameTimingDetails;
     type ProxyDrawImage = ();
-    type EmbedderNotification = crate::engine::CompositorEmbedderNotification;
 }
 
 // The main half's binding to this family. The

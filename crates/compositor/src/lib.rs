@@ -43,10 +43,10 @@ pub mod engine;
 pub use engine::{
     CommitDeferralReason, CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
 
-    CompositorServices, CompositorInput, CompositorInputEffect, CompositorEmbedderNotification, CompositorMainThreadEffect, CompositorMutation,
+    CompositorServices, CompositorInput, CompositorInputEffect, CompositorEmbedderNotification, CompositorMutation,
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
-    PresentationUnavailableReason, BeginMainFrameState, ImplToMainTask, MainFamily,
+    BeginMainFrameState, ImplToMainTask, MainFamily,
     MainAnimationHost, MainHostParams, MainPropertyTreeFeatures, MainToImplTask, ProxyImplInit,
     CreateMainHostParams,
     ScrollPhase, ScrollSourceType, TargetSnapAreaElementIds,

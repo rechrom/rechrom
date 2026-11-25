@@ -8,7 +8,8 @@ pub(crate) mod canvas_2d;
 use paint::{PaintLifecycle as _, PaintPropertyUpdates as _, PaintResourceUpdates as _};
 use layout::fragment::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
-pub use compositor::CompositorMainThreadEffect;
+mod main_compositor_effect;
+pub use main_compositor_effect::{CompositorMainThreadEffect, PresentationUnavailableReason};
 use compositor::{
     CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
     CompositorFrameSubmission, CompositorOutput, CompositorViewportState,

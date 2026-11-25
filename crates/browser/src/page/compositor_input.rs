@@ -146,7 +146,7 @@ pub fn GestureCompositorInputWithDispatchId(
 pub fn PresentationFeedbackDetails(
     feedback: PageFramePresentationFeedback,
     clock: PageCompositorClockMapping,
-) -> Result<(u32, compositor::engine::CompositorFrameTimingDetails), CompositorMainThreadEffect> {
+) -> Result<(u32, viz_common::frame_timing_details::FrameTimingDetails), CompositorMainThreadEffect> {
     let PageFramePresentationFeedback {
         surface_id,
         viz_submission,
@@ -165,13 +165,13 @@ pub fn PresentationFeedbackDetails(
         };
         let reason = match reason {
             PagePresentationUnavailableReason::BackendHasNoTimestamp => {
-                compositor::PresentationUnavailableReason::BackendHasNoTimestamp
+                PresentationUnavailableReason::BackendHasNoTimestamp
             }
             PagePresentationUnavailableReason::OffscreenTarget => {
-                compositor::PresentationUnavailableReason::OffscreenTarget
+                PresentationUnavailableReason::OffscreenTarget
             }
             PagePresentationUnavailableReason::DiscardedBeforePresentation => {
-                compositor::PresentationUnavailableReason::DiscardedBeforePresentation
+                PresentationUnavailableReason::DiscardedBeforePresentation
             }
         };
         return Err(CompositorMainThreadEffect::PresentationFeedbackUnavailable {
@@ -181,7 +181,7 @@ pub fn PresentationFeedbackDetails(
             reason,
         });
     };
-    let mut details = compositor::engine::CompositorFrameTimingDetails::default();
+    let mut details = viz_common::frame_timing_details::FrameTimingDetails::default();
     details.frame_id = frame_id;
     details.presentation_feedback.timestamp = clock.TimeTicks(timestamp);
     details.presentation_feedback.interval =

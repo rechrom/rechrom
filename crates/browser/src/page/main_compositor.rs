@@ -658,7 +658,7 @@ impl PageDomainServices {
 pub(super) fn ImplNotificationEffect(
     task: compositor::ImplToMainTask,
 ) -> Option<CompositorMainThreadEffect> {
-    use compositor::CompositorEmbedderNotification as N;
+    use layerize::commit::proxy::CompositorEmbedderNotification as N;
     use layerize::commit::proxy::ImplToMain;
     Some(match task {
         ImplToMain::DidPresentCompositorFrame {

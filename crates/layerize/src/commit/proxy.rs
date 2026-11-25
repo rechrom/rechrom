@@ -139,19 +139,40 @@ pub trait ProxyTypes: LayerizeFamily {
     /// The impl construction values ProxyMain::InitializeOnImplThread
     /// passes to the ProxyImpl constructor (proxy_main.cc:80-89).
     type ImplInit: Send;
-    /// The presentation callbacks and FrameTimingDetails of
-    /// ProxyMain::DidPresentCompositorFrame (proxy_main.h:71-78).
-    type PresentationFeedback: Send;
     /// The std::unique_ptr<DrawImage> of ProxyImpl::QueueImageDecodeOnImpl.
     type ProxyDrawImage: Send;
-    /// Rechrom: the impl notifications Chromium delivers to the main thread
-    /// outside ProxyMain (ReportTimeSwapPromise's posted callbacks,
-    /// cc/trees/swap_promise.h; LayerTreeFrameSink DidNotProduceFrame; the
-    /// video frame provider's BeginFrames for VideoFrameSubmitter; custom
-    /// tracker metrics). They share the ProxyImpl -> ProxyMain queue as
-    /// `ImplToMain::EmbedderNotification`, so CompositorEngine's outputs
-    /// carry no main-thread effects.
-    type EmbedderNotification: Send;
+}
+
+/// Rechrom: the impl notifications Chromium delivers to the main thread
+/// outside ProxyMain (ReportTimeSwapPromise's posted callbacks,
+/// cc/trees/swap_promise.h; LayerTreeFrameSink DidNotProduceFrame; the video
+/// frame provider's BeginFrames for VideoFrameSubmitter; custom tracker
+/// metrics, LayerTreeHostClient::NotifyCompositorMetricsTrackerResults).
+/// They share the ProxyImpl -> ProxyMain queue as
+/// `ImplToMain::EmbedderNotification`, so CompositorEngine's outputs carry no
+/// main-thread effects. Plain cc / viz values.
+#[derive(Clone, Debug)]
+pub enum CompositorEmbedderNotification {
+    /// ReportTimeSwapPromise::DidSwap (cc/trees/swap_promise.h).
+    PresentationPromiseSwapped {
+        request: u64,
+        frame_token: u32,
+        swap_time: TimeTicks,
+    },
+    /// ReportTimeSwapPromise::DidNotSwap.
+    PresentationPromiseDidNotSwap { request: u64, failure_time: TimeTicks },
+    /// LayerTreeFrameSink::DidNotProduceFrame.
+    FrameNotProduced {
+        ack: compositor_values::begin_frame::BeginFrameAck,
+        reason: compositor_values::frame_skipped_reason::FrameSkippedReason,
+    },
+    /// The video frame provider's BeginFrame (VideoFrameSubmitter).
+    VideoBeginFrame { controller: u64, args: BeginFrameArgs },
+    VideoNeedsBeginFrames { needs: bool },
+    /// LayerTreeHostClient custom tracker metrics.
+    CompositorMetrics {
+        results: compositor_values::frame_sequence_metrics::CustomTrackerResults,
+    },
 }
 
 /// cc::MutatorEvents: the animation events of the impl AnimationHost for the
@@ -329,7 +350,7 @@ pub enum ImplToMain<F: ProxyTypes> {
     DidCommitAndDrawFrame(i32),
     DidPresentCompositorFrame {
         frame_token: u32,
-        feedback: F::PresentationFeedback,
+        feedback: viz_common::frame_timing_details::FrameTimingDetails,
     },
     /// Source: cc/trees/proxy_main.h NotifyImageDecodeRequestFinished
     /// (request_id, speculative, decode_succeeded).
@@ -347,6 +368,6 @@ pub enum ImplToMain<F: ProxyTypes> {
     BeginMainFrameNotExpectedSoon,
     BeginMainFrameNotExpectedUntil(TimeTicks),
     DidLoseLayerTreeFrameSink,
-    /// Rechrom: see `ProxyTypes::EmbedderNotification`.
-    EmbedderNotification(F::EmbedderNotification),
+    /// Rechrom: see `CompositorEmbedderNotification`.
+    EmbedderNotification(CompositorEmbedderNotification),
 }
