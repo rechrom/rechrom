@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 browser_tracing = { path = "../tracing" }
-compositor = { path = "../compositor" }
+# components/viz/common frame values and the cc/gfx shared values they carry
+# (cc::MathUtil, cc::Region over the SkRegion value backend).
+viz_common = { path = "../viz/viz_common" }
+cc_paint = { path = "../compositor/cc_paint" }
+compositor_tree = { path = "../compositor/compositor_tree" }
 foundation = { path = "../foundation" }
 viz = { path = "../viz" }

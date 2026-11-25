@@ -1,5 +1,5 @@
 use super::draw_polygon::DrawPolygon;
-use compositor::adapter::{geometry::Rect, property_tree::PropertyTreeTransform as _};
+use compositor_tree::geometry::Rect;
 use viz::common::quads::aggregated_render_pass::Transform;
 // Source: components/viz/service/display/bsp_walk_action.h:20-23
 // Rust capability dispatch replaces C++ virtual operator() inheritance.

@@ -11,3 +11,4 @@ browser_tracing = { path = "../../tracing" }
 compositor_animation = { path = "../compositor_animation" }
 compositor_tree = { path = "../compositor_tree" }
 compositor_values = { path = "../compositor_values" }
+viz_common = { path = "../../viz/viz_common" }

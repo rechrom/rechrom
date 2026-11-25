@@ -9,13 +9,11 @@
 #![allow(non_snake_case)]
 
 use crate::{render_target::RenderTarget, translated_adapter::*};
-use compositor::{
-    adapter::{
-        geometry::{PointF, Rect, RectF, Size},
-        property_types::BlendMode,
-    },
-    runtime::frame::{QuadMaterial, RenderPassId},
+use compositor_tree::{
+    geometry::{PointF, Rect, RectF, Size},
+    property_types::BlendMode,
 };
+use viz_common::draw_quad::{QuadMaterial, RenderPassId};
 use renderer::{RenderPassRequirements, RenderUpdate, RendererBackend, RendererSettings};
 use skia::{
     include::core::{
@@ -386,7 +384,7 @@ impl TranslatedSoftwareRenderer {
         let info = image_info(
             1,
             1,
-            compositor::adapter::resource_types::SinglePlaneFormat::BGRA_8888,
+            compositor_values::shared_image_format::SinglePlaneFormat::BGRA_8888,
         )?;
         if !target
             .read_pixels(
@@ -652,7 +650,7 @@ impl TranslatedSoftwareRenderer {
         else {
             return Ok(());
         };
-        let source = compositor::cc::base::math_util::MathUtil::ScaleRectProportional(
+        let source = compositor_tree::math_util::MathUtil::ScaleRectProportional(
             *tex_coord_rect,
             RectF::from(quad.geometry.rect),
             RectF::from(quad.geometry.visible_rect),
@@ -826,8 +824,8 @@ impl TranslatedSoftwareRenderer {
             self.update.tile_blit_eligible_quads += 1;
             let mapping = raster::execution::MapResourceForRead(lease.as_ref())?;
             let format = mapping.format();
-            if format == compositor::adapter::resource_types::SinglePlaneFormat::BGRA_8888
-                || format == compositor::adapter::resource_types::SinglePlaneFormat::BGRX_8888
+            if format == compositor_values::shared_image_format::SinglePlaneFormat::BGRA_8888
+                || format == compositor_values::shared_image_format::SinglePlaneFormat::BGRX_8888
             {
                 // With AA disabled, Skia covers exactly the device pixels
                 // whose centers lie inside the mapped destination rectangle.
@@ -997,8 +995,8 @@ impl TranslatedSoftwareRenderer {
                     }
                 }
             }
-            if format == compositor::adapter::resource_types::SinglePlaneFormat::BGRA_8888
-                || format == compositor::adapter::resource_types::SinglePlaneFormat::BGRX_8888
+            if format == compositor_values::shared_image_format::SinglePlaneFormat::BGRA_8888
+                || format == compositor_values::shared_image_format::SinglePlaneFormat::BGRX_8888
             {
                 let mode = match blend {
                     SkBlendMode::kSrc => N32BlitMode::Src,
@@ -1271,7 +1269,7 @@ impl TranslatedSoftwareRenderer {
             } else {
                 *tex_coord_rect
             };
-            let source = compositor::cc::base::math_util::MathUtil::ScaleRectProportional(
+            let source = compositor_tree::math_util::MathUtil::ScaleRectProportional(
                 source,
                 RectF::from(quad.geometry.rect),
                 RectF::from(quad.geometry.visible_rect),
@@ -2050,7 +2048,7 @@ impl TranslatedSoftwareRenderer {
         let info = image_info(
             captured.rect.width,
             captured.rect.height,
-            compositor::adapter::resource_types::SinglePlaneFormat::BGRA_8888,
+            compositor_values::shared_image_format::SinglePlaneFormat::BGRA_8888,
         )?;
         let row_bytes = captured.rect.width as usize * 4;
         if !target
@@ -2630,7 +2628,7 @@ impl RendererBackend for TranslatedSoftwareRenderer {
 #[cfg(test)]
 mod tests {
     use super::CanDrawRootDirect;
-    use compositor::adapter::geometry::Rect;
+    use compositor_tree::geometry::Rect;
 
     #[test]
     fn direct_root_accepts_padded_host_stride() {

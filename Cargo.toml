@@ -73,6 +73,7 @@ members = [
     "crates/layerize",
     "crates/compositor",
     "crates/viz",
+    "crates/viz/viz_common",
     "crates/renderer",
     "crates/renderer_skia",
     "crates/dom",

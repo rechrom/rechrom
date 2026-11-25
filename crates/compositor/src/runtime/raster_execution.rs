@@ -12,7 +12,7 @@ pub use crate::cc::raster::{
     task::{TaskGraph, TaskRef, TaskVector},
     task_graph_runner::{NamespaceToken, TaskGraphRunner as RasterTaskRunner},
 };
-use std::{any::Any, io};
+use std::io;
 /// The source worker borrows the immutable raster source, resolved transform,
 /// image provider and scroll-offset map only for this playback invocation.
 /// Neither this envelope nor the backend may retain a compositor owner/context.
@@ -51,21 +51,9 @@ pub trait RasterBufferProviderBackend<S: ?Sized, T: AxisTransform2d, I: ?Sized, 
     fn NotifyWorkSubmitted(&mut self);
     fn Shutdown(&mut self) -> io::Result<()>;
 }
-/// Opaque read lease to one immutable raster resource. The compositor and Viz
-/// retain identity and lifetime only; a concrete renderer asks the raster
-/// package to map the backend payload it understands.
-pub trait RasterResourceLease: Send + Sync {
-    fn resource_id(&self) -> ResourceId;
-    fn size(&self) -> Size;
-    fn format(&self) -> SharedImageFormat;
-    fn is_opaque(&self) -> bool;
-    /// Resource color identity used by Viz/Renderer. Tile resources default to
-    /// sRGB; multiplanar video overrides this with the decoded gfx::ColorSpace.
-    fn color_space(&self) -> super::resources::RasterColorSpace {
-        super::resources::RasterColorSpace::CreateSRGB()
-    }
-    fn backend_resource(&self) -> &(dyn Any + Send + Sync);
-}
+// The display read lease of an exported resource is a viz value
+// (viz_common::raster_resource_lease).
+pub use viz_common::raster_resource_lease::RasterResourceLease;
 /// Exact move-only origin-thread task results. Values are produced by native
 /// TileTask completion and consumed by its native TileManager owner; the
 /// envelope makes no activation/readiness decisions.

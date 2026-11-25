@@ -50,6 +50,10 @@ pub mod surface_id;
 pub mod color4f;
 // ui/gfx/color_space.h values (named by cc/paint, cc and viz).
 pub mod color_space;
+// ui/gfx/display_color_spaces.h (named by cc and viz).
+pub mod display_color_spaces;
+pub mod overlay_transform;
+pub mod unguessable_token;
 mod float_clip_rect_transform;
 pub mod location;
 pub mod prioritized_tile;

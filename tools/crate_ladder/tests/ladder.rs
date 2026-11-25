@@ -66,6 +66,9 @@ const ROOTS: &[(&str, Root)] = &[
     ("compositor_values", Root::Value),
     ("compositor_animation", Root::Value),
     ("cc_paint", Root::Value),
+    // components/viz/common: the CompositorFrame values cc fills and Viz and
+    // the renderer read (crates/viz/viz_common).
+    ("viz_common", Root::Value),
 ];
 
 struct Engine {
@@ -305,9 +308,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // out-of-flow layout.
     ("layout_base", "cssom", "third_party/blink/renderer/core/css/out_of_flow_data.h"),
     // Temporary (crate ladder B1-B4); each step removes its entries.
-    ("viz", "compositor", "B1: frame values move to viz_common"),
-    ("renderer", "compositor", "B1: frame values move to viz_common"),
-    ("renderer_skia", "compositor", "B1: frame values move to viz_common"),
     // Raster names its cc paint values from cc_paint through the compositor
     // and implements cc's injected raster service traits
     // (RasterBufferProviderBackend, TilingRasterSource, PictureRasterSource,

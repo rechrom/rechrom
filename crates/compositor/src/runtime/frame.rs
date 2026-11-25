@@ -1,15 +1,17 @@
-//! Native Viz owned values. All setters below only write the requested field or
-//! append the requested material. Layerization, culling, damage, tiling, draw
-//! order and scheduling remain in the canonical cc owners that call them.
+//! The cc producer facets of the viz frame values. The pass, quad and frame
+//! values are components/viz/common (`viz_common`); the canonical cc owners
+//! (layers, render surfaces, LayerTreeHostImpl) append into them through the
+//! facade traits implemented here. Throttling and frame-data facets live with
+//! their traits in compositor_draw / compositor_frame.
 pub use crate::adapter::layer_tree_impl::ResourceId;
 pub use crate::adapter::scheduler_host::BeginFrameAck;
 use crate::adapter::{
-    frame_data::{FrameDataRenderPass, FrameDataTraceValue, FrameDataTypes},
+    frame_data::FrameDataTypes,
     geometry::{PointF, Rect, RectF, Size, Vector2dF},
     layer_impl::{
         LayerImplDrawQuad, LayerImplRenderPass, LayerImplSharedQuadState, LayerImplTypes,
     },
-    layer_tree_impl::{Color4f, LayerTreeTypes},
+    layer_tree_impl::Color4f,
     occlusion::SkBlendMode,
     property_types::{MaskFilterInfo, SubtreeCaptureId, ViewTransitionElementResourceId},
     render_surface_impl::{RenderSurfaceRenderPass, RenderSurfaceTypes},
@@ -19,64 +21,43 @@ use crate::adapter::{
         TileBasedLayerImplTypes, TileBasedRenderPass, TileBasedSharedQuadState,
     },
 };
-use std::{collections::HashMap, marker::PhantomData, sync::Arc};
-// Quad and render-pass values live in compositor_frame; this facade keeps the
-// producer-side trait wiring below.
-pub use compositor_frame::quads::{
+use layerize::commit::CommitTypes;
+use std::sync::Arc;
+pub use viz_common::compositor_render_pass::{
+    CompositorFrame, CompositorRenderPass, FrameValueTypes, FrameValues,
+};
+pub use viz_common::draw_quad::{
     DrawQuad, DrawQuadHandle, QuadGeometry, QuadMaterial, RenderPassId, SharedQuadState,
     SharedQuadStateHandle,
 };
-/// External geometry/Paint values selected once by the production family.
-/// These are value/backend types, never compositor owner implementations.
-pub trait FrameValueTypes {
-    type FrameTransform: Clone + Default;
-    type FrameFilters: Clone + Default;
-    type FramePath: Clone;
-    type FrameCopyRequest;
-    type PictureDisplayItemList;
-}
-/// Shared native field storage for any concrete injected geometry/Paint backend.
-/// A full owner family implements this same value vocabulary; no owner is held.
-pub struct FrameValues<T, F, P, Q, S, Timing, L>(PhantomData<(T, F, P, Q, S, Timing, L)>);
-impl<T: Clone + Default, F: Clone + Default, P: Clone, Q, S, Timing, L> FrameValueTypes
-    for FrameValues<T, F, P, Q, S, Timing, L>
-{
-    type FrameTransform = T;
-    type FrameFilters = F;
-    type FramePath = P;
-    type FrameCopyRequest = Q;
-    type PictureDisplayItemList = L;
-}
-impl<T: Clone + Default, F: Clone + Default, P: Clone, Q, S, Timing: Clone, L> FrameDataTypes
-    for FrameValues<T, F, P, Q, S, Timing, L>
-{
-    type SharedQuadStateHandle = SharedQuadStateHandle;
-    type DrawQuadHandle = DrawQuadHandle;
-    type RenderPassId = RenderPassId;
-    type SurfaceId = S;
-    type ResourceId = ResourceId;
-    type RenderPass = CompositorRenderPass<Self>;
-    type BeginFrameAck = BeginFrameAck;
-    type TreesInVizTiming = Timing;
-}
-/// One root-family constraint makes all canonical material adapters use this
-/// exact owned pass/state/quad storage and the existing unique native IDs.
+
+/// The frame value family of one compositor family.
+type Values<B> = <B as FrameTypes>::FrameValues;
+type DisplayList<B> = <Values<B> as FrameValueTypes>::PictureDisplayItemList;
+
+/// Binds the root family to the viz frame values it produces: a pass is
+/// `CompositorRenderPass<Self::FrameValues>`, whose value types are exactly
+/// the family's commit values (as cc::LayerTreeHostImpl fills a
+/// viz::CompositorRenderPass with its gfx::Transform and FilterOperations).
 pub trait FrameTypes:
-    FrameValueTypes<
-        FrameTransform = <Self as layerize::commit::CommitTypes>::Transform,
-        FrameFilters = <Self as layerize::commit::CommitTypes>::Filters,
-        FramePath = <Self as layerize::commit::CommitTypes>::Path,
-        FrameCopyRequest = <Self as layerize::commit::CommitTypes>::CopyOutputRequest,
-    > + LayerImplTypes<
-        SharedQuadState = SharedQuadState<<Self as layerize::commit::CommitTypes>::Transform>,
-        DrawQuad = DrawQuad<<Self as FrameValueTypes>::PictureDisplayItemList>,
+    LayerImplTypes<
+        SharedQuadState = SharedQuadState<<Self as CommitTypes>::Transform>,
+        DrawQuad = DrawQuad<
+            <<Self as FrameTypes>::FrameValues as FrameValueTypes>::PictureDisplayItemList,
+        >,
     > + FrameDataTypes<
         RenderPassId = RenderPassId,
         SharedQuadStateHandle = SharedQuadStateHandle,
         DrawQuadHandle = DrawQuadHandle,
-        RenderPass = CompositorRenderPass<Self>,
+        RenderPass = CompositorRenderPass<<Self as FrameTypes>::FrameValues>,
     >
 {
+    type FrameValues: FrameValueTypes<
+        FrameTransform = <Self as CommitTypes>::Transform,
+        FrameFilters = <Self as CommitTypes>::Filters,
+        FramePath = <Self as CommitTypes>::Path,
+        FrameCopyRequest = <Self as CommitTypes>::CopyOutputRequest,
+    >;
 }
 impl<T: Clone> LayerImplSharedQuadState<T> for SharedQuadState<T> {
     fn opacity(&self) -> f32 {
@@ -143,215 +124,7 @@ impl<L> LayerImplDrawQuad for DrawQuad<L> {
         DrawQuad::resource_id(self)
     }
 }
-/// Owned native Viz pass. Copy requests are move-only; the pass intentionally
-/// has no blanket Clone, so resource/result ownership cannot be duplicated.
-pub struct CompositorRenderPass<V: FrameValueTypes> {
-    pub id: RenderPassId,
-    pub output_rect: Rect,
-    pub damage_rect: Rect,
-    pub transform_to_root_target: V::FrameTransform,
-    pub filters: V::FrameFilters,
-    pub backdrop_filters: V::FrameFilters,
-    pub backdrop_filter_bounds: Option<V::FramePath>,
-    pub generate_mipmap: bool,
-    pub subtree_size: Size,
-    pub has_damage_from_contributing_content: bool,
-    pub subtree_capture_id: SubtreeCaptureId,
-    pub cache_render_pass: bool,
-    pub view_transition_element_resource_id: ViewTransitionElementResourceId,
-    pub has_transparent_background: bool,
-    pub copy_requests: Vec<Box<V::FrameCopyRequest>>,
-    pub shared_quad_state_list: Vec<SharedQuadState<V::FrameTransform>>,
-    pub quad_list: Vec<DrawQuad<V::PictureDisplayItemList>>,
-}
-impl<V: FrameValueTypes> Default for CompositorRenderPass<V> {
-    fn default() -> Self {
-        Self {
-            id: RenderPassId::default(),
-            output_rect: Rect::default(),
-            damage_rect: Rect::default(),
-            transform_to_root_target: V::FrameTransform::default(),
-            filters: V::FrameFilters::default(),
-            backdrop_filters: V::FrameFilters::default(),
-            backdrop_filter_bounds: None,
-            generate_mipmap: false,
-            subtree_size: Size::default(),
-            has_damage_from_contributing_content: false,
-            subtree_capture_id: SubtreeCaptureId::default(),
-            cache_render_pass: false,
-            view_transition_element_resource_id: ViewTransitionElementResourceId::default(),
-            has_transparent_background: true,
-            copy_requests: Vec::new(),
-            shared_quad_state_list: Vec::new(),
-            quad_list: Vec::new(),
-        }
-    }
-}
-impl<V: FrameValueTypes> CompositorRenderPass<V> {
-    pub fn new(num_contributors: usize) -> Self {
-        let mut pass = Self::default();
-        pass.shared_quad_state_list.reserve(num_contributors);
-        pass
-    }
-    pub fn AppendSharedQuadState(&mut self) -> SharedQuadStateHandle {
-        let id = SharedQuadStateHandle::FromIndex(self.shared_quad_state_list.len());
-        self.shared_quad_state_list.push(SharedQuadState::default());
-        id
-    }
-    pub fn SharedQuadState(
-        &self,
-        id: SharedQuadStateHandle,
-    ) -> &SharedQuadState<V::FrameTransform> {
-        &self.shared_quad_state_list[id.Index()]
-    }
-    /// Viz validation resolves the native handle without assuming that an
-    /// untrusted submitted frame satisfies the producer-side invariant.
-    pub fn TrySharedQuadState(
-        &self,
-        id: SharedQuadStateHandle,
-    ) -> Option<&SharedQuadState<V::FrameTransform>> {
-        self.shared_quad_state_list.get(id.Index())
-    }
-    pub fn SharedQuadStateMutable(
-        &mut self,
-        id: SharedQuadStateHandle,
-    ) -> &mut SharedQuadState<V::FrameTransform> {
-        &mut self.shared_quad_state_list[id.Index()]
-    }
-    fn AppendMaterial(
-        &mut self,
-        material: QuadMaterial<V::PictureDisplayItemList>,
-    ) -> DrawQuadHandle {
-        let id = DrawQuadHandle::FromIndex(self.quad_list.len());
-        self.quad_list.push(DrawQuad {
-            geometry: QuadGeometry::default(),
-            material,
-        });
-        id
-    }
-    fn SetQuad(
-        &mut self,
-        quad: DrawQuadHandle,
-        shared: SharedQuadStateHandle,
-        rect: Rect,
-        visible: Rect,
-        needs_blending: bool,
-        material: QuadMaterial<V::PictureDisplayItemList>,
-    ) {
-        assert!(
-            shared.Index() < self.shared_quad_state_list.len(),
-            "quad must reference its producing pass's actual shared state"
-        );
-        self.quad_list[quad.Index()] = DrawQuad {
-            geometry: QuadGeometry {
-                shared_quad_state: Some(shared),
-                rect,
-                visible_rect: visible,
-                needs_blending,
-            },
-            material,
-        };
-    }
-
-    /// Appends the current Chromium video quad shape. The caller owns resource
-    /// import/release and the shared state, matching VideoResourceUpdater.
-    pub fn AppendTextureQuad(
-        &mut self,
-        shared: SharedQuadStateHandle,
-        rect: Rect,
-        visible: Rect,
-        needs_blending: bool,
-        resource_id: ResourceId,
-        tex_coord_rect: RectF,
-        is_tex_coord_rect_normalized: bool,
-        background_color: Color4f,
-        nearest_neighbor: bool,
-        secure_output_only: bool,
-        is_video_frame: bool,
-        force_rgbx: bool,
-    ) {
-        assert_ne!(resource_id, ResourceId::default());
-        let material = QuadMaterial::Texture {
-            resource_id,
-            tex_coord_rect,
-            is_tex_coord_rect_normalized,
-            background_color,
-            nearest_neighbor,
-            secure_output_only,
-            is_video_frame,
-            force_rgbx,
-        };
-        let quad = self.AppendMaterial(material.clone());
-        self.SetQuad(quad, shared, rect, visible, needs_blending, material);
-    }
-
-    /// Source: components/viz/common/quads/surface_draw_quad.cc:23-35,37-53.
-    pub fn AppendSurfaceQuad(
-        &mut self,
-        shared: SharedQuadStateHandle,
-        rect: Rect,
-        visible: Rect,
-        needs_blending: bool,
-        surface_range: crate::runtime::types::SurfaceRange,
-        default_background_color: Color4f,
-        stretch_content_to_fill_bounds: bool,
-        is_reflection: bool,
-        allow_merge: bool,
-    ) {
-        let material = QuadMaterial::Surface {
-            surface_range,
-            default_background_color,
-            stretch_content_to_fill_bounds,
-            is_reflection,
-            allow_merge,
-        };
-        let quad = self.AppendMaterial(material.clone());
-        self.SetQuad(quad, shared, rect, visible, needs_blending, material);
-    }
-    pub fn SetNew(
-        &mut self,
-        id: RenderPassId,
-        output: Rect,
-        damage: Rect,
-        transform: &V::FrameTransform,
-    ) {
-        self.id = id;
-        self.output_rect = output;
-        self.damage_rect = damage;
-        self.transform_to_root_target = transform.clone();
-    }
-}
-impl<V: FrameValueTypes> FrameDataRenderPass for CompositorRenderPass<V> {
-    type ResourceId = ResourceId;
-    fn AsValueInto<T: FrameDataTraceValue>(
-        &self,
-        value: &mut T,
-        resources: &mut HashMap<ResourceId, usize>,
-    ) {
-        value.BeginDictionary();
-        value.SetBoolean(
-            "has_transparent_background",
-            self.has_transparent_background,
-        );
-        value.SetBoolean(
-            "has_damage_from_contributing_content",
-            self.has_damage_from_contributing_content,
-        );
-        value.BeginArray("quad_list");
-        for quad in &self.quad_list {
-            value.BeginDictionary();
-            let id = quad.resource_id();
-            if id != ResourceId::default() {
-                let next = resources.len();
-                resources.entry(id).or_insert(next);
-            }
-            value.SetBoolean("needs_blending", quad.geometry.needs_blending);
-            value.EndDictionary();
-        }
-        value.EndArray();
-    }
-}
-impl<B: FrameTypes> LayerImplRenderPass<B> for CompositorRenderPass<B> {
+impl<B: FrameTypes> LayerImplRenderPass<B> for CompositorRenderPass<Values<B>> {
     fn AppendDebugBorderQuad(
         &mut self,
         state: SharedQuadStateHandle,
@@ -377,18 +150,23 @@ impl<B: FrameTypes> LayerImplRenderPass<B> for CompositorRenderPass<B> {
         );
     }
 }
-impl<B: FrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B> for CompositorRenderPass<B> {
+impl<B: FrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B>
+    for CompositorRenderPass<Values<B>>
+{
     fn CreateAndAppendSharedQuadState(&mut self) -> SharedQuadStateHandle {
         self.AppendSharedQuadState()
     }
-    fn SharedQuadState(&self, id: SharedQuadStateHandle) -> &SharedQuadState<B::FrameTransform> {
-        self.SharedQuadState(id)
+    fn SharedQuadState(
+        &self,
+        id: SharedQuadStateHandle,
+    ) -> &SharedQuadState<<B as CommitTypes>::Transform> {
+        CompositorRenderPass::SharedQuadState(self, id)
     }
     fn SharedQuadStateMutable(
         &mut self,
         id: SharedQuadStateHandle,
-    ) -> &mut SharedQuadState<B::FrameTransform> {
-        self.SharedQuadStateMutable(id)
+    ) -> &mut SharedQuadState<<B as CommitTypes>::Transform> {
+        CompositorRenderPass::SharedQuadStateMutable(self, id)
     }
     fn CreateAndAppendSolidColorDrawQuad(&mut self) -> DrawQuadHandle {
         self.AppendMaterial(QuadMaterial::SolidColor {
@@ -443,7 +221,7 @@ impl<B: FrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B> for Compo
         );
     }
 }
-impl<B> SurfaceRenderPass<B> for CompositorRenderPass<B>
+impl<B> SurfaceRenderPass<B> for CompositorRenderPass<Values<B>>
 where
     B: FrameTypes
         + SurfaceLayerImplTypes<
@@ -475,8 +253,10 @@ where
         );
     }
 }
-impl<B: FrameTypes + TileBasedLayerImplTypes> TileBasedRenderPass<B> for CompositorRenderPass<B> {
-    fn DrawQuad(&self, id: DrawQuadHandle) -> &DrawQuad<B::PictureDisplayItemList> {
+impl<B: FrameTypes + TileBasedLayerImplTypes> TileBasedRenderPass<B>
+    for CompositorRenderPass<Values<B>>
+{
+    fn DrawQuad(&self, id: DrawQuadHandle) -> &DrawQuad<DisplayList<B>> {
         &self.quad_list[id.Index()]
     }
     fn CreateAndAppendDebugBorderDrawQuad(&mut self) -> DrawQuadHandle {
@@ -546,23 +326,25 @@ impl<B: FrameTypes + TileBasedLayerImplTypes> TileBasedRenderPass<B> for Composi
         );
     }
 }
-impl<B: FrameTypes + RenderSurfaceTypes> RenderSurfaceRenderPass<B> for CompositorRenderPass<B> {
+impl<B: FrameTypes + RenderSurfaceTypes> RenderSurfaceRenderPass<B>
+    for CompositorRenderPass<Values<B>>
+{
     fn SetNew(
         &mut self,
         id: RenderPassId,
         output: Rect,
         damage: Rect,
-        transform: &B::FrameTransform,
+        transform: &<B as CommitTypes>::Transform,
     ) {
-        self.SetNew(id, output, damage, transform);
+        CompositorRenderPass::SetNew(self, id, output, damage, transform);
     }
-    fn SetFilters(&mut self, value: &B::FrameFilters) {
+    fn SetFilters(&mut self, value: &<B as CommitTypes>::Filters) {
         self.filters = value.clone();
     }
-    fn SetBackdropFilters(&mut self, value: &B::FrameFilters) {
+    fn SetBackdropFilters(&mut self, value: &<B as CommitTypes>::Filters) {
         self.backdrop_filters = value.clone();
     }
-    fn SetBackdropFilterBounds(&mut self, value: Option<B::FramePath>) {
+    fn SetBackdropFilterBounds(&mut self, value: Option<<B as CommitTypes>::Path>) {
         self.backdrop_filter_bounds = value;
     }
     fn set_generate_mipmap(&mut self, value: bool) {
@@ -636,115 +418,7 @@ impl<B: FrameTypes + RenderSurfaceTypes> RenderSurfaceRenderPass<B> for Composit
         );
     }
 }
-/// Final owned output. Metadata/resources use the production family's native
-/// value types; no live compositor/paint tree or raster pixel owner is copied.
-pub struct CompositorFrame<M, P, R> {
-    pub metadata: M,
-    pub render_pass_list: Vec<Box<P>>,
-    pub resource_list: Vec<R>,
-}
-impl<M: Default, P, R> Default for CompositorFrame<M, P, R> {
-    fn default() -> Self {
-        Self {
-            metadata: M::default(),
-            render_pass_list: Vec::new(),
-            resource_list: Vec::new(),
-        }
-    }
-}
 
-/// Borrow-only native DrawQuad/shared-quad-state projection. A pass resolves
-/// the handle at the point of iteration; neither reference is saved in a quad.
-pub struct ThrottleQuadView<'a, T, L> {
-    quad: &'a DrawQuad<L>,
-    shared: &'a SharedQuadState<T>,
-}
-impl<T, F, L> crate::adapter::throttle::ThrottleQuad<T, RenderPassId, F>
-    for ThrottleQuadView<'_, T, L>
-{
-    fn render_pass_quad(
-        &self,
-    ) -> Option<&dyn crate::adapter::throttle::RenderPassQuad<RenderPassId>> {
-        matches!(
-            self.quad.material,
-            QuadMaterial::CompositorRenderPass { .. }
-        )
-        .then_some(self.quad)
-    }
-    fn surface_quad(&self) -> Option<&dyn crate::adapter::throttle::SurfaceQuad<F>> {
-        // None of the represented native materials is a SurfaceDrawQuad.
-        // Surface allocation/aggregation belongs to the external Viz boundary.
-        None
-    }
-    fn quad_to_target_transform(&self) -> &T {
-        &self.shared.quad_to_target_transform
-    }
-    fn clip_rect(&self) -> Option<Rect> {
-        self.shared.clip_rect
-    }
-    fn visible_rect(&self) -> Rect {
-        self.quad.geometry.visible_rect
-    }
-}
-pub struct ThrottleQuads<'a, V: FrameValueTypes> {
-    pass: &'a CompositorRenderPass<V>,
-    iter: std::slice::Iter<'a, DrawQuad<V::PictureDisplayItemList>>,
-}
-impl<'a, V: FrameValueTypes> Iterator for ThrottleQuads<'a, V> {
-    type Item = ThrottleQuadView<'a, V::FrameTransform, V::PictureDisplayItemList>;
-    fn next(&mut self) -> Option<Self::Item> {
-        let quad = self.iter.next()?;
-        let handle = quad
-            .geometry
-            .shared_quad_state
-            .expect("native quad has a shared quad state");
-        let shared = self
-            .pass
-            .shared_quad_state_list
-            .get(handle.Index())
-            .expect("native shared state belongs to this pass");
-        Some(ThrottleQuadView { quad, shared })
-    }
-}
-impl<V, F> crate::adapter::throttle::ThrottlePass<V::FrameTransform, RenderPassId, F>
-    for CompositorRenderPass<V>
-where
-    V: FrameValueTypes,
-    V::FrameFilters: crate::adapter::draw_property::DrawFilters,
-    V::FramePath: crate::adapter::geometry::Path,
-{
-    type Quad<'a>
-        = ThrottleQuadView<'a, V::FrameTransform, V::PictureDisplayItemList>
-    where
-        Self: 'a;
-    type Quads<'a>
-        = ThrottleQuads<'a, V>
-    where
-        Self: 'a;
-    fn id(&self) -> RenderPassId {
-        self.id
-    }
-    fn filters_have_blur(&self) -> bool {
-        crate::adapter::draw_property::DrawFilters::HasBlurFilter(&self.filters)
-    }
-    fn backdrop_filters_have_blur(&self) -> bool {
-        crate::adapter::draw_property::DrawFilters::HasBlurFilter(&self.backdrop_filters)
-    }
-    fn output_rect(&self) -> Rect {
-        self.output_rect
-    }
-    fn backdrop_filter_bounds(&self) -> Option<RectF> {
-        self.backdrop_filter_bounds
-            .as_ref()
-            .map(crate::adapter::geometry::Path::bounds)
-    }
-    fn quads(&self) -> Self::Quads<'_> {
-        ThrottleQuads {
-            pass: self,
-            iter: self.quad_list.iter(),
-        }
-    }
-}
 impl<V: FrameValueTypes> crate::adapter::layer_tree_host_impl::HostMetadataPass
     for CompositorRenderPass<V>
 {
@@ -755,9 +429,10 @@ impl<V: FrameValueTypes> crate::adapter::layer_tree_host_impl::HostMetadataPass
         LayerImplDrawQuad::resource_id(&self.quad_list[index])
     }
 }
-impl<B> crate::adapter::layer_tree_host_impl::HostDrawPass<B> for CompositorRenderPass<B>
+impl<B> crate::adapter::layer_tree_host_impl::HostDrawPass<B> for CompositorRenderPass<Values<B>>
 where
     B: FrameTypes + crate::adapter::layer_tree_host_impl::HostImplTypes,
+    <B as CommitTypes>::Filters: crate::adapter::throttle::ThrottleFilters,
 {
     fn Create() -> Box<Self> {
         Box::new(Self::default())
@@ -767,9 +442,9 @@ where
         id: RenderPassId,
         output: Rect,
         damage: Rect,
-        transform: B::FrameTransform,
+        transform: <B as CommitTypes>::Transform,
     ) {
-        Self::SetNew(self, id, output, damage, &transform);
+        CompositorRenderPass::SetNew(self, id, output, damage, &transform);
     }
     fn set_damage_rect(&mut self, rect: Rect) {
         self.damage_rect = rect;
@@ -777,10 +452,10 @@ where
     fn set_has_transparent_background(&mut self, value: bool) {
         self.has_transparent_background = value;
     }
-    fn copy_requests(&self) -> &Vec<Box<B::FrameCopyRequest>> {
+    fn copy_requests(&self) -> &Vec<Box<<B as CommitTypes>::CopyOutputRequest>> {
         &self.copy_requests
     }
-    fn copy_requests_mut(&mut self) -> &mut Vec<Box<B::FrameCopyRequest>> {
+    fn copy_requests_mut(&mut self) -> &mut Vec<Box<<B as CommitTypes>::CopyOutputRequest>> {
         &mut self.copy_requests
     }
     fn quad_count(&self) -> usize {
@@ -835,7 +510,7 @@ where
     fn SetSharedQuadStateAll(
         &mut self,
         state: SharedQuadStateHandle,
-        transform: B::FrameTransform,
+        transform: <B as CommitTypes>::Transform,
         rect: Rect,
         visible: Rect,
         mask: MaskFilterInfo,
@@ -893,7 +568,7 @@ where
 impl<B> crate::adapter::layer_tree_host_impl::HostCompositorFrame<B>
     for CompositorFrame<
         B::CompositorFrameMetadata,
-        CompositorRenderPass<B>,
+        CompositorRenderPass<Values<B>>,
         B::TransferableResource,
     >
 where
@@ -908,10 +583,10 @@ where
     fn set_metadata(&mut self, value: B::CompositorFrameMetadata) {
         self.metadata = value;
     }
-    fn render_passes(&self) -> &[Box<CompositorRenderPass<B>>] {
+    fn render_passes(&self) -> &[Box<CompositorRenderPass<Values<B>>>] {
         &self.render_pass_list
     }
-    fn set_render_passes(&mut self, value: Vec<Box<CompositorRenderPass<B>>>) {
+    fn set_render_passes(&mut self, value: Vec<Box<CompositorRenderPass<Values<B>>>>) {
         self.render_pass_list = value;
     }
     fn resource_list_mut(&mut self) -> &mut Vec<B::TransferableResource> {
@@ -930,12 +605,17 @@ impl crate::adapter::layer_tree_host_impl::HostMetadataBeginFrameAck for BeginFr
 
 /// Narrow external Viz/gfx value function. This is independent of Skia and
 /// carries no compositor owner, tree, frame lifecycle or layerization policy.
-pub trait ViewTransitionGeometry: FrameValueTypes {
-    fn GetViewTransitionTransform(shared_element_quad: Rect, output: Rect) -> Self::FrameTransform;
+pub trait ViewTransitionGeometry {
+    type ViewTransitionTransform;
+    fn GetViewTransitionTransform(
+        shared_element_quad: Rect,
+        output: Rect,
+    ) -> Self::ViewTransitionTransform;
 }
 
-impl<B> crate::adapter::picture_layer_impl::PictureRenderPass<B> for CompositorRenderPass<B>
-where B:FrameTypes+crate::adapter::picture_layer_impl::PictureLayerImplTypes+FrameValueTypes<PictureDisplayItemList=<<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource as crate::adapter::picture_layer_impl::PictureRasterSource>::DisplayItemList>
+impl<B> crate::adapter::picture_layer_impl::PictureRenderPass<B> for CompositorRenderPass<Values<B>>
+where B:FrameTypes+crate::adapter::picture_layer_impl::PictureLayerImplTypes,
+      Values<B>: FrameValueTypes<PictureDisplayItemList=<<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource as crate::adapter::picture_layer_impl::PictureRasterSource>::DisplayItemList>
 {
  fn CreateAndAppendPictureDrawQuad(&mut self)->DrawQuadHandle {
   // Native default construction before SetNew. No fabricated display content.

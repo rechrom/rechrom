@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = []
-chromeos = []
+chromeos = ["compositor_values/chromeos"]
 
 [dependencies]
 scroll_animation = { path = "scroll_animation" }
@@ -24,6 +24,7 @@ compositor_scheduler = { path = "compositor_scheduler" }
 compositor_input = { path = "compositor_input" }
 compositor_animation = { path = "compositor_animation" }
 compositor_values = { path = "compositor_values" }
+viz_common = { path = "../viz/viz_common" }
 paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
 foundation = { path = "../foundation" }

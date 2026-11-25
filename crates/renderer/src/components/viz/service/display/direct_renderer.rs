@@ -10,11 +10,11 @@ use super::{
 use crate::components::viz::common::display::renderer_settings::{
     DebugRendererSettings, RendererSettings,
 };
-use compositor::{
-    adapter::geometry::{PointF, Rect, RectF, Size},
-    cc::base::math_util::MathUtil,
-    runtime::frame::{QuadMaterial, RenderPassId},
+use compositor_tree::{
+    geometry::{PointF, Rect, RectF, Size},
+    math_util::MathUtil,
 };
+use viz_common::draw_quad::{QuadMaterial, RenderPassId};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,

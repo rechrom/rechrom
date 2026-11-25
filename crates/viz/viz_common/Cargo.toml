@@ -1,0 +1,19 @@
+[package]
+name = "viz_common"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# components/viz/common: the values a CompositorFrame carries from cc to Viz
+# and the display renderer (quads, render passes, frame metadata, surface
+# ids, transferable/returned resources and shared-image backend values,
+# CopyOutputRequest, BeginFrameAck, LatencyInfo). Values only; no lifecycle,
+# thread or engine state. Like components/viz/common, it names cc/paint (the
+# PictureDrawQuad display list) and the cc/gfx shared values.
+[dependencies]
+cc_paint = { path = "../../compositor/cc_paint" }
+compositor_tree = { path = "../../compositor/compositor_tree" }
+compositor_values = { path = "../../compositor/compositor_values" }
+scroll_animation = { path = "../../compositor/scroll_animation" }
+image_resource = { path = "../../image_resource" }
+paint_model = { path = "../../paint/paint_model" }

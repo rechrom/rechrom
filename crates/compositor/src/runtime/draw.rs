@@ -273,7 +273,7 @@ impl<'a, B: RenderSurfaceTypes> DamageContext<'a, B> {
 impl<B> RuntimeDamageContext for DamageContext<'_, B>
 where
     B: RenderSurfaceTypes<RenderSurface = RenderSurfaceImpl<B>>
-        + super::frame::ViewTransitionGeometry<FrameTransform = B::Transform>,
+        + super::frame::ViewTransitionGeometry<ViewTransitionTransform = B::Transform>,
     B::Layer: DamageLayer<B::Transform, i32, Trees = PropertyTreesFor<B>>,
 {
     type Trees = PropertyTreesFor<B>;

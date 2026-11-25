@@ -1,16 +1,7 @@
 //! One concrete CPU compositor family. R is the external Skia value backend;
 //! cc owners are canonical types, never supplied by R or copied from old core.
-use super::{
-    frame,
-    geometry::{RoundedRectTransformBackend, Transform},
-    metadata,
-};
-use crate::adapter::{
-    frame_data::FrameDataTypes,
-    main_layer::MainLayerCopyOutputRequest,
-    property_tree::PropertyTreeCopyOutputRequest,
-    region_backend::SkRegionBackend,
-};
+use super::{frame, geometry::Transform, metadata};
+use crate::adapter::frame_data::FrameDataTypes;
 use std::{marker::PhantomData, sync::Arc};
 
 pub use layerize::commit::skia_value_backend::MainSkiaBackend;
@@ -53,74 +44,9 @@ impl<R: CpuSkiaBackend> CpuCompositorTypes<R> {
 }
 
 pub use layerize::commit::main_callbacks::{ResultTaskRunner, TaskRunner};
-/// Native Viz request ownership and abort-on-drop behavior are implemented by
-/// the external Viz request owner. This wrapper forwards only native fields.
-pub trait CopyOutputRequestBackend:
-    PropertyTreeCopyOutputRequest + MainLayerCopyOutputRequest<TaskRunner = TaskRunner> + Send + Sync
-{
-}
-impl<T> CopyOutputRequestBackend for T where
-    T: PropertyTreeCopyOutputRequest
-        + MainLayerCopyOutputRequest<TaskRunner = TaskRunner>
-        + Send
-        + Sync
-{
-}
-pub struct CopyOutputRequest(pub Box<dyn CopyOutputRequestBackend>);
-impl PropertyTreeCopyOutputRequest for CopyOutputRequest {
-    fn has_area(&self) -> bool {
-        PropertyTreeCopyOutputRequest::has_area(self.0.as_ref())
-    }
-    fn area(&self) -> crate::adapter::geometry::Rect {
-        PropertyTreeCopyOutputRequest::area(self.0.as_ref())
-    }
-    fn set_area(&mut self, area: crate::adapter::geometry::Rect) {
-        PropertyTreeCopyOutputRequest::set_area(self.0.as_mut(), area);
-    }
-    fn is_scaled(&self) -> bool {
-        self.0.is_scaled()
-    }
-    fn has_result_selection(&self) -> bool {
-        self.0.has_result_selection()
-    }
-    fn scale_from(&self) -> crate::adapter::geometry::Vector2d {
-        self.0.scale_from()
-    }
-    fn scale_to(&self) -> crate::adapter::geometry::Vector2d {
-        self.0.scale_to()
-    }
-    fn SetScaleRatio(
-        &mut self,
-        from: crate::adapter::geometry::Vector2d,
-        to: crate::adapter::geometry::Vector2d,
-    ) {
-        self.0.SetScaleRatio(from, to);
-    }
-}
-impl MainLayerCopyOutputRequest for CopyOutputRequest {
-    type TaskRunner = TaskRunner;
-    fn has_result_task_runner(&self) -> bool {
-        self.0.has_result_task_runner()
-    }
-    fn set_result_task_runner(&mut self, runner: TaskRunner) {
-        self.0.set_result_task_runner(runner);
-    }
-    fn has_area(&self) -> bool {
-        MainLayerCopyOutputRequest::has_area(self.0.as_ref())
-    }
-    fn area(&self) -> &crate::adapter::geometry::Rect {
-        MainLayerCopyOutputRequest::area(self.0.as_ref())
-    }
-    fn set_area(&mut self, area: crate::adapter::geometry::Rect) {
-        MainLayerCopyOutputRequest::set_area(self.0.as_mut(), area);
-    }
-    fn has_source(&self) -> bool {
-        self.0.has_source()
-    }
-    fn source(&self) -> crate::adapter::layer_tree_impl::UnguessableToken {
-        self.0.source()
-    }
-}
+// viz::CopyOutputRequest is a viz value; its cc facets live with their
+// traits in layerize::commit.
+pub use viz_common::copy_output_request::{CopyOutputRequest, CopyOutputRequestBackend};
 /// Native SurfaceId values live in compositor_frame; routing/aggregation is
 /// external Viz work.
 pub use compositor_frame::surface_id::{FrameSinkId, LocalSurfaceId, SurfaceId, SurfaceRange};
@@ -130,25 +56,27 @@ impl crate::adapter::layer_tree_host_impl::HostHitTestSurfaceId for SurfaceId {
         self.frame_sink_id
     }
 }
-impl<R: CpuSkiaBackend> frame::FrameValueTypes for CpuCompositorTypes<R> {
-    type FrameTransform = Transform<R>;
-    type FrameFilters = R::Filters;
-    type FramePath = R::Path;
-    type FrameCopyRequest = CopyOutputRequest;
-    type PictureDisplayItemList = super::paint::ContentDisplayItemList<R>;
-}
+/// The viz frame values this family produces (viz_common::FrameValues).
+pub type CpuFrameValues<R> = frame::FrameValues<
+    Transform<R>,
+    <R as super::types::MainSkiaBackend>::Filters,
+    <R as layerize::commit::paint::skia_backend::RecordSkiaBackend>::Path,
+    CopyOutputRequest,
+    super::paint::ContentDisplayItemList<R>,
+>;
 impl<R: CpuSkiaBackend> FrameDataTypes for CpuCompositorTypes<R> {
     type SharedQuadStateHandle = frame::SharedQuadStateHandle;
     type DrawQuadHandle = frame::DrawQuadHandle;
     type RenderPassId = frame::RenderPassId;
     type SurfaceId = SurfaceId;
     type ResourceId = crate::adapter::layer_tree_impl::ResourceId;
-    type RenderPass = frame::CompositorRenderPass<Self>;
+    type RenderPass = frame::CompositorRenderPass<CpuFrameValues<R>>;
     type BeginFrameAck = frame::BeginFrameAck;
     type TreesInVizTiming = metadata::TreesInVizTiming;
 }
 
 impl<R: CpuSkiaBackend> frame::ViewTransitionGeometry for CpuCompositorTypes<R> {
+    type ViewTransitionTransform = Transform<R>;
     // Source dependency: components/viz/common/viz_utils.cc:116-135.
     fn GetViewTransitionTransform(
         shared: crate::adapter::geometry::Rect,

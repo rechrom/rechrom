@@ -13,3 +13,4 @@ compositor_tile = { path = "../compositor_tile" }
 compositor_tree = { path = "../compositor_tree" }
 image_resource = { path = "../../image_resource" }
 compositor_values = { path = "../compositor_values" }
+viz_common = { path = "../../viz/viz_common" }

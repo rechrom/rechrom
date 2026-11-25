@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use super::surface_id::SurfaceId;
-use compositor::adapter::geometry::Size;
+use compositor_tree::geometry::Size;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceInfo {

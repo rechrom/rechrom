@@ -1176,13 +1176,9 @@ pub trait HostChildLocalSurfaceIdAllocator {
 pub trait HostFrameTimingDetails {
     fn PresentationTimestamp(&self) -> TimeTicks;
 }
-// Source dependency: ui/latency/latency_info.h:64-67,163.
-// These named variants select upstream components, not replacement numeric IDs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HostScrollLatencyComponent {
-    FirstScrollUpdateOriginal,
-    ScrollUpdateOriginal,
-}
+// Source dependency: ui/latency/latency_info.h:64-67,163 (a viz frame value,
+// viz_common::latency_info).
+pub use viz_common::latency_info::LatencyComponentType as HostScrollLatencyComponent;
 pub trait HostScrollLatency {
     fn FindLatency(&self, component: HostScrollLatencyComponent, timestamp: &mut TimeTicks)
         -> bool;
@@ -2764,13 +2760,7 @@ pub mod host_impl_chunk_d {
     }
 
     // External Viz enum identity: components/viz/common/quads/frame_interval_inputs.h:31-36.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum HostContentFrameIntervalType {
-        kVideo,
-        kAnimatingImage,
-        kScrollBarFadeOutAnimation,
-        kCompositorScroll,
-    }
+    pub use viz_common::compositor_frame_metadata::ContentFrameIntervalType as HostContentFrameIntervalType;
     pub trait HostMetadataBeginFrameAck {
         fn frame_id(&self) -> crate::adapter::begin_frame::BeginFrameId;
         fn IsSequenceValid(&self) -> bool;

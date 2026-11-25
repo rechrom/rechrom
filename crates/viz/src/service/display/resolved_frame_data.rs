@@ -5,13 +5,10 @@
 #![allow(non_snake_case)]
 
 use crate::{common::surfaces::surface_id::SurfaceId, service::surfaces::surface::FrameData};
-use compositor::adapter::{
-    geometry::{Rect, Vector2dF},
-    input_services::OffsetTag,
-    layer_tree_impl::ResourceId,
-};
-use compositor::runtime::frame::{QuadMaterial, RenderPassId};
-use compositor::{CompositorFrame, CompositorRenderPass};
+use compositor_tree::geometry::{Rect, Vector2dF};
+use viz_common::draw_quad::{QuadMaterial, RenderPassId};
+use viz_common::offset_tag::OffsetTag;
+use viz_common::{CompositorFrame, CompositorRenderPass, ResourceId};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     error::Error,

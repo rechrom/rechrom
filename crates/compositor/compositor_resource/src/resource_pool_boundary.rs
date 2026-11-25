@@ -72,14 +72,9 @@ pub struct SharedImageTestDescriptor<'a, C> {
 pub trait ResourceSyncToken: Clone + Default + Send + Sync {
     fn HasData(&self) -> bool;
 }
-pub trait ResourcePoolMemoryDump<G> {
-    fn CreateAllocatorDump(&mut self, name: &str) -> G;
-    fn AddScalar(&mut self, guid: &G, name: &str, units: &str, value: u64);
-}
-#[derive(Clone, Copy)]
-pub enum SharedImageTracingImportance {
-    ClientOwner,
-}
+// base::trace_event::ProcessMemoryDump and gpu::TracingImportance, named by
+// the shared-image values (viz_common::shared_image).
+pub use viz_common::shared_image::{ResourcePoolMemoryDump, SharedImageTracingImportance};
 pub trait PoolSharedImage<T: ResourceSyncToken, G>: Clone + Send + Sync {
     fn UpdateDestructionSyncToken(&self, token: &T);
     fn OnMemoryDump(

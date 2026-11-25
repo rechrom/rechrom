@@ -4,18 +4,18 @@
 // payloads remain Renderer capabilities; pass/quads and copy algorithms live here.
 #![allow(non_snake_case)]
 
-use compositor::adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage};
-use compositor::runtime::{
-    frame::{DrawQuad as FrameDrawQuad, FrameValueTypes, QuadMaterial, RenderPassId},
-    skia::SkRegion,
-};
-use compositor::CompositorTypes;
+use compositor_tree::geometry::Rect;
+use viz_common::compositor_render_pass::FrameValueTypes;
+use viz_common::draw_quad::{DrawQuad as FrameDrawQuad, QuadMaterial, RenderPassId};
+use viz_common::surfaces::ContentColorUsage;
+use viz_common::SoftwareFrameValues;
 
-pub type Transform = compositor::runtime::geometry::Transform<SkRegion>;
-pub type SharedQuadState = compositor::runtime::frame::SharedQuadState<Transform>;
-pub type DrawQuad = FrameDrawQuad<<CompositorTypes as FrameValueTypes>::PictureDisplayItemList>;
-pub type FrameFilters = <CompositorTypes as FrameValueTypes>::FrameFilters;
-pub type Path = <CompositorTypes as FrameValueTypes>::FramePath;
+pub type Transform = viz_common::FrameTransform;
+pub type SharedQuadState = viz_common::draw_quad::SharedQuadState<Transform>;
+pub type DrawQuad =
+    FrameDrawQuad<<SoftwareFrameValues as FrameValueTypes>::PictureDisplayItemList>;
+pub type FrameFilters = <SoftwareFrameValues as FrameValueTypes>::FrameFilters;
+pub type Path = <SoftwareFrameValues as FrameValueTypes>::FramePath;
 
 // Source: components/viz/common/quads/aggregated_render_pass.h:41-65
 // Source: components/viz/common/quads/aggregated_render_pass.cc:34-86
@@ -120,7 +120,7 @@ impl AggregatedRenderPass {
             _ => panic!("expected CompositorRenderPass quad"),
         }
         copy.geometry.shared_quad_state = Some(
-            compositor::runtime::frame::SharedQuadStateHandle::FromIndex(
+            viz_common::draw_quad::SharedQuadStateHandle::FromIndex(
                 self.shared_quad_state_list.len() - 1,
             ),
         );
@@ -132,7 +132,7 @@ impl AggregatedRenderPass {
         assert!(!matches!(quad.material, QuadMaterial::SharedElement { .. }));
         let mut copy = quad.clone();
         copy.geometry.shared_quad_state = Some(
-            compositor::runtime::frame::SharedQuadStateHandle::FromIndex(
+            viz_common::draw_quad::SharedQuadStateHandle::FromIndex(
                 self.shared_quad_state_list.len() - 1,
             ),
         );
@@ -187,7 +187,7 @@ impl AggregatedRenderPass {
     }
     pub fn TrySharedQuadState(
         &self,
-        handle: compositor::runtime::frame::SharedQuadStateHandle,
+        handle: viz_common::draw_quad::SharedQuadStateHandle,
     ) -> Option<&SharedQuadState> {
         self.shared_quad_state_list.get(handle.Index())
     }

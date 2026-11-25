@@ -3,10 +3,9 @@
 #![allow(non_snake_case)]
 
 use crate::common::surfaces::surface_id::SurfaceId;
-use compositor::adapter::{
-    begin_frame::BeginFrameArgs, geometry::Rect, scheduler_host::BeginFrameAck,
-};
-use compositor::{runtime::frame::RenderPassId, CompositorFrame};
+use compositor_tree::geometry::Rect;
+use viz_common::begin_frame::{BeginFrameAck, BeginFrameArgs};
+use viz_common::{draw_quad::RenderPassId, CompositorFrame};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Instant,

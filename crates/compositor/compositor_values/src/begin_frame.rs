@@ -86,3 +86,29 @@ impl BeginFrameArgs {
         TimeDelta::Microseconds(0)
     }
 }
+
+// Source: components/viz/common/frame_sinks/begin_frame_args.h BeginFrameAck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BeginFrameAck {
+    pub frame_id: BeginFrameId,
+    pub trace_id: i64,
+    pub has_damage: bool,
+}
+impl Default for BeginFrameAck {
+    fn default() -> Self {
+        Self {
+            frame_id: BeginFrameId::default(),
+            trace_id: -1,
+            has_damage: false,
+        }
+    }
+}
+impl BeginFrameAck {
+    pub fn new(args: &BeginFrameArgs, has_damage: bool) -> Self {
+        Self {
+            frame_id: args.frame_id,
+            trace_id: args.trace_id,
+            has_damage,
+        }
+    }
+}

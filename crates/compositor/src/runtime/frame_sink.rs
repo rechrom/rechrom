@@ -1,13 +1,6 @@
 //! Injected native frame transport. The wrapper is the actual external sink
 //! allocation; it contains no Host/Page reference and creates no window or Viz.
-use super::{
-    frame::{CompositorFrame, CompositorRenderPass, FrameValueTypes},
-    resources::{RasterReturnedResource, RasterTransferableResource},
-};
-use crate::adapter::{
-    geometry::Size,
-    unbounded::{CompositorFrame as Frame, FrameSink as FrameSinkTransport, UnboundedTypes},
-};
+use crate::adapter::unbounded::{FrameSink as FrameSinkTransport, UnboundedTypes};
 
 /// Native Bind registers only the source client identity. Future callbacks are
 /// delivered by the Page with a fresh live owner context; this object never
@@ -35,36 +28,7 @@ impl<B: UnboundedTypes> FrameSinkTransport<B> for FrameSink<B> {
             .SubmitCompositorFrame(frame, hit_test_data_changed)
     }
 }
-impl<M, V: FrameValueTypes> Frame<RasterReturnedResource>
-    for CompositorFrame<M, CompositorRenderPass<V>, RasterTransferableResource>
-{
-    fn render_pass_list_is_empty(&self) -> bool {
-        self.render_pass_list.is_empty()
-    }
-    fn SetLastRenderPassOutputSize(&mut self, size: Size) {
-        let last = self
-            .render_pass_list
-            .last_mut()
-            .expect("native nonempty render pass list");
-        last.output_rect.width = size.width();
-        last.output_rect.height = size.height();
-    }
-    fn size_in_pixels(&self) -> Size {
-        self.render_pass_list
-            .last()
-            .expect("native nonempty render pass list")
-            .output_rect
-            .size()
-    }
-    // Source dependency: cc/trees/unbounded_frame_sink_handler.cc:71-76;
-    // components/viz/common/resources/transferable_resource.cc:44-50. Each actual transfer's EndImport is used.
-    fn ReturnResources(&self) -> Vec<RasterReturnedResource> {
-        self.resource_list
-            .iter()
-            .map(RasterTransferableResource::ToReturnedResource)
-            .collect()
-    }
-}
+// The unbounded-sink facet of the viz frame is compositor_frame::viz_frame.
 
 /// Independent transport for complete, move-only native frames. The queue owns
 /// only submitted output, including its actual resource leases; it never owns

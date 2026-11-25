@@ -14,8 +14,8 @@ pub mod resource_pool_boundary;
 pub mod returned_resource;
 pub mod resource_types;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct ResourceId(pub u32);
+// components/viz/common/resources/resource_id.h (a viz value).
+pub use viz_common::ResourceId;
 
 // gpu/command_buffer/common/gpu_memory_allocation.h values shared with
 // LayerTreeSettings.

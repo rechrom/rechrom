@@ -5,12 +5,11 @@
 use crate::common::quads::aggregated_render_pass::{
     AggregatedRenderPass, AggregatedRenderPassList,
 };
-use compositor::{
-    adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage},
-    runtime::{
-        input::LatencyInfo,
-        metadata::{DelegatedInkMetadata, TrackedElementRects},
-    },
+use compositor_tree::geometry::Rect;
+use viz_common::{
+    compositor_frame_metadata::DelegatedInkMetadata,
+    latency_info::LatencyInfo,
+    surfaces::{ContentColorUsage, TrackedElementRects},
 };
 
 pub type SurfaceDamageRectList = Vec<Rect>;

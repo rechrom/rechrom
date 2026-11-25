@@ -7,6 +7,11 @@ publish = false
 # cc shared value root: cc input, settings, viz and gfx values that both the
 # main (layerize) and the impl (compositor) side name. Values and value
 # algorithms only; no lifecycle, thread or engine state.
+[features]
+default = []
+# gfx::DisplayColorSpaces' default output format (BGRA on ChromeOS).
+chromeos = []
+
 [dependencies]
 scroll_snap = { path = "../scroll_snap" }
 scroll_animation = { path = "../scroll_animation" }

@@ -1,6 +1,6 @@
 //! Selected CPU renderer utility; other Viz utilities remain outside this package.
 #![allow(non_snake_case)]
-use compositor::adapter::geometry::RectF;
+use compositor_tree::geometry::RectF;
 use viz::common::quads::aggregated_render_pass::SharedQuadState;
 
 // Source: components/viz/common/viz_utils.cc:136-159.
