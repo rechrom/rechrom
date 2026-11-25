@@ -400,10 +400,22 @@ impl Page {
                         x: f64::from(position.x()) / widget_scale,
                         y: f64::from(position.y()) / widget_scale,
                     })?;
-                    self.RouteImplInput(InputToImpl::ContinueWheelScroll {
+                    // FindScrollTargetOnMainThread posts the reply
+                    // (FindScrollTargetReply ->
+                    // ContinueScrollBeginAfterMainThreadHitTest) to the
+                    // compositor thread's input-blocking runner
+                    // (widget_input_handler_manager.cc:504-520,989-1015).
+                    let reply = InputToImpl::ContinueWheelScroll {
                         request,
                         scroll_element_id,
-                    })?;
+                    };
+                    let runner = self.state.compositor_input_blocking_task_runner.borrow().clone();
+                    match runner {
+                        Some(runner) if self.external_compositor => {
+                            let _ = runner.PostTask(CompositorThreadTask::ImplInput(reply));
+                        }
+                        _ => self.RouteImplInput(reply)?,
+                    }
                 }
                 CompositorMainThreadEffect::ViewportScaleChanged {
                     delta,
