@@ -704,6 +704,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "crate_ladder"
+version = "0.0.1"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2138,7 +2142,6 @@ dependencies = [
  "layout_style",
  "navigation_history",
  "resize_observer",
- "style_model",
  "url",
 ]
 

@@ -112,6 +112,7 @@ members = [
     "crates/browser/url_formatter",
     "crates/browser",
     "apps/rechrom",
+    "tools/crate_ladder",
 ]
 exclude = ["vendor/smithay-clipboard", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d", "vendor/hyper-util"]
 resolver = "2"
