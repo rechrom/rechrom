@@ -38,6 +38,19 @@ pub enum PacScrollEffect {
 /// viz::LocalSurfaceId, carried by the LayerTreeHost -> Proxy requests below.
 pub use compositor_values::surface_id::LocalSurfaceId;
 
+/// The first parent LocalSurfaceId of a Page widget (Blink's
+/// ParentLocalSurfaceIdAllocator::GenerateId with a new embed token,
+/// components/viz/common/surfaces/parent_local_surface_id_allocator.cc),
+/// which LayerTreeHost::SetViewportRectAndScale carries. Moved from
+/// compositor/src/engine.rs.
+pub fn NewParentLocalSurfaceId() -> LocalSurfaceId {
+    LocalSurfaceId {
+        parent_sequence_number: 1,
+        child_sequence_number: 1,
+        embed_token: super::values::CreateUnguessableToken().0,
+    }
+}
+
 /// Proxy calls from LayerTreeHost (cc/trees/layer_tree_host.cc:321-337,
 /// 520-547,835-849,877-880), not copied commit/tree state. They are posted in
 /// source order to the impl half (ProxyMain -> ProxyImpl).

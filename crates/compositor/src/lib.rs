@@ -47,7 +47,6 @@ pub use engine::{
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
     BeginMainFrameState, ImplToMainTask, MainFamily,
-    MainAnimationHost, MainHostParams, MainPropertyTreeFeatures, MainToImplTask, ProxyImplInit,
-    CreateMainHostParams,
+    MainToImplTask, ProxyImplInit,
     ScrollPhase, ScrollSourceType, TargetSnapAreaElementIds,
 };

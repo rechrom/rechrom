@@ -50,18 +50,9 @@ pub(crate) trait SurfaceTokenSource: Send + Sync {
 
 pub(crate) struct OsSurfaceTokenSource;
 impl SurfaceTokenSource for OsSurfaceTokenSource {
+    // base::UnguessableToken::Create (layerize::commit::values).
     fn NextEmbedToken(&self) -> [u64; 2] {
-        loop {
-            let mut bytes = [0u8; 16];
-            getrandom::fill(&mut bytes).expect("OS entropy for LocalSurfaceId token");
-            let token = [
-                u64::from_ne_bytes(bytes[..8].try_into().expect("token half")),
-                u64::from_ne_bytes(bytes[8..].try_into().expect("token half")),
-            ];
-            if token != [0, 0] {
-                return token;
-            }
-        }
+        layerize::commit::values::CreateUnguessableToken().0
     }
 }
 

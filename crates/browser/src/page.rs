@@ -728,10 +728,11 @@ struct PageDomainServices {
     // endpoint, the LayerizeEngine and its PropertyTreeFeatures.
     proxy_main: std::cell::OnceCell<RefCell<main_compositor::MainProxy>>,
     proxy_main_endpoint: std::cell::OnceCell<
-        Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<compositor::MainFamily>>,
+        Arc<layerize::runtime::proxy_main::ProxyMainEndpoint<layerize::commit::MainFamily>>,
     >,
     layerize: std::cell::OnceCell<RefCell<main_compositor::MainLayerize>>,
-    main_property_tree_features: std::cell::OnceCell<compositor::MainPropertyTreeFeatures>,
+    main_property_tree_features:
+        std::cell::OnceCell<layerize::commit::property_tree_services::PropertyTreeFeatureValues>,
     main_compositor_shut_down: Cell<bool>,
     // A visibility change made inside ProxyMain::BeginMainFrame (the Page
     // lifecycle), applied when it returns.
@@ -6063,7 +6064,7 @@ impl Page {
     /// the impl thread.
     pub fn RunExternalBeginMainFrame(
         &mut self,
-        state: Box<compositor::BeginMainFrameState>,
+        state: Box<main_compositor::BeginMainFrameState>,
         args: foundation::begin_frame::BeginFrameArgs,
         width: u32,
         height: u32,
@@ -6106,7 +6107,7 @@ impl Page {
     }
 
     /// A ProxyImpl -> ProxyMain task other than BeginMainFrame.
-    pub fn RunCompositorImplTask(&mut self, task: compositor::ImplToMainTask) -> io::Result<()> {
+    pub fn RunCompositorImplTask(&mut self, task: main_compositor::ImplToMainTask) -> io::Result<()> {
         if !self.state.HasMainCompositor() {
             return Ok(());
         }

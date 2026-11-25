@@ -11,6 +11,8 @@ pub mod paint_services;
 pub(crate) mod main_endpoint;
 pub(crate) mod main_frame_lifecycle;
 pub(crate) mod main_host;
+/// The main half's construction values (Blink LayerTreeView::Initialize inputs).
+pub mod main_host_params;
 pub(crate) mod pac_scroll;
 /// ProxyMain (cc/trees/proxy_main.cc), the main half of the commit protocol.
 pub mod proxy_main;

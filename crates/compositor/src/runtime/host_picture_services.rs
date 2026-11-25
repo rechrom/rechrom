@@ -55,16 +55,9 @@ pub(crate) trait HostPictureState {
 /// must pass the actual configured values used by this Page's compositor.
 #[derive(Clone, Debug)]
 pub(crate) struct HostPictureFeatures {
-    pub use_layer_lists_by_default: bool,
-    pub trees_in_viz: bool,
-    pub tree_animations_in_viz: bool,
-    pub defer_impl_invalidation: bool,
-    pub defer_impl_invalidation_frames: i32,
-    pub scroll_event_dispatch_mode: String,
-    pub wait_for_late_scroll_events: bool,
-    pub wait_for_late_scroll_events_deadline_ratio: f64,
-    pub renderer_image_decode_working_set_bytes: usize,
-    pub browser_image_decode_working_set_bytes: usize,
+    /// The process feature values LayerTreeSettings reads, shared with the
+    /// main half's settings (compositor_values).
+    pub settings: compositor_values::layer_tree_settings_features::LayerTreeSettingsFeatureValues,
     pub low_end_device: bool,
     pub cc_slimming: bool,
     pub compute_raster_translate_for_external_scale: bool,
@@ -74,35 +67,31 @@ pub(crate) struct HostPictureFeatures {
 
 impl LayerTreeSettingsFeatures for HostPictureFeatures {
     fn UseLayerListsByDefault(&self) -> bool {
-        self.use_layer_lists_by_default
+        self.settings.UseLayerListsByDefault()
     }
     fn TreesInViz(&self) -> bool {
-        self.trees_in_viz
+        self.settings.TreesInViz()
     }
     fn TreeAnimationsInViz(&self) -> bool {
-        self.tree_animations_in_viz
+        self.settings.TreeAnimationsInViz()
     }
     fn DeferImplInvalidation(&self) -> bool {
-        self.defer_impl_invalidation
+        self.settings.DeferImplInvalidation()
     }
     fn DeferImplInvalidationFrames(&self) -> i32 {
-        self.defer_impl_invalidation_frames
+        self.settings.DeferImplInvalidationFrames()
     }
     fn ScrollEventDispatchMode(&self) -> &str {
-        &self.scroll_event_dispatch_mode
+        self.settings.ScrollEventDispatchMode()
     }
     fn WaitForLateScrollEvents(&self) -> bool {
-        self.wait_for_late_scroll_events
+        self.settings.WaitForLateScrollEvents()
     }
     fn WaitForLateScrollEventsDeadlineRatio(&self) -> f64 {
-        self.wait_for_late_scroll_events_deadline_ratio
+        self.settings.WaitForLateScrollEventsDeadlineRatio()
     }
     fn ImageDecodeWorkingSetBytes(&self, for_renderer: bool) -> usize {
-        if for_renderer {
-            self.renderer_image_decode_working_set_bytes
-        } else {
-            self.browser_image_decode_working_set_bytes
-        }
+        self.settings.ImageDecodeWorkingSetBytes(for_renderer)
     }
 }
 
