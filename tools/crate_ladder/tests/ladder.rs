@@ -548,17 +548,21 @@ const IMPL_OWNER_MODULES: &[&str] = &[
 /// Document-side files that still name `compositor::`. Remove each entry in
 /// the commit that removes its last use.
 const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
-    // Still name the concrete cc family: MainFamily (and the ProxyImplInit,
+    // Still name the concrete cc family: MainFamily (and the
     // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
     // MainPropertyTreeFeatures instantiated over it) is the impl
-    // CpuCompositorTypes, because CommitTypes / CommitStateTypes /
-    // ProxyTypes still name impl owners (SwapPromise, MicroBenchmarkImpl,
-    // UIResourceRequest / UIResourceBitmap, ViewTransitionRequest,
-    // EventMetrics, the presentation callbacks, BeginMainFrameMetrics,
-    // MutatorHostHandle = AnimationHostOwner, ImplInit = ProxyImplInit,
-    // LayerTreeMutator), and impl code names CommitState<B> over the impl
-    // family. (The push target, the render surfaces and the main
-    // draw_property_utils update no longer do.) page.rs keeps only the PageDomainServices fields
+    // CpuCompositorTypes. Of the commit family's associated types only
+    // CommitStateTypes::MicroBenchmarkImpl still names an impl owner (its
+    // DidCompleteCommit borrows the impl LayerTreeHostImpl context); the
+    // other payloads (SwapPromise, UI resources, ViewTransitionRequest,
+    // EventMetrics, presentation callbacks, BeginMainFrameMetrics,
+    // LayerTreeMutator, the AnimationHost, ProxyImplInit) are shared cc
+    // owners in layerize::commit / compositor_values. Left: a shared commit
+    // family type in layerize::commit that the impl family refers to (impl
+    // code names CommitState<B> / LayerBorrow<B> and the push target over the
+    // impl family), and the main-half construction values. (The push
+    // target, the render surfaces and the main draw_property_utils update
+    // no longer name impl owners.) page.rs keeps only the PageDomainServices fields
     // and the external BeginMainFrame / impl-task entry points typed over
     // that family; main_compositor.rs additionally builds the main half
     // from CompositorConfig / CreateMainHostParams. The executor and frame
