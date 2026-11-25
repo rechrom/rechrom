@@ -5,6 +5,7 @@
 //! Page connects DOM mutation notifications and the style/layout/paint lifecycle;
 //! each engine owns its state and invalidation, like LocalFrameView lifecycle wiring.
 pub(crate) mod canvas_2d;
+use paint::{PaintLifecycle as _, PaintPropertyUpdates as _, PaintResourceUpdates as _};
 use layout::fragment::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
 pub use compositor::CompositorMainThreadEffect;

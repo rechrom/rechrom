@@ -34,6 +34,7 @@ pub use layout_object_counter::LayoutObjectCounter;
 pub use paint_engine::PaintRect;
 pub use paint_engine::{
     CompositedAnimationPropertyUpdate, ForeignLayer, LocalFrameViewPaintInput, PaintArtifact,
+    PaintLayerQueries, PaintLifecycle, PaintPropertyUpdates, PaintResourceUpdates,
     PaintEngine,
 };
 pub use paint_event::PaintEvent;

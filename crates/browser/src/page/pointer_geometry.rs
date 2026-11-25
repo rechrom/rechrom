@@ -1,5 +1,6 @@
 //! Page assembly of call-scoped resident pointer geometry queries.
 use super::*;
+use paint::PaintLayerQueries as _;
 use foundation::{gfx, LayoutUnit, PhysicalSize, TouchAction};
 use interaction::adapter::page_pointer_hit_test::{
     PagePointerGeometry, PointerAdjustmentDOMFacts, PointerGeometryError, PointerHit,

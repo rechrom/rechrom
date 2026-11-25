@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use paint::PaintLifecycle as _;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_char;
 use std::io;
