@@ -308,7 +308,13 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("viz", "compositor", "B1: frame values move to viz_common"),
     ("renderer", "compositor", "B1: frame values move to viz_common"),
     ("renderer_skia", "compositor", "B1: frame values move to viz_common"),
-    ("raster", "compositor", "B2: cc paint values move to cc_paint"),
+    // Raster names its cc paint values from cc_paint through the compositor
+    // and implements cc's injected raster service traits
+    // (RasterBufferProviderBackend, TilingRasterSource, PictureRasterSource,
+    // HostUI*), which still live in the compositor facade; cc/raster/
+    // raster_buffer_provider.h and cc/raster/raster_source.h are their
+    // Chromium homes. Clears when those interfaces move to a cc root.
+    ("raster", "compositor", "B2: cc raster service traits move to a cc root"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
