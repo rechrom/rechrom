@@ -8,7 +8,8 @@ change must follow, and how to validate work.
 Contents:
 
 1. [Architecture](#1-architecture): the pipeline, each boundary's interface,
-   each stage's internal workflow, side engines, data-flow rules.
+   each stage's internal workflow, side engines, data-flow rules, crate
+   boundary rules.
 2. [Engineering rules](#2-engineering-rules): Chromium alignment, boundaries,
    integration gaps.
 3. [Validation](#3-validation): check tiers, browser verification, pixels,
@@ -410,6 +411,52 @@ These apply to every boundary above.
   interface refinements are fine when they express Chromium's behaviour more
   directly; when a boundary lacks information, extend it with the smallest
   platform-neutral value that carries Chromium's semantics.
+
+### 1.7 Crate boundary rules
+
+Every crate is one of: a **value root** (shared values and pure algorithms,
+no lifecycle, no engine state), an **engine facade**, an **engine-internal
+package**, or the **assembly** (`browser`, `apps/rechrom`). Dependencies form a
+ladder down the pipeline in 1.1.
+
+- **Allowed edges.** A crate may depend on value roots, on packages of its own
+  engine, and on the facade of its **direct upstream** stage only. Value roots
+  depend only on other value roots and never on an engine. Only the assembly
+  may depend on many engines.
+- **No reverse or wrong edges.** No crate depends on a downstream stage, and no
+  value root depends on an engine. No crate skips a stage to reach an engine
+  further away (for example Page document code or Viz naming the `compositor`
+  facade, or Raster naming `paint`). Remove such edges; do not add new ones.
+  When a downstream crate needs a type that lives in an upstream facade, the
+  type is a value: move it into a value root (Chromium's own split shows where:
+  `components/viz/common`, `cc/paint`, `ui/gfx`, `cc/trees`) instead of
+  depending on the facade.
+- **Skip-step requests use the existing channels.** An engine calls only its
+  neighbour. A request that must reach a stage further away travels as a
+  message on the boundary channels Chromium uses, never as a direct call:
+  the Proxy queue (`ProxyMain` → `ProxyImpl`, through Layerize) for commits,
+  animations, visibility and frame control, and the input queue (the input
+  owner → `InputHandlerProxy`) for input and main-thread hit-test replies
+  delivered to the compositor thread. Shared value types (ids, enums, geometry,
+  time) are vocabulary, not calls, and may be named anywhere through value
+  roots.
+- **Interface shape.** Each boundary has one entry call or one mutation enum
+  going down, typed values or effects coming back, and shared vocabulary from
+  value roots. Prefer one mutation enum over many side methods. No callbacks,
+  getters or trait mirrors that reach back into the sender.
+- **No copies across a boundary.** Data crosses by **move** (an owned value or
+  message whose sender gives it up), by **borrow** (a reference or a lease
+  scoped to the call, as boundaries 1–5 and the commit lease do), or by
+  **retained shared ownership** (an existing `Arc`/`Rc` owner kept alive, never
+  rebuilt). Never clone a tree, snapshot an engine's state, or rebuild a second
+  model to satisfy an interface. A small `Copy` value (ids, flags, geometry)
+  is not a copy in this sense.
+- **Enforcement.** Boundary tests (`crates/layerize/tests/layerize_boundary.rs`,
+  `crates/layout/layout/tests/source_layout.rs`, and the crate-ladder test once
+  added) encode these rules. Known violations are listed there as temporary
+  allowances, each removed by the change that fixes it; never add an
+  allowance for new code. Documented exceptions carry a Chromium citation
+  (DOM depends on Layout because it hosts `LayoutTreeBuilder`, boundary 3).
 
 ---
 
