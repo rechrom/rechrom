@@ -50,6 +50,23 @@ pub mod viz_metadata;
 //         cc/input/{scroll_snap_data,overscroll_behavior,
 //         main_thread_scrolling_reason}.h.
 pub use compositor_animation::property_animation_state;
+
+/// KeyframeModel installs and removals the Page applies to its main
+/// AnimationHost (Blink CompositorAnimation -> cc::Animation::
+/// AddKeyframeModel on the main thread; cc/animation/keyframe_model.h,
+/// keyframed_animation_curve.h). They reach the impl AnimationHost only
+/// through PushPropertiesTo in the commit.
+pub mod animation {
+    pub use compositor_animation::compositor_mutation::PropertyAnimationMutation;
+    pub use compositor_animation::keyframe_model::{
+        CompositorAnimationCurve, Direction as AnimationDirection, FillMode as AnimationFillMode,
+    };
+    pub use compositor_animation::keyframed_animation_curve::{
+        KeyframedFloatAnimationCurve, KeyframedTransformAnimationCurve,
+        TimingFunction as AnimationTimingFunction,
+    };
+    pub use compositor_tree::target_property::Type as AnimationTargetProperty;
+}
 pub use compositor_tree::damage_reason;
 pub use compositor_values::{
     browser_controls_params, compositor_commit_data, event_listener_properties, input_types,

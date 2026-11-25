@@ -15,8 +15,8 @@ use crate::{
     },
     runtime::types::PaintSkiaBackend,
 };
-fn scroll_snap_type(value: paint::paint_property_tree::PaintScrollSnapType) -> ScrollSnapType {
-    use paint::paint_property_tree::{PaintScrollSnapAxis as Axis, PaintScrollSnapStrictness as S};
+fn scroll_snap_type(value: paint_model::paint_property_tree::PaintScrollSnapType) -> ScrollSnapType {
+    use paint_model::paint_property_tree::{PaintScrollSnapAxis as Axis, PaintScrollSnapStrictness as S};
     let axis = match value.axis {
         Axis::Both => SnapAxis::kBoth,
         Axis::X => SnapAxis::kX,
@@ -31,7 +31,7 @@ fn scroll_snap_type(value: paint::paint_property_tree::PaintScrollSnapType) -> S
     };
     ScrollSnapType::new(false, axis, strictness)
 }
-fn rect(p: paint::paint_engine::PaintRect) -> Rect {
+fn rect(p: paint_model::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
         p.x as f32,
         p.y as f32,
@@ -83,10 +83,10 @@ impl<R: PaintSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
     }
     fn OverscrollBehavior(&self) -> OverscrollBehavior {
         let convert = |v| match v {
-            paint::paint_property_tree::LayoutOverscrollBehavior::kNone => Type::kNone,
-            paint::paint_property_tree::LayoutOverscrollBehavior::kAuto => Type::kAuto,
-            paint::paint_property_tree::LayoutOverscrollBehavior::kContain => Type::kContain,
-            paint::paint_property_tree::LayoutOverscrollBehavior::kChain => Type::kChain,
+            paint_model::paint_property_tree::LayoutOverscrollBehavior::kNone => Type::kNone,
+            paint_model::paint_property_tree::LayoutOverscrollBehavior::kAuto => Type::kAuto,
+            paint_model::paint_property_tree::LayoutOverscrollBehavior::kContain => Type::kContain,
+            paint_model::paint_property_tree::LayoutOverscrollBehavior::kChain => Type::kChain,
         };
         let b = read(|a| self.node().OverscrollBehavior(a));
         OverscrollBehavior::FromAxes(convert(b[0]), convert(b[1]))
@@ -139,9 +139,9 @@ mod tests {
 
     #[test]
     fn computed_scroll_snap_type_reaches_cc_container_data() {
-        let data = paint::paint_property_tree::PaintScrollSnapType {
-            axis: paint::paint_property_tree::PaintScrollSnapAxis::X,
-            strictness: paint::paint_property_tree::PaintScrollSnapStrictness::Mandatory,
+        let data = paint_model::paint_property_tree::PaintScrollSnapType {
+            axis: paint_model::paint_property_tree::PaintScrollSnapAxis::X,
+            strictness: paint_model::paint_property_tree::PaintScrollSnapStrictness::Mandatory,
         };
         let container = SnapContainerData::FromType(scroll_snap_type(data));
         assert_eq!(

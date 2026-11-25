@@ -7,6 +7,7 @@
 //! by the in-process Proxy queues, which this presenter drains after each
 //! call (decision D1; cc's SingleThreadProxy::CompositeImmediately shape).
 use super::*;
+use compositor::CompositorInput;
 
 pub(super) struct SynchronousPresenter {
     compositor: CompositorEngine,
@@ -168,21 +169,41 @@ impl PageDomainServices {
         }
     }
 
-    /// An internal-presenter compositor mutation: the main-side ones
-    /// (`CompositorMutation::IsMainThreadMutation`) are applied to the main
-    /// half, the others are InputHandlerProxy routing on the impl half.
-    pub(super) fn ContinueCompositorMutation(
+    /// A LayerTreeHost setter of the internal presenter's Page, applied to
+    /// the main half, then the Proxy tasks it posted run in process.
+    pub(super) fn ContinueMainCompositorMutation(
         &self,
-        mutation: compositor::CompositorMutation,
+        mutation: main_compositor::MainCompositorMutation,
     ) -> io::Result<CompositorWheelResult> {
         self.EnsureCompositor(None)?;
-        if mutation.IsMainThreadMutation() {
-            self.MutateMainCompositor(mutation)?;
-            return Ok(CompositorWheelResult {
-                effects: self.DidMutateMainCompositor()?,
-                ..Default::default()
-            });
-        }
+        self.MutateMainCompositor(mutation)?;
+        Ok(CompositorWheelResult {
+            effects: self.DidMutateMainCompositor()?,
+            ..Default::default()
+        })
+    }
+
+    /// The internal presenter runs an input-queue message where the
+    /// compositor task runner would: the InputHandlerProxy call on the impl
+    /// half.
+    pub(super) fn ContinueImplInput(&self, input: InputToImpl) -> io::Result<CompositorWheelResult> {
+        self.ContinueImplCompositorInput(compositor_input::ImplInput(input))
+    }
+
+    /// A browser-dispatched scroll or pinch gesture on the internal impl half.
+    pub(super) fn ContinueGestureScroll(
+        &self,
+        gesture: &interaction::input_event::WebGestureEvent,
+    ) -> io::Result<CompositorWheelResult> {
+        self.ContinueImplCompositorInput(compositor_input::GestureCompositorInput(gesture)?)
+    }
+
+    fn ContinueImplCompositorInput(
+        &self,
+        input: CompositorInput,
+    ) -> io::Result<CompositorWheelResult> {
+        self.EnsureCompositor(None)?;
+        let mutation = compositor::CompositorMutation::Input(input);
         self.WithSynchronousPresenter(|presenter, main| presenter.WheelInput(main, mutation, false))
     }
 

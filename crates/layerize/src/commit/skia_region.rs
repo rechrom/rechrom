@@ -210,14 +210,14 @@ impl RoundedRectTransformBackend for SkRegion {
     }
 }
 
-pub use paint::cc::paint::filter_operations::FilterOperations;
+pub use paint_model::cc::paint::filter_operations::FilterOperations;
 pub use skia::src::core::SkPath::SkPath;
 
 fn stroke_backend_path(
     path: &SkPath,
     width: f32,
-    cap: paint::cc::paint::paint_flags::Cap,
-    join: paint::cc::paint::paint_flags::Join,
+    cap: paint_model::cc::paint::paint_flags::Cap,
+    join: paint_model::cc::paint::paint_flags::Join,
     miter_limit: f32,
     dash_intervals: &[f32],
     dash_phase: f32,
@@ -247,14 +247,14 @@ fn stroke_backend_path(
     stroke.setStrokeStyle(width, false);
     stroke.setStrokeParams(
         match cap {
-            paint::cc::paint::paint_flags::Cap::kButt_Cap => SkCap::kButt_Cap,
-            paint::cc::paint::paint_flags::Cap::kRound_Cap => SkCap::kRound_Cap,
-            paint::cc::paint::paint_flags::Cap::kSquare_Cap => SkCap::kSquare_Cap,
+            paint_model::cc::paint::paint_flags::Cap::kButt_Cap => SkCap::kButt_Cap,
+            paint_model::cc::paint::paint_flags::Cap::kRound_Cap => SkCap::kRound_Cap,
+            paint_model::cc::paint::paint_flags::Cap::kSquare_Cap => SkCap::kSquare_Cap,
         },
         match join {
-            paint::cc::paint::paint_flags::Join::kMiter_Join => SkJoin::kMiter_Join,
-            paint::cc::paint::paint_flags::Join::kRound_Join => SkJoin::kRound_Join,
-            paint::cc::paint::paint_flags::Join::kBevel_Join => SkJoin::kBevel_Join,
+            paint_model::cc::paint::paint_flags::Join::kMiter_Join => SkJoin::kMiter_Join,
+            paint_model::cc::paint::paint_flags::Join::kRound_Join => SkJoin::kRound_Join,
+            paint_model::cc::paint::paint_flags::Join::kBevel_Join => SkJoin::kBevel_Join,
         },
         miter_limit,
     );
@@ -282,12 +282,12 @@ fn stroke_backend_path(
 impl super::skia_value_backend::MainSkiaBackend for SkRegion {
     type Filters = FilterOperations;
     type Path = SkPath;
-    fn FromPaintPath(path: &paint::paint_clip_path::PaintPath) -> Self::Path {
+    fn FromPaintPath(path: &paint_model::paint_clip_path::PaintPath) -> Self::Path {
         paint_skia::path::FromPaintPath(path)
     }
 
     fn StrokeBounds(
-        path: &paint::paint_clip_path::PaintPath,
+        path: &paint_model::paint_clip_path::PaintPath,
         width: f32,
         resolution_scale: f32,
     ) -> Option<RectF> {
@@ -329,10 +329,10 @@ impl super::skia_value_backend::MainSkiaBackend for SkRegion {
         }
     }
     fn StrokePath(
-        path: &paint::paint_clip_path::PaintPath,
+        path: &paint_model::paint_clip_path::PaintPath,
         width: f32,
-        cap: paint::cc::paint::paint_flags::Cap,
-        join: paint::cc::paint::paint_flags::Join,
+        cap: paint_model::cc::paint::paint_flags::Cap,
+        join: paint_model::cc::paint::paint_flags::Join,
         miter_limit: f32,
         dash_intervals: &[f32],
         dash_phase: f32,
@@ -353,8 +353,8 @@ impl super::skia_value_backend::MainSkiaBackend for SkRegion {
     fn StrokeBackendPath(
         path: &Self::Path,
         width: f32,
-        cap: paint::cc::paint::paint_flags::Cap,
-        join: paint::cc::paint::paint_flags::Join,
+        cap: paint_model::cc::paint::paint_flags::Cap,
+        join: paint_model::cc::paint::paint_flags::Join,
         miter_limit: f32,
         dash_intervals: &[f32],
         dash_phase: f32,

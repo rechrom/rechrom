@@ -9,6 +9,5 @@ foundation = { path = "../../foundation" }
 image_resource = { path = "../../image_resource" }
 layout_geometry = { path = "../../layout/layout_geometry" }
 layout_style = { path = "../../layout/layout_style" }
-layout = { path = "../../layout/layout" }
 paint_input_types = { path = "../../layout/paint_input_types" }
 serde_json = "1"

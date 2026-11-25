@@ -18,11 +18,14 @@ pub mod box_paint_invalidator;
 pub mod client_rects;
 pub mod clip_path_clipper;
 pub mod compositing_reason_finder;
+pub mod contoured_border_geometry;
 pub mod cull_rect_updater;
 pub mod nine_piece_geometry;
 pub mod nine_piece_image_grid;
 pub mod object_paint_invalidator;
 pub mod paint_invalidator;
+// PaintLayer classification of a Layout fragment (core/paint/paint_layer.cc).
+pub mod paint_order;
 pub mod paint_shader_resolver;
 pub mod pre_paint_tree_walk;
 pub mod resident_hit_test;

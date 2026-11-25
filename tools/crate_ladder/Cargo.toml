@@ -1,0 +1,9 @@
+[package]
+name = "crate_ladder"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# Workspace crate-ladder guard (AGENTS.md 1.7). It reads manifests and
+# sources only, so it has no dependencies.
+[dependencies]

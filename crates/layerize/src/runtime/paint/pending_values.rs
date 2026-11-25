@@ -9,7 +9,7 @@ use crate::{
     },
     runtime::types::PaintSkiaBackend,
 };
-fn rect(r: paint::paint_engine::PaintRect) -> RectF {
+fn rect(r: paint_model::PaintRect) -> RectF {
     RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
 }
 fn metadata(chunk: &PaintChunk) -> &paint::paint_engine::PaintChunkCompositorData {
@@ -213,7 +213,7 @@ where
     }
     fn first_display_item_is_foreign_layer_video(&self, a: &PaintArtifact) -> bool {
         a.display_items[self.begin_index as usize].id.r#type
-            == paint::display_item_id::DisplayItemIdType::kForeignLayerVideo
+            == paint_model::display_item_id::DisplayItemIdType::kForeignLayerVideo
     }
     fn FirstDisplayItem<'a>(&self, a: &'a PaintArtifact) -> &'a DisplayItem {
         &a.display_items[self.begin_index as usize]

@@ -226,7 +226,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
             // (S1b-8d); without one, Blink's targeted scrollbar paint
             // invalidation runs instead.
             if !state.ApplyScrollbarPaint(
-                compositor::adapter::input_types::ElementId::new(
+                compositor_values::input_types::ElementId::new(
                     update.compositor_element_id.GetInternalValue(),
                 ),
                 update.painted_opacity,

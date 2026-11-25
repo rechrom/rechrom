@@ -3281,8 +3281,15 @@ fn send_page_compositor_continuations(
             browser::page::PageBrowserInput::DocumentDetached { generation } => {
                 ImplCommand::DocumentDetached { generation }
             }
-            browser::page::PageBrowserInput::Compositor(input) => {
-                ImplCommand::InputContinuation(input)
+            // The input queue: each message moves to the impl runner, which
+            // makes its InputHandlerProxy call in posting order.
+            browser::page::PageBrowserInput::ImplInput(input) => ImplCommand::InputContinuation(
+                compositor::CompositorMutation::Input(browser::page::ImplInput(input)),
+            ),
+            browser::page::PageBrowserInput::GestureScroll(gesture) => {
+                ImplCommand::InputContinuation(compositor::CompositorMutation::Input(
+                    browser::page::GestureCompositorInput(&gesture)?,
+                ))
             }
             browser::page::PageBrowserInput::Gesture(gesture) => ImplCommand::Gesture {
                 gesture,

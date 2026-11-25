@@ -14,8 +14,8 @@ use std::sync::Arc;
 use crate::paint_clip_path::PaintClipPath;
 use crate::property_filter_operations::PropertyFilterOperations;
 use crate::PaintRect;
-use layout::paint::StickyPositionPaintData;
-pub use layout::input::OverscrollBehavior as LayoutOverscrollBehavior;
+use paint_input_types::layout_input::StickyPositionPaintData;
+pub use paint_input_types::layout_input::OverscrollBehavior as LayoutOverscrollBehavior;
 use paint_input_types::layout_input::{Offset, TransformMatrix};
 pub use paint_input_types::paint_input::PaintBlendMode;
 use paint_input_types::paint_input::PaintCornerRadii;
@@ -1872,7 +1872,7 @@ pub struct ScrollCompositorState {
     pub max_scroll_offset_affected_by_page_scale: bool,
     pub composited_scrolling_preference: PaintCompositedScrollingPreference,
     pub main_thread_repaint_reasons: u8,
-    pub overscroll_behavior: [layout::input::OverscrollBehavior; 2],
+    pub overscroll_behavior: [LayoutOverscrollBehavior; 2],
     pub scrolling_contents_cull_rect: PaintRect,
     /// The producer queried scroll-snap state and proved that no source
     /// SnapContainerData exists. False means a non-none snap payload is still

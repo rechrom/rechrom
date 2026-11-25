@@ -394,7 +394,7 @@ pub mod caret;
 
 pub mod editing_state;
 pub mod layout_selection;
-pub mod svg_filter_geometry;
+pub use paint_input_types::svg_filter_geometry;
 
 // Canonical values crossing the Layout/editing boundary; no LayoutObject owner
 // or dependency on an Interaction implementation crosses with them.

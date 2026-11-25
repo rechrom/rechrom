@@ -9,7 +9,7 @@ use crate::{
     },
     runtime::types::PaintSkiaBackend,
 };
-fn rect(p: paint::paint_engine::PaintRect) -> Rect {
+fn rect(p: paint_model::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
         p.x as f32,
         p.y as f32,
@@ -26,7 +26,7 @@ impl<B> ConversionPaintChunk<B> for PaintChunk
 where
     B: PaintChunksTypes<
         HitTestData = paint::paint_engine::PaintHitTestData,
-        RegionCaptureData = Vec<([u64; 2], paint::paint_engine::PaintRect)>,
+        RegionCaptureData = Vec<([u64; 2], paint_model::PaintRect)>,
         TrackedData = Vec<paint::paint_engine::PaintTrackedElementRect>,
         SelectionData = paint::paint_engine::PaintLayerSelectionData,
     >,
@@ -41,13 +41,13 @@ where
         rect(self.bounds)
     }
     fn IsScrollHitTest(&self) -> bool {
-        self.id.r#type == paint::display_item_id::DisplayItemIdType::kScrollHitTest
+        self.id.r#type == paint_model::display_item_id::DisplayItemIdType::kScrollHitTest
     }
     fn IsScrollbarHitTest(&self) -> bool {
-        self.id.r#type == paint::display_item_id::DisplayItemIdType::kScrollbarHitTest
+        self.id.r#type == paint_model::display_item_id::DisplayItemIdType::kScrollbarHitTest
     }
     fn IsResizerScrollHitTest(&self) -> bool {
-        self.id.r#type == paint::display_item_id::DisplayItemIdType::kResizerScrollHitTest
+        self.id.r#type == paint_model::display_item_id::DisplayItemIdType::kResizerScrollHitTest
     }
     fn hit_test_data(&self) -> Option<&B::HitTestData> {
         metadata(self).hit_test_data.as_deref()
@@ -151,7 +151,7 @@ where
     }
 }
 impl<B: PaintChunksTypes<CaptureId = crate::runtime::metadata::RegionCaptureCropId>>
-    ConversionRegionCaptureData<B> for Vec<([u64; 2], paint::paint_engine::PaintRect)>
+    ConversionRegionCaptureData<B> for Vec<([u64; 2], paint_model::PaintRect)>
 {
     fn iter(&self) -> impl Iterator<Item = (B::CaptureId, Rect)> {
         self.as_slice()

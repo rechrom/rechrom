@@ -17,7 +17,7 @@ impl PageState {
         &self,
         request: interaction::scroll::core::scroll::scrollbar::ScrollbarGesture,
     ) -> io::Result<()> {
-        use compositor::adapter::input_types::{ElementId, ScrollGranularity};
+        use compositor_values::input_types::{ElementId, ScrollGranularity};
         use interaction::input::{
             base::time::time::TimeTicks,
             public::common::input::{web_gesture_event::WebGestureEvent, web_input_event::Type},
@@ -82,15 +82,13 @@ impl PageState {
         };
         self.pending_compositor_mutations
             .borrow_mut()
-            .push(PageBrowserInput::Compositor(
-                compositor::CompositorMutation::Input(CompositorInput::ScrollbarGesture {
-                    scroll_element_id: ElementId::new(element),
-                    delta,
-                    granularity,
-                    event_timestamp: timestamp,
-                    phase,
-                }),
-            ));
+            .push(PageBrowserInput::ImplInput(InputToImpl::ScrollbarGesture {
+                scroll_element_id: ElementId::new(element),
+                delta,
+                granularity,
+                event_timestamp: timestamp,
+                phase,
+            }));
         Ok(())
     }
 }
@@ -140,7 +138,7 @@ impl Page {
     fn ScrollableContainerAt(
         &mut self,
         point: Offset,
-    ) -> io::Result<Option<compositor::adapter::input_types::ElementId>> {
+    ) -> io::Result<Option<compositor_values::input_types::ElementId>> {
         // WidgetInputHandlerManager runs this main-thread hit-test only after
         // UpdateLifecycle.  A newly committed navigation can already retain a
         // LayoutResult while its fragment-local PrePaint state is not yet
@@ -161,7 +159,7 @@ impl Page {
                 .ok_or_else(|| io::Error::other("child scroll input owner required"))?;
             runtime.EnsureInteractionScrollOwners(&child, &engine);
             return Ok(runtime.ScrollableContainerForNode(node).map(|id| {
-                compositor::adapter::input_types::ElementId::new(id.GetInternalValue())
+                compositor_values::input_types::ElementId::new(id.GetInternalValue())
             }));
         }
         let WidgetPointResult::ScrollContainer(id) =
@@ -169,7 +167,7 @@ impl Page {
         else {
             unreachable!()
         };
-        Ok(id.map(|id| compositor::adapter::input_types::ElementId::new(id.GetInternalValue())))
+        Ok(id.map(|id| compositor_values::input_types::ElementId::new(id.GetInternalValue())))
     }
     /// Route the source widget query to Interaction's borrowed resident owners.
     pub(super) fn WidgetPointAt(
@@ -259,7 +257,7 @@ impl Page {
     }
     fn IsVisualViewportScrollElement(
         &self,
-        element: compositor::adapter::input_types::ElementId,
+        element: compositor_values::input_types::ElementId,
     ) -> bool {
         self.frame
             .as_ref()
@@ -279,9 +277,9 @@ impl Page {
     fn ApplyCompositorScrollOffset(
         &mut self,
         sequence: u64,
-        element: compositor::adapter::input_types::ElementId,
+        element: compositor_values::input_types::ElementId,
         offset: Offset,
-        source_type: compositor::ScrollSourceType,
+        source_type: compositor_values::scroll_source_type::ScrollSourceType,
     ) -> io::Result<Option<u64>> {
         if sequence <= self.processed_compositor_scroll_sequence {
             return Ok(None);
@@ -400,7 +398,7 @@ impl Page {
                         x: f64::from(position.x()) / widget_scale,
                         y: f64::from(position.y()) / widget_scale,
                     })?;
-                    self.RouteWheelCompositorInput(CompositorInput::ContinueWheelScroll {
+                    self.RouteImplInput(InputToImpl::ContinueWheelScroll {
                         request,
                         scroll_element_id,
                     })?;
@@ -724,7 +722,7 @@ impl Page {
         }
         if !wheel.compositor_ack.is_empty() {
             for acknowledgement in ::interaction::WheelDOMAcknowledgements(wheel, false) {
-                self.RouteWheelCompositorInput(CompositorInput::WheelDOMAcknowledgement {
+                self.RouteImplInput(InputToImpl::WheelDOMAcknowledgement {
                     request: acknowledgement.request,
                     default_prevented: acknowledgement.default_prevented,
                 })?;
@@ -740,7 +738,7 @@ impl Page {
             .state
             .WithResidentSynchronousPresenter(|presenter, main| presenter.Wheel(main, wheel))?;
         if let Some(request) = result.dom_ack {
-            self.RouteWheelCompositorInput(CompositorInput::WheelDOMAcknowledgement {
+            self.RouteImplInput(InputToImpl::WheelDOMAcknowledgement {
                 request,
                 default_prevented: false,
             })?;
@@ -756,23 +754,58 @@ impl Page {
         }
         Ok(())
     }
-    pub(super) fn RouteWheelCompositorInput(&mut self, input: CompositorInput) -> io::Result<()> {
-        self.RouteCompositorMutation(compositor::CompositorMutation::Input(input))
-    }
-    pub(super) fn RouteCompositorMutation(
-        &mut self,
-        mutation: compositor::CompositorMutation,
-    ) -> io::Result<()> {
+    /// Posts `input` to the impl input handler. The external runtime's input
+    /// router moves it to the compositor thread in queue order
+    /// (WidgetInputHandlerManager posting to InputHandlerProxy); the
+    /// synchronous presenter runs it here, where its compositor task runner
+    /// would.
+    pub(super) fn RouteImplInput(&mut self, input: InputToImpl) -> io::Result<()> {
         if self.external_compositor {
             self.state
                 .pending_compositor_mutations
                 .borrow_mut()
-                .push(PageBrowserInput::Compositor(mutation));
+                .push(PageBrowserInput::ImplInput(input));
             return Ok(());
         }
-        let result = self
-            .state
-            .ContinueCompositorMutation(mutation)?;
+        let result = self.state.ContinueImplInput(input)?;
+        self.FinishSynchronousContinuation(result)
+    }
+    /// A browser-dispatched scroll or pinch gesture for the impl input
+    /// handler, through the same ordered ingress.
+    pub(super) fn RouteGestureScrollToImpl(
+        &mut self,
+        gesture: &interaction::input_event::WebGestureEvent,
+    ) -> io::Result<()> {
+        compositor_input::ValidateGestureCompositorInput(gesture)?;
+        if self.external_compositor {
+            self.state
+                .pending_compositor_mutations
+                .borrow_mut()
+                .push(PageBrowserInput::GestureScroll(gesture.clone()));
+            return Ok(());
+        }
+        let result = self.state.ContinueGestureScroll(gesture)?;
+        self.FinishSynchronousContinuation(result)
+    }
+    /// A LayerTreeHost setter on this Page's own main half. The external
+    /// runtime applies it after the transaction
+    /// (`ApplyPendingMainCompositorMutations`); the synchronous presenter
+    /// applies it now and runs the Proxy tasks it posted.
+    pub(super) fn RouteMainCompositorMutation(
+        &mut self,
+        mutation: main_compositor::MainCompositorMutation,
+    ) -> io::Result<()> {
+        if self.external_compositor {
+            self.state
+                .pending_main_compositor_mutations
+                .borrow_mut()
+                .push(mutation);
+            return Ok(());
+        }
+        let result = self.state.ContinueMainCompositorMutation(mutation)?;
+        self.FinishSynchronousContinuation(result)
+    }
+    fn FinishSynchronousContinuation(&mut self, result: CompositorWheelResult) -> io::Result<()> {
         assert!(
             result.dom_ack.is_none(),
             "continuation cannot dispatch the original DOM wheel twice"
@@ -786,7 +819,7 @@ impl Page {
     /// The tail of synchronous main-half calls made by the Page (PAC direct
     /// updates, main AnimationHost KeyframeModels, scrollbar layers). The
     /// internal presenter runs the in-process Proxy tasks they posted and
-    /// the Page applies the main-half effects, in ContinueCompositorMutation's
+    /// the Page applies the main-half effects, in the continuations'
     /// order. The external runtime's ProxyMain posts to the compositor thread
     /// itself; its effects are taken after the lifecycle
     /// (`ApplyPendingMainCompositorMutations`).

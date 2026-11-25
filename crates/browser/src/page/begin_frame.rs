@@ -42,7 +42,7 @@ impl Page {
         let dispositions = self.begin_frame.inputs.TakeWheelDispositions();
         for disposition in &dispositions {
             for &request in &disposition.requests {
-                self.RouteWheelCompositorInput(CompositorInput::WheelDOMAcknowledgement{
+                self.RouteImplInput(InputToImpl::WheelDOMAcknowledgement{
                     request,default_prevented:disposition.result==interaction::input::public::mojom::input::input_event_result::InputEventResultState::kConsumed,
                 })?;
             }
@@ -54,7 +54,7 @@ impl Page {
         wheel: &interaction::input_event::WheelEvent,
     ) -> io::Result<()> {
         for acknowledgement in interaction::WheelDOMAcknowledgements(wheel, false) {
-            self.RouteWheelCompositorInput(CompositorInput::WheelDOMAcknowledgement {
+            self.RouteImplInput(InputToImpl::WheelDOMAcknowledgement {
                 request: acknowledgement.request,
                 default_prevented: false,
             })?;

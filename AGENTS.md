@@ -68,12 +68,21 @@ document thread and pushes its artifact inside `ProxyMain::BeginMainFrame`; no
 | 1 | Loader → DOM | `url_loader` request/response bytes feed `open`'s `HTMLDocumentParser`; edits are `dom::DOMMutation`; navigation lifecycle is `open::OpenMutation` → `OpenEffect`. | The parser builds into the Page's shared `Rc<RefCell<DOM>>` owner. |
 | 2 | DOM → Style | `DocumentStyleEngine::Update(owner: &mut impl StyleDocument, &MediaValuesCachedData, UserAgentStyleSheetInput) -> StyleUpdateImpact` | Style reads the live DOM through `StyleDocument` and stores each `ComputedStyle` owner on its element. |
 | 3 | Style → Layout | `layout::LayoutEngine::ApplyMutation(LayoutMutation<'_>)` then `Layout()`; the `LayoutMutation::TreeUpdate(&mut dyn FnMut(&mut LayoutTreeUpdate))` variant lends Layout's tree builder for one synchronous attach transaction. Side commands (form controls, selection, scroll, pointer, event registry) are `LayoutMutation` family variants; engine queries are borrowed `layout::views::*` views. | DOM's `LayoutTreeBuilder` attaches layout objects in place, sharing the same `ComputedStyle` owner. |
-| 4 | Layout → Paint | `PaintEngine::Paint(&LayoutPaintOutput, EditingPaintState)`; `LayoutPaintOutput` wraps a `LayoutResultHandle`, walked with `PaintFragmentCursor`; resources arrive as `PaintMutation` / `PaintResourceUpdate`. | Paint walks the resident fragments and their attached Paint sidecars in place. |
+| 4 | Layout → Paint | `PaintLifecycle::Paint(&LayoutPaintOutput, EditingPaintState)` on `PaintEngine`; `LayoutPaintOutput` wraps a `LayoutResultHandle`, walked with `PaintFragmentCursor`; resources arrive as `PaintMutation` / `PaintResourceUpdate`. | Paint walks the resident fragments and their attached Paint sidecars in place. |
 | 5 | Paint → Layerize | `LayerizeEngine` runs Blink's `PaintArtifactCompositor::Update` over the `PaintArtifact`, viewport and scroll translations (Blink `LocalFrameView::PushPaintArtifactToCompositor`), then cc's `UpdateLayers` / `WillCommit`. | Borrowed artifact on the document sequence. |
 | 6 | Layerize → Compositor | `layerize::commit`: impl → main `BeginMainFrame` with impl deltas as values; main → impl `ReadyToCommit(CommitState)` or `BeginMainFrameAborted`; impl `FinishCommit` pushes dirty main-layer and animation properties through the push-target traits. | `CommitState` moved (cc property trees as a value inside it); main layers stay on main and are borrowed through `ThreadUnsafeCommitState` while main is parked (`ProtectedCommitLease`, `CompletionEvent`); display lists and paint records share their existing `Arc`. `compositor` may use only `layerize::commit`; `layerize` never depends on `compositor`. |
 | 7 | Compositor → Viz | `CompositorFrame { metadata, render_pass_list, resource_list }`, plus frame-scoped raster read leases; Viz returns `FrameSubmission` with returned resources. | Frame moved. |
 | 8 | Viz → Renderer | `Aggregate(DeviceRect, &[SurfacePlacement]) -> VizOutput` (an `AggregatedFrame` of `AggregatedRenderPass`es). | Aggregate moved. |
 | 9 | Renderer → display | `HostOutput::Render(&mut VizOutput, B::Target) -> (RenderUpdate, B::Target)`; backend injected through `DirectRendererBackend`. | Borrowed host render target; the host presents. |
+
+Besides the Proxy queue, one typed input queue crosses to the compositor
+thread: document-thread requests for the impl input handler (injected
+scrollbar gestures, wheel DOM acknowledgements, main-thread hit-test replies)
+move as `compositor_values::input_to_impl::InputToImpl`, in FIFO order. The
+embedding's input router drains it (`PageBrowserInput`; Chromium's
+WidgetInputHandlerManager posting to InputHandlerProxy); the synchronous
+presenter runs each message where the compositor task runner would. The
+document side never builds a `CompositorMutation`.
 
 Borrowing across boundaries 1–5 is deliberate: it is how Chromium's in-process
 data flow keeps its performance. A boundary violation is code that goes
@@ -139,7 +148,8 @@ the resident fragment tree (base modules of `layout_base`;
 published to Paint and Interaction through `layout::result`) →
 `layout_commit` (typed publication). Shared roots: `layout_geometry`, `layout_style` (the single
 `ComputedStyle` owner), `paint_input_types` (plain paint values Layout
-publishes: paint-input schema, `PaintResources`, glyph runs; Paint, Raster,
+publishes: paint-input schema, `PaintResources`, glyph runs, SVG filter
+geometry, sticky and overscroll values; Paint, Raster,
 Compositor and Style name them without depending on Layout), `layout_style_paint`
 (pure ComputedStyle -> paint-value projection and style-based scrollbar
 thickness; Style calls it for SVG paint servers, generated-image content and
@@ -172,8 +182,13 @@ internal.
 and retained-state proofs) → `paint_record` (backend-neutral PaintOps) →
 `paint_chunk` (DisplayItem grouping) → `paint_commit` (completes the
 `PaintArtifact`). `paint` is the facade and lifecycle orchestrator.
-Shared: `paint_model` (property-tree, coordinate, path, low-level paint values,
-layer classification), `paint_skia` (Skia path values for geometry services).
+Shared roots: `paint_model` (property-tree, coordinate, path, low-level paint
+values; names no Layout type), `paint_skia` (Skia path values for geometry
+services). core/paint code that reads Layout fragments (PaintLayer
+classification, fragment border edges and radii) lives in `prepaint`.
+`PaintEngine` exposes focused interfaces: `PaintLifecycle` (PrePaint, Paint,
+commit), `PaintResourceUpdates`, `PaintPropertyUpdates` (direct scroll,
+viewport and composited-animation updates) and `PaintLayerQueries`.
 Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
 `paint_chunk`, `paint_commit`.
 
@@ -234,7 +249,8 @@ with `ProxyImpl` receiving the commit.
   trees and their nodes), `compositor_animation` (cc/animation, one
   AnimationHost class for the main and the impl instance) and
   `compositor_values` (cc input, settings, viz and gfx values named by both
-  sides, including `gfx::Transform`) live under `crates/compositor/`. They
+  sides, including `gfx::Transform` and the `InputToImpl` input-queue
+  messages) live under `crates/compositor/`. They
   carry only source-aligned values and algorithms used by both sides, depend
   only on each other and on value crates (`paint_model` geometry,
   `foundation`, `skia`, `browser_tracing`, `image_resource`), and never own
@@ -425,8 +441,11 @@ These apply to every boundary above.
 - **Focused interfaces.** Each interface has one clear focus. It may have
   several methods, each serving that focus; unrelated concerns get their own
   interface. No callbacks or getters that reach back.
-- Boundary tests enforce these rules; known violations are listed there as
-  temporary allowances.
+- `tools/crate_ladder` enforces them: every crate has one tier (base, platform
+  and value roots; pipeline and side engines as facade plus internal
+  packages; assembly), a pipeline stage names only its direct upstream, and
+  the Page document side names no `compositor::`. Known violations are listed
+  there as cited exceptions or temporary allowances.
 
 ---
 

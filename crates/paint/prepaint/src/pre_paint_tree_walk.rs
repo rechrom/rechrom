@@ -39,7 +39,7 @@ use crate::nine_piece_geometry::NinePieceImageGeometry;
 use crate::object_paint_invalidator::ObjectPaintInvalidator;
 use crate::paint_invalidator::{PaintInvalidator, PaintInvalidatorContext};
 use crate::table_cell_paint_invalidator::TableCellPaintInvalidator;
-use paint_model::contoured_border_geometry::{
+use crate::contoured_border_geometry::{
     ConicRoundedRectPath, ExpandCornerRadiiEdges, IncludedBorderEdges,
     OutsetCornerRadiiWithCorrection, ResolveCornerRadii, UniformCornerRadius,
 };
@@ -47,7 +47,7 @@ use paint_model::geometry_mapper::{
     MapRectToRoot, MultiplyTransforms, ResolveLocalTransformAroundReferenceBox,
     ResolvePaintTransform, ResolveTransformReferenceRect, TranslationTransform,
 };
-use paint_model::paint_order::ClassifyFragmentPaintLayer;
+use crate::paint_order::ClassifyFragmentPaintLayer;
 use paint_model::paint_property_tree::{
     ClipPaintPropertyNode, EffectAnimationState, EffectPaintPropertyNode, PaintBackfaceVisibility,
     PaintCompositorStickyConstraint, PaintPropertyChangeType, PaintPropertyKey,

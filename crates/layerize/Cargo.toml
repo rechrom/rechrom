@@ -20,13 +20,14 @@ scroll_animation = { path = "../compositor/scroll_animation" }
 skia = { path = "../skia" }
 # Blink ContentLayerClient (PictureLayer client) and PAC layerization policy.
 compositor_layerize = { path = "compositor_layerize" }
-# cc::FilterOperations (cc/paint) for the shared filter facets; the main half
-# also reads PaintArtifact once PAC moves here.
+# The PaintArtifact handoff (boundary 5): display items and chunks. Property
+# nodes, PaintRect, clip paths and cc/paint values come from paint_model.
 paint = { path = "../paint" }
 # PaintModel's geometry-mapper matrix facets and Paint's Skia path compiler,
 # implemented by the shared Transform / SkRegion value backends.
 paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
+paint_input_types = { path = "../layout/paint_input_types" }
 foundation = { path = "../foundation" }
 # canvas::CanvasRecordReadLease, implemented by the canvas child raster input.
 canvas = { path = "../canvas" }
@@ -34,7 +35,3 @@ browser_tracing = { path = "../tracing" }
 serde_json = "1"
 # Paint metric sampler seed of the Skia paint platform (runtime/paint/services.rs).
 getrandom = "0.4"
-
-[dev-dependencies]
-# PaintResources values built by the cc/paint metadata unit tests.
-paint_input_types = { path = "../layout/paint_input_types" }

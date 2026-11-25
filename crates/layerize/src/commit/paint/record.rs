@@ -25,7 +25,7 @@ pub enum CpuFilterQuality {
     kMedium,
     kHigh,
 }
-pub type CpuDynamicRangeLimit = paint::cc::paint::paint_flags::DynamicRangeLimitMixture;
+pub type CpuDynamicRangeLimit = paint_model::cc::paint::paint_flags::DynamicRangeLimitMixture;
 pub type TargetColorParams = crate::commit::color_space::HostTargetColorParams<
     crate::commit::color_space::RasterColorSpace,
 >;
@@ -123,21 +123,21 @@ pub struct CpuBufferMetadata {
     pub has_discardable_images: bool,
     pub content_color_usage: ContentColorUsage,
 }
-pub type CpuPaintFilter = Arc<dyn paint::cc::paint::filter_operation::PaintFilter>;
+pub type CpuPaintFilter = Arc<dyn paint_model::cc::paint::filter_operation::PaintFilter>;
 /// Canonical Skia image-filter input graph. Operations own their real immutable
 /// references; this is not a second authored projection or executable cache.
 #[derive(Debug)]
-pub struct CpuOperationsFilter(pub paint::cc::paint::filter_operations::FilterOperations);
-impl paint::cc::paint::filter_operation::PaintFilter for CpuOperationsFilter {
+pub struct CpuOperationsFilter(pub paint_model::cc::paint::filter_operations::FilterOperations);
+impl paint_model::cc::paint::filter_operation::PaintFilter for CpuOperationsFilter {
     fn MapRect(
         &self,
         rect: foundation::gfx::Rect,
-        ctm: Option<&dyn paint::cc::paint::filter_operation::FilterMapTransform>,
-        direction: paint::cc::paint::filter_operation::MapDirection,
+        ctm: Option<&dyn paint_model::cc::paint::filter_operation::FilterMapTransform>,
+        direction: paint_model::cc::paint::filter_operation::MapDirection,
     ) -> foundation::gfx::Rect {
         match direction {
-            paint::cc::paint::filter_operation::MapDirection::Forward => self.0.MapRect(rect, ctm),
-            paint::cc::paint::filter_operation::MapDirection::Reverse => {
+            paint_model::cc::paint::filter_operation::MapDirection::Forward => self.0.MapRect(rect, ctm),
+            paint_model::cc::paint::filter_operation::MapDirection::Reverse => {
                 self.0.MapRectReverse(rect, ctm)
             }
         }
@@ -145,19 +145,19 @@ impl paint::cc::paint::filter_operation::PaintFilter for CpuOperationsFilter {
     fn TypeToString(&self) -> &'static str {
         "CompositorFilterOperations"
     }
-    fn ReplayGraph(&self) -> paint::cc::paint::filter_operation::PaintFilterReplay<'_> {
-        paint::cc::paint::filter_operation::PaintFilterReplay::Operations(&self.0)
+    fn ReplayGraph(&self) -> paint_model::cc::paint::filter_operation::PaintFilterReplay<'_> {
+        paint_model::cc::paint::filter_operation::PaintFilterReplay::Operations(&self.0)
     }
 }
 /// Runtime Paint flags retain the complete canonical scalar state. Image-filter
 /// values remain the actual immutable external Paint graph; this owner never
 /// projects a layer/tree or stores a raster execution capability.
 pub struct CpuPaintFlags<R: PaintSkiaBackend = crate::commit::skia_region::SkRegion> {
-    core: paint::cc::paint::paint_flags::CorePaintFlags,
+    core: paint_model::cc::paint::paint_flags::CorePaintFlags,
     pub image_filter: Option<CpuPaintFilter>,
     pub shader: Option<Arc<super::CpuPaintShader<R>>>,
     pub color_filter: Option<super::CpuPaintColorFilter>,
-    pub looper: Option<Arc<paint::cc::paint::draw_looper::DrawLooper>>,
+    pub looper: Option<Arc<paint_model::cc::paint::draw_looper::DrawLooper>>,
 }
 impl<R: PaintSkiaBackend> Default for CpuPaintFlags<R> {
     fn default() -> Self {
@@ -182,7 +182,7 @@ impl<R: PaintSkiaBackend> Clone for CpuPaintFlags<R> {
     }
 }
 impl<R: PaintSkiaBackend> std::ops::Deref for CpuPaintFlags<R> {
-    type Target = paint::cc::paint::paint_flags::CorePaintFlags;
+    type Target = paint_model::cc::paint::paint_flags::CorePaintFlags;
     fn deref(&self) -> &Self::Target {
         &self.core
     }
@@ -199,7 +199,7 @@ pub trait CpuPaintValueServices<R: PaintSkiaBackend>: Send + Sync {
     fn AnalyzeAddedOp(
         &self,
         op: CpuPaintOpRef<'_, R>,
-        metadata: &mut paint::cc::paint::paint_op_buffer::PaintOpBufferMetadata<ContentColorUsage>,
+        metadata: &mut paint_model::cc::paint::paint_op_buffer::PaintOpBufferMetadata<ContentColorUsage>,
     );
     fn NeedsAdditionalInvalidationForLCDText(
         &self,
@@ -274,7 +274,7 @@ pub struct CpuClipPath<R: PaintSkiaBackend> {
     paths: Arc<[Arc<R::Path>]>,
 }
 impl<R: PaintSkiaBackend> CpuClipPath<R> {
-    pub fn FromPaintPath(path: &paint::paint_clip_path::PaintClipPath) -> Self {
+    pub fn FromPaintPath(path: &paint_model::paint_clip_path::PaintClipPath) -> Self {
         Self {
             paths: path
                 .paths()
@@ -344,7 +344,7 @@ pub enum CpuPaintOp<R: PaintSkiaBackend> {
     DrawTransparentColorSrc,
     DrawColor {
         color: Color4f,
-        blend: paint::cc::paint::blend_mode::BlendMode,
+        blend: paint_model::cc::paint::blend_mode::BlendMode,
     },
     DrawRecord(CpuPaintRecord<R>),
     DrawScrollingContents {
@@ -363,13 +363,13 @@ pub enum CpuPaintStorage<R: PaintSkiaBackend> {
 pub struct CpuPaintOpBuffer<R: PaintSkiaBackend> {
     storage: CpuPaintStorage<R>,
     values: Arc<dyn CpuPaintValueServices<R>>,
-    metadata: paint::cc::paint::paint_op_buffer::PaintOpBufferMetadata<ContentColorUsage>,
+    metadata: paint_model::cc::paint::paint_op_buffer::PaintOpBufferMetadata<ContentColorUsage>,
 }
 impl<R: PaintSkiaBackend> CpuPaintOpBuffer<R> {
     pub fn new(values: Arc<dyn CpuPaintValueServices<R>>) -> Self {
         Self {
             storage: CpuPaintStorage::Converted(Vec::new()),
-            metadata: paint::cc::paint::paint_op_buffer::PaintOpBufferMetadata::new(
+            metadata: paint_model::cc::paint::paint_op_buffer::PaintOpBufferMetadata::new(
                 ContentColorUsage::kSRGB,
             ),
             values,
@@ -384,7 +384,7 @@ impl<R: PaintSkiaBackend> CpuPaintOpBuffer<R> {
     }
     pub fn canonical_metadata(
         &self,
-    ) -> &paint::cc::paint::paint_op_buffer::PaintOpBufferMetadata<ContentColorUsage> {
+    ) -> &paint_model::cc::paint::paint_op_buffer::PaintOpBufferMetadata<ContentColorUsage> {
         &self.metadata
     }
     pub fn allocation_capacity(&self) -> usize {
@@ -672,9 +672,9 @@ impl<R: PaintSkiaBackend> DisplayPaintOpBuffer<CpuPaintTypes<R>> for CpuPaintOpB
     type Iter<'a> = CpuPaintIter<'a, R>;
     type OffsetIter<'a> = CpuPaintIter<'a, R>;
     type PlaybackItem<'a> =
-        paint::cc::paint::paint_op_buffer_iterator::PlaybackItem<CpuPaintOpRef<'a, R>>;
+        paint_model::cc::paint::paint_op_buffer_iterator::PlaybackItem<CpuPaintOpRef<'a, R>>;
     type PlaybackFoldingIter<'a> =
-        paint::cc::paint::paint_op_buffer_iterator::PlaybackFoldingIterator<'a, Self>;
+        paint_model::cc::paint::paint_op_buffer_iterator::PlaybackFoldingIterator<'a, Self>;
     fn iter(&self) -> Self::Iter<'_> {
         CpuPaintIter {
             buffer: self,
@@ -690,7 +690,7 @@ impl<R: PaintSkiaBackend> DisplayPaintOpBuffer<CpuPaintTypes<R>> for CpuPaintOpB
         }
     }
     fn playback_folding_iter<'a>(&'a self, offsets: &'a [usize]) -> Self::PlaybackFoldingIter<'a> {
-        paint::cc::paint::paint_op_buffer_iterator::PlaybackFoldingIterator::new(
+        paint_model::cc::paint::paint_op_buffer_iterator::PlaybackFoldingIterator::new(
             self,
             Some(offsets),
         )
@@ -735,7 +735,7 @@ impl<R: PaintSkiaBackend> DisplayPaintOpBuffer<CpuPaintTypes<R>> for CpuPaintOpB
         let ops = std::mem::take(self.converted_mut());
         let metadata = std::mem::replace(
             &mut self.metadata,
-            paint::cc::paint::paint_op_buffer::PaintOpBufferMetadata::new(ContentColorUsage::kSRGB),
+            paint_model::cc::paint::paint_op_buffer::PaintOpBufferMetadata::new(ContentColorUsage::kSRGB),
         );
         CpuPaintRecord::Buffer(Arc::new(Self {
             storage: CpuPaintStorage::Converted(ops),
@@ -959,7 +959,7 @@ impl<R: PaintSkiaBackend> Clone for CpuPaintOpRef<'_, R> {
         *self
     }
 }
-impl<R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpBufferView
+impl<R: PaintSkiaBackend> paint_model::cc::paint::paint_op_buffer_iterator::PaintOpBufferView
     for CpuPaintOpBuffer<R>
 {
     type Op<'a> = CpuPaintOpRef<'a, R>;
@@ -980,12 +980,12 @@ impl<R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpBuf
         offset + 1
     }
 }
-impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpView<'a>
+impl<'a, R: PaintSkiaBackend> paint_model::cc::paint::paint_op_buffer_iterator::PaintOpView<'a>
     for CpuPaintOpRef<'a, R>
 {
     type Buffer = CpuPaintOpBuffer<R>;
-    fn GetType(self) -> paint::cc::paint::paint_op_buffer_iterator::PaintOpType {
-        use paint::cc::paint::paint_op_buffer_iterator::PaintOpType as T;
+    fn GetType(self) -> paint_model::cc::paint::paint_op_buffer_iterator::PaintOpType {
+        use paint_model::cc::paint::paint_op_buffer_iterator::PaintOpType as T;
         use paint::paint_engine::DisplayItemType as N;
         match self {
             Self::PaintRecord { op, .. } => match op.r#type {
@@ -1053,9 +1053,9 @@ impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintO
         }
     }
     fn IsDrawOp(self) -> bool {
-        use paint::cc::paint::paint_op_buffer_iterator::PaintOpType::*;
+        use paint_model::cc::paint::paint_op_buffer_iterator::PaintOpType::*;
         matches!(
-            paint::cc::paint::paint_op_buffer_iterator::PaintOpView::GetType(self),
+            paint_model::cc::paint::paint_op_buffer_iterator::PaintOpView::GetType(self),
             kDrawArc
                 | kDrawArcLite
                 | kDrawColor
@@ -1079,7 +1079,7 @@ impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintO
     }
     fn IsPaintOpWithFlags(self) -> bool {
         match self {
-            Self::PaintRecord { .. } => self.IsDrawOp() || matches!(paint::cc::paint::paint_op_buffer_iterator::PaintOpView::GetType(self), paint::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayer | paint::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayerFilters),
+            Self::PaintRecord { .. } => self.IsDrawOp() || matches!(paint_model::cc::paint::paint_op_buffer_iterator::PaintOpView::GetType(self), paint_model::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayer | paint_model::cc::paint::paint_op_buffer_iterator::PaintOpType::kSaveLayerFilters),
             Self::Converted(
                 CpuPaintOp::DrawRRect(..)
                 | CpuPaintOp::DrawRect(..)
@@ -1092,7 +1092,7 @@ impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintO
     fn FlagsSupportFoldingAlpha(self) -> bool {
         match self {
             Self::PaintRecord { op, .. } => {
-                op.blend_mode == paint::paint_property_tree::PaintBlendMode::kNormal
+                op.blend_mode == paint_model::paint_property_tree::PaintBlendMode::kNormal
                     && op.canonical_filters.is_empty()
                     && !op.is_shadow
                     && op.r#type != paint::paint_engine::DisplayItemType::kDrawBoxShadow
@@ -1103,7 +1103,7 @@ impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintO
                 | CpuPaintOp::DrawPath { flags, .. }
                 | CpuPaintOp::DrawDRRect { flags, .. },
             ) => {
-                flags.getBlendMode() == paint::cc::paint::blend_mode::BlendMode::kSrcOver
+                flags.getBlendMode() == paint_model::cc::paint::blend_mode::BlendMode::kSrcOver
                     && flags.image_filter.is_none()
                     && flags.looper.is_none()
                     && flags.color_filter.is_none()
@@ -1130,7 +1130,7 @@ impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintO
             Self::Converted(CpuPaintOp::DrawTransparentColorSrc) => ([0.; 4], false),
             Self::Converted(CpuPaintOp::DrawColor { color, blend }) => (
                 [color.red, color.green, color.blue, color.alpha],
-                *blend == paint::cc::paint::blend_mode::BlendMode::kSrcOver,
+                *blend == paint_model::cc::paint::blend_mode::BlendMode::kSrcOver,
             ),
             _ => panic!("source DrawColorOp required"),
         }
@@ -1143,14 +1143,14 @@ impl<'a, R: PaintSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintO
     }
 }
 impl<R: PaintSkiaBackend> DisplayPlaybackItem
-    for paint::cc::paint::paint_op_buffer_iterator::PlaybackItem<CpuPaintOpRef<'_, R>>
+    for paint_model::cc::paint::paint_op_buffer_iterator::PlaybackItem<CpuPaintOpRef<'_, R>>
 {
     fn AdditionalOpCount(&self) -> usize {
         match self.op {
-            paint::cc::paint::paint_op_buffer_iterator::FoldedOp::Borrowed(op) => {
+            paint_model::cc::paint::paint_op_buffer_iterator::FoldedOp::Borrowed(op) => {
                 op.AdditionalOpCount()
             }
-            paint::cc::paint::paint_op_buffer_iterator::FoldedOp::OwnedDrawColor { .. } => 0,
+            paint_model::cc::paint::paint_op_buffer_iterator::FoldedOp::OwnedDrawColor { .. } => 0,
         }
     }
 }

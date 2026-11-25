@@ -611,20 +611,7 @@ pub enum Overflow {
     kAuto,
     kClip,
 }
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OverscrollBehavior {
-    #[default]
-    kAuto,
-    kContain,
-    kNone,
-    kChain,
-}
-impl OverscrollBehavior {
-    pub fn AllowsScrollChaining(self) -> bool {
-        matches!(self, Self::kAuto | Self::kChain)
-    }
-}
+pub use paint_input_types::layout_input::OverscrollBehavior;
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverflowClipReferenceBox {

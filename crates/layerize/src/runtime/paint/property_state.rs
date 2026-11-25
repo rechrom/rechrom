@@ -21,7 +21,7 @@ use crate::{
     runtime::types::PaintSkiaBackend,
     third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache,
 };
-use paint::paint_property_tree;
+use paint_model::paint_property_tree;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TransformCompositingBoundaryType {
@@ -66,7 +66,7 @@ fn can_merge_for_fixed_position<R: PaintSkiaBackend>(
     super::read(|a| first.node().CanMergeForFixedPosition(a, second.node()))
 }
 
-fn source_rect(value: paint::paint_engine::PaintRect) -> Rect {
+fn source_rect(value: paint_model::PaintRect) -> Rect {
     ToEnclosingRect(RectF::new(
         value.x as f32,
         value.y as f32,

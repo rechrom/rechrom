@@ -1,10 +1,10 @@
 //! Thin actual Skia no-pixels/value binding for canonical Paint solid analysis.
-//! Classification remains entirely in paint::cc::paint::solid_color_analyzer.
+//! Classification remains entirely in paint_model::cc::paint::solid_color_analyzer.
 #![allow(non_snake_case)]
 use super::{CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef};
 use crate::commit::skia_region::SkRegion;
-use paint::cc::paint::blend_mode::BlendMode;
-use paint::cc::paint::solid_color_analyzer::*;
+use paint_model::cc::paint::blend_mode::BlendMode;
+use paint_model::cc::paint::solid_color_analyzer::*;
 use skia::{
     include::{core::SkClipOp::SkClipOp, utils::SkNoDrawCanvas::SkNoDrawCanvas},
     src::core::{SkCanvas::SkCanvas, SkM44::SkM44, SkRect::SkRect as Rect},
@@ -173,8 +173,8 @@ impl AnalysisShape for RRectShape {
     }
 }
 pub struct Flags<'a>(CpuPaintOpRef<'a, SkRegion>);
-fn blend(m: paint::paint_property_tree::PaintBlendMode) -> BlendMode {
-    use paint::paint_property_tree::PaintBlendMode::*;
+fn blend(m: paint_model::paint_property_tree::PaintBlendMode) -> BlendMode {
+    use paint_model::paint_property_tree::PaintBlendMode::*;
     match m {
         kNormal => BlendMode::kSrcOver,
         kMultiply => BlendMode::kMultiply,
@@ -277,7 +277,7 @@ impl AnalysisFlags for Flags<'_> {
                 | CpuPaintOp::DrawPath { flags: f, .. }
                 | CpuPaintOp::DrawRRect(_, f)
                 | CpuPaintOp::DrawDRRect { flags: f, .. },
-            ) => f.getStyle() == paint::cc::paint::paint_flags::Style::kFill_Style,
+            ) => f.getStyle() == paint_model::cc::paint::paint_flags::Style::kFill_Style,
             _ => panic!("source flagged shape required"),
         }
     }

@@ -5,6 +5,7 @@
 //! The full source entry still requires frame, scroll, capture and geometry
 //! ports; overflow controls and locked-selection preparation stay explicit.
 //! Native window cursor creation stays with the host.
+use paint::PaintLayerQueries as _;
 use dom::{persistent_document::DOMNodeType, Document};
 use layout::paint_input::ECursor as StyleCursor;
 

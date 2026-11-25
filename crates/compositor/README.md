@@ -25,8 +25,9 @@ Package classes (guarded by `crates/layerize/tests/layerize_boundary.rs`):
 - cc shared roots: `scroll_snap`, `scroll_animation`, `compositor_tree` (cc
   property trees), `compositor_animation` (cc/animation, main and impl
   AnimationHost instances), `compositor_values` (cc input, settings, viz and
-  gfx values, including `gfx::Transform`). They depend only on each other and
-  on value crates; Layerize and crates outside this family may use them.
+  gfx values, including `gfx::Transform`, and the `input_to_impl` input-queue
+  messages the document thread moves to the impl input handler). They depend
+  only on each other and on value crates; Layerize and crates outside this family may use them.
 - impl packages: every other package here. Only the `compositor` facade and
   other impl packages may depend on them.
 

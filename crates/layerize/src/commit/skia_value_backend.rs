@@ -7,8 +7,8 @@ use super::{
     geometry::RectF,
     layer_value_backend::{DrawFilters, MainLayerPath},
 };
-use paint::cc::paint::paint_flags::{Cap, Join};
-use paint::paint_clip_path::PaintPath;
+use paint_model::cc::paint::paint_flags::{Cap, Join};
+use paint_model::paint_clip_path::PaintPath;
 
 /// Pure Skia-owned value types only. Policy/owner algorithms are forbidden in
 /// this capability; the backend implements native filter/path operations.
@@ -53,7 +53,7 @@ pub trait MainSkiaBackend {
 pub trait PaintSkiaBackend:
     super::region_backend::SkRegionBackend
     + super::transform::RoundedRectTransformBackend
-    + MainSkiaBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
+    + MainSkiaBackend<Filters = paint_model::cc::paint::filter_operations::FilterOperations>
     + Send
     + Sync
     + 'static
@@ -62,7 +62,7 @@ pub trait PaintSkiaBackend:
 impl<R> PaintSkiaBackend for R where
     R: super::region_backend::SkRegionBackend
         + super::transform::RoundedRectTransformBackend
-        + MainSkiaBackend<Filters = paint::cc::paint::filter_operations::FilterOperations>
+        + MainSkiaBackend<Filters = paint_model::cc::paint::filter_operations::FilterOperations>
         + Send
         + Sync
         + 'static

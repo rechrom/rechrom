@@ -15,7 +15,7 @@ use crate::{
         geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCache},
     },
 };
-use paint::paint_property_tree;
+use paint_model::paint_property_tree;
 use std::{marker::PhantomData, sync::Arc};
 pub struct CpuGeometryMapper<R: PaintSkiaBackend> {
     pub(super) tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
@@ -43,7 +43,7 @@ impl<R: PaintSkiaBackend> CpuGeometryMapper<R> {
         ClipNode::from_arc(link.clone())
     }
 }
-fn rect(r: paint::paint_engine::PaintRect) -> RectF {
+fn rect(r: paint_model::PaintRect) -> RectF {
     RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32)
 }
 fn clip_rect(r: paint_property_tree::ClipLayoutRect) -> FloatClipRect {

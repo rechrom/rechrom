@@ -19,7 +19,10 @@ pub(super) fn ResetRootDocumentInputForCommit(state: &Rc<PageState>) {
     // must never be forwarded through the replacement client's binder.
     {
         let mut pending = state.pending_compositor_mutations.borrow_mut();
-        pending.retain(|input| matches!(input, super::PageBrowserInput::Compositor(_)));
+        pending.retain(|input| matches!(
+            input,
+            super::PageBrowserInput::ImplInput(_) | super::PageBrowserInput::GestureScroll(_)
+        ));
         if let Some(generation) =
             input_generation.filter(|_| state.external_presentation.get())
         {
@@ -466,7 +469,16 @@ impl OpenDocumentAdapter for PageOpenAdapter<'_> {
                 .pending_compositor_mutations
                 .borrow_mut()
                 .drain(..)
-                .filter(|input| matches!(input, super::PageBrowserInput::Compositor(_))),
+                .filter(|input| matches!(
+            input,
+            super::PageBrowserInput::ImplInput(_) | super::PageBrowserInput::GestureScroll(_)
+        )),
+        );
+        state.pending_main_compositor_mutations.borrow_mut().extend(
+            previous
+                .pending_main_compositor_mutations
+                .borrow_mut()
+                .drain(..),
         );
         let resources = CreateRootDocumentResources(&state, resource_engine);
         ResetRootDocumentInputForCommit(&state);

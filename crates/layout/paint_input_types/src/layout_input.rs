@@ -186,3 +186,76 @@ pub struct SvgViewBoxData {
     // is concatenated after the viewBox-to-viewport mapping.
     pub view_transform: Option<TransformMatrix>,
 }
+
+/// Sticky-position constraint inputs Layout publishes for PrePaint's
+/// StickyTranslation (Blink cc::StickyPositionConstraint, filled by
+/// PaintPropertyTreeBuilder::UpdateStickyTranslation).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StickyAxisPaintData {
+    pub min_inset: Option<f64>,
+    pub max_inset: Option<f64>,
+    pub scroll_container_relative_containing_block_offset: f64,
+    pub scroll_container_relative_containing_block_size: f64,
+    pub scroll_container_relative_sticky_box_offset: f64,
+    pub scroll_container_relative_sticky_box_size: f64,
+    pub constraining_offset: f64,
+    pub constraining_size: f64,
+    pub scroll_container_client_id: u64,
+    pub nearest_sticky_box_client_id: u64,
+    pub nearest_containing_block_client_id: u64,
+    pub current_sticky_offset: f64,
+    pub current_total_sticky_box_offset: f64,
+    pub current_total_containing_block_offset: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StickyPositionPaintData {
+    pub owner_client_id: u64,
+    pub horizontal: Option<StickyAxisPaintData>,
+    pub vertical: Option<StickyAxisPaintData>,
+}
+
+impl StickyPositionPaintData {
+    /// Compare retained layout geometry while ignoring resolved scroll offsets.
+    pub fn same_geometry(&self, other: &Self) -> bool {
+        let (mut before, mut after) = (*self, *other);
+        for data in [&mut before, &mut after] {
+            for axis in [&mut data.horizontal, &mut data.vertical]
+                .into_iter()
+                .flatten()
+            {
+                if ![
+                    axis.current_sticky_offset,
+                    axis.current_total_sticky_box_offset,
+                    axis.current_total_containing_block_offset,
+                ]
+                .into_iter()
+                .all(f64::is_finite)
+                {
+                    return false;
+                }
+                axis.current_sticky_offset = 0.0;
+                axis.current_total_sticky_box_offset = 0.0;
+                axis.current_total_containing_block_offset = 0.0;
+            }
+        }
+        before == after
+    }
+}
+
+/// CSS overscroll-behavior (Blink EOverscrollBehavior; cc::OverscrollBehavior
+/// on the ScrollPaintPropertyNode).
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    #[default]
+    kAuto,
+    kContain,
+    kNone,
+    kChain,
+}
+impl OverscrollBehavior {
+    pub fn AllowsScrollChaining(self) -> bool {
+        matches!(self, Self::kAuto | Self::kChain)
+    }
+}

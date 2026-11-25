@@ -256,6 +256,8 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "compositor",
+ "compositor_tree",
+ "compositor_values",
  "cssom",
  "decode",
  "document",
@@ -487,10 +489,10 @@ dependencies = [
  "compositor_tile",
  "compositor_tree",
  "compositor_tree_sync",
+ "compositor_values",
  "foundation",
  "getrandom 0.4.3",
  "layerize",
- "paint",
  "paint_input_types",
  "paint_model",
  "paint_skia",
@@ -702,6 +704,10 @@ dependencies = [
  "libc",
  "rav1d",
 ]
+
+[[package]]
+name = "crate_ladder"
+version = "0.0.1"
 
 [[package]]
 name = "crc32fast"
@@ -2138,7 +2144,6 @@ dependencies = [
  "layout_style",
  "navigation_history",
  "resize_observer",
- "style_model",
  "url",
 ]
 
@@ -3280,7 +3285,6 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "image_resource",
- "layout",
  "layout_geometry",
  "layout_style",
  "paint_input_types",
@@ -3904,7 +3908,7 @@ dependencies = [
  "bytemuck",
  "compositor",
  "foundation",
- "paint",
+ "paint_model",
  "raster",
  "renderer",
  "skia",

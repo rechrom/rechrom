@@ -160,7 +160,7 @@ impl InteractionScrollOwner {
         node: u64,
         offset: Offset,
         behavior: ViewportScrollBehavior,
-        source_type: compositor::ScrollSourceType,
+        source_type: compositor_values::scroll_source_type::ScrollSourceType,
     ) {
         match self {
             Self::Root(page) => {

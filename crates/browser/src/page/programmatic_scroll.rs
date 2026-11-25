@@ -75,7 +75,7 @@ impl PageState {
         node: u64,
         offset: Offset,
         behavior: ViewportScrollBehavior,
-        source_type: compositor::ScrollSourceType,
+        source_type: compositor_values::scroll_source_type::ScrollSourceType,
     ) {
         let element = self
             .layout_engine
@@ -190,7 +190,7 @@ impl local_frame::LocalFrame {
         node: u64,
         offset: Offset,
         behavior: ViewportScrollBehavior,
-        source_type: compositor::ScrollSourceType,
+        source_type: compositor_values::scroll_source_type::ScrollSourceType,
     ) {
         if !self.IsCurrentRuntime(runtime) {
             return;

@@ -4,10 +4,6 @@
 //! cc/paint values of `layerize::commit::paint`.
 
 pub use layerize::commit::paint::*;
-pub use paint::paint_engine::{
-    DisplayItem as PaintOp, PaintArtifact, PaintChunk, RecordedDisplayItem as DisplayItem,
-    RecordedDisplayItemKind,
-};
 mod picture;
 pub use picture::*;
 mod raster;

@@ -1,5 +1,6 @@
 //! Call-scoped PointerEventManager geometry leaves. Every query releases its
 //! Layout/Paint borrows before dispatch can reenter script or layout.
+use paint::PaintLayerQueries as _;
 use super::page_cursor::{
     PreparedLocalChildFrameQueries, ResidentDOMCursorNodes, ResidentDOMNodeOwners,
 };

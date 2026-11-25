@@ -13,6 +13,7 @@
 //! This required-services adapter is the production Page hit-test route.
 //! Source layer traversal, DOM result owners and virtual geometry operations
 //! are supplied by the call-scoped resident binding below.
+use paint::PaintLayerQueries as _;
 use ::layout::fragment::ResidentBoxGeometry as _;
 use crate::{
     core::{

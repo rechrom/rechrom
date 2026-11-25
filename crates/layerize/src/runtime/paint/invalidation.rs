@@ -98,7 +98,7 @@ impl<R: PaintSkiaBackend> RasterInvalidationTrackingValue
         Self::AddInvalidation(self, id, name, rect, reason)
     }
 }
-fn enclosing(r: paint::paint_engine::PaintRect) -> Rect {
+fn enclosing(r: paint_model::PaintRect) -> Rect {
     crate::adapter::geometry::ToEnclosingRect(RectF::new(
         r.x as f32,
         r.y as f32,
@@ -107,7 +107,7 @@ fn enclosing(r: paint::paint_engine::PaintRect) -> Rect {
     ))
 }
 impl RasterInvalidationItem for DisplayItem {
-    type Id = paint::display_item_id::DisplayItemId;
+    type Id = paint_model::display_item_id::DisplayItemId;
     fn GetId(&self) -> Self::Id {
         self.GetId()
     }
@@ -137,7 +137,7 @@ impl RasterInvalidationItem for DisplayItem {
         enclosing(self.RectKnownToBeOpaque())
     }
     fn IsBoxDecorationBackground(&self) -> bool {
-        self.id.r#type == paint::display_item_id::DisplayItemIdType::kBoxDecorationBackground
+        self.id.r#type == paint_model::display_item_id::DisplayItemIdType::kBoxDecorationBackground
     }
     fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason {
         self.GetPaintInvalidationReason()
@@ -145,7 +145,7 @@ impl RasterInvalidationItem for DisplayItem {
     }
 }
 impl<R: PaintSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for PaintChunk {
-    type Id = paint::display_item_id::DisplayItemId;
+    type Id = paint_model::display_item_id::DisplayItemId;
     fn id(&self) -> Self::Id {
         self.id
     }
@@ -174,8 +174,8 @@ impl<R: PaintSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for Pain
         paint::paint_engine::PaintChunk::DrawsContent(self)
     }
     fn IsForeignLayerType(&self) -> bool {
-        self.id.r#type.0 >= paint::display_item_id::DisplayItemIdType::kForeignLayerFirst.0
-            && self.id.r#type.0 <= paint::display_item_id::DisplayItemIdType::kForeignLayerLast.0
+        self.id.r#type.0 >= paint_model::display_item_id::DisplayItemIdType::kForeignLayerFirst.0
+            && self.id.r#type.0 <= paint_model::display_item_id::DisplayItemIdType::kForeignLayerLast.0
     }
 }
 impl<R: PaintSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for PaintArtifact {
@@ -249,7 +249,7 @@ impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         layer: &PropertyTreeState<R>,
     ) -> bool {
         paint_model::property_cell::with_access(|a| {
-            paint::property_node_geometry::PropertyStateChanged(
+            paint_model::property_node_geometry::PropertyStateChanged(
                 a,
                 &chunk.properties,
                 paint_property_tree::PaintPropertyChangeType::ChangedOnlyCompositedValues,
@@ -262,7 +262,7 @@ impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         state: &PropertyTreeState<R>,
         layer: &PropertyTreeState<R>,
     ) -> bool {
-        paint_model::property_cell::with_access(|access| paint::property_node_geometry::EffectChanged(
+        paint_model::property_cell::with_access(|access| paint_model::property_node_geometry::EffectChanged(
             access,
             state.effect_.node(),
             paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,
@@ -275,7 +275,7 @@ impl<R: PaintSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         state: &PropertyTreeState<R>,
         layer: &PropertyTreeState<R>,
     ) -> bool {
-        paint_model::property_cell::with_access(|access| paint::property_node_geometry::ClipChanged(
+        paint_model::property_cell::with_access(|access| paint_model::property_node_geometry::ClipChanged(
             access,
             state.clip_.node(),
             paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues,

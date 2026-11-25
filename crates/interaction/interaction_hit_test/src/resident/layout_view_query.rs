@@ -1,5 +1,6 @@
 //! Prepared LayoutView query over canonical same-local-root owners.
 //! Source layout_view.cc:160-231 and layout_view.h:75-95,132-135,210,417-419.
+use paint::PaintLayerQueries as _;
 use super::{
     child_frame_query::{LocalChildFrameIdentity, PreparedLocalChildLayoutView},
     query_services::ResidentQueryServices,

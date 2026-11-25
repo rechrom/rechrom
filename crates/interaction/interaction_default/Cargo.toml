@@ -16,7 +16,6 @@ foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 layout_style = { path = "../../layout/layout_style" }
 layout_geometry = { path = "../../layout/layout_geometry" }
-style_model = { path = "../../style/style_model" }
 image_resource = { path = "../../image_resource" }
 
 [dev-dependencies]
