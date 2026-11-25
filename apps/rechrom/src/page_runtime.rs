@@ -202,8 +202,6 @@ pub(crate) enum Command {
         queued_at: Instant,
         effects: Vec<CompositorMainThreadEffect>,
     },
-    FlingDisposition(WebGestureEvent),
-    GestureDisposition(GestureEventAck),
     ExternalGesture { document_generation: u64, dispatch_id: u64, gesture: WebGestureEvent },
     CompositorEffects {
         effects: Vec<CompositorMainThreadEffect>,
@@ -879,6 +877,13 @@ struct ImplPresentation {
     pending_resize: Option<ResizeProvenance>,
     visual_properties_ack: Arc<dyn Fn() + Send + Sync>,
     presentation_feedback: Arc<dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync>,
+    /// The browser's DispatchEventCallback for the input this compositor
+    /// thread acknowledges. WidgetInputHandlerManager runs it here when
+    /// InputHandlerProxy handles or drops the event
+    /// (widget_input_handler_manager.cc:1147-1155) and when a main-thread
+    /// result's CallCallback runs here (cc:1209-1218); the ack never waits
+    /// behind document tasks.
+    events: Arc<dyn Fn(Document, Event) + Send + Sync>,
 }
 
 impl ImplPresentation {
@@ -894,6 +899,7 @@ impl ImplPresentation {
         presentation_feedback: Arc<
             dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync,
         >,
+        events: Arc<dyn Fn(Document, Event) + Send + Sync>,
     ) -> Self {
         Self {
             cursor_control: Default::default(),
@@ -921,6 +927,7 @@ impl ImplPresentation {
             copy_output_redraw_pending: false,
             pending_resize: None,
             visual_properties_ack,
+            events,
         }
     }
 
@@ -1227,7 +1234,7 @@ impl ImplPresentation {
                     if let Some(request) = result.dom_ack {
                         wheel.compositor_ack.push(request);
                     }
-                    self.gesture_acks(&result.gesture_acks, main);
+                    self.gesture_acks(&result.gesture_acks);
                     let _ = main.send(Command::ExternalCanonicalWheel {
                         document_generation: self.input_document_generation,
                         event,
@@ -1238,13 +1245,24 @@ impl ImplPresentation {
                 }
             }
         }
-        if let Some(event) = output.acknowledged {
-            let _ = main.send(Command::FlingDisposition(event));
+        if let Some(gesture) = output.acknowledged {
+            // The fling controller's ack of its own generated gesture, run
+            // on this thread like every compositor-handled ack.
+            (self.events)(
+                self.document,
+                Event::FlingDisposition {
+                    gesture,
+                    result: InputEventResultState::kConsumed,
+                },
+            );
         }
         Ok(())
     }
 
-    fn gesture_acks(&mut self, acks: &[(u64, bool)], main: &mpsc::Sender<Command>) {
+    /// InputHandlerProxy's gesture dispositions:
+    /// DidHandleInputEventSentToCompositor runs the browser's callback on
+    /// this thread (widget_input_handler_manager.cc:1147-1155).
+    fn gesture_acks(&mut self, acks: &[(u64, bool)]) {
         for &(dispatch_id, handled) in acks {
             self.ack_gesture(
                 dispatch_id,
@@ -1254,7 +1272,6 @@ impl ImplPresentation {
                 } else {
                     InputEventResultState::kNotConsumed
                 },
-                main,
             );
         }
     }
@@ -1263,11 +1280,21 @@ impl ImplPresentation {
         dispatch_id: u64,
         source: InputEventResultSource,
         result: InputEventResultState,
-        main: &mpsc::Sender<Command>,
     ) {
         for ack in self.gestures.ProcessGestureAck(dispatch_id, source, result) {
-            let _ = main.send(Command::GestureDisposition(ack));
+            self.dispatch_gesture_ack(ack);
         }
+    }
+    /// Runs the browser's DispatchEventCallback on this thread.
+    fn dispatch_gesture_ack(&self, ack: GestureEventAck) {
+        (self.events)(
+            self.document,
+            Event::GestureDisposition {
+                gesture: ack.event,
+                source: ack.source,
+                result: ack.result,
+            },
+        );
     }
     fn forward_gesture(
         &mut self,
@@ -1289,7 +1316,6 @@ impl ImplPresentation {
                     dispatch.dispatch_id,
                     InputEventResultSource::kCompositorThread,
                     InputEventResultState::kNoConsumerExists,
-                    main,
                 );
                 return Ok(());
             }
@@ -1301,7 +1327,7 @@ impl ImplPresentation {
                 dispatch.dispatch_id,
             )?;
             let result = self.compositor_input(compositor::CompositorMutation::Input(input))?;
-            self.gesture_acks(&result.gesture_acks, main);
+            self.gesture_acks(&result.gesture_acks);
             self.deliver_input_effects(result.effects, main);
         } else {
             let _ = main.send(Command::ExternalGesture {
@@ -1591,6 +1617,7 @@ fn run_impl(
         viewport,
         visual_properties_ack,
         presentation_feedback,
+        events.clone(),
     );
     let mut queued_commands = VecDeque::new();
     // The compositor thread's input-blocking task queue: a separate FIFO at
@@ -1767,12 +1794,9 @@ fn run_impl(
                 dispatch_id,
                 result,
             } => {
-                presentation.ack_gesture(
-                    dispatch_id,
-                    InputEventResultSource::kMainThread,
-                    result,
-                    &main,
-                );
+                // CallCallback on the compositor thread
+                // (widget_input_handler_manager.cc:1209-1218).
+                presentation.ack_gesture(dispatch_id, InputEventResultSource::kMainThread, result);
             }
             ImplCommand::TouchAck {
                 unique_touch_event_id,
@@ -1800,7 +1824,7 @@ fn run_impl(
                 // Retire target-bound input without publishing StopFling's
                 // old synthetic WheelEnd to the new document owner.
                 for ack in presentation.gestures.DocumentDetached() {
-                    let _ = main.send(Command::GestureDisposition(ack));
+                    presentation.dispatch_gesture_ack(ack);
                 }
             }
             ImplCommand::StopFling => {
@@ -1842,7 +1866,7 @@ fn run_impl(
                     }
                     task => {
                         let result = presentation.run_main_thread_task(task)?;
-                        presentation.gesture_acks(&result.gesture_acks, &main);
+                        presentation.gesture_acks(&result.gesture_acks);
                         presentation.deliver_input_effects(result.effects, &main);
                         let _ = presentation.flush_frames()?;
                     }
@@ -1864,7 +1888,7 @@ fn run_impl(
                 // only when work arrived after the drain began.
                 let observed_generation = pump_generation.load(Ordering::Acquire);
                 let result = presentation.pump()?;
-                presentation.gesture_acks(&result.gesture_acks, &main);
+                presentation.gesture_acks(&result.gesture_acks);
                 presentation.deliver_input_effects(result.effects, &main);
                 let _ = presentation.flush_frames()?;
                 pump_pending.store(false, Ordering::Release);
@@ -1889,7 +1913,7 @@ fn run_impl(
                 // resolves only valid successful presentation feedback.
                 let _ = main.send(Command::EventTimingDidPresent(feedback));
                 let result = presentation.receive_presentation_feedback(feedback)?;
-                presentation.gesture_acks(&result.gesture_acks, &main);
+                presentation.gesture_acks(&result.gesture_acks);
                 presentation.deliver_input_effects(result.effects, &main);
                 let _ = presentation.flush_frames()?;
             }
@@ -1906,7 +1930,7 @@ fn run_impl(
                 presentation.deliver_fling_output(output, &main)?;
                 if presentation.needs_begin_frames {
                     let result = presentation.begin_physical_frame(frame.args)?;
-                    presentation.gesture_acks(&result.gesture_acks, &main);
+                    presentation.gesture_acks(&result.gesture_acks);
                     presentation.deliver_input_effects(result.effects, &main);
                 }
                 let _ = presentation.flush_frames()?;
@@ -1958,7 +1982,7 @@ fn run_impl(
                     result.dom_ack.is_none(),
                     "source continuation cannot redispatch its DOM wheel"
                 );
-                presentation.gesture_acks(&result.gesture_acks, &main);
+                presentation.gesture_acks(&result.gesture_acks);
                 if !result.effects.is_empty() {
                     let _ = main.send(Command::CompositorEffects {
                         effects: result.effects,
@@ -2011,7 +2035,7 @@ fn run_impl(
                 // Blocking raw wheel awaits its canonical DOM ack. The
                 // gesture and any main-thread hit-test callback return to this
                 // same impl InputHandler; no main-thread offset fallback runs.
-                presentation.gesture_acks(&result.gesture_acks, &main);
+                presentation.gesture_acks(&result.gesture_acks);
                 let _ = main.send(Command::ExternalWheel {
                     document_generation: presentation.input_document_generation,
                     wheel,
@@ -3106,25 +3130,6 @@ fn run_document(
                         result: InputEventResultState::kNoConsumerExists,
                     });
                 }
-            }
-            Ok(Command::GestureDisposition(ack)) => {
-                (params.events)(
-                    params.document,
-                    Event::GestureDisposition {
-                        gesture: ack.event,
-                        source: ack.source,
-                        result: ack.result,
-                    },
-                );
-            }
-            Ok(Command::FlingDisposition(gesture)) => {
-                (params.events)(
-                    params.document,
-                    Event::FlingDisposition {
-                        gesture,
-                        result: InputEventResultState::kConsumed,
-                    },
-                );
             }
             Ok(Command::CompositorEffects { effects }) => {
                 page.ApplyCompositorWheelEffects(effects)?;

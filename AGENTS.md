@@ -87,7 +87,11 @@ it, never collected for a later drain. The main-thread hit-test reply alone
 goes to the Page's `CompositorInputBlockingTaskRunner` (Blink's
 compositor-thread input task runner, kHighestPriority): the impl runner keeps
 it in a separate input-blocking queue selected before the default queue at
-every task selection. The synchronous presenter runs each
+every task selection. The impl runner hands every input acknowledgement
+it holds (InputHandlerProxy and fling dispositions, and the main-thread
+acks posted to it) straight to the host's event sink, as Blink's compositor
+thread runs the browser's DispatchEventCallback; none is relayed through
+the document thread. The synchronous presenter runs each
 message where the compositor task runner would. Page-scale animations are
 LayerTreeHost state carried by the commit, not input tasks. The document side
 never builds a `CompositorMutation`.
