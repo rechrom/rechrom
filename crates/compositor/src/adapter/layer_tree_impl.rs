@@ -127,6 +127,36 @@ pub trait LayerTreeTypes:
         ViewTransitionRequest: LayerTreeViewTransitionRequest,
     >
 {
+    /// The main family the commit is instantiated over (CommitState,
+    /// ThreadUnsafeCommitState, the Proxy messages and the main layers the
+    /// commit pushes from; layerize::commit::CommitFamily). Chromium names
+    /// one type per commit value (cc/trees/commit_state.h), so these bounds
+    /// equate each main value with this family's (LayerImplTypes adds the
+    /// pushed layer values). They are the only equalities on the main
+    /// family's values in impl code: impl code never
+    /// bounds `Main` by `LayerizeFamily`, whose own equalities on the same
+    /// values would make every projection ambiguous; it names the narrow
+    /// main-layer traits it calls (MainLayerTypes, DerivedLayerTypes, ...)
+    /// instead.
+    type Main: layerize::commit::CommitStateTypes<
+            Transform = <Self as CommitTypes>::Transform,
+            RegionBackend = <Self as CommitTypes>::RegionBackend,
+            Filters = <Self as CommitTypes>::Filters,
+            Path = <Self as CommitTypes>::Path,
+            CopyOutputRequest = <Self as CommitTypes>::CopyOutputRequest,
+            SurfaceRange = <Self as CommitTypes>::SurfaceRange,
+            DisplayColorSpaces = <Self as CommitTypes>::DisplayColorSpaces,
+            LocalSurfaceId = <Self as CommitTypes>::LocalSurfaceId,
+            EventMetrics = <Self as CommitTypes>::EventMetrics,
+            DelegatedInkMetadata = <Self as CommitTypes>::DelegatedInkMetadata,
+            SuccessfulPresentationCallback = <Self as CommitTypes>::SuccessfulPresentationCallback,
+            PresentationCallback = <Self as CommitTypes>::PresentationCallback,
+            ViewTransitionRequest = <Self as CommitTypes>::ViewTransitionRequest,
+            SwapPromise = <Self as CommitTypes>::SwapPromise,
+            CompositorFrameMetadata = <Self as CommitTypes>::CompositorFrameMetadata,
+            UIResourceRequest = <Self as CommitTypes>::UIResourceRequest,
+            UIResourceBitmap = <Self as CommitTypes>::UIResourceBitmap,
+        > + layerize::commit::surface_range::SurfaceRangeTypes;
     /// The resident cc::LayerImpl (the push target of main
     /// Layer::PushPropertiesTo and the allocation of Layer::CreateLayerImpl).
     type Layer: LayerTreeLayer<Self>;
@@ -964,8 +994,8 @@ pub fn MakeDictIntoImplicitSnapshot(
 
 // Rust borrowed field access to the canonical source CommitState. This facet
 // never owns/copies the aggregate; take() corresponds to each native std::move.
-impl<B: super::commit_state::CommitStateTypes + LayerTreeTypes> LayerTreeCommitState<B>
-    for crate::cc::trees::commit_state::CommitState<B>
+impl<B: LayerTreeTypes> LayerTreeCommitState<B>
+    for crate::cc::trees::commit_state::CommitState<B::Main>
 {
     fn property_trees(&self) -> &MainPropertyTreesFor<B> {
         &self.property_trees
@@ -1107,8 +1137,8 @@ impl<B: super::commit_state::CommitStateTypes + LayerTreeTypes> LayerTreeCommitS
         &mut self.view_transition_requests
     }
 }
-impl<B: super::commit_state::CommitStateTypes + LayerTreeTypes> LayerTreeUnsafeCommitState<B>
-    for crate::cc::trees::commit_state::ThreadUnsafeCommitState<B>
+impl<B: LayerTreeTypes> LayerTreeUnsafeCommitState<B>
+    for crate::cc::trees::commit_state::ThreadUnsafeCommitState<B::Main>
 {
     fn HasRootLayer(&self) -> bool {
         self.root_layer.is_some()

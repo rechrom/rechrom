@@ -346,8 +346,9 @@ impl From<layerize::commit::layerize_error::LayerizeError> for CompositorError {
 pub type ImmutablePaintRecord =
     crate::runtime::paint::CpuPaintRecord<crate::runtime::skia::SkRegion>;
 
-/// The single Layerize family of this compositor.
-pub type MainFamily = crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>;
+/// The main (Layerize) family of this compositor: the shared commit family
+/// (layerize::commit::CommitFamily) its impl family names as `Main`.
+pub type MainFamily = layerize::commit::MainFamily;
 /// ProxyMain -> ProxyImpl task of this family.
 pub type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
 /// ProxyImpl -> ProxyMain task of this family.

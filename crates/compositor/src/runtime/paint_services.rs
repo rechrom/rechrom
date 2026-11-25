@@ -36,6 +36,6 @@ const _: fn() = || {
             + crate::adapter::tile_manager::TileManagerTypes,
     >() {
     }
-    require_main::<CpuCompositorTypes<crate::runtime::skia::SkRegion>>();
+    require_main::<layerize::commit::MainFamily>();
     require_impl::<CpuCompositorTypes<crate::runtime::skia::SkRegion>>();
 };

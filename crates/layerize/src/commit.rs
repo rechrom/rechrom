@@ -9,6 +9,7 @@ pub use compositor_values::color_space;
 // cc/animation/animation_host.h: the one AnimationHost class serving the
 // main and the impl instance.
 pub mod animation_host;
+pub mod commit_family;
 pub mod commit_state;
 pub mod completion_event;
 pub mod geometry;
@@ -88,6 +89,7 @@ pub use compositor_tree::{
     transform_node, viewport_property_ids,
 };
 
+pub use commit_family::{CommitFamily, MainFamily};
 pub use commit_state::{CommitStateTypes, CommitTypes, PropertyTreesFor};
 
 // Shared cc/gfx values named by cc/paint on both threads.

@@ -135,7 +135,7 @@ impl<R: CpuSkiaBackend> HostImplTypes for CpuCompositorTypes<R> {
     }
     fn QueueResidentImageDecode(
         manager: &mut <Self as crate::adapter::layer_tree_impl::LayerTreeTypes>::TileManager,
-        image: &<Self as crate::adapter::commit_state::CommitStateTypes>::DrawImage,
+        image: &crate::adapter::commit_state::MainDrawImage<Self>,
         callback: crate::adapter::layer_tree_host_impl::HostImageDecodeCallback,
         speculative: bool,
         context: &mut crate::adapter::layer_tree_host_impl::HostImplContext<'_, Self>,
@@ -427,8 +427,8 @@ fn AssertCpuClientCommit(
     host: &mut crate::cc::trees::client_layer_tree_host_impl::ClientLayerTreeHostImpl<
         crate::CompositorTypes,
     >,
-    state: &mut crate::cc::trees::commit_state::CommitState<crate::CompositorTypes>,
-    unsafe_state: &crate::cc::trees::commit_state::ThreadUnsafeCommitState<crate::CompositorTypes>,
+    state: &mut crate::cc::trees::commit_state::CommitState<crate::MainFamily>,
+    unsafe_state: &crate::cc::trees::commit_state::ThreadUnsafeCommitState<crate::MainFamily>,
     main: &mut super::sync::MainSynchronizationContext<'_, '_, crate::CompositorTypes>,
     services: &mut super::host_services::CpuHostServices<crate::CompositorTypes>,
 ) {

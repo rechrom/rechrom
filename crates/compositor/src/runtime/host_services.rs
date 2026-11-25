@@ -2149,11 +2149,11 @@ impl<B: HostImplTypes + PictureLayerImplTypes> HostImplGServices<B> for CpuHostS
 
     fn CreateDrawImageForDecode(
         &mut self,
-        image: &<B as crate::adapter::commit_state::CommitStateTypes>::DrawImage,
+        image: &crate::adapter::commit_state::MainDrawImage<B>,
         scale_adjustment: f32,
         frame_index: usize,
         color: HostTargetColorParams<B::ColorSpace>,
-    ) -> <B as crate::adapter::commit_state::CommitStateTypes>::DrawImage {
+    ) -> crate::adapter::commit_state::MainDrawImage<B> {
         self.frame_sink
             .CreateDrawImageForDecode(image, scale_adjustment, frame_index, color)
     }

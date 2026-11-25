@@ -25,7 +25,7 @@ pub struct LayerContextTree<'a, B: PictureLayerImplTypes, Extra> {
     pub host: &'a mut dyn PictureLayerTreeHost<B>,
     pub extra: Extra,
 }
-impl<B: PictureLayerImplTypes, E> MainLayerImplTree<B> for LayerContextTree<'_, B, E> {
+impl<B: PictureLayerImplTypes, E> MainLayerImplTree<B::Main> for LayerContextTree<'_, B, E> {
     fn source_frame_number(&self) -> i32 {
         *self.fields.source_frame_number
     }
@@ -262,7 +262,7 @@ impl<'a, B: PictureLayerImplTypes> SourceContext<'a, B> {
         Self { fields, read_host }
     }
 }
-impl<B: PictureLayerImplTypes> MainLayerImplTree<B> for SourceContext<'_, B> {
+impl<B: PictureLayerImplTypes> MainLayerImplTree<B::Main> for SourceContext<'_, B> {
     fn source_frame_number(&self) -> i32 {
         *self.fields.source_frame_number
     }
@@ -984,7 +984,7 @@ pub struct ScrollContextTree<'a, B: LayerImplTypes> {
     debug: &'a crate::cc::debug::layer_tree_debug_state::LayerTreeDebugState,
     caps: &'a crate::cc::trees::raster_capabilities::RasterCapabilities,
 }
-impl<B: LayerImplTypes> MainLayerImplTree<B> for ScrollContextTree<'_, B> {
+impl<B: LayerImplTypes> MainLayerImplTree<B::Main> for ScrollContextTree<'_, B> {
     fn source_frame_number(&self) -> i32 {
         *self.fields.source_frame_number
     }

@@ -90,12 +90,11 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> ScrollbarLaye
     }
 }
 
-impl<B> crate::adapter::main_layer::MainLayerImpl<B> for CompositorLayer<B>
+impl<B> crate::adapter::main_layer::MainLayerImpl<B::Main> for CompositorLayer<B>
 where
     B: PictureLayerImplTypes
         + SolidColorScrollbarLayerImplTypes
-        + crate::adapter::layer_tree_impl::LayerTreeTypes<Layer = CompositorLayer<B>>
-        + crate::adapter::main_layer::MainLayerTypes,
+        + crate::adapter::layer_tree_impl::LayerTreeTypes<Layer = CompositorLayer<B>>,
 {
     type ImplContext<'a>
         = crate::adapter::layer_impl::LayerImplContext<'a, B>
@@ -1127,7 +1126,6 @@ use super::metadata::{
 use crate::adapter::layer_tree_host_impl::{
     HostDrawLayer, HostImplDTypes, HostImplTypes, HostMetadataLayer,
 };
-use crate::adapter::main_layer::MainLayerTypes;
 use crate::adapter::render_metadata::RenderFrameMetadataTypes;
 type TrackedFlagIter<'a> =
     std::iter::Map<std::slice::Iter<'a, TrackedElementRect>, fn(&TrackedElementRect) -> bool>;
@@ -1154,7 +1152,7 @@ where
         + SolidColorScrollbarLayerImplTypes
         + SurfaceLayerImplTypes
         + HostImplTypes
-        + MainLayerTypes + layerize::commit::push_properties::PushPropertiesTypes<TrackedElementRects = TrackedElementRects>,
+        + layerize::commit::push_properties::PushPropertiesTypes<TrackedElementRects = TrackedElementRects>,
 {
     type TrackedRectLists<'a>
         = TrackedListIter<'a>
@@ -1262,7 +1260,7 @@ where
     B: PictureLayerImplTypes
         + SolidColorScrollbarLayerImplTypes
         + HostImplTypes
-        + MainLayerTypes<
+        + layerize::commit::push_properties::PushPropertiesTypes<
             TrackedElementRects = TrackedElementRects,
             RegionCaptureBounds = RegionCaptureBounds,
         > + RenderFrameMetadataTypes<TrackedElementRects = TrackedElementRects>
@@ -1295,14 +1293,14 @@ where
     }
 }
 
-impl<B> crate::adapter::picture_layer::PictureLayerImplTarget<B> for CompositorLayer<B>
+impl<B> crate::adapter::picture_layer::PictureLayerImplTarget<B::Main> for CompositorLayer<B>
 where
- B:crate::adapter::picture_layer::PictureLayerTypes+PictureLayerImplTypes+SolidColorScrollbarLayerImplTypes+crate::adapter::layer_tree_impl::LayerTreeTypes<Layer=CompositorLayer<B>>,
- B::Recording:crate::adapter::recording_source::RecordingSourceTypes<RasterSource=<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource>,
+ B:PictureLayerImplTypes+SolidColorScrollbarLayerImplTypes+crate::adapter::layer_tree_impl::LayerTreeTypes<Layer=CompositorLayer<B>,Main:crate::adapter::picture_layer::PictureLayerTypes>,
+ <B::Main as crate::adapter::picture_layer::PictureLayerTypes>::Recording:crate::adapter::recording_source::RecordingSourceTypes<RasterSource=<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource>,
 {
  fn set_has_non_animated_image_update_rect(&mut self){self.picture_impl_mut().expect("native Picture target").set_has_non_animated_image_update_rect()}
  fn set_gpu_raster_max_texture_size(&mut self,size:crate::adapter::geometry::Size,tree:&mut Self::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").set_gpu_raster_max_texture_size(size,tree)}
  fn SetIsBackdropFilterMask(&mut self,value:bool,tree:&mut Self::ImplContext<'_>){self.picture_impl_mut().expect("native Picture target").SetIsBackdropFilterMask(value,tree)}
- fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<B::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
+ fn StageNewRasterSourceForCommit(&mut self,source:std::sync::Arc<<<B::Main as crate::adapter::picture_layer::PictureLayerTypes>::Recording as crate::adapter::recording_source::RecordingSourceTypes>::RasterSource>,invalidation:crate::cc::base::region::Region<<B as layerize::commit::CommitTypes>::RegionBackend>){self.picture_impl_mut().expect("native Picture target").StageNewRasterSourceForCommit(source,invalidation)}
  fn set_should_batch_updated_tiles(&mut self){self.picture_impl_mut().expect("native Picture target").set_should_batch_updated_tiles()}
 }

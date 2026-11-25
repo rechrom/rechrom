@@ -159,8 +159,8 @@ impl EngineAssembly {
     /// ProxyImpl::NotifyReadyToCommitOnImpl (proxy_impl.cc:425-493).
     pub(crate) fn ReadyToCommit(
         &mut self,
-        commit_state: Box<crate::cc::trees::commit_state::CommitState<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>>,
-        lease: layerize::commit::proxy::ProtectedCommitLease<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>,
+        commit_state: Box<crate::cc::trees::commit_state::CommitState<crate::MainFamily>>,
+        lease: layerize::commit::proxy::ProtectedCommitLease<crate::MainFamily>,
         main_thread_start_time: crate::adapter::time::TimeTicks,
         scroll_and_viewport_changes_synced: bool,
         commit_timeout: bool,
@@ -195,7 +195,7 @@ impl EngineAssembly {
     /// The remaining ProxyMain -> ProxyImpl tasks.
     pub(crate) fn RunMainThreadTask(
         &mut self,
-        task: layerize::commit::proxy::MainToImpl<crate::runtime::types::CpuCompositorTypes<crate::runtime::skia::SkRegion>>,
+        task: layerize::commit::proxy::MainToImpl<crate::MainFamily>,
     ) -> Result<CompositorOutput, CompositorError> {
         self.core.RunMainThreadTask(task, &mut self.scheduler);
         self.Poll()

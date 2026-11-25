@@ -254,7 +254,7 @@ impl<B: HostImplTypes + PictureLayerImplTypes> ClientLayerTreeHostImpl<B> {
     // Source: cc/trees/client_layer_tree_host_impl.cc:160-173.
     fn PullLayerTreeHostPropertiesFrom(
         &mut self,
-        commit: &CommitState<B>,
+        commit: &CommitState<B::Main>,
         context: &mut ClientHostContext<'_, B>,
     ) {
         self.base
@@ -300,14 +300,14 @@ impl<B> ClientLayerTreeHostImpl<B>
 where
     B: HostImplTypes
         + PictureLayerImplTypes
-        + LayerTreeTypes<CommitState = CommitState<B>, UnsafeCommitState = ThreadUnsafeCommitState<B>>,
+        + LayerTreeTypes<CommitState = CommitState<<B as LayerTreeTypes>::Main>, UnsafeCommitState = ThreadUnsafeCommitState<<B as LayerTreeTypes>::Main>>,
 {
     // Source: cc/trees/client_layer_tree_host_impl.h:46-47.
     // Source: cc/trees/client_layer_tree_host_impl.cc:120-158.
     pub fn FinishCommit(
         &mut self,
-        state: &mut CommitState<B>,
-        unsafe_state: &ThreadUnsafeCommitState<B>,
+        state: &mut CommitState<B::Main>,
+        unsafe_state: &ThreadUnsafeCommitState<B::Main>,
         main_context:&mut <B::Synchronizer as crate::adapter::layer_tree_impl::LayerTreeSynchronizer<B>>::MainContext<'_, '_>,
         context: &mut ClientHostContext<'_, B>,
     ) {
