@@ -150,6 +150,8 @@ const CLASSIFICATION: &[(&str, Class)] = &[
     ("compositor_tree", Shared),
     ("compositor_animation", Shared),
     ("compositor_values", Shared),
+    ("cc_paint", Shared),
+    ("cc_raster", Shared),
     ("compositor_tree_sync", Impl),
     ("compositor_input", Impl),
     ("compositor_draw", Impl),
@@ -164,9 +166,20 @@ const CLASSIFICATION: &[(&str, Class)] = &[
 ];
 
 /// Non-compositor value crates a shared root may name (gfx geometry, tracing,
-/// Skia values, base types, image values).
+/// Skia values, base types, image and canvas values, viz frame values).
 const SHARED_ROOT_VALUE_DEPENDENCIES: &[&str] =
-    &["paint_model", "browser_tracing", "skia", "foundation", "image_resource"];
+    &[
+        "paint_model",
+        "paint_skia",
+        "paint_input_types",
+        "browser_tracing",
+        "skia",
+        "foundation",
+        "image_resource",
+        "canvas",
+        // components/viz/common values (cc_raster names the viz resources).
+        "viz_common",
+    ];
 
 struct Manifest {
     path: String,

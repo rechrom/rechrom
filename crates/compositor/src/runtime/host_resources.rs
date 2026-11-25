@@ -8,12 +8,11 @@ use super::{
 use crate::adapter::{
     geometry::Size,
     layer_tree_host_impl::{
-        HostImplResourceTypes, HostUIBitmapFormat, HostUICanvas, HostUIPixmap,
-        HostUIResourceBitmap, HostUIResourceImageInfo, HostUIResourceTypes, HostUISharedMapping,
-        HostUISourceBitmap, HostUISurface,
+        HostImplResourceTypes, HostUIBitmapFormat, HostUIResourceBitmap, HostUIResourceImageInfo,
+        HostUIResourceTypes, HostUISharedMapping,
     },
 };
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// A default native WritableSharedMemoryMapping is invalid. A valid mapping is
 /// the actual external allocation and stays exclusively owned until dropped.
@@ -77,66 +76,12 @@ impl HostUIResourceBitmap for RawUIBitmap {
         self.row_bytes
     }
 }
-/// This file only uses native SkImageInfo::MakeN32Premul. The external Skia
-/// factory supplies its actual dimensions and minRowBytes value, without a
-/// compositor-side bytes-per-pixel or allocation calculation.
-#[derive(Clone, Debug)]
-pub struct UIImageInfo {
-    pub size: Size,
-    pub min_row_bytes: usize,
-}
+// The UI-resource raster values the injected raster service produces
+// (cc_raster::ui_resource); the image-info facet is LayerTreeHostImpl's.
+pub use cc_raster::ui_resource::{SourceBitmap, UICanvas, UIImage, UIImageInfo, UISurface, UiImage};
 impl HostUIResourceImageInfo for UIImageInfo {
     fn minRowBytes(&self) -> usize {
         self.min_row_bytes
-    }
-}
-/// Opaque image owner produced and consumed by the injected raster service.
-/// Compositor retains identity and lifetime only; concrete Skia image types stay
-/// inside the raster package.
-pub trait UiImage: Any {
-    fn as_any(&self) -> &dyn Any;
-}
-pub type UIImage = Arc<dyn UiImage>;
-pub struct SourceBitmap<'a>(pub Box<dyn HostUISourceBitmap<'a, UIImageInfo, UIImage> + 'a>);
-impl<'a> HostUISourceBitmap<'a, UIImageInfo, UIImage> for SourceBitmap<'a> {
-    fn setInfo(&mut self, info: UIImageInfo, row_bytes: usize) {
-        self.0.setInfo(info, row_bytes)
-    }
-    fn setPixels(&mut self, pixels: &'a [u8]) {
-        self.0.setPixels(pixels)
-    }
-    fn asImage(&self) -> UIImage {
-        self.0.asImage()
-    }
-}
-pub struct UICanvas<'a>(pub Box<dyn HostUICanvas<UIImageInfo, UIImage> + 'a>);
-impl HostUICanvas<UIImageInfo, UIImage> for UICanvas<'_> {
-    fn peekPixels(&self) -> HostUIPixmap<'_> {
-        self.0.peekPixels()
-    }
-    fn writePixels(&mut self, info: &UIImageInfo, pixels: &[u8], row_bytes: usize, x: i32, y: i32) {
-        self.0.writePixels(info, pixels, row_bytes, x, y)
-    }
-    fn scale(&mut self, x: f32, y: f32) {
-        self.0.scale(x, y)
-    }
-    fn clearTransparent(&mut self) {
-        self.0.clearTransparent()
-    }
-    fn drawImage(&mut self, image: &UIImage, x: f32, y: f32) {
-        self.0.drawImage(image, x, y)
-    }
-}
-pub struct UISurface<'a>(
-    pub Box<dyn HostUISurface<UIImageInfo, UIImage, Canvas = UICanvas<'a>> + 'a>,
-);
-impl<'a> HostUISurface<UIImageInfo, UIImage> for UISurface<'a> {
-    type Canvas = UICanvas<'a>;
-    fn getCanvas(&mut self) -> &mut Self::Canvas {
-        self.0.getCanvas()
-    }
-    fn peekPixels(&self) -> HostUIPixmap<'_> {
-        self.0.peekPixels()
     }
 }
 /// Native UI plane projection of the same exclusively mapped raster backing.

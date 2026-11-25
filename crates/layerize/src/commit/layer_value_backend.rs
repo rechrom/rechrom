@@ -35,3 +35,30 @@ pub trait MainLayerCopyOutputRequest {
     fn has_source(&self) -> bool;
     fn source(&self) -> UnguessableToken;
 }
+
+// The main Layer facet of viz::CopyOutputRequest (cc/layers/layer.cc
+// Layer::RequestCopyOfOutput).
+impl MainLayerCopyOutputRequest for viz_common::copy_output_request::CopyOutputRequest {
+    type TaskRunner = viz_common::copy_output_request::TaskRunner;
+    fn has_result_task_runner(&self) -> bool {
+        Self::has_result_task_runner(self)
+    }
+    fn set_result_task_runner(&mut self, runner: Self::TaskRunner) {
+        Self::set_result_task_runner(self, runner);
+    }
+    fn has_area(&self) -> bool {
+        Self::has_area(self)
+    }
+    fn area(&self) -> &Rect {
+        Self::area(self)
+    }
+    fn set_area(&mut self, area: Rect) {
+        Self::set_area(self, area);
+    }
+    fn has_source(&self) -> bool {
+        Self::has_source(self)
+    }
+    fn source(&self) -> UnguessableToken {
+        Self::source(self)
+    }
+}

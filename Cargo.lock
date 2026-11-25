@@ -255,6 +255,7 @@ dependencies = [
  "animation",
  "browser_tracing",
  "canvas",
+ "cc_paint",
  "compositor",
  "compositor_tree",
  "compositor_values",
@@ -297,6 +298,7 @@ dependencies = [
  "url_formatter",
  "url_loader",
  "viz",
+ "viz_common",
  "web_font",
  "webapi",
  "xhr_transport",
@@ -428,6 +430,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc_raster"
+version = "0.0.1"
+dependencies = [
+ "cc_paint",
+ "compositor_tree",
+ "compositor_values",
+ "viz_common",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -496,6 +508,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
+ "cc_raster",
  "compositor_animation",
  "compositor_draw",
  "compositor_frame",
@@ -516,6 +529,7 @@ dependencies = [
  "scroll_animation",
  "serde_json",
  "skia",
+ "viz_common",
 ]
 
 [[package]]
@@ -532,8 +546,11 @@ name = "compositor_draw"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "cc_paint",
  "compositor_tree",
  "compositor_values",
+ "paint_model",
+ "viz_common",
 ]
 
 [[package]]
@@ -548,6 +565,7 @@ dependencies = [
  "compositor_tree",
  "compositor_values",
  "image_resource",
+ "viz_common",
 ]
 
 [[package]]
@@ -560,6 +578,7 @@ dependencies = [
  "compositor_values",
  "scroll_animation",
  "scroll_snap",
+ "viz_common",
 ]
 
 [[package]]
@@ -588,6 +607,7 @@ dependencies = [
  "compositor_tile",
  "compositor_tree",
  "compositor_values",
+ "viz_common",
 ]
 
 [[package]]
@@ -2337,6 +2357,7 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "cc_paint",
+ "cc_raster",
  "compositor_animation",
  "compositor_layerize",
  "compositor_tree",
@@ -2350,6 +2371,7 @@ dependencies = [
  "scroll_animation",
  "serde_json",
  "skia",
+ "viz_common",
 ]
 
 [[package]]
@@ -3714,7 +3736,10 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
- "compositor",
+ "cc_paint",
+ "cc_raster",
+ "compositor_tree",
+ "compositor_values",
  "font_engine",
  "foundation",
  "image_resource",
@@ -3722,6 +3747,7 @@ dependencies = [
  "paint_input_types",
  "paint_model",
  "skia",
+ "viz_common",
 ]
 
 [[package]]
@@ -3915,9 +3941,11 @@ name = "renderer"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "compositor",
+ "cc_paint",
+ "compositor_tree",
  "foundation",
  "viz",
+ "viz_common",
 ]
 
 [[package]]
@@ -3926,13 +3954,15 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "bytemuck",
- "compositor",
+ "compositor_tree",
+ "compositor_values",
  "foundation",
  "paint_model",
  "raster",
  "renderer",
  "skia",
  "viz",
+ "viz_common",
 ]
 
 [[package]]
@@ -4896,7 +4926,21 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "viz"
 version = "0.0.1"
 dependencies = [
- "compositor",
+ "compositor_tree",
+ "compositor_values",
+ "viz_common",
+]
+
+[[package]]
+name = "viz_common"
+version = "0.0.1"
+dependencies = [
+ "cc_paint",
+ "compositor_tree",
+ "compositor_values",
+ "image_resource",
+ "paint_model",
+ "scroll_animation",
 ]
 
 [[package]]

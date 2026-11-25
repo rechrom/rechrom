@@ -31,6 +31,34 @@ pub trait PropertyTreeCopyOutputRequest {
     fn scale_to(&self) -> super::geometry::Vector2d;
     fn SetScaleRatio(&mut self, from: super::geometry::Vector2d, to: super::geometry::Vector2d);
 }
+// The property-tree facet of viz::CopyOutputRequest
+// (cc/trees/property_tree.cc EffectTree copy requests).
+impl PropertyTreeCopyOutputRequest for viz_common::copy_output_request::CopyOutputRequest {
+    fn has_area(&self) -> bool {
+        Self::has_area(self)
+    }
+    fn area(&self) -> super::geometry::Rect {
+        *Self::area(self)
+    }
+    fn set_area(&mut self, area: super::geometry::Rect) {
+        Self::set_area(self, area);
+    }
+    fn is_scaled(&self) -> bool {
+        Self::is_scaled(self)
+    }
+    fn has_result_selection(&self) -> bool {
+        Self::has_result_selection(self)
+    }
+    fn scale_from(&self) -> super::geometry::Vector2d {
+        Self::scale_from(self)
+    }
+    fn scale_to(&self) -> super::geometry::Vector2d {
+        Self::scale_to(self)
+    }
+    fn SetScaleRatio(&mut self, from: super::geometry::Vector2d, to: super::geometry::Vector2d) {
+        Self::SetScaleRatio(self, from, to);
+    }
+}
 pub trait PropertyTreeFeatures {
     fn SizeOopifEffectSurfacesAtExternalScale(&self) -> bool;
 }

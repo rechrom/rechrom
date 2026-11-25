@@ -44,8 +44,8 @@ impl<R: CpuSkiaBackend> InputHandlerTypes for CpuCompositorTypes<R> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnboundedClientIdentity(pub u64);
 pub type CpuFrame<R> = frame::CompositorFrame<
-    metadata::CompositorFrameMetadata<CpuCompositorTypes<R>>,
-    frame::CompositorRenderPass<CpuCompositorTypes<R>>,
+    metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
+    frame::CompositorRenderPass<super::types::CpuFrameValues<R>>,
     super::resources::RasterTransferableResource,
 >;
 impl<R: CpuSkiaBackend> UnboundedTypes for CpuCompositorTypes<R> {
@@ -339,8 +339,12 @@ impl<R: CpuSkiaBackend> crate::adapter::layer_tree_host_impl::HostImplGTypes
 {
     type LayerTreeMutator = super::host_owners::LayerTreeMutator;
 }
-impl<R: CpuSkiaBackend> metadata::MetadataTypes for CpuCompositorTypes<R> {}
-impl<R: CpuSkiaBackend> frame::FrameTypes for CpuCompositorTypes<R> {}
+impl<R: CpuSkiaBackend> metadata::MetadataTypes for CpuCompositorTypes<R> {
+    type MetadataValues = viz_common::SoftwareMetadataValues;
+}
+impl<R: CpuSkiaBackend> frame::FrameTypes for CpuCompositorTypes<R> {
+    type FrameValues = super::types::CpuFrameValues<R>;
+}
 
 /// This is a real canonical constructor call, compiled for the same family as
 /// the output frame/input/layer owners; all external capabilities are injected.

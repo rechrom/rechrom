@@ -9,20 +9,19 @@ use super::{
 };
 use crate::{
     adapter::{
-        geometry::{Rect, Size},
+        geometry::Rect,
         layer_tree_impl::Color4f,
         recording_source::{
-            PartialRasterFullReplay, RecordingDisplayItemList, RecordingSourceTypes,
+            RecordingDisplayItemList, RecordingSourceTypes,
         },
     },
     cc::layers::recording_source::RecordingSource,
     commit::skia_value_backend::PaintSkiaBackend,
 };
-use compositor_values::raster_source::TilingRasterSource;
 use std::{
     marker::PhantomData,
-    ops::Deref,
-    sync::{Arc, RwLock, RwLockReadGuard},
+
+    sync::{Arc, RwLock},
 };
 pub struct Picture<R: PaintSkiaBackend> {
     pub record: CpuPaintRecord<R>,
@@ -57,96 +56,46 @@ impl<R: PaintSkiaBackend> RecordingDisplayItemList<DirectlyCompositedImageInfo>
         Self::GetColorIfSolidInRect(self, rect, color, max_ops as i32)
     }
 }
-/// Source: cc/raster/raster_source.cc:26-40. These are precisely the immutable
-/// metadata values owned by RasterSource; its recording lease remains shared.
-pub struct RasterSourceStorage<R: PaintSkiaBackend> {
-    pub display_list: Option<Arc<ContentDisplayItemList<R>>>,
-    pub background_color: Color4f,
-    pub requires_clear: bool,
-    pub is_solid_color: bool,
-    pub solid_color: Color4f,
-    pub recorded_bounds: Rect,
-    pub size: Size,
-    pub slow_down_raster_scale_factor_for_debug: i32,
-    pub recording_scale_factor: f32,
-    pub directly_composited_image_info: Option<DirectlyCompositedImageInfo>,
-    pub full_replays_for_partial_raster: Vec<PartialRasterFullReplay>,
-    pub debug_name: RwLock<String>,
-}
-impl<R: PaintSkiaBackend> RasterSourceStorage<R> {
-    pub fn from_recording(recording: &RecordingSource<CpuRecordingTypes<R>>) -> Self {
-        let value = recording.RasterSourceFields();
-        if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
-            eprintln!(
-                "partial-full-replay-source count={} requires_clear={}",
-                value.full_replays_for_partial_raster.len(),
-                value.requires_clear
-            );
-        }
-        let source = Self {
-            display_list: value.display_list.clone(),
-            background_color: *value.background_color,
-            requires_clear: *value.requires_clear,
-            is_solid_color: *value.is_solid_color,
-            solid_color: *value.solid_color,
-            recorded_bounds: *value.recorded_bounds,
-            size: *value.size,
-            slow_down_raster_scale_factor_for_debug: *value.slow_down_raster_scale_factor_for_debug,
-            recording_scale_factor: *value.recording_scale_factor,
-            directly_composited_image_info: value.directly_composited_image_info.clone(),
-            full_replays_for_partial_raster: value.full_replays_for_partial_raster.to_vec(),
-            debug_name: RwLock::new(String::new()),
-        };
-        debug_assert!(
-            source.recorded_bounds.IsEmpty()
-                || Rect::new(0, 0, source.size.width(), source.size.height())
-                    .Contains(source.recorded_bounds)
+// cc::RasterSource is a cc/raster value (cc_raster), read by the impl tilings
+// and the raster service.
+pub use cc_raster::raster_source::{RasterDebugName, RasterSourceStorage};
+
+/// RecordingSource::CreateRasterSource (cc/layers/recording_source.cc) with
+/// the RasterSource(const RecordingSource*) constructor
+/// (cc/raster/raster_source.cc:26-40): the immutable metadata values the
+/// recording owns; the display-list lease stays shared.
+pub fn CreateRasterSource<R: PaintSkiaBackend>(
+    recording: &RecordingSource<CpuRecordingTypes<R>>,
+) -> RasterSourceStorage<R> {
+    let value = recording.RasterSourceFields();
+    if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+        eprintln!(
+            "partial-full-replay-source count={} requires_clear={}",
+            value.full_replays_for_partial_raster.len(),
+            value.requires_clear
         );
-        source
     }
-    pub fn display_list(&self) -> &Option<Arc<ContentDisplayItemList<R>>> {
-        &self.display_list
-    }
-    pub fn FullReplaysForPartialRaster(&self) -> &[PartialRasterFullReplay] {
-        &self.full_replays_for_partial_raster
-    }
-    pub fn DebugName(&self) -> RasterDebugName<'_> {
-        RasterDebugName(
-            self.debug_name
-                .read()
-                .expect("native source debug name poisoned"),
-        )
-    }
+    let source = RasterSourceStorage {
+        display_list: value.display_list.clone(),
+        background_color: *value.background_color,
+        requires_clear: *value.requires_clear,
+        is_solid_color: *value.is_solid_color,
+        solid_color: *value.solid_color,
+        recorded_bounds: *value.recorded_bounds,
+        size: *value.size,
+        slow_down_raster_scale_factor_for_debug: *value.slow_down_raster_scale_factor_for_debug,
+        recording_scale_factor: *value.recording_scale_factor,
+        directly_composited_image_info: value.directly_composited_image_info.clone(),
+        full_replays_for_partial_raster: value.full_replays_for_partial_raster.to_vec(),
+        debug_name: RwLock::new(String::new()),
+    };
+    debug_assert!(
+        source.recorded_bounds.IsEmpty()
+            || Rect::new(0, 0, source.size.width(), source.size.height())
+                .Contains(source.recorded_bounds)
+    );
+    source
 }
-pub struct RasterDebugName<'a>(RwLockReadGuard<'a, String>);
-impl Deref for RasterDebugName<'_> {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.0.as_str()
-    }
-}
-impl<R: PaintSkiaBackend> TilingRasterSource for RasterSourceStorage<R> {
-    fn IsSolidColor(&self) -> bool {
-        self.is_solid_color
-    }
-    fn size(&self) -> Size {
-        self.size
-    }
-    // Source: cc/raster/raster_source.h:118-122. Direct image rasterization uses
-    // full size; the stored recorded rectangle itself is never rewritten.
-    fn recorded_bounds(&self) -> Rect {
-        if self.directly_composited_image_info.is_some() {
-            Rect::new(0, 0, self.size.width(), self.size.height())
-        } else {
-            self.recorded_bounds
-        }
-    }
-    fn IntersectsRect(&self, rect: Rect) -> bool {
-        self.recorded_bounds().Intersects(rect)
-    }
-}
-
-
 /// Actual external SkPicture recorder. The wrapper owns its recording target,
 /// and only borrows a buffer for the duration of playback.
 pub trait CpuPictureRecorderValue<R: PaintSkiaBackend>: super::CpuPaintCanvas<R> {

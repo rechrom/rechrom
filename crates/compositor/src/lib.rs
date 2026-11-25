@@ -26,14 +26,12 @@ pub mod runtime;
 /// aliases expose only the immutable native frame/resource output; translated
 /// layer, tiling, scheduler and host owners remain private to CompositorEngine.
 pub type CompositorTypes = runtime::types::CpuCompositorTypes<runtime::skia::SkRegion>;
-pub type CompositorFrame = runtime::frame::CompositorFrame<
-    runtime::metadata::CompositorFrameMetadata<CompositorTypes>,
-    runtime::frame::CompositorRenderPass<CompositorTypes>,
-    runtime::resources::RasterTransferableResource,
->;
-pub type CompositorRenderPass = runtime::frame::CompositorRenderPass<CompositorTypes>;
-pub type CompositorFrameMetadata = runtime::metadata::CompositorFrameMetadata<CompositorTypes>;
-pub type TransferableResource = runtime::resources::RasterTransferableResource;
+/// The frame values are components/viz/common (`viz_common`); the family's
+/// passes and metadata are exactly viz_common's software frame instance.
+pub type CompositorFrame = viz_common::CompositorFrame;
+pub type CompositorRenderPass = viz_common::CompositorRenderPass;
+pub type CompositorFrameMetadata = viz_common::CompositorFrameMetadata;
+pub type TransferableResource = viz_common::TransferableResource;
 pub type RasterResourceLease = dyn runtime::raster_execution::RasterResourceLease;
 /// The value submitted through LayerTreeFrameSink. Chromium carries the
 /// LocalSurfaceId beside each CompositorFrame; keeping that pair intact lets

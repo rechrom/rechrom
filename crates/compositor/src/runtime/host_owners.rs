@@ -168,14 +168,15 @@ impl TaskRunnerProvider {
 pub struct SwapPromise<R: super::types::CpuSkiaBackend>(
     pub  Box<
         dyn crate::cc::trees::swap_promise::SwapPromise<
-            super::metadata::CompositorFrameMetadata<super::types::CpuCompositorTypes<R>>,
+            super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
         >,
     >,
+    pub std::marker::PhantomData<fn() -> R>,
 );
 impl<R: super::types::CpuSkiaBackend> crate::adapter::commit_types::SwapPromise for SwapPromise<R> {}
 impl<R: super::types::CpuSkiaBackend>
     crate::cc::trees::swap_promise::SwapPromise<
-        super::metadata::CompositorFrameMetadata<super::types::CpuCompositorTypes<R>>,
+        super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
     > for SwapPromise<R>
 {
     fn DidActivate(&mut self) {
@@ -183,9 +184,7 @@ impl<R: super::types::CpuSkiaBackend>
     }
     fn WillSwap(
         &mut self,
-        metadata: &mut super::metadata::CompositorFrameMetadata<
-            super::types::CpuCompositorTypes<R>,
-        >,
+        metadata: &mut super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
     ) {
         self.0.WillSwap(metadata)
     }
@@ -370,7 +369,7 @@ impl<R: super::types::CpuSkiaBackend> crate::adapter::throttle::ThrottleTypes fo
     type PassId = super::frame::RenderPassId;
     type FrameSinkId = super::types::FrameSinkId;
     type PassHandle = crate::adapter::layer_tree_host_impl::HostRenderPassLocation;
-    type Pass = super::frame::CompositorRenderPass<super::types::CpuCompositorTypes<R>>;
+    type Pass = super::frame::CompositorRenderPass<super::types::CpuFrameValues<R>>;
 }
 
 /// Native SkColorType enum value returned by the external format conversion.
@@ -470,7 +469,7 @@ pub trait RenderFrameMetadataObserverBackend<R: super::types::CpuSkiaBackend> {
         metadata: &crate::cc::trees::render_frame_metadata::RenderFrameMetadata<
             super::types::CpuCompositorTypes<R>,
         >,
-        frame: &mut super::metadata::CompositorFrameMetadata<super::types::CpuCompositorTypes<R>>,
+        frame: &mut super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
         force: bool,
     );
 }
@@ -483,7 +482,7 @@ impl<R: super::types::CpuSkiaBackend> RenderFrameMetadataObserver<R> {
         metadata: &crate::cc::trees::render_frame_metadata::RenderFrameMetadata<
             super::types::CpuCompositorTypes<R>,
         >,
-        frame: &mut super::metadata::CompositorFrameMetadata<super::types::CpuCompositorTypes<R>>,
+        frame: &mut super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
         force: bool,
     ) {
         self.0.ObserveRenderFrameSubmission(metadata, frame, force)

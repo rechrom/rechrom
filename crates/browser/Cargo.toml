@@ -12,6 +12,8 @@ scroll_animation = { path = "../compositor/scroll_animation" }
 # geometry, the input-queue messages).
 compositor_values = { path = "../compositor/compositor_values" }
 compositor_tree = { path = "../compositor/compositor_tree" }
+viz_common = { path = "../viz/viz_common" }
+cc_paint = { path = "../compositor/cc_paint" }
 fileapi = { path = "../webapi/fileapi" }
 getrandom = "0.4"
 canvas = { path = "../canvas" }

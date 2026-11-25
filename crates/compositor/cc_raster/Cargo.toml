@@ -1,0 +1,17 @@
+[package]
+name = "cc_raster"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# cc/raster service interfaces and values shared by the cc impl side and the
+# injected raster service: RasterSource (raster_source.h), RasterBuffer /
+# RasterBufferProvider (raster_buffer.h, raster_buffer_provider.h) and the
+# UI-resource raster capability LayerTreeHostImpl::CreateUIResource drives
+# (cc/resources/ui_resource_bitmap.h). Values and interfaces only; tile
+# selection, task graphs and pixel storage stay with their owners.
+[dependencies]
+cc_paint = { path = "../cc_paint" }
+compositor_tree = { path = "../compositor_tree" }
+compositor_values = { path = "../compositor_values" }
+viz_common = { path = "../../viz/viz_common" }

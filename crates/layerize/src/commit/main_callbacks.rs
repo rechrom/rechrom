@@ -5,14 +5,9 @@ use crate::adapter::{
 };
 use std::sync::Arc;
 
-/// Strong native sequenced-task-runner capability, supplied by the embedding.
-/// No worker/thread/clock implementation is created by the compositor family.
-// Source: components/viz/common/frame_sinks/copy_output_request.h
-//         (result_task_runner_).
-pub trait ResultTaskRunner: Send + Sync {
-    fn PostTask(&self, task: Box<dyn FnOnce() + Send>);
-}
-pub type TaskRunner = Arc<dyn ResultTaskRunner>;
+// The CopyOutputRequest result task runner is a viz value
+// (components/viz/common/frame_sinks/copy_output_request.h).
+pub use viz_common::copy_output_request::{ResultTaskRunner, TaskRunner};
 
 /// Native base::RepeatingCallback void(PointF,ElementId). Cloning shares only
 /// the callback allocation, not any compositor tree or Layer state.

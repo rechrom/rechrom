@@ -7,7 +7,9 @@ edition = "2021"
 browser_tracing = { path = "../tracing" }
 renderer = { path = "../renderer" }
 bytemuck = "1.24"
-compositor = { path = "../compositor" }
+viz_common = { path = "../viz/viz_common" }
+compositor_tree = { path = "../compositor/compositor_tree" }
+compositor_values = { path = "../compositor/compositor_values" }
 foundation = { path = "../foundation" }
 skia = { path = "../skia" }
 paint_model = { path = "../paint/paint_model" }

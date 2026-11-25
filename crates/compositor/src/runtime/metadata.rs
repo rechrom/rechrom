@@ -1,6 +1,7 @@
-//! Native owned frame metadata values. This is the external Viz value boundary,
-//! not a compositor algorithm or translation-coverage claim. All source
-//! decisions remain in LayerTreeHostImpl; setters write exactly one field.
+//! The cc producer facets of viz::CompositorFrameMetadata. The metadata
+//! values are components/viz/common (`viz_common::compositor_frame_metadata`);
+//! all source decisions remain in LayerTreeHostImpl; setters write exactly
+//! one field.
 use crate::adapter::{
     geometry::{PointF, Size, SizeF, Vector2dF},
     input_services::OffsetTag,
@@ -8,57 +9,21 @@ use crate::adapter::{
         ContentColorUsage, HostCompositorFrameMetadata, HostContentFrameIntervalType,
         HostImplDTypes, HostImplFrameMetadata,
     },
-    layer_tree_impl::{Color4f, LayerTreeTypes, OverlayTransform, UnguessableToken},
+    layer_tree_impl::{Color4f, OverlayTransform, UnguessableToken},
     time::{TimeDelta, TimeTicks},
 };
+pub use viz_common::compositor_frame_metadata::{
+    CompositorFrameMetadata, ContentFrameIntervalInfo, DelegatedInkMetadata, FrameDeadline,
+    FrameIntervalInputs, FrameMetadataValueTypes, MetadataValues, OffsetTagConstraints,
+    OffsetTagDefinition, OffsetTagValue, SharedTransitionElement, TransitionDirective,
+    TransitionDirectiveType, TreesInVizTiming,
+};
 // The viz values a main Layer carries into the commit.
-pub use layerize::commit::viz_metadata::{
+pub use viz_common::surfaces::{
     FrameToken, RegionCaptureBounds, RegionCaptureCropId, TrackedElementFeature,
     TrackedElementRect, TrackedElementRects,
 };
 
-/// External components/viz/common/quads/trees_in_viz_timing.h value. No clock
-/// is read here; canonical owner calls write the injected timestamps.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TreesInVizTiming {
-    pub start_update_display_tree: TimeTicks,
-    pub start_prepare_to_draw: TimeTicks,
-    pub start_draw_layers: TimeTicks,
-    pub submit_compositor_frame: TimeTicks,
-}
-/// Native Viz field value; this does not read a clock or select a deadline.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameDeadline {
-    pub frame_start_time: TimeTicks,
-    pub deadline_in_frames: u32,
-    pub frame_interval: TimeDelta,
-    pub use_default_lower_bound_deadline: bool,
-}
-impl Default for FrameDeadline {
-    fn default() -> Self {
-        Self {
-            frame_start_time: TimeTicks::default(),
-            deadline_in_frames: 0,
-            frame_interval: crate::adapter::begin_frame::BeginFrameArgs::DefaultInterval(),
-            use_default_lower_bound_deadline: true,
-        }
-    }
-}
-impl FrameDeadline {
-    pub fn new(
-        frame_start_time: TimeTicks,
-        deadline_in_frames: u32,
-        frame_interval: TimeDelta,
-        use_default_lower_bound_deadline: bool,
-    ) -> Self {
-        Self {
-            frame_start_time,
-            deadline_in_frames,
-            frame_interval,
-            use_default_lower_bound_deadline,
-        }
-    }
-}
 /// Native zero-invalid token generator, incremented by the host's external
 /// value service; no scheduling or submission policy is implemented here.
 #[derive(Default)]
@@ -78,156 +43,20 @@ impl FrameTokenGenerator {
         self.frame_token
     }
 }
-#[derive(Clone, Copy, Debug, Default)]
-pub struct OffsetTagConstraints {
-    pub min_offset: Vector2dF,
-    pub max_offset: Vector2dF,
-}
-pub struct OffsetTagDefinition<R> {
-    pub tag: OffsetTag,
-    pub provider: R,
-    pub constraints: OffsetTagConstraints,
-}
-pub struct OffsetTagValue {
-    pub tag: OffsetTag,
-    pub offset: Vector2dF,
-}
 
-pub trait FrameMetadataValueTypes {
-    type MetadataSurfaceRange;
-    type MetadataSurfaceId;
-    type MetadataDeadline: Default;
-    type MetadataDelegatedInk;
-    type MetadataTransition;
-    type MetadataCaptureBounds: Default;
-    type MetadataTrackedRects: Default;
-    type MetadataLatency;
-    type MetadataAck: Default;
-}
-pub struct MetadataValues<SR, SID, FD, INK, TD, CB, TR, LI, ACK>(
-    std::marker::PhantomData<(SR, SID, FD, INK, TD, CB, TR, LI, ACK)>,
-);
-impl<SR, SID, FD: Default, INK, TD, CB: Default, TR: Default, LI, ACK: Default>
-    FrameMetadataValueTypes for MetadataValues<SR, SID, FD, INK, TD, CB, TR, LI, ACK>
-{
-    type MetadataSurfaceRange = SR;
-    type MetadataSurfaceId = SID;
-    type MetadataDeadline = FD;
-    type MetadataDelegatedInk = INK;
-    type MetadataTransition = TD;
-    type MetadataCaptureBounds = CB;
-    type MetadataTrackedRects = TR;
-    type MetadataLatency = LI;
-    type MetadataAck = ACK;
-}
 /// Bind the root family to exactly the same native values as the output frame.
-pub trait MetadataTypes:
-    HostImplDTypes<TreesInVizTiming=TreesInVizTiming> + FrameMetadataValueTypes<
-        MetadataSurfaceRange=<Self as layerize::commit::CommitTypes>::SurfaceRange,
-        MetadataSurfaceId=<Self as crate::adapter::frame_data::FrameDataTypes>::SurfaceId,
-        MetadataDeadline=<Self as HostImplDTypes>::FrameDeadline,
-        MetadataDelegatedInk=<Self as layerize::commit::CommitTypes>::DelegatedInkMetadata,
-        MetadataTransition=<Self as HostImplDTypes>::TransitionDirective,
-        MetadataCaptureBounds=<Self as HostImplDTypes>::RegionCaptureBounds,
-        MetadataTrackedRects=<Self as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects,
-        MetadataLatency=<Self as crate::adapter::input_services::InputHostTypes>::LatencyInfo,
-        MetadataAck=<Self as crate::adapter::frame_data::FrameDataTypes>::BeginFrameAck,
-    > {}
-#[derive(Clone, Copy, Debug)]
-pub struct ContentFrameIntervalInfo {
-    pub kind: HostContentFrameIntervalType,
-    pub frame_interval: TimeDelta,
-    pub duplicate_count: u32,
-}
-#[derive(Default)]
-pub struct FrameIntervalInputs {
-    pub frame_time: TimeTicks,
-    pub has_input: bool,
-    pub has_user_input: bool,
-    pub major_scroll_speed_in_pixels_per_second: f32,
-    pub content_interval_info: Vec<ContentFrameIntervalInfo>,
-    pub has_only_content_frame_interval_updates: bool,
-}
-/// Move-only native payload: copy requests/delegated ink and transition values
-/// are not cloned when a frame is submitted or metadata is replaced.
-pub struct CompositorFrameMetadata<V: FrameMetadataValueTypes> {
-    pub device_scale_factor: f32,
-    pub root_scroll_offset: PointF,
-    pub page_scale_factor: f32,
-    pub scrollable_viewport_size: SizeF,
-    pub visible_viewport_size: Size,
-    pub content_color_usage: ContentColorUsage,
-    pub may_contain_video: bool,
-    pub may_throttle_if_undrawn_frames: bool,
-    pub is_handling_interaction: bool,
-    pub is_handling_animation: bool,
-    pub root_background_color: Color4f,
-    pub latency_info: Vec<V::MetadataLatency>,
-    pub referenced_surfaces: Vec<V::MetadataSurfaceRange>,
-    pub activation_dependencies: Vec<V::MetadataSurfaceId>,
-    pub deadline: V::MetadataDeadline,
-    pub begin_frame_ack: V::MetadataAck,
-    pub frame_token: u32,
-    pub send_frame_token_to_embedder: bool,
-    pub min_page_scale_factor: f32,
-    pub top_controls_visible_height: Option<f32>,
-    pub display_transform_hint: OverlayTransform,
-    pub is_mobile_optimized: bool,
-    pub delegated_ink_metadata: Option<Box<V::MetadataDelegatedInk>>,
-    pub transition_directives: Vec<V::MetadataTransition>,
-    pub capture_bounds: V::MetadataCaptureBounds,
-    pub has_shared_element_resources: bool,
-    pub screenshot_destination: Option<UnguessableToken>,
-    pub is_software: bool,
-    pub offset_tag_definitions: Vec<OffsetTagDefinition<V::MetadataSurfaceRange>>,
-    pub offset_tag_values: Vec<OffsetTagValue>,
-    pub frame_interval_inputs: FrameIntervalInputs,
-    pub trees_in_viz_timing_details: TreesInVizTiming,
-    pub tracked_element_rects: V::MetadataTrackedRects,
-}
-impl<V: FrameMetadataValueTypes> Default for CompositorFrameMetadata<V> {
-    fn default() -> Self {
-        Self {
-            device_scale_factor: 0.,
-            root_scroll_offset: PointF::default(),
-            page_scale_factor: 0.,
-            scrollable_viewport_size: SizeF::default(),
-            visible_viewport_size: Size::default(),
-            content_color_usage: ContentColorUsage::kSRGB,
-            may_contain_video: false,
-            may_throttle_if_undrawn_frames: true,
-            is_handling_interaction: false,
-            is_handling_animation: false,
-            root_background_color: Color4f {
-                red: 1.,
-                green: 1.,
-                blue: 1.,
-                alpha: 1.,
-            },
-            latency_info: Vec::new(),
-            referenced_surfaces: Vec::new(),
-            activation_dependencies: Vec::new(),
-            deadline: V::MetadataDeadline::default(),
-            begin_frame_ack: V::MetadataAck::default(),
-            frame_token: 0,
-            send_frame_token_to_embedder: false,
-            min_page_scale_factor: 0.,
-            top_controls_visible_height: None,
-            display_transform_hint: OverlayTransform::None,
-            is_mobile_optimized: false,
-            delegated_ink_metadata: None,
-            transition_directives: Vec::new(),
-            capture_bounds: V::MetadataCaptureBounds::default(),
-            has_shared_element_resources: false,
-            screenshot_destination: None,
-            is_software: false,
-            offset_tag_definitions: Vec::new(),
-            offset_tag_values: Vec::new(),
-            frame_interval_inputs: FrameIntervalInputs::default(),
-            trees_in_viz_timing_details: TreesInVizTiming::default(),
-            tracked_element_rects: V::MetadataTrackedRects::default(),
-        }
-    }
+pub trait MetadataTypes: HostImplDTypes<TreesInVizTiming = TreesInVizTiming> {
+    type MetadataValues: FrameMetadataValueTypes<
+        MetadataSurfaceRange = <Self as layerize::commit::CommitTypes>::SurfaceRange,
+        MetadataSurfaceId = <Self as crate::adapter::frame_data::FrameDataTypes>::SurfaceId,
+        MetadataDeadline = <Self as HostImplDTypes>::FrameDeadline,
+        MetadataDelegatedInk = <Self as layerize::commit::CommitTypes>::DelegatedInkMetadata,
+        MetadataTransition = <Self as HostImplDTypes>::TransitionDirective,
+        MetadataCaptureBounds = <Self as HostImplDTypes>::RegionCaptureBounds,
+        MetadataTrackedRects = <Self as crate::adapter::render_metadata::RenderFrameMetadataTypes>::TrackedElementRects,
+        MetadataLatency = <Self as crate::adapter::input_services::InputHostTypes>::LatencyInfo,
+        MetadataAck = <Self as crate::adapter::frame_data::FrameDataTypes>::BeginFrameAck,
+    >;
 }
 impl<V: FrameMetadataValueTypes> HostImplFrameMetadata for CompositorFrameMetadata<V> {
     fn set_content_color_usage(&mut self, usage: ContentColorUsage) {
@@ -237,7 +66,7 @@ impl<V: FrameMetadataValueTypes> HostImplFrameMetadata for CompositorFrameMetada
         self.content_color_usage
     }
 }
-impl<B: MetadataTypes> HostCompositorFrameMetadata<B> for CompositorFrameMetadata<B> {
+impl<B: MetadataTypes> HostCompositorFrameMetadata<B> for CompositorFrameMetadata<B::MetadataValues> {
     fn frame_token(&self) -> u32 {
         self.frame_token
     }
@@ -566,53 +395,3 @@ impl<R: super::types::CpuSkiaBackend> crate::adapter::render_metadata::RenderFra
     type TrackedElementRects = TrackedElementRects;
 }
 
-// Source dependency: ui/gfx/delegated_ink_metadata.h:31-124. This is the native
-// immutable drawing/IPC value, not a copy of compositor or paint owner state.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DelegatedInkMetadata {
-    pub point: PointF,
-    pub diameter: f64,
-    pub color: u32,
-    pub timestamp: TimeTicks,
-    pub presentation_area: crate::adapter::geometry::RectF,
-    pub frame_time: TimeTicks,
-    pub is_hovering: bool,
-    pub render_pass_id: u64,
-}
-// Source dependency: components/viz/common/quads/compositor_frame_transition_directive.h:42-43,45-67,136-154.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TransitionDirectiveType {
-    #[default]
-    kSave,
-    kAnimateRenderer,
-    kRelease,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SharedTransitionElement {
-    pub render_pass_id: super::frame::RenderPassId,
-    pub view_transition_element_resource_id:
-        crate::adapter::property_types::ViewTransitionElementResourceId,
-}
-#[derive(Clone, Debug, Default)]
-pub struct TransitionDirective {
-    pub transition_token: crate::adapter::draw_property::ViewTransitionToken,
-    pub maybe_cross_frame_sink: bool,
-    pub sequence_id: u32,
-    pub kind: TransitionDirectiveType,
-    pub shared_elements: Vec<SharedTransitionElement>,
-    pub display_color_spaces: super::resources::RasterDisplayColorSpaces,
-    pub delay_layer_tree_view_deletion: bool,
-}
-impl<R: super::types::CpuSkiaBackend> FrameMetadataValueTypes
-    for super::types::CpuCompositorTypes<R>
-{
-    type MetadataSurfaceRange = super::types::SurfaceRange;
-    type MetadataSurfaceId = super::types::SurfaceId;
-    type MetadataDeadline = FrameDeadline;
-    type MetadataDelegatedInk = DelegatedInkMetadata;
-    type MetadataTransition = TransitionDirective;
-    type MetadataCaptureBounds = RegionCaptureBounds;
-    type MetadataTrackedRects = TrackedElementRects;
-    type MetadataLatency = super::input::LatencyInfo;
-    type MetadataAck = super::frame::BeginFrameAck;
-}

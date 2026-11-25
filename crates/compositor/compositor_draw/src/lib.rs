@@ -35,7 +35,8 @@ pub mod subnormal_float;
 pub mod throttle;
 pub mod tree_draw_update;
 
-pub type ViewTransitionToken = [u64; 2];
+// blink::ViewTransitionToken, carried by viz transition directives.
+pub use viz_common::ViewTransitionToken;
 
 pub use compositor_values::color4f::Color4f;
 

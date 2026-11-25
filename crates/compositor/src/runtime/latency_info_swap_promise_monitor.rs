@@ -74,7 +74,7 @@ impl LatencyMonitorRegistry {
         let promise = LatencyInfoSwapPromise {
             latency: Some(latency.CloneForSwapPromise()),
         };
-        Some(Box::new(SwapPromise(Box::new(promise))))
+        Some(Box::new(SwapPromise(Box::new(promise), std::marker::PhantomData)))
     }
 
     pub(crate) fn Remove(&self, id: HostImplLatencyMonitorId) {
@@ -110,14 +110,14 @@ impl Drop for LatencyMonitor {
 struct LatencyInfoSwapPromise {
     latency: Option<LatencyInfo>,
 }
-impl SwapPromiseContract<super::metadata::CompositorFrameMetadata<CompositorTypes>>
+impl SwapPromiseContract<super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>>
     for LatencyInfoSwapPromise
 {
     fn DidActivate(&mut self) {}
 
     fn WillSwap(
         &mut self,
-        metadata: &mut super::metadata::CompositorFrameMetadata<CompositorTypes>,
+        metadata: &mut super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
     ) {
         metadata.latency_info.push(
             self.latency

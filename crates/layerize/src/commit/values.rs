@@ -3,29 +3,10 @@
 //! the old paths re-export them.
 use std::cmp::Ordering;
 
-// Source dependency: base/unguessable_token.h (two 64-bit halves; empty is 0).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct UnguessableToken(pub [u64; 2]);
-impl UnguessableToken {
-    pub fn is_empty(self) -> bool {
-        self.0 == [0, 0]
-    }
-}
-
-// Source dependency: ui/gfx/overlay_transform.h gfx::OverlayTransform.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OverlayTransform {
-    #[default]
-    None,
-    FlipHorizontal,
-    FlipVertical,
-    Rotate90,
-    Rotate180,
-    Rotate270,
-    FlipVerticalRotate90,
-    FlipVerticalRotate270,
-    Invalid,
-}
+// base::UnguessableToken and gfx::OverlayTransform are base/gfx values that
+// viz::CompositorFrameMetadata names too.
+pub use compositor_values::overlay_transform::OverlayTransform;
+pub use compositor_values::unguessable_token::UnguessableToken;
 
 // Source dependency: cc/trees/layer_tree_host.h
 // PropertyChangeForcesCommitCriteria.

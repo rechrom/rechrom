@@ -18,30 +18,32 @@ pub use translated::{
 };
 mod ui_translated;
 use backend::{RasterBackend, RasterBackendTarget};
-use compositor::{
-    adapter::{
-        geometry::{AxisTransform2d, Rect, Size},
-        layer_tree_impl::ResourceId,
-        picture_layer_tiling::TilingRasterSource,
-        prioritized_tile::ScrollOffsetMap,
-        resource_pool::{ResourcePoolMemoryDump, SharedImageTracingImportance},
-        resource_types::{
-            ChannelFormat, PlaneConfig, SharedImageFormat, SinglePlaneFormat, Subsampling,
-        },
+use cc_paint::{skia_region::SkRegion, RasterImageProviderRef};
+use cc_raster::{
+    raster_buffer_provider::{RasterBuffer, RasterBufferProviderBackend, RasterPlayback},
+    raster_source::RasterSourceStorage,
+};
+use compositor_tree::geometry::{AxisTransform2d, Rect, Size};
+use compositor_values::{
+    axis_transform2d::RasterTransform,
+    color_space::{ColorMatrixId, ColorPrimaryId, ColorRangeId, ColorTransferId, RasterColorSpace},
+    prioritized_tile::ScrollOffsetMap,
+    raster_source::TilingRasterSource,
+    shared_image_format::{
+        ChannelFormat, PlaneConfig, SharedImageFormat, SinglePlaneFormat, Subsampling,
     },
-    runtime::{
-        paint::{RasterImageProviderRef, RasterSourceStorage, RasterTransform},
-        raster_execution::{
-            RasterBuffer, RasterBufferProviderBackend, RasterPlayback, RasterResourceLease,
-        },
-        resources::{
-            ColorMatrixId, ColorPrimaryId, ColorRangeId, ColorTransferId, CommandBufferNamespace,
-            RasterColorSpace, RasterDumpGuid, RasterResourceSource, RasterSharedImage,
-            RasterSyncToken, RasterSynchronizationType, RasterTransferableResource,
-            RasterWriteMapping, SharedImageBackend,
-        },
-        skia::SkRegion,
+};
+use viz_common::{
+    raster_resource_lease::RasterResourceLease,
+    returned_resource::{CommandBufferNamespace, RasterSyncToken},
+    shared_image::{
+        RasterDumpGuid, RasterSharedImage, RasterWriteMapping, ResourcePoolMemoryDump,
+        SharedImageBackend, SharedImageTracingImportance,
     },
+    transferable_resource::{
+        RasterResourceSource, RasterSynchronizationType, RasterTransferableResource,
+    },
+    ResourceId,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -493,7 +495,7 @@ impl RasterEngine {
     }
     pub fn RasterizeDragImageRecord(
         &self,
-        record: &compositor::engine::ImmutablePaintRecord,
+        record: &cc_paint::CpuPaintRecord<cc_paint::skia_region::SkRegion>,
         layout_size: (f64, f64),
         paint_offset: (f64, f64),
         scale: f32,
@@ -1268,7 +1270,7 @@ impl<'image>
 /// The compositor's only injected pixel capability. Cloning this handle shares
 /// the same allocation/cache owners; it does not clone pixel storage.
 /// Canonical cc code continues to choose tasks, resources and completion order.
-impl compositor::CompositorRasterProvider for RasterEngine {
+impl cc_raster::raster_buffer_provider::CompositorRasterProvider for RasterEngine {
     fn CreateSharedImage(
         &self,
         resource: ResourceId,
@@ -1285,7 +1287,7 @@ impl compositor::CompositorRasterProvider for RasterEngine {
         format: &SharedImageFormat,
         resource_content_id: u64,
         previous_content_id: u64,
-    ) -> io::Result<Box<compositor::runtime::paint::TileRasterBufferValue>> {
+    ) -> io::Result<Box<cc_raster::raster_buffer_provider::TileRasterBufferValue>> {
         let buffer = <Self as RasterBufferProviderBackend<
             RasterSourceStorage<SkRegion>,
             RasterTransform,

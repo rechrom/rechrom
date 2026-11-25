@@ -19,9 +19,9 @@ struct ReportTimeSwapPromise {
     effects: ResourceEffects,
     clock: Arc<dyn crate::CompositorExecutor>,
 }
-impl Promise<CompositorFrameMetadata<CompositorTypes>> for ReportTimeSwapPromise {
+impl Promise<CompositorFrameMetadata<viz_common::SoftwareMetadataValues>> for ReportTimeSwapPromise {
     fn DidActivate(&mut self) {}
-    fn WillSwap(&mut self, metadata: &mut CompositorFrameMetadata<CompositorTypes>) {
+    fn WillSwap(&mut self, metadata: &mut CompositorFrameMetadata<viz_common::SoftwareMetadataValues>) {
         assert!(metadata.frame_token > 0);
         self.frame_token = metadata.frame_token;
     }
@@ -60,5 +60,5 @@ pub(super) fn Create(
         frame_token: 0,
         effects,
         clock,
-    })))
+    }), std::marker::PhantomData))
 }

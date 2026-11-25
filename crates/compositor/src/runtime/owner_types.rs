@@ -116,7 +116,7 @@ impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> 
     type LocalSurfaceId = super::types::LocalSurfaceId;
     type SurfaceRange = super::types::SurfaceRange;
     type SwapPromise = super::host_owners::SwapPromise<R>;
-    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<Self>;
+    type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>;
     type UIResourceRequest = super::host_owners::UIResourceRequest;
     type PresentationCallback =
         crate::adapter::presentation::Callback<super::metadata::PresentationFeedback>;

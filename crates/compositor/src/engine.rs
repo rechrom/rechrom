@@ -17,14 +17,9 @@ use crate::{
         begin_frame::BeginFrameArgs,
         geometry::{PointF, Size, Vector2dF},
         input_types::ElementId,
-        layer_tree_impl::ResourceId,
-        resource_types::SharedImageFormat,
         time::{TimeDelta, TimeTicks},
     },
-    runtime::{
-        paint::TileRasterBufferValue,
-        resources::{RasterColorSpace, RasterReturnedResource, RasterSharedImage},
-    },
+    runtime::resources::RasterReturnedResource,
     CompositorFrameSubmission,
 };
 pub use compositor_animation::compositor_mutation::PropertyAnimationMutation;
@@ -51,29 +46,7 @@ pub trait CompositorExecutor: Send + Sync {
 /// Resource allocation and replay primitives, implemented by the raster
 /// package. Selection, dependency graphs and completion accounting stay inside
 /// the compositor. Frame resources directly retain this backend's read lease.
-pub trait CompositorRasterProvider: Send + Sync {
-    fn CreateSharedImage(
-        &self,
-        // Preferred allocation id supplied by the tile resource owner. The
-        // returned image's allocation id is authoritative when this hint is
-        // already occupied by another live UI or tile allocation.
-        resource: ResourceId,
-        size: Size,
-        format: &SharedImageFormat,
-        color_space: &RasterColorSpace,
-    ) -> io::Result<RasterSharedImage>;
-    fn AcquireBufferForRaster(
-        &self,
-        resource: ResourceId,
-        size: Size,
-        format: &SharedImageFormat,
-        resource_content_id: u64,
-        previous_content_id: u64,
-    ) -> io::Result<Box<TileRasterBufferValue>>;
-    fn CanPartialRasterIntoProvidedResource(&self) -> bool;
-    fn NotifyWorkSubmitted(&self);
-    fn Shutdown(&self) -> io::Result<()>;
-}
+pub use cc_raster::raster_buffer_provider::CompositorRasterProvider;
 
 /// The services the embedding injects into `CompositorEngine::new`: the impl
 /// sequence's task runner and clock, the raster worker executor and the

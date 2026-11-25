@@ -10,10 +10,10 @@ use crate::common::{
     surfaces::{surface_id::SurfaceId, surface_info::SurfaceInfo, surface_range::SurfaceRange},
 };
 use crate::service::surfaces::surface_dependency_deadline::SurfaceDependencyDeadline;
-use compositor::adapter::geometry::Rect;
-use compositor::runtime::frame::RenderPassId;
-use compositor::runtime::resources::RasterReturnedResource;
-use compositor::{CompositorFrame, TransferableResource};
+use compositor_tree::geometry::Rect;
+use viz_common::draw_quad::RenderPassId;
+use viz_common::returned_resource::RasterReturnedResource;
+use viz_common::{CompositorFrame, TransferableResource};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
 

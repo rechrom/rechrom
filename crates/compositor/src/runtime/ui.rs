@@ -1,43 +1,13 @@
 //! UI-resource external raster primitives. No UI resource selection, sizing,
 //! lifetime or source host policy is implemented here; those remain in HostImpl.
+//! The capability is a cc/raster interface the raster service implements
+//! (cc_raster::ui_resource).
+pub use cc_raster::ui_resource::UiRasterServices;
 use super::{
     host_resources::{SourceBitmap, UIImageInfo, UISurface},
     resources::{RasterColorSpace, RasterSharedImage},
 };
-use crate::adapter::{
-    geometry::Size, layer_tree_host_impl::HostUISharedImageUsage, resource_types::SharedImageFormat,
-};
-/// The raster allocation owner implements this capability. Borrowed
-/// surfaces must retain the exact caller pixel slice and its stride; the trait
-/// does not permit a compositor-side pixel copy or fabricated image/surface.
-pub trait UiRasterServices: Send + Sync {
-    fn MakeN32Premul(&self, size: Size) -> UIImageInfo;
-    fn NewSourceBitmap<'a>(&self) -> SourceBitmap<'a>;
-    fn WrapPixels<'a>(
-        &self,
-        info: UIImageInfo,
-        pixels: &'a mut [u8],
-        row_bytes: usize,
-    ) -> Option<UISurface<'a>>;
-    fn RasterSurface<'a>(&self, info: UIImageInfo) -> Option<UISurface<'a>>;
-    fn CreateSoftwareSharedImage(
-        &self,
-        format: SharedImageFormat,
-        size: Size,
-        color: &RasterColorSpace,
-        usage: HostUISharedImageUsage,
-        label: &'static str,
-    ) -> Option<RasterSharedImage>;
-    fn CreateSharedImageWithPixels(
-        &self,
-        format: SharedImageFormat,
-        size: Size,
-        color: &RasterColorSpace,
-        usage: HostUISharedImageUsage,
-        label: &'static str,
-        pixels: &[u8],
-    ) -> Option<RasterSharedImage>;
-}
+use crate::adapter::{geometry::Size, resource_types::SharedImageFormat};
 use super::{
     engine_factory::FactoryCapabilities,
     host_resources::SharedMapping,

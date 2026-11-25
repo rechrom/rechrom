@@ -1,11 +1,11 @@
 //! Draw-quad values carried by a CompositorFrame to Viz
 //! (components/viz/common/quads). Producers append them; Viz and the renderer
 //! read them. No layerization, tiling or draw-order logic lives here.
-use crate::surface_id::SurfaceRange;
-use compositor_draw::Color4f;
-use compositor_resource::ResourceId;
-use compositor_tile::prioritized_tile_types::ScrollOffsetMap;
+use crate::ResourceId;
 use compositor_tree::geometry::{PointF, Rect, RectF, Size, Vector2dF};
+use compositor_values::color4f::Color4f;
+use compositor_values::prioritized_tile::ScrollOffsetMap;
+use compositor_values::surface_id::SurfaceRange;
 use compositor_tree::property_types::{
     BlendMode as SkBlendMode, MaskFilterInfo, ViewTransitionElementResourceId,
 };
@@ -281,16 +281,5 @@ impl<L> DrawQuad<L> {
             } => mask_resource_id,
             _ => ResourceId::default(),
         }
-    }
-}
-impl<L> compositor_draw::throttle::RenderPassQuad<RenderPassId> for DrawQuad<L> {
-    fn render_pass_id(&self) -> RenderPassId {
-        match self.material {
-            QuadMaterial::CompositorRenderPass { render_pass_id, .. } => render_pass_id,
-            _ => panic!("native render-pass quad material invariant"),
-        }
-    }
-    fn has_mask_resource(&self) -> bool {
-        self.resource_id().0 != 0
     }
 }

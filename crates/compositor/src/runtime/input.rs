@@ -68,63 +68,8 @@ impl SmoothEffectDrivingThread {
     pub const kMaxValue: Self = Self::kUnknown;
 }
 
-/// The actual latency event supplies component timestamps. This trait is kept
-/// with the event allocation so the host never fabricates a reduced event copy.
-pub trait LatencyInfoBackend: Send {
-    fn FindLatency(&self, component: HostScrollLatencyComponent, timestamp: &mut TimeTicks)
-        -> bool;
-    fn AddRendererSwapTimestamp(&mut self, timestamp: TimeTicks);
-    fn AddRenderingScheduledImpl(&mut self) -> bool;
-    fn CloneForSwapPromise(&self) -> Box<dyn LatencyInfoBackend>;
-    fn Terminate(&mut self);
-    fn TraceId(&self) -> i64;
-    fn TraceMainCommit(&self);
-}
-#[derive(Clone)]
-pub struct LatencyInfo(pub std::sync::Arc<std::sync::Mutex<Box<dyn LatencyInfoBackend>>>);
-impl LatencyInfo {
-    pub fn new(value: Box<dyn LatencyInfoBackend>) -> Self {
-        Self(std::sync::Arc::new(std::sync::Mutex::new(value)))
-    }
-    pub(crate) fn CloneForSwapPromise(&self) -> Self {
-        let value = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .CloneForSwapPromise();
-        Self::new(value)
-    }
-    pub(crate) fn AddRenderingScheduledImpl(&mut self) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .AddRenderingScheduledImpl()
-    }
-    pub(crate) fn Terminate(&mut self) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .Terminate()
-    }
-    pub(crate) fn TraceId(&self) -> i64 {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .TraceId()
-    }
-    pub(crate) fn TraceMainCommit(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .TraceMainCommit()
-    }
-    pub(crate) fn AddRendererSwapTimestamp(&mut self, timestamp: TimeTicks) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .AddRendererSwapTimestamp(timestamp)
-    }
-}
+// ui::LatencyInfo is a viz frame value (viz_common::latency_info).
+pub use viz_common::latency_info::{LatencyInfo, LatencyInfoBackend};
 impl HostScrollLatency for LatencyInfo {
     fn FindLatency(
         &self,

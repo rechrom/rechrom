@@ -253,7 +253,10 @@ with `ProxyImpl` receiving the commit.
   sides, including `gfx::Transform`, `gfx::ColorSpace` and the
   `InputToImpl` input-queue messages) and `cc_paint` (cc/paint: PaintRecord,
   DisplayItemList, image values, the SkRegion/SkPath value backend;
-  re-exported as `layerize::commit::paint`) live under `crates/compositor/`. They
+  re-exported as `layerize::commit::paint`) and `cc_raster` (cc/raster
+  interfaces the raster service implements: RasterSource, RasterBuffer /
+  RasterBufferProvider, the UI-resource raster capability) live under
+  `crates/compositor/`. They
   carry only source-aligned values and algorithms used by both sides, depend
   only on each other and on value crates (`paint_model` geometry,
   `foundation`, `skia`, `browser_tracing`, `image_resource`), and never own
@@ -293,7 +296,11 @@ with `ProxyImpl` receiving the commit.
   tile coverage.
 
 **Viz** (`viz`): surface manager → aggregator (`Aggregate`) → display
-scheduling. Input is `CompositorFrame`, surface lifecycle, BeginFrame/deadline
+scheduling. The frame values are the value root `viz_common`
+(components/viz/common: quads, render passes, frame metadata, surface ids,
+transferable/returned resources and shared-image values, CopyOutputRequest,
+LatencyInfo); cc fills them, Viz and the renderer read them, and none of the
+three names a cc package. Input is `CompositorFrame`, surface lifecycle, BeginFrame/deadline
 and swap acknowledgements; output is a validated aggregate and swap decision.
 Pure state and logic: no Skia, window, IOSurface, GPU or OS dependency.
 

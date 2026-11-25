@@ -68,6 +68,11 @@ impl<R: RoundedRectTransformBackend> Transform<R> {
     pub fn GetInverse(&self, result: &mut Self) -> bool {
         self.source.GetInverse(&mut result.source)
     }
+    // Source: ui/gfx/geometry/transform.h NonDegeneratePreserves2dAxisAlignment
+    // (read by cc occlusion and the viz OcclusionCuller).
+    pub fn NonDegeneratePreserves2dAxisAlignment(&self) -> bool {
+        self.source.NonDegeneratePreserves2dAxisAlignment()
+    }
     pub fn MapPoint(&self, point: PointF) -> PointF {
         let p = self
             .source

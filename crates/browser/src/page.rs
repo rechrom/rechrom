@@ -10,9 +10,10 @@ use layout::fragment::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
 pub use compositor::CompositorMainThreadEffect;
 use compositor::{
-    adapter::layer_tree_impl::ResourceId, CompositorConfig, CompositorEngine, CompositorError,
-    CompositorExecutor, CompositorFrameSubmission, CompositorOutput, CompositorViewportState,
+    CompositorConfig, CompositorEngine, CompositorError, CompositorExecutor,
+    CompositorFrameSubmission, CompositorOutput, CompositorViewportState,
 };
+use viz_common::ResourceId;
 use compositor_tree::geometry::{
     PointF as CompositorPointF, Rect as CompositorRect, RectF as CompositorRectF,
     Size as CompositorSize, Vector2dF,
@@ -279,9 +280,9 @@ pub type PageCompositorFrame = CompositorFrameSubmission;
 /// window-owned Viz service consumes this frame before the parent frame.
 pub struct PageChildCompositorFrame {
     pub surface_id: viz::adapter::SurfaceId,
-    pub frame: compositor::CompositorFrame,
+    pub frame: viz_common::CompositorFrame,
 }
-pub type PageReturnedResource = compositor::runtime::resources::RasterReturnedResource;
+pub type PageReturnedResource = viz_common::returned_resource::RasterReturnedResource;
 /// The main LayerTreeHost's main-thread task runner (copy-output results,
 /// view-transition callbacks) over this Page's document executor.
 struct PageMainTaskRunner(Arc<PageCompositorExecutor>);

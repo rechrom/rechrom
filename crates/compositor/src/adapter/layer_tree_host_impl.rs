@@ -603,22 +603,8 @@ pub trait HostUIResourceBitmap {
     fn GetPixels(&self) -> &[u8];
     fn row_bytes(&self) -> usize;
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HostUISharedImageUsage(u32);
-// Source dependency: gpu/command_buffer/common/shared_image_usage.h:25,29,50.
-impl HostUISharedImageUsage {
-    pub const DISPLAY_READ: Self = Self(1 << 2);
-    pub const CPU_WRITE_ONLY: Self = Self(1 << 11);
-    pub const SCANOUT: Self = Self(1 << 4);
-    pub fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-}
-impl std::ops::BitOrAssign for HostUISharedImageUsage {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
+// gpu::SharedImageUsageSet bits the UI-resource raster capability takes.
+pub use cc_raster::ui_resource::HostUISharedImageUsage;
 pub trait HostUISharedImage<T> {
     fn creation_sync_token(&self) -> T;
     fn UpdateDestructionSyncToken(&mut self, token: &T);
@@ -629,28 +615,11 @@ pub trait HostUISharedMapping {
 pub trait HostUIResourceImageInfo {
     fn minRowBytes(&self) -> usize;
 }
-pub trait HostUISourceBitmap<'a, Info, Image> {
-    fn setInfo(&mut self, info: Info, row_bytes: usize);
-    fn setPixels(&mut self, pixels: &'a [u8]);
-    fn asImage(&self) -> Image;
-}
-pub trait HostUICanvas<Info, Image> {
-    // Source dependency: third_party/skia/include/core/SkCanvas.h:384-396.
-    fn peekPixels(&self) -> HostUIPixmap<'_>;
-    fn writePixels(&mut self, info: &Info, pixels: &[u8], row_bytes: usize, x: i32, y: i32);
-    fn scale(&mut self, x: f32, y: f32);
-    fn clearTransparent(&mut self);
-    fn drawImage(&mut self, image: &Image, x: f32, y: f32);
-}
-/// Borrowed native SkPixmap-to-span result. The surface owns its pixels.
-pub struct HostUIPixmap<'a> {
-    pub pixels: &'a [u8],
-}
-pub trait HostUISurface<Info, Image> {
-    type Canvas: HostUICanvas<Info, Image>;
-    fn getCanvas(&mut self) -> &mut Self::Canvas;
-    fn peekPixels(&self) -> HostUIPixmap<'_>;
-}
+// The SkBitmap/SkCanvas/SkSurface primitives of the UI-resource raster
+// capability (cc_raster::ui_resource).
+pub use cc_raster::ui_resource::{
+    HostUICanvas, HostUIPixmap, HostUISourceBitmap, HostUISurface,
+};
 pub trait HostUIResourceTypes: HostImplResourceTypes {
     type UIBitmap: HostUIResourceBitmap;
     type UISyncToken: Default;
@@ -1176,13 +1145,9 @@ pub trait HostChildLocalSurfaceIdAllocator {
 pub trait HostFrameTimingDetails {
     fn PresentationTimestamp(&self) -> TimeTicks;
 }
-// Source dependency: ui/latency/latency_info.h:64-67,163.
-// These named variants select upstream components, not replacement numeric IDs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HostScrollLatencyComponent {
-    FirstScrollUpdateOriginal,
-    ScrollUpdateOriginal,
-}
+// Source dependency: ui/latency/latency_info.h:64-67,163 (a viz frame value,
+// viz_common::latency_info).
+pub use viz_common::latency_info::LatencyComponentType as HostScrollLatencyComponent;
 pub trait HostScrollLatency {
     fn FindLatency(&self, component: HostScrollLatencyComponent, timestamp: &mut TimeTicks)
         -> bool;
@@ -2764,13 +2729,7 @@ pub mod host_impl_chunk_d {
     }
 
     // External Viz enum identity: components/viz/common/quads/frame_interval_inputs.h:31-36.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum HostContentFrameIntervalType {
-        kVideo,
-        kAnimatingImage,
-        kScrollBarFadeOutAnimation,
-        kCompositorScroll,
-    }
+    pub use viz_common::compositor_frame_metadata::ContentFrameIntervalType as HostContentFrameIntervalType;
     pub trait HostMetadataBeginFrameAck {
         fn frame_id(&self) -> crate::adapter::begin_frame::BeginFrameId;
         fn IsSequenceValid(&self) -> bool;

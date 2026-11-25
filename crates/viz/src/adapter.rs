@@ -21,17 +21,16 @@ use crate::{
         },
     },
 };
-use compositor::runtime::{
-    frame::QuadMaterial,
-    resources::{RasterReturnedResource, RasterTransferableResource},
-    types::{
+use viz_common::{
+    draw_quad::{QuadMaterial, RenderPassId},
+    raster_resource_lease::RasterResourceLease,
+    returned_resource::RasterReturnedResource,
+    surfaces::{
         FrameSinkId as RuntimeFrameSinkId, LocalSurfaceId as RuntimeLocalSurfaceId,
         SurfaceId as RuntimeSurfaceIdValue, SurfaceRange as RuntimeSurfaceRangeValue,
     },
-};
-use compositor::{
-    adapter::layer_tree_impl::ResourceId, runtime::frame::RenderPassId, CompositorFrame,
-    RasterResourceLease,
+    transferable_resource::RasterTransferableResource,
+    CompositorFrame, ResourceId,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,12 +39,12 @@ use std::{
     sync::Arc,
 };
 
-pub type DeviceRect = compositor::adapter::geometry::Rect;
+pub type DeviceRect = compositor_tree::geometry::Rect;
 pub use crate::common::quads::aggregated_render_pass::{
     AggregatedRenderPass, SharedQuadState, Transform,
 };
 pub use crate::service::display::aggregated_frame::AggregatedFrame;
-pub use compositor::adapter::layer_tree_impl::Color4f;
+pub use compositor_values::color4f::Color4f;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SurfaceId(pub u64);
@@ -129,7 +128,7 @@ pub struct PresentedSurfaceFrame {
     pub surface_id: SurfaceId,
     pub submission: u64,
     pub frame_token: u32,
-    pub frame_id: compositor::adapter::begin_frame::BeginFrameId,
+    pub frame_id: viz_common::begin_frame::BeginFrameId,
 }
 pub struct FrameSubmission {
     pub submission: u64,
@@ -164,7 +163,7 @@ pub struct VizOutput {
 /// SharedImage remains present even when no host mapping exists.
 pub(crate) struct DisplayResource {
     pub(crate) transferable: RasterTransferableResource,
-    pub(crate) read_lease: Option<Arc<RasterResourceLease>>,
+    pub(crate) read_lease: Option<Arc<dyn RasterResourceLease>>,
 }
 
 impl VizOutput {
@@ -176,7 +175,7 @@ impl VizOutput {
     pub fn FrameMut(&mut self) -> &mut AggregatedFrame {
         &mut self.frame
     }
-    pub fn Resource(&self, id: ResourceId) -> Option<Arc<RasterResourceLease>> {
+    pub fn Resource(&self, id: ResourceId) -> Option<Arc<dyn RasterResourceLease>> {
         self.resources.get(&id.0)?.read_lease.clone()
     }
     /// Complete imported resource for GPU renderer/image-context creation.
@@ -284,7 +283,7 @@ impl VizEngine {
                 .render_pass_list
                 .last()
                 .ok_or(VizError::MissingRenderPass)?;
-            let size = compositor::adapter::geometry::Size::new(
+            let size = compositor_tree::geometry::Size::new(
                 root.output_rect.width,
                 root.output_rect.height,
             );
@@ -353,7 +352,7 @@ impl VizEngine {
             .referenced_surfaces
             .iter()
             .map(|range| {
-                let cv = |id: &compositor::runtime::types::SurfaceId| {
+                let cv = |id: &viz_common::surfaces::SurfaceId| {
                     CoreSurfaceId::new(
                         CoreFrameSinkId::new(id.frame_sink_id.client_id, id.frame_sink_id.sink_id),
                         CoreLocalSurfaceId::new(
@@ -529,14 +528,15 @@ impl VizEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compositor::{
-        adapter::layer_tree_impl::Color4f,
-        adapter::resource_pool::{ResourcePoolMemoryDump, SharedImageTracingImportance},
-        runtime::frame::{QuadMaterial, RenderPassId, SharedQuadStateHandle},
-        runtime::resources::{
-            CommandBufferNamespace, RasterDumpGuid, RasterResourceSource, RasterSharedImage,
-            RasterSyncToken, RasterSynchronizationType, RasterTransferableResource,
-            RasterWriteMapping, SharedImageBackend,
+    use viz_common::{
+        draw_quad::{QuadMaterial, RenderPassId, SharedQuadStateHandle},
+        returned_resource::{CommandBufferNamespace, RasterSyncToken},
+        shared_image::{
+            RasterDumpGuid, RasterSharedImage, RasterWriteMapping, ResourcePoolMemoryDump,
+            SharedImageBackend, SharedImageTracingImportance,
+        },
+        transferable_resource::{
+            RasterResourceSource, RasterSynchronizationType, RasterTransferableResource,
         },
     };
     use std::{io, sync::Arc};
@@ -569,7 +569,7 @@ mod tests {
         ) {
         }
 
-        fn RasterReadLease(&self) -> Option<Arc<RasterResourceLease>> {
+        fn RasterReadLease(&self) -> Option<Arc<dyn RasterResourceLease>> {
             None
         }
 
@@ -583,7 +583,7 @@ mod tests {
 
     fn frame(token: u32, damage: DeviceRect, contributing_damage: bool) -> CompositorFrame {
         let rect = DeviceRect::new(0, 0, 10, 10);
-        let mut pass = compositor::CompositorRenderPass::default();
+        let mut pass = viz_common::CompositorRenderPass::default();
         pass.id = RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = damage;
@@ -598,7 +598,7 @@ mod tests {
     fn frame_with_gpu_like_resource(token: u32) -> CompositorFrame {
         let rect = DeviceRect::new(0, 0, 10, 10);
         let child_id = ResourceId(7);
-        let mut pass = compositor::CompositorRenderPass::default();
+        let mut pass = viz_common::CompositorRenderPass::default();
         pass.id = RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = rect;
@@ -610,8 +610,8 @@ mod tests {
             state.are_contents_opaque = true;
         }
         pass.quad_list
-            .push(compositor::runtime::frame::DrawQuad {
-                geometry: compositor::runtime::frame::QuadGeometry {
+            .push(viz_common::draw_quad::DrawQuad {
+                geometry: viz_common::draw_quad::QuadGeometry {
                     shared_quad_state: Some(shared),
                     rect,
                     visible_rect: rect,
@@ -619,7 +619,7 @@ mod tests {
                 },
                 material: QuadMaterial::Tile {
                     resource_id: child_id,
-                    tex_coord_rect: compositor::adapter::geometry::RectF::new(
+                    tex_coord_rect: compositor_tree::geometry::RectF::new(
                         0.0, 0.0, 10.0, 10.0,
                     ),
                     nearest_neighbor: false,
@@ -697,7 +697,7 @@ mod tests {
         color: Color4f,
         background: Color4f,
     ) -> CompositorFrame {
-        let mut pass = compositor::CompositorRenderPass::default();
+        let mut pass = viz_common::CompositorRenderPass::default();
         pass.id = RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = rect;
@@ -710,8 +710,8 @@ mod tests {
             state.are_contents_opaque = true;
         }
         pass.quad_list
-            .push(compositor::runtime::frame::DrawQuad {
-                geometry: compositor::runtime::frame::QuadGeometry {
+            .push(viz_common::draw_quad::DrawQuad {
+                geometry: viz_common::draw_quad::QuadGeometry {
                     shared_quad_state: Some(shared),
                     rect,
                     visible_rect: rect,

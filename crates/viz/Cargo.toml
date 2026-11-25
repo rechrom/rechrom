@@ -3,5 +3,9 @@ name = "viz"
 version = "0.0.1"
 edition = "2021"
 
+# components/viz/service over the components/viz/common frame values; Viz
+# names no cc package.
 [dependencies]
-compositor = { path = "../compositor" }
+viz_common = { path = "viz_common" }
+compositor_tree = { path = "../compositor/compositor_tree" }
+compositor_values = { path = "../compositor/compositor_values" }

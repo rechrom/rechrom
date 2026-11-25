@@ -5,14 +5,16 @@
 //! used for one synchronous draw or publication call.
 
 use crate::render_target::{PixelFormat, PixelStorage, RenderTarget};
-use compositor::{
-    adapter::{
-        geometry::{RRectF, Rect, RectF},
-        layer_tree_impl::{Color4f, ResourceId},
-        property_types::BlendMode,
-        resource_types::{SharedImageFormat, SinglePlaneFormat},
-    },
-    runtime::{frame::RenderPassId, raster_execution::RasterResourceLease},
+use compositor_tree::{
+    geometry::{RRectF, Rect, RectF},
+    property_types::BlendMode,
+};
+use compositor_values::{
+    color4f::Color4f,
+    shared_image_format::{SharedImageFormat, SinglePlaneFormat},
+};
+use viz_common::{
+    draw_quad::RenderPassId, raster_resource_lease::RasterResourceLease, ResourceId,
 };
 use raster::{MapResourceForRead, MapVideoResourceForRead};
 use skia::{
@@ -448,18 +450,18 @@ fn bt709_apple_to_srgb_byte(encoded: f32) -> u8 {
 #[cfg(test)]
 fn convert_nv12_bt709_apple_to_srgb(
     video: Nv12Planes<'_>,
-    matrix_id: compositor::runtime::resources::ColorMatrixId,
+    matrix_id: compositor_values::color_space::ColorMatrixId,
 ) -> io::Result<Vec<u8>> {
     convert_nv12_bt709_apple_to_srgb_scaled(video, matrix_id, video.width, video.height)
 }
 
 fn convert_nv12_bt709_apple_to_srgb_scaled(
     video: Nv12Planes<'_>,
-    matrix_id: compositor::runtime::resources::ColorMatrixId,
+    matrix_id: compositor_values::color_space::ColorMatrixId,
     output_width: usize,
     output_height: usize,
 ) -> io::Result<Vec<u8>> {
-    use compositor::runtime::resources::ColorMatrixId;
+    use compositor_values::color_space::ColorMatrixId;
 
     let chroma_width = video.width.div_ceil(2);
     let chroma_height = video.height.div_ceil(2);
@@ -638,7 +640,7 @@ pub(crate) fn video_lease_image_scaled(
     output_width: i32,
     output_height: i32,
 ) -> io::Result<Arc<dyn SkImage>> {
-    use compositor::runtime::resources::{ColorPrimaryId, ColorRangeId, ColorTransferId};
+    use compositor_values::color_space::{ColorPrimaryId, ColorRangeId, ColorTransferId};
     let video = MapVideoResourceForRead(lease.as_ref())?;
     let width = video.size.width();
     let height = video.size.height();
@@ -683,7 +685,7 @@ pub(crate) fn video_lease_image_scaled(
 #[cfg(test)]
 mod video_tests {
     use super::*;
-    use compositor::runtime::resources::ColorMatrixId;
+    use compositor_values::color_space::ColorMatrixId;
 
     #[test]
     fn bt709_apple_transfer_thresholds_preserve_exact_quantization() {

@@ -9,15 +9,14 @@
 #![allow(non_snake_case)]
 
 use crate::components::viz::common::display::renderer_settings::OcclusionCullerSettings;
-use compositor::{
-    adapter::{
-        geometry::{Rect, Transform as _},
-        occlusion::OcclusionTransform as _,
-        property_types::PropertyTransform as _,
-    },
-    cc::base::{math_util::MathUtil, region::Region as GenericRegion},
-    runtime::{frame::QuadMaterial, skia::SkRegion},
+use cc_paint::skia_region::SkRegion;
+use compositor_tree::{
+    geometry::{Rect, Transform as _},
+    math_util::MathUtil,
+    property_types::PropertyTransform as _,
+    region::Region as GenericRegion,
 };
+use viz_common::draw_quad::QuadMaterial;
 use std::collections::BTreeSet;
 use viz::{
     adapter::AggregatedFrame,
@@ -55,8 +54,8 @@ impl OcclusionCuller {
             && sqs.are_contents_opaque
             && matches!(
                 sqs.blend_mode,
-                compositor::adapter::occlusion::SkBlendMode::kSrcOver
-                    | compositor::adapter::occlusion::SkBlendMode::kSrc
+                compositor_tree::property_types::BlendMode::kSrcOver
+                    | compositor_tree::property_types::BlendMode::kSrc
             )
             && sqs
                 .quad_to_target_transform

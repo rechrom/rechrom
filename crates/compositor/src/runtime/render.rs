@@ -94,7 +94,7 @@ impl RenderSurfaceServices<CompositorTypes> for RenderServices {
     fn CreateRenderPass(
         &mut self,
         num_contributors: i32,
-    ) -> Box<CompositorRenderPass<CompositorTypes>> {
+    ) -> Box<CompositorRenderPass<viz_common::SoftwareFrameValues>> {
         // Source: components/viz/common/quads/compositor_render_pass.cc:41-44,54-55.
         // Source: components/viz/common/quads/render_pass_internal.cc:21-37.
         // Create reserves output arrays; it does not decide content or paint.

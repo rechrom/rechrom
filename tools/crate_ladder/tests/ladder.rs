@@ -66,6 +66,12 @@ const ROOTS: &[(&str, Root)] = &[
     ("compositor_values", Root::Value),
     ("compositor_animation", Root::Value),
     ("cc_paint", Root::Value),
+    // cc/raster service interfaces (RasterSource, RasterBufferProvider, the
+    // UI-resource raster capability) the raster service implements.
+    ("cc_raster", Root::Value),
+    // components/viz/common: the CompositorFrame values cc fills and Viz and
+    // the renderer read (crates/viz/viz_common).
+    ("viz_common", Root::Value),
 ];
 
 struct Engine {
@@ -304,17 +310,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // (`Member<const CSSPropertyValueSet>`); Layout writes it during
     // out-of-flow layout.
     ("layout_base", "cssom", "third_party/blink/renderer/core/css/out_of_flow_data.h"),
-    // Temporary (crate ladder B1-B4); each step removes its entries.
-    ("viz", "compositor", "B1: frame values move to viz_common"),
-    ("renderer", "compositor", "B1: frame values move to viz_common"),
-    ("renderer_skia", "compositor", "B1: frame values move to viz_common"),
-    // Raster names its cc paint values from cc_paint through the compositor
-    // and implements cc's injected raster service traits
-    // (RasterBufferProviderBackend, TilingRasterSource, PictureRasterSource,
-    // HostUI*), which still live in the compositor facade; cc/raster/
-    // raster_buffer_provider.h and cc/raster/raster_source.h are their
-    // Chromium homes. Clears when those interfaces move to a cc root.
-    ("raster", "compositor", "B2: cc raster service traits move to a cc root"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -553,13 +548,17 @@ const IMPL_OWNER_MODULES: &[&str] = &[
 /// Document-side files that still name `compositor::`. Remove each entry in
 /// the commit that removes its last use.
 const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
-    // Still name the concrete cc family and impl-crate types: PageState holds
-    // the CompositorEngine executor/presentation glue and consumes
-    // CompositorMainThreadEffect; main_compositor names MainFamily,
-    // ProxyImplInit, CreateMainHostParams, BeginMainFrameState and
-    // ImplToMainTask. They clear once the family marker and the main-thread
-    // effect vocabulary move to value roots (with viz_common) and the
-    // presentation glue moves into the impl-owner modules.
+    // Still name the concrete cc family: MainFamily (and the ProxyImplInit,
+    // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
+    // MainPropertyTreeFeatures instantiated over it) is the impl
+    // CpuCompositorTypes, because CommitTypes / CommitStateTypes name impl
+    // owners (Layer = CompositorLayer, RenderSurface = RenderSurfaceImpl in
+    // the shared PropertyTrees, SwapPromise, MicroBenchmarkImpl,
+    // UIResourceRequest). page.rs also holds the CompositorEngine executor
+    // and presentation glue and consumes CompositorMainThreadEffect. Frame
+    // values already come from viz_common. Clears once those owners leave
+    // CommitTypes for an impl-side family and the glue moves into the
+    // impl-owner modules.
     "crates/browser/src/page.rs",
     "crates/browser/src/page/main_compositor.rs",
 ];

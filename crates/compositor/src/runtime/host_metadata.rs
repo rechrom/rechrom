@@ -253,7 +253,7 @@ impl HostImplDServices<CompositorTypes> for HostMetadataServices {
         _sink: HostImplFrameSinkId,
         _provider: Option<&mut ClientResourceProvider<CompositorTypes>>,
         _caps: &crate::cc::trees::raster_capabilities::RasterCapabilities,
-        _passes: &mut Vec<Box<CompositorRenderPass<CompositorTypes>>>,
+        _passes: &mut Vec<Box<CompositorRenderPass<viz_common::SoftwareFrameValues>>>,
     ) {
         panic!("CPU layer family has no HeadsUpDisplayLayerImpl owner")
     }
@@ -291,7 +291,7 @@ impl HostImplDServices<CompositorTypes> for HostMetadataServices {
         render_metadata: &crate::cc::trees::render_frame_metadata::RenderFrameMetadata<
             CompositorTypes,
         >,
-        metadata: &mut super::metadata::CompositorFrameMetadata<CompositorTypes>,
+        metadata: &mut super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>,
         force: bool,
     ) {
         observer.ObserveRenderFrameSubmission(render_metadata, metadata, force)

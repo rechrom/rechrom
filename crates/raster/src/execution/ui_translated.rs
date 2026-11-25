@@ -1,15 +1,9 @@
 //! UI resource drawing through the translated SkCanvas backend. HostImpl owns
 //! sizing and lifecycle policy; this module owns concrete image/surface values.
 use super::*;
-use compositor::{
-    adapter::layer_tree_host_impl::{
-        HostUICanvas, HostUIPixmap, HostUISharedImageUsage, HostUISourceBitmap, HostUISurface,
-    },
-    runtime::{
-        host_resources::{SourceBitmap, UICanvas, UIImage, UIImageInfo, UISurface, UiImage},
-        resources::RasterColorSpace,
-        ui::UiRasterServices,
-    },
+use cc_raster::ui_resource::{
+    HostUICanvas, HostUIPixmap, HostUISharedImageUsage, HostUISourceBitmap, HostUISurface,
+    SourceBitmap, UICanvas, UIImage, UIImageInfo, UISurface, UiImage, UiRasterServices,
 };
 use skia::{
     include::core::SkSamplingOptions::SkSamplingOptions,
