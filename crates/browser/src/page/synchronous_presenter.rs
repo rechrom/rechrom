@@ -7,7 +7,10 @@
 //! by the in-process Proxy queues, which this presenter drains after each
 //! call (decision D1; cc's SingleThreadProxy::CompositeImmediately shape).
 use super::*;
-use compositor::CompositorInput;
+use compositor::{
+    CompositorEngine, CompositorFrameSubmission, CompositorInput, CompositorOutput,
+    CompositorViewportState,
+};
 
 pub(super) struct SynchronousPresenter {
     compositor: CompositorEngine,

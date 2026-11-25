@@ -4,7 +4,34 @@
 //! Chromium performs them in InputRouter (ui::ScaleWebInputEvent) and
 //! InputHandlerProxy before cc's InputHandler sees the event.
 use super::*;
-use compositor::CompositorInput;
+use compositor::{CompositorConfig, CompositorExecutor, CompositorInput};
+
+/// The move-only frame an impl owner presents (CompositorEngine output).
+pub type PageCompositorFrame = compositor::CompositorFrameSubmission;
+
+/// The impl half's injected task runner and clock (LayerTreeHostImpl's
+/// TaskRunnerProvider, cc/trees/layer_tree_host_impl.cc Create) over the
+/// Page's executor and its TimeTicks domain.
+impl CompositorExecutor for PageCompositorExecutor {
+    fn Now(&self) -> CompositorTimeTicks {
+        PageCompositorExecutor::Now(self)
+    }
+
+    fn Execute(&self, task: Box<dyn FnOnce() + Send>) {
+        PageCompositorExecutor::Execute(self, task)
+    }
+
+    fn ExecuteAfter(&self, delay: CompositorTimeDelta, task: Box<dyn FnOnce() + Send>) {
+        let delay = delay.InMicroseconds().max(0) as u64;
+        let _ = self
+            .executor
+            .execute_after(std::time::Duration::from_micros(delay), task);
+    }
+
+    fn RunsTasksInCurrentSequence(&self) -> bool {
+        std::thread::current().id() == self.sequence
+    }
+}
 
 /// The InputHandlerProxy call of an input-queue message, made by the impl
 /// owner when the compositor task runner runs it (InputHandlerProxy::
