@@ -443,7 +443,8 @@ These apply to every boundary above.
   root-to-engine edges; a type needed further down moves to a value root.
 - **Neighbours only.** A request for a stage further away goes through the
   neighbour's channel (the Proxy queue or the input queue), never a direct
-  call.
+  call. Post at the point Chromium posts, on one ordered task runner per
+  target thread; never buffer or batch where Chromium does not.
 - **Live data, no copies.** Pass the live owner, as the paint property nodes
   are passed: borrow it (`&`, `&mut`, a lease) or share the existing `Arc`.
   Across threads, move it. No snapshots, frozen or immutable result copies,
