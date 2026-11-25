@@ -61,7 +61,7 @@ struct PendingDraw {
 /// Paint contract carries only that semantic operation.
 struct TranslatedFilterMapTransform<'a>(&'a SkMatrix);
 
-impl paint::cc::paint::filter_operation::FilterMapTransform for TranslatedFilterMapTransform<'_> {
+impl paint_model::cc::paint::filter_operation::FilterMapTransform for TranslatedFilterMapTransform<'_> {
     fn MapVector(&self, x: f32, y: f32) -> (f32, f32) {
         let mapped = self.0.mapVector(SkPoint::make(x, y));
         (mapped.x(), mapped.y())
@@ -1755,7 +1755,7 @@ impl TranslatedSoftwareRenderer {
     /// Foreground filters render into their expanded forward bounds before
     /// opacity, masks and the render-pass blend are applied by the parent.
     fn ApplyImageFilter(
-        filters: &paint::cc::paint::filter_operations::FilterOperations,
+        filters: &paint_model::cc::paint::filter_operations::FilterOperations,
         source: Option<&PassBacking>,
         local: &SkMatrix,
         quad: Rect,
@@ -1831,7 +1831,7 @@ impl TranslatedSoftwareRenderer {
     }
 
     fn ShouldApplyBackdropFilters(
-        filters: &paint::cc::paint::filter_operations::FilterOperations,
+        filters: &paint_model::cc::paint::filter_operations::FilterOperations,
         opacity: f32,
     ) -> bool {
         !filters.IsEmpty() && opacity != 0.
@@ -1839,7 +1839,7 @@ impl TranslatedSoftwareRenderer {
 
     /// Source: components/viz/service/display/software_renderer.cc:842-872.
     fn ApplyBackdropFilterWithExactOutputSize(
-        filters: &paint::cc::paint::filter_operations::FilterOperations,
+        filters: &paint_model::cc::paint::filter_operations::FilterOperations,
         source: &PassBacking,
         local: &SkMatrix,
         output: Rect,
@@ -1986,7 +1986,7 @@ impl TranslatedSoftwareRenderer {
     fn DrawBackdropFilter(
         target: &mut RasterTarget<'_>,
         update: &mut RenderUpdate,
-        filters: &paint::cc::paint::filter_operations::FilterOperations,
+        filters: &paint_model::cc::paint::filter_operations::FilterOperations,
         bounds: Option<&SkPath>,
         filter_matrix: &SkMatrix,
         visible: Rect,

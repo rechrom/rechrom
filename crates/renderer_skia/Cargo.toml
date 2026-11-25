@@ -10,7 +10,7 @@ bytemuck = "1.24"
 compositor = { path = "../compositor" }
 foundation = { path = "../foundation" }
 skia = { path = "../skia" }
-paint = { path = "../paint" }
+paint_model = { path = "../paint/paint_model" }
 viz = { path = "../viz" }
 raster = { path = "../raster" }
 
