@@ -21,10 +21,7 @@ use super::{
     layer_value_backend::MainLayerCopyOutputRequest,
     main_callbacks::{MainViewTransitionRequest, TaskRunner},
     main_effects::LocalSurfaceId,
-    property_tree_services::PropertyTreeFeatures,
     values::{UIResourceId, UIResourceRequestType},
-    viewport_property_ids::ViewportPropertyIds,
-    PropertyTreesFor,
     paint::{CpuFilterQuality, DynamicRangeLimit, NodeId},
     push_properties::PushPropertiesTypes,
     skia_value_backend::{MainSkiaBackend, PaintSkiaBackend},
@@ -95,17 +92,4 @@ pub trait LayerizeFamily:
     fn EmptyUIResourceBitmap() -> Self::UIResourceBitmap {
         Self::CreateUIResourceBitmap(Size::default(), Vec::new(), 0, false)
     }
-
-    /// Source: cc/trees/draw_property_utils.cc:1590-1605, the
-    /// UpdatePropertyTrees step of LayerTreeHost::DoUpdateLayers
-    /// (layer_tree_host.cc:1093-1125) over the main PropertyTrees. The
-    /// translated draw_property_utils is shared with the impl draw path and
-    /// stays in the compositor until it is classified (S4); this hook runs it
-    /// with the canonical CPU draw-context type family, constructing or
-    /// querying no impl tree, layer or host.
-    fn UpdateMainPropertyTrees(
-        trees: &mut PropertyTreesFor<Self>,
-        ids: &ViewportPropertyIds,
-        features: &dyn PropertyTreeFeatures,
-    );
 }

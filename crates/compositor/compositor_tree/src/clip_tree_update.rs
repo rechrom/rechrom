@@ -1,4 +1,5 @@
-//! Ordered retained clip-tree cache updates.
+//! Ordered retained clip-tree cache updates (cc/trees/draw_property_utils.cc
+//! ComputeClips), shared by the main and impl property-tree updates.
 
 pub trait ClipTreeUpdateContext {
     fn needs_update(&self) -> bool;
@@ -24,7 +25,7 @@ pub fn UpdateClipTree<C: ClipTreeUpdateContext>(context: &mut C) -> ClipTreeUpda
     if !context.needs_update() {
         return ClipTreeUpdateStats::default();
     }
-    let mut trace = browser_tracing::span("compositor.tree_sync", "Compositor.TreeSync.UpdateClips");
+    let mut trace = browser_tracing::span("compositor.tree", "Compositor.Tree.UpdateClips");
     let first = context.first_node_id();
     let end = context.node_count();
     let mut stats = ClipTreeUpdateStats {

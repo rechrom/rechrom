@@ -8,7 +8,6 @@
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
 pub mod activation;
-pub mod clip_tree_update;
 pub mod commit_properties;
 pub mod commit_sync;
 pub mod layer_collections;

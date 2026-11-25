@@ -6,6 +6,7 @@
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
 pub mod clip_node;
+pub mod clip_tree_update;
 pub mod commit_types;
 pub mod damage_reason;
 pub mod effect_node;

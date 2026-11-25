@@ -2181,9 +2181,7 @@ impl<B: LayerTreeTypes> compositor_draw::occlusion_walk::OcclusionWalkContext
                 .property_trees_
                 .effect_tree()
                 .Node(DrawSurface::EffectTreeIndex(surface));
-            crate::cc::trees::draw_property_utils::ConcatInverseSurfaceContentsScale::<
-                B::DrawContext<'_>,
-            >(node, &mut transform);
+            crate::cc::trees::draw_property_utils::ConcatInverseSurfaceContentsScale(node, &mut transform);
             crate::adapter::property_tree::PropertyTreeTransform::PostTranslate(
                 &mut transform,
                 DrawSurface::pixel_alignment_offset(target),

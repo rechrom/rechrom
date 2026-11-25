@@ -579,9 +579,13 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
 
         // Source: cc/trees/layer_tree_host.cc:1093-1125 ->
         // draw_property_utils::UpdatePropertyTrees (draw_property_utils.cc:
-        // 1590-1605), run by the family over the main PropertyTrees.
+        // 1590-1605) over the main PropertyTrees.
         let ids = self.pending.viewport_property_ids;
-        F::UpdateMainPropertyTrees(&mut self.property_trees, &ids, features);
+        crate::commit::draw_property_utils::UpdatePropertyTrees(
+            &mut self.property_trees,
+            &ids,
+            features,
+        );
         let root = self
             .unsafe_state
             .root_layer

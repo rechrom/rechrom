@@ -70,33 +70,6 @@ impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
         use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
         bitmap.GetSize()
     }
-    // Source draw_property_utils.cc:1590-1605. The runtime DrawContext type
-    // is used only as the canonical CPU type family for ComputeClips; no
-    // impl-side tree, layer, or host object is constructed or queried.
-    // Moved from the main host's UpdateLayers (layerize runtime/main_host.rs).
-    fn UpdateMainPropertyTrees(
-        trees: &mut PropertyTreesFor<Self>,
-        ids: &crate::cc::trees::viewport_property_ids::ViewportPropertyIds,
-        features: &dyn crate::adapter::property_tree::PropertyTreeFeatures,
-    ) {
-        if trees.transform_tree().needs_update() {
-            trees.clip_tree_mutable().set_needs_update(true);
-            trees.effect_tree_mutable().set_needs_update(true);
-        }
-        {
-            let (tree, mut context) = trees.transform_tree_with_context();
-            crate::cc::trees::draw_property_utils::ComputeTransforms(tree, ids, &mut context);
-        }
-        {
-            let (tree, mut context) = trees.effect_tree_with_context(features);
-            crate::cc::trees::draw_property_utils::ComputeEffects::<
-                super::draw::DrawContext<'_, Self>,
-            >(tree, &mut context);
-        }
-        crate::cc::trees::draw_property_utils::ComputeClips::<super::draw::DrawContext<'_, Self>>(
-            trees,
-        );
-    }
 }
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
     type Transform = Transform<R>;
