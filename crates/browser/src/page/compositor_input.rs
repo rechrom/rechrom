@@ -36,8 +36,7 @@ impl CompositorExecutor for PageCompositorExecutor {
 /// The InputHandlerProxy call of an input-queue message, made by the impl
 /// owner when the compositor task runner runs it (InputHandlerProxy::
 /// ContinueScrollBeginAfterMainThreadHitTest, the wheel DOM
-/// acknowledgement, the injected scrollbar gesture,
-/// LayerTreeHostImpl::StartPageScaleAnimation).
+/// acknowledgement, the injected scrollbar gesture).
 pub fn ImplInput(input: InputToImpl) -> CompositorInput {
     match input {
         InputToImpl::ScrollbarGesture {
@@ -66,17 +65,6 @@ pub fn ImplInput(input: InputToImpl) -> CompositorInput {
         } => CompositorInput::ContinueWheelScroll {
             request,
             scroll_element_id,
-        },
-        InputToImpl::StartPageScaleAnimation {
-            target,
-            use_anchor,
-            scale,
-            duration,
-        } => CompositorInput::StartPageScaleAnimation {
-            target,
-            use_anchor,
-            scale,
-            duration,
         },
     }
 }

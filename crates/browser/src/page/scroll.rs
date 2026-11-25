@@ -10,9 +10,13 @@ impl PageState {
     ///
     /// Interaction has already selected the ScrollableArea and applied the
     /// local-root input scale. The generated event retains that opaque scroll
-    /// identity and enters the same sequenced compositor ingress as wheel
-    /// continuations. The queue is drained after synchronous input dispatch;
-    /// neither this callback nor a scrollbar timer mutates DOM scroll offsets.
+    /// identity and is posted at once to the compositor thread's task runner
+    /// (WidgetInputHandlerManager::DispatchScrollGestureToCompositor,
+    /// widget_input_handler_manager.cc:626-638), whose input handler
+    /// (HandleInputEventWithLatencyOnInputHandlingThread, cc:640-647) runs
+    /// it; neither this callback nor a scrollbar timer mutates DOM scroll
+    /// offsets. With single-thread compositing the in-process runner runs it
+    /// as a main-thread task (cc:1257-1258).
     pub(super) fn InjectScrollbarGesture(
         &self,
         request: interaction::scroll::core::scroll::scrollbar::ScrollbarGesture,
@@ -80,15 +84,13 @@ impl PageState {
             SourceGranularity::kScrollByPage => ScrollGranularity::kScrollByPage,
             SourceGranularity::kScrollByDocument => ScrollGranularity::kScrollByDocument,
         };
-        self.pending_compositor_mutations
-            .borrow_mut()
-            .push(PageBrowserInput::ImplInput(InputToImpl::ScrollbarGesture {
-                scroll_element_id: ElementId::new(element),
-                delta,
-                granularity,
-                event_timestamp: timestamp,
-                phase,
-            }));
+        self.PostCompositorTask(CompositorThreadTask::ImplInput(InputToImpl::ScrollbarGesture {
+            scroll_element_id: ElementId::new(element),
+            delta,
+            granularity,
+            event_timestamp: timestamp,
+            phase,
+        }));
         Ok(())
     }
 }
@@ -754,17 +756,14 @@ impl Page {
         }
         Ok(())
     }
-    /// Posts `input` to the impl input handler. The external runtime's input
-    /// router moves it to the compositor thread in queue order
-    /// (WidgetInputHandlerManager posting to InputHandlerProxy); the
-    /// synchronous presenter runs it here, where its compositor task runner
-    /// would.
+    /// Posts `input` to the impl input handler on the compositor thread's
+    /// task runner at once (WidgetInputHandlerManager::FindScrollTargetReply
+    /// and DidHandleInputEventSentToMain, widget_input_handler_manager.cc:
+    /// 504-520,1171-1230); the synchronous presenter runs it here, where its
+    /// compositor task runner would.
     pub(super) fn RouteImplInput(&mut self, input: InputToImpl) -> io::Result<()> {
         if self.external_compositor {
-            self.state
-                .pending_compositor_mutations
-                .borrow_mut()
-                .push(PageBrowserInput::ImplInput(input));
+            self.state.PostCompositorTask(CompositorThreadTask::ImplInput(input));
             return Ok(());
         }
         let result = self.state.ContinueImplInput(input)?;
@@ -779,28 +778,27 @@ impl Page {
         compositor_input::ValidateGestureCompositorInput(gesture)?;
         if self.external_compositor {
             self.state
-                .pending_compositor_mutations
-                .borrow_mut()
-                .push(PageBrowserInput::GestureScroll(gesture.clone()));
+                .PostCompositorTask(CompositorThreadTask::GestureScroll(gesture.clone()));
             return Ok(());
         }
         let result = self.state.ContinueGestureScroll(gesture)?;
         self.FinishSynchronousContinuation(result)
     }
-    /// A LayerTreeHost setter on this Page's own main half. The external
-    /// runtime applies it after the transaction
-    /// (`ApplyPendingMainCompositorMutations`); the synchronous presenter
-    /// applies it now and runs the Proxy tasks it posted.
+    /// A LayerTreeHost setter on this Page's own main half, applied at the
+    /// call as Blink calls LayerTreeHost (web_frame_widget_impl.cc:1738-1744,
+    /// 2220-2232). ProxyMain posts what it needs to the compositor thread
+    /// itself; the synchronous presenter also runs the Proxy tasks it posted.
     pub(super) fn RouteMainCompositorMutation(
         &mut self,
         mutation: main_compositor::MainCompositorMutation,
     ) -> io::Result<()> {
         if self.external_compositor {
-            self.state
-                .pending_main_compositor_mutations
-                .borrow_mut()
-                .push(mutation);
-            return Ok(());
+            if !self.state.HasMainCompositor() {
+                return Err(io::Error::other("external compositor is not started"));
+            }
+            self.state.MutateMainCompositor(mutation)?;
+            let effects = self.state.TakeMainCompositorEffects();
+            return self.ApplyCompositorWheelEffects(effects);
         }
         let result = self.state.ContinueMainCompositorMutation(mutation)?;
         self.FinishSynchronousContinuation(result)
@@ -821,8 +819,7 @@ impl Page {
     /// internal presenter runs the in-process Proxy tasks they posted and
     /// the Page applies the main-half effects, in the continuations'
     /// order. The external runtime's ProxyMain posts to the compositor thread
-    /// itself; its effects are taken after the lifecycle
-    /// (`ApplyPendingMainCompositorMutations`).
+    /// itself.
     pub(super) fn DidMutateMainCompositor(&mut self) -> io::Result<()> {
         if self.external_compositor {
             return Ok(());
@@ -830,7 +827,11 @@ impl Page {
         let effects = self.state.DidMutateMainCompositor()?;
         self.ApplyCompositorWheelEffects(effects)
     }
-    pub fn TakePendingBrowserInputs(&self) -> Vec<PageBrowserInput> {
-        std::mem::take(&mut *self.state.pending_compositor_mutations.borrow_mut())
+}
+impl PageDomainServices {
+    /// PostTask on the compositor thread's task runner. A stopped compositor
+    /// thread drops the task, as a deleted task runner does.
+    pub(super) fn PostCompositorTask(&self, task: CompositorThreadTask) {
+        let _ = self.compositor_task_runner.borrow().PostTask(task);
     }
 }

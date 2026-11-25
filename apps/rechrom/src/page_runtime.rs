@@ -291,7 +291,10 @@ pub(crate) enum ImplCommand {
         queued_at: Instant,
         samples: usize,
     },
-    InputContinuation(compositor::CompositorMutation),
+    /// A document-thread request for the impl input handler
+    /// (`CompositorThreadTask::ImplInput` / `GestureScroll`), converted to
+    /// its InputHandlerProxy call when this runner runs it.
+    InputHandler(browser::page::CompositorThreadTask),
     Reclaim(Vec<PageReturnedResource>),
     Stop,
 }
@@ -1888,8 +1891,18 @@ fn run_impl(
                 }
                 let _ = presentation.flush_frames()?;
             }
-            ImplCommand::InputContinuation(input) => {
-                let result = presentation.continue_compositor_mutation(input)?;
+            ImplCommand::InputHandler(task) => {
+                let input = match task {
+                    browser::page::CompositorThreadTask::ImplInput(input) => {
+                        browser::page::ImplInput(input)
+                    }
+                    browser::page::CompositorThreadTask::GestureScroll(gesture) => {
+                        browser::page::GestureCompositorInput(&gesture)?
+                    }
+                    _ => unreachable!("input-handler task"),
+                };
+                let result = presentation
+                    .continue_compositor_mutation(compositor::CompositorMutation::Input(input))?;
                 assert!(
                     result.dom_ack.is_none(),
                     "source continuation cannot redispatch its DOM wheel"
@@ -2592,7 +2605,29 @@ fn run_document(
                 })
         }))
     };
-    page.StartExternalCompositor(viewport.width, viewport.height, viewport.scale, to_impl)?;
+    // The document thread's posts to this Page's compositor thread: the
+    // input-queue tasks enter the same ordered queue as ProxyMain's, at the
+    // point Blink posts them (WidgetInputHandlerManager posting to the
+    // compositor thread's default task runner, which LayerTreeHost was
+    // created with: widget_base.cc:239-245, widget_input_handler_manager.cc:
+    // 1250-1260).
+    let compositor_task_runner = {
+        let sender = Mutex::new(impl_sender.clone());
+        browser::page::CompositorTaskRunner::Posting(Arc::new(move |task| {
+            sender
+                .lock()
+                .unwrap()
+                .send(CompositorThreadCommand(task))
+                .map_err(|mpsc::SendError(command)| CompositorThreadTaskOf(command))
+        }))
+    };
+    page.StartExternalCompositor(
+        viewport.width,
+        viewport.height,
+        viewport.scale,
+        to_impl,
+        compositor_task_runner,
+    )?;
     *source.animate.lock().unwrap() = page.CompositorAnimateRequests();
     page.SetBeginFrameSource(Some(source.clone()));
     // LayerTreeHost's first commit request.
@@ -2762,7 +2797,6 @@ fn run_document(
                         }
                     },
                 )?;
-                send_page_compositor_continuations(&mut page, &impl_sender)?;
                 let committed = matches!(
                     result,
                     browser::page::MainFrameResult::ReadyToCommit { .. }
@@ -3091,7 +3125,6 @@ fn run_document(
                 let _ = reply.send(result);
             }
         }
-        send_page_compositor_continuations(&mut page, &impl_sender)?;
         let count = patches.len();
         for _ in 0..count {
             let (revision, patch) = patches.pop_front().unwrap();
@@ -3115,18 +3148,6 @@ fn run_document(
             // commit. This is the Page-backed equivalent of Chromium's
             // browser-UI commit acknowledgement.
             source.request_begin_frame();
-        }
-        // MainThreadEventQueue owns the original and coalesced callbacks.
-        // Publish their completed ACKs in order without waiting on the host.
-        for disposition in page.TakeBrowserGestureDispositions() {
-            let _ = impl_sender.send(ImplCommand::GestureAck {
-                dispatch_id: disposition.dispatch_id,
-                result: if disposition.consumed {
-                    InputEventResultState::kConsumed
-                } else {
-                    InputEventResultState::kNotConsumed
-                },
-            });
         }
         for disposition in page.TakeTouchDispositions() {
             (params.events)(
@@ -3257,51 +3278,62 @@ fn run_document(
     }
     Ok(())
 }
-fn send_page_compositor_continuations(
-    page: &mut Page,
-    impl_sender: &mpsc::Sender<ImplCommand>,
-) -> io::Result<()> {
-    // WidgetInputHandlerManager.cc:505-520 posts its completed main-thread
-    // hit test back to the input owner. WebFrameWidgetImpl.cc:4353-4355 posts
-    // injected scrollbar gestures to that same sequenced ingress. Preserve
-    // wheel acknowledgements and all Page-produced continuations in FIFO order
-    // after the synchronous document transaction completes. Main-thread
-    // compositor mutations (LayerTreeHost setters, deferrals) apply to the
-    // main half on this thread; PAC direct updates and the main
-    // AnimationHost are called synchronously by the Page itself.
-    page.ApplyPendingMainCompositorMutations()?;
-    for disposition in page.TakeWheelDispositions()? {
-        let _ = impl_sender.send(ImplCommand::WheelAck {
-            document_generation: disposition.document_generation,
-            result: disposition.result,
-        });
-    }
-    for input in page.TakePendingBrowserInputs() {
-        let command = match input {
-            browser::page::PageBrowserInput::DocumentDetached { generation } => {
-                ImplCommand::DocumentDetached { generation }
-            }
-            // The input queue: each message moves to the impl runner, which
-            // makes its InputHandlerProxy call in posting order.
-            browser::page::PageBrowserInput::ImplInput(input) => ImplCommand::InputContinuation(
-                compositor::CompositorMutation::Input(browser::page::ImplInput(input)),
-            ),
-            browser::page::PageBrowserInput::GestureScroll(gesture) => {
-                ImplCommand::InputContinuation(compositor::CompositorMutation::Input(
-                    browser::page::GestureCompositorInput(&gesture)?,
-                ))
-            }
-            browser::page::PageBrowserInput::Gesture(gesture) => ImplCommand::Gesture {
-                gesture,
-                queued_at: Instant::now(),
-                samples: 1,
+/// A document-thread post to the compositor thread as this runner's command.
+#[allow(non_snake_case)]
+fn CompositorThreadCommand(task: browser::page::CompositorThreadTask) -> ImplCommand {
+    use browser::page::CompositorThreadTask as Task;
+    match task {
+        Task::DocumentDetached { generation } => ImplCommand::DocumentDetached { generation },
+        task @ (Task::ImplInput(_) | Task::GestureScroll(_)) => ImplCommand::InputHandler(task),
+        Task::Gesture(gesture) => ImplCommand::Gesture {
+            gesture,
+            queued_at: Instant::now(),
+            samples: 1,
+        },
+        Task::WheelEventAck {
+            document_generation,
+            result,
+        } => ImplCommand::WheelAck {
+            document_generation,
+            result,
+        },
+        Task::GestureEventAck {
+            dispatch_id,
+            consumed,
+        } => ImplCommand::GestureAck {
+            dispatch_id,
+            result: if consumed {
+                InputEventResultState::kConsumed
+            } else {
+                InputEventResultState::kNotConsumed
             },
-        };
-        impl_sender
-            .send(command)
-            .map_err(|_| io::Error::other("Page input executor stopped"))?;
+        },
     }
-    Ok(())
+}
+/// The task of a command the stopped compositor thread handed back.
+#[allow(non_snake_case)]
+fn CompositorThreadTaskOf(command: ImplCommand) -> browser::page::CompositorThreadTask {
+    use browser::page::CompositorThreadTask as Task;
+    match command {
+        ImplCommand::DocumentDetached { generation } => Task::DocumentDetached { generation },
+        ImplCommand::InputHandler(task) => task,
+        ImplCommand::Gesture { gesture, .. } => Task::Gesture(gesture),
+        ImplCommand::WheelAck {
+            document_generation,
+            result,
+        } => Task::WheelEventAck {
+            document_generation,
+            result,
+        },
+        ImplCommand::GestureAck {
+            dispatch_id,
+            result,
+        } => Task::GestureEventAck {
+            dispatch_id,
+            consumed: result == InputEventResultState::kConsumed,
+        },
+        _ => unreachable!("posted compositor-thread task"),
+    }
 }
 fn send_event_timing_requests(
     page: &Page,

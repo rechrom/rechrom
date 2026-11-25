@@ -153,12 +153,6 @@ pub enum CompositorInput {
         minimum: f32,
         maximum: f32,
     },
-    StartPageScaleAnimation {
-        target: crate::adapter::geometry::Point,
-        use_anchor: bool,
-        scale: f32,
-        duration: crate::adapter::time::TimeDelta,
-    },
     ScrollGesture(CompositorScrollGesture),
     PinchGesture {
         dispatch_id: u64,

@@ -528,6 +528,26 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
         self.SetPropertyTreesNeedRebuild();
         self.SetNeedsCommit();
     }
+    // Source: cc/trees/layer_tree_host.cc:1627-1636. The animation rides the
+    // next commit (CommitState::pending_page_scale_animation, pulled by
+    // LayerTreeImpl::PullPropertiesFrom, layer_tree_impl.cc:919-921).
+    pub fn StartPageScaleAnimation(
+        &mut self,
+        target_offset: compositor_tree::input_geometry::Point,
+        use_anchor: bool,
+        scale: f32,
+        duration: scroll_animation::TimeDelta,
+    ) {
+        self.pending.pending_page_scale_animation = Some(Box::new(
+            crate::commit::page_scale_animation::PendingPageScaleAnimation::new(
+                &target_offset,
+                use_anchor,
+                scale,
+                &duration,
+            ),
+        ));
+        self.SetNeedsCommit();
+    }
 
     // Source: cc/trees/layer_tree_host.cc:1719-1771.
     fn SetLocalSurfaceIdFromParent(&mut self, id: LocalSurfaceId) {

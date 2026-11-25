@@ -14,20 +14,11 @@ pub(super) fn ResetRootDocumentInputForCommit(state: &Rc<PageState>) {
         .document_input_queue
         .get()
         .map(|inputs| inputs.ResetGestureDetectionForDocumentCommit());
-    // Preserve already completed compositor acknowledgements in FIFO
-    // order. Unsent gestures still belong to the detached document and
-    // must never be forwarded through the replacement client's binder.
-    {
-        let mut pending = state.pending_compositor_mutations.borrow_mut();
-        pending.retain(|input| matches!(
-            input,
-            super::PageBrowserInput::ImplInput(_) | super::PageBrowserInput::GestureScroll(_)
-        ));
-        if let Some(generation) =
-            input_generation.filter(|_| state.external_presentation.get())
-        {
-            pending.push(super::PageBrowserInput::DocumentDetached { generation });
-        }
+    // Posted behind every earlier compositor-thread task of the old
+    // document; the input router stamps the gestures it forwards with the
+    // old generation, which the replacement document discards.
+    if let Some(generation) = input_generation.filter(|_| state.external_presentation.get()) {
+        state.PostCompositorTask(super::CompositorThreadTask::DocumentDetached { generation });
     }
 }
 
@@ -464,22 +455,6 @@ impl OpenDocumentAdapter for PageOpenAdapter<'_> {
                 .GetDocument()
                 .SetLifecycleActive(false);
         }
-        state.pending_compositor_mutations.borrow_mut().extend(
-            previous
-                .pending_compositor_mutations
-                .borrow_mut()
-                .drain(..)
-                .filter(|input| matches!(
-            input,
-            super::PageBrowserInput::ImplInput(_) | super::PageBrowserInput::GestureScroll(_)
-        )),
-        );
-        state.pending_main_compositor_mutations.borrow_mut().extend(
-            previous
-                .pending_main_compositor_mutations
-                .borrow_mut()
-                .drain(..),
-        );
         let resources = CreateRootDocumentResources(&state, resource_engine);
         ResetRootDocumentInputForCommit(&state);
         let script_client: Rc<RefCell<dyn ScriptLoadClient>> = Rc::new(RefCell::new(ScriptClient(

@@ -36,19 +36,6 @@ impl Page {
     pub fn InputDocumentGeneration(&self) -> u64 {
         self.begin_frame.inputs.InputDocumentGeneration()
     }
-    pub fn TakeWheelDispositions(
-        &mut self,
-    ) -> io::Result<Vec<interaction::frame_aligned_input_queue::WheelDisposition>> {
-        let dispositions = self.begin_frame.inputs.TakeWheelDispositions();
-        for disposition in &dispositions {
-            for &request in &disposition.requests {
-                self.RouteImplInput(InputToImpl::WheelDOMAcknowledgement{
-                    request,default_prevented:disposition.result==interaction::input::public::mojom::input::input_event_result::InputEventResultState::kConsumed,
-                })?;
-            }
-        }
-        Ok(dispositions)
-    }
     pub fn DiscardWheelForDetachedDocument(
         &mut self,
         wheel: &interaction::input_event::WheelEvent,
@@ -172,11 +159,6 @@ impl Page {
             1,
             Some(dispatch_id),
         )
-    }
-    pub fn TakeBrowserGestureDispositions(
-        &self,
-    ) -> Vec<interaction::frame_aligned_input_queue::BrowserGestureDisposition> {
-        self.begin_frame.inputs.TakeBrowserGestureDispositions()
     }
     fn QueueFrameInputWithPacket(
         &mut self,
