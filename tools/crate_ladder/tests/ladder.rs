@@ -548,13 +548,17 @@ const IMPL_OWNER_MODULES: &[&str] = &[
 /// Document-side files that still name `compositor::`. Remove each entry in
 /// the commit that removes its last use.
 const PAGE_COMPOSITOR_ALLOWED: &[&str] = &[
-    // Still name the concrete cc family and impl-crate types: PageState holds
-    // the CompositorEngine executor/presentation glue and consumes
-    // CompositorMainThreadEffect; main_compositor names MainFamily,
-    // ProxyImplInit, CreateMainHostParams, BeginMainFrameState and
-    // ImplToMainTask. They clear once the family marker and the main-thread
-    // effect vocabulary move to value roots (with viz_common) and the
-    // presentation glue moves into the impl-owner modules.
+    // Still name the concrete cc family: MainFamily (and the ProxyImplInit,
+    // BeginMainFrameState, ImplToMainTask, CreateMainHostParams and
+    // MainPropertyTreeFeatures instantiated over it) is the impl
+    // CpuCompositorTypes, because CommitTypes / CommitStateTypes name impl
+    // owners (Layer = CompositorLayer, RenderSurface = RenderSurfaceImpl in
+    // the shared PropertyTrees, SwapPromise, MicroBenchmarkImpl,
+    // UIResourceRequest). page.rs also holds the CompositorEngine executor
+    // and presentation glue and consumes CompositorMainThreadEffect. Frame
+    // values already come from viz_common. Clears once those owners leave
+    // CommitTypes for an impl-side family and the glue moves into the
+    // impl-owner modules.
     "crates/browser/src/page.rs",
     "crates/browser/src/page/main_compositor.rs",
 ];

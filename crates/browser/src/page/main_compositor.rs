@@ -573,7 +573,7 @@ impl PageDomainServices {
         &self,
         artifact: Arc<paint::PaintArtifact>,
         state: &paint::paint_property_tree::PropertyTreeState,
-    ) -> Option<compositor::engine::ImmutablePaintRecord> {
+    ) -> Option<cc_paint::CpuPaintRecord<cc_paint::skia_region::SkRegion>> {
         Some(
             self.layerize
                 .get()?
@@ -814,7 +814,7 @@ impl MainFrameClient<compositor::MainFamily> for LifecycleClient<'_> {
     fn Now(&self) -> scroll_animation::TimeTicks {
         self.now.Now()
     }
-    fn UpdateRendering(&mut self, _args: &compositor::adapter::begin_frame::BeginFrameArgs) {
+    fn UpdateRendering(&mut self, _args: &compositor_values::begin_frame::BeginFrameArgs) {
         // The PAC scroll callbacks of ApplyCompositorChanges run before the
         // lifecycle (cc::ScrollCallbacks are synchronous in Chromium).
         let effects = std::mem::take(&mut self.effects.effects);
@@ -831,7 +831,7 @@ impl PageDomainServices {
     fn BuildVideoChildFrame(
         &self,
         video: &image_resource::VideoFrameResource,
-    ) -> io::Result<compositor::CompositorFrame> {
+    ) -> io::Result<viz_common::CompositorFrame> {
         let resource = self
             .raster_engine
             .CreateImmutableVideoTransferableResource(video)?;
@@ -840,8 +840,8 @@ impl PageDomainServices {
         let height = i32::try_from(video.height)
             .map_err(|_| io::Error::other("video frame height overflow"))?;
         let rect = CompositorRect::new(0, 0, width, height);
-        let mut pass = compositor::CompositorRenderPass::new(1);
-        pass.id = compositor::runtime::frame::RenderPassId(1);
+        let mut pass = viz_common::CompositorRenderPass::new(1);
+        pass.id = viz_common::draw_quad::RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = rect;
         pass.has_damage_from_contributing_content = true;
@@ -868,7 +868,7 @@ impl PageDomainServices {
             true,
             true,
         );
-        let mut frame = compositor::CompositorFrame::default();
+        let mut frame = viz_common::CompositorFrame::default();
         let token = self.video_frame_token.get().wrapping_add(1).max(1);
         self.video_frame_token.set(token);
         frame.metadata.device_scale_factor = 1.0;

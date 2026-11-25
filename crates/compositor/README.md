@@ -30,8 +30,13 @@ Package classes (guarded by `crates/layerize/tests/layerize_boundary.rs`):
   input handler), `cc_paint` (cc/paint: PaintRecord, DisplayItemList, image
   and worklet values, cc/base/rtree and the SkRegion/SkPath value backend;
   `layerize::commit::paint` re-exports it; records are built from the
-  PaintArtifact on the producer side). They depend
-  only on each other and on value crates; Layerize and crates outside this family may use them.
+  PaintArtifact on the producer side), `cc_raster` (cc/raster:
+  RasterSource, RasterBuffer / RasterBufferProvider and
+  `CompositorRasterProvider`, the UI-resource raster capability; the
+  `raster` service implements them). They depend
+  only on each other and on value crates (including `viz_common`, the
+  components/viz/common frame values under `crates/viz/`); Layerize and
+  crates outside this family may use them.
 - impl packages: every other package here. Only the `compositor` facade and
   other impl packages may depend on them.
 
