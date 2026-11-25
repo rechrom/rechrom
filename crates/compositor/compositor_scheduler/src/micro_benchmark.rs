@@ -9,7 +9,3 @@ impl HostHandle for compositor_tree::LayerTreeHostId {
         self.0 == 0
     }
 }
-pub trait MicroBenchmarkImpl<H: HostHandle + ?Sized> {
-    fn IsDone(&self) -> bool;
-    fn DidCompleteCommit(&mut self, host: &mut H);
-}

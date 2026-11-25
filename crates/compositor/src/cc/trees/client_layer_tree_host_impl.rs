@@ -665,8 +665,6 @@ where
             PictureLayer = crate::cc::layers::picture_layer_impl::PictureLayerImpl<B>,
             TileManager = crate::cc::tiles::tile_manager::TileManager<B>,
         >,
-    for<'a> B::MicroBenchmarkImpl:
-        crate::adapter::micro_benchmark::MicroBenchmarkImpl<BenchmarkContext<'a, B>>,
 {
     // Source: cc/trees/client_layer_tree_host_impl.h:48-48.
     // Source: cc/trees/client_layer_tree_host_impl.cc:184-277.

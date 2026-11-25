@@ -4,13 +4,14 @@
 // found in the LICENSE file.
 // Source: cc/benchmarks/micro_benchmark_controller_impl.h:1-40;
 //         cc/benchmarks/micro_benchmark_controller_impl.cc:1-15.
-use crate::adapter::micro_benchmark::{HostHandle, MicroBenchmarkImpl};
+use crate::adapter::micro_benchmark::HostHandle;
+use compositor_values::micro_benchmark_impl::{MicroBenchmarkHost, MicroBenchmarkImpl};
 // Source: cc/benchmarks/micro_benchmark_controller_impl.h:18-35.
 // Option<Box<M>> preserves the unique_ptr's moved-from/null representation.
-pub struct MicroBenchmarkControllerImpl<M> {
-    benchmarks_: Vec<Option<Box<M>>>,
+pub struct MicroBenchmarkControllerImpl {
+    benchmarks_: Vec<Option<Box<dyn MicroBenchmarkImpl>>>,
 }
-impl<M> MicroBenchmarkControllerImpl<M> {
+impl MicroBenchmarkControllerImpl {
     // Source: cc/benchmarks/micro_benchmark_controller_impl.cc:17-23.
     // Only the source non-null precondition is checked here. The resident host
     // is borrowed afresh when a benchmark receives DidCompleteCommit.
@@ -21,28 +22,22 @@ impl<M> MicroBenchmarkControllerImpl<M> {
         }
     }
     // Source: cc/benchmarks/micro_benchmark_controller_impl.cc:25-28.
-    pub fn ScheduleRun(&mut self, benchmark: Box<M>) {
+    pub fn ScheduleRun(&mut self, benchmark: Box<dyn MicroBenchmarkImpl>) {
         self.benchmarks_.push(Some(benchmark));
     }
     // Source: cc/benchmarks/micro_benchmark_controller_impl.cc:30-37.
-    pub fn DidCompleteCommit<H: HostHandle + ?Sized>(&mut self, host: &mut H)
-    where
-        M: MicroBenchmarkImpl<H>,
-    {
+    pub fn DidCompleteCommit(&mut self, host: &mut dyn MicroBenchmarkHost) {
         for benchmark in &mut self.benchmarks_ {
             let benchmark = benchmark.as_mut().expect("source nonnull benchmark");
             debug_assert!(!benchmark.IsDone());
             benchmark.DidCompleteCommit(host);
         }
-        self.CleanUpFinishedBenchmarks::<H>();
+        self.CleanUpFinishedBenchmarks();
     }
     // Source: cc/benchmarks/micro_benchmark_controller_impl.cc:39-44.
     // std::erase_if(vector<unique_ptr>) compacts by move assignment, destroying a
     // removed pointee when that slot is overwritten, then erases the trailing range.
-    fn CleanUpFinishedBenchmarks<H: HostHandle + ?Sized>(&mut self)
-    where
-        M: MicroBenchmarkImpl<H>,
-    {
+    fn CleanUpFinishedBenchmarks(&mut self) {
         let Some(mut write) = self
             .benchmarks_
             .iter()

@@ -87,6 +87,10 @@ pub struct BenchmarkContext<'a, B: HostImplTypes> {
     pub task_provider: super::layer_tree_host_impl::HostImplTaskRunnerProviderId,
     pub services: &'a mut dyn HostImplServices<B>,
 }
+impl<B: HostImplTypes> compositor_values::micro_benchmark_impl::MicroBenchmarkHost
+    for BenchmarkContext<'_, B>
+{
+}
 impl<B: HostImplTypes> super::micro_benchmark::HostHandle for BenchmarkContext<'_, B> {
     fn IsNull(&self) -> bool {
         self.owner.0 == 0
