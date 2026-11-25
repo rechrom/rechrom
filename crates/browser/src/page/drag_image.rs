@@ -327,7 +327,12 @@ impl PageMouseFrameGeometry {
                     >,
                 )
                 .ok_or_else(|| io::Error::other("SVG drag image has no exact container record"))?;
-            raster::RasterizeDocumentDragImage(record, natural, scale, 0.75)?
+            raster::RasterizeDocumentDragImage(
+                crate::paint_artifact_raster::DocumentPaintRecord(record),
+                natural,
+                scale,
+                0.75,
+            )?
         } else {
             raster::ResizeAndOrientDragImage(
                 &image,

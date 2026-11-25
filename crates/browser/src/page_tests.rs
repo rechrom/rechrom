@@ -132,7 +132,7 @@ impl PageClient for Client {
             .push(format!("frame\t{}", frame.sequence));
         self.frames
             .borrow_mut()
-            .push(raster::RasterizePaintArtifactTransparent(
+            .push(crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
                 &frame.display_items,
                 160,
                 96,
@@ -357,7 +357,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
                 (document.body.getAttribute('qqcom-theme')==='dark') === {dark})) throw Error('injected preference mismatch');
             "#, !dark), "fixture:color-scheme").unwrap();
             assert!(result.Succeeded(), "{:?}", result.exception);
-            let rgba = raster::RasterizePaintArtifact(
+            let rgba = crate::paint_artifact_raster::RasterizePaintArtifact(
                 &page.CurrentFrame().unwrap().display_items,
                 160,
                 96,
@@ -411,7 +411,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
             .unwrap();
 
         let rgba =
-            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         assert_eq!(
             &rgba[(50 * 160 + 80) * 4..(50 * 160 + 80) * 4 + 4],
             &[32, 33, 36, 255]
@@ -451,7 +451,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
             .unwrap();
 
         let rgba =
-            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         std::fs::write(root.join("rust.rgba"), &rgba).unwrap();
         let expected =
             include_bytes!("../../../artifacts/qq-chromium-parity/font-fixture/chromium.rgba");
@@ -476,7 +476,7 @@ fn image_mipmap_sampling_matches_repository_chromium() {
             .unwrap();
 
         let rgba =
-            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         std::fs::write(root.join("rust.rgba"), &rgba).unwrap();
         let expected =
             include_bytes!("../../../artifacts/qq-chromium-parity/image-fixture/chromium.rgba");
@@ -909,7 +909,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         .unwrap();
         assert_eq!(target, first_pixels);
         let snapshot = page.CurrentFrame().unwrap().fragments.clone();
-        let old_pixels = raster::RasterizePaintArtifactTransparent(
+        let old_pixels = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
             &paint::paint_engine::Paint(&snapshot),
             160,
             96,
@@ -929,7 +929,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         assert!(snapshot.PtrEq(&page.CurrentFrame().unwrap().fragments));
         assert_ne!(
             old_pixels,
-            raster::RasterizePaintArtifactTransparent(
+            crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
                 &paint::paint_engine::Paint(&snapshot),
                 160,
                 96
@@ -1039,7 +1039,7 @@ fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
             .unwrap();
         assert!(result.Succeeded(), "{:?}", result.exception);
         let rgba =
-            raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
         assert_eq!(
             rgba.as_slice(),
             include_bytes!("../../../artifacts/qq-chromium-parity/zoom-fixture/chromium.rgba")
@@ -1903,7 +1903,7 @@ fn profile_qq_loading_stall() {
             for (width, height, scale) in [(1216, 704, 1.0), (2432, 1408, 2.0)] {
                 for iteration in 0..5 {
                     let started = std::time::Instant::now();
-                    let pixels = raster::RasterizePaintArtifactWithScale(
+                    let pixels = crate::paint_artifact_raster::RasterizePaintArtifactWithScale(
                         &frame.display_items,
                         width,
                         height,
@@ -1919,7 +1919,7 @@ fn profile_qq_loading_stall() {
             for iteration in 0..5 {
                 let started = std::time::Instant::now();
                 let pixels =
-                    raster::RasterizePaintArtifactTransparent(&frame.display_items, 1216, 704);
+                    crate::paint_artifact_raster::RasterizePaintArtifactTransparent(&frame.display_items, 1216, 704);
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                 let hash = pixels.iter().fold(0xcbf29ce484222325_u64, |value, &byte| {
                     (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)

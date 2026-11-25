@@ -15,6 +15,10 @@ impl ImageBitmapRasterizer for RasterImageBitmapService {
             paint::paint_engine::DocumentPaintArtifactRecord,
         >(&frame.frame.record)
         .ok_or_else(|| io::Error::other("SVG image producer published an unknown paint record"))?;
-        raster::RasterizeDocumentImageBitmap(record, frame.width, frame.height)
+        raster::RasterizeDocumentImageBitmap(
+            crate::paint_artifact_raster::DocumentPaintRecord(record),
+            frame.width,
+            frame.height,
+        )
     }
 }

@@ -411,7 +411,7 @@ fn placeholder_pseudo_style_reaches_the_raster_output() {
             item.color
         );
 
-        let pixels = raster::RasterizePaintArtifactWithScale(
+        let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(
             &page.CurrentFrame().unwrap().display_items,
             640,
             480,
@@ -454,7 +454,7 @@ fn flexed_toolbar_text_control_value_reaches_raster() {
                     && !item.stroke_glyphs
             })
             .expect("the toolbar control value must produce a foreground glyph run");
-        let pixels = raster::RasterizePaintArtifactWithScale(&frame.display_items, 640, 480, 1.0);
+        let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(&frame.display_items, 640, 480, 1.0);
         let rect = item.glyph_ink_rect.unwrap_or(item.rect);
         let left = rect.x.floor().max(0.0) as usize;
         let top = rect.y.floor().max(0.0) as usize;
@@ -510,7 +510,7 @@ fn paint_only_placeholder_color_change_rejects_the_cached_glyph_run() {
             "the repainted placeholder must use the current custom-property color: {after:?}"
         );
         let red_pixels = |page: &Page| {
-            raster::RasterizePaintArtifactWithScale(
+            browser::paint_artifact_raster::RasterizePaintArtifactWithScale(
                 &page.CurrentFrame().unwrap().display_items,
                 640,
                 480,
@@ -924,7 +924,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
                 composite_over_white(selection_color.green),
                 composite_over_white(selection_color.blue),
             ];
-            let pixels = raster::RasterizePaintArtifactWithScale(
+            let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(
                 &page.CurrentFrame().unwrap().display_items,
                 640,
                 480,

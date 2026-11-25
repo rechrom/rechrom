@@ -351,7 +351,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             assert_eq!(actual_geometry, fresh_geometry, "step {step}");
             {
                 let pixels = |fragment: &FragmentPaintData| {
-                    raster::RasterizePaintArtifactTransparent(
+                    browser::paint_artifact_raster::RasterizePaintArtifactTransparent(
                         &paint::paint_engine::Paint(fragment),
                         320,
                         240,

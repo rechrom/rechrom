@@ -11,11 +11,12 @@ foundation = { path = "../foundation" }
 font_engine = { path = "../font_engine" }
 image_resource = { path = "../image_resource" }
 paint_input_types = { path = "../layout/paint_input_types" }
-paint = { path = "../paint" }
+paint_model = { path = "../paint/paint_model" }
 skia = { path = "../skia" }
 
 [features]
 default = []
-artifact_test_support = []
 
 [dev-dependencies]
+# Tests build PaintArtifacts to drive the op replay.
+paint = { path = "../paint" }

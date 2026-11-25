@@ -3701,6 +3701,7 @@ dependencies = [
  "image_resource",
  "paint",
  "paint_input_types",
+ "paint_model",
  "skia",
 ]
 

@@ -183,7 +183,7 @@ fn gradient_dither_phase_is_invariant_through_picture_layer_raster() {
             None,
         );
         let artifact = &page.CurrentFrame().unwrap().display_items;
-        let direct = raster::RasterizePaintArtifactTransparent(artifact, 320, 200);
+        let direct = browser::paint_artifact_raster::RasterizePaintArtifactTransparent(artifact, 320, 200);
         let mut composited = vec![0_u32; 320 * 200];
         page.PaintArtifactInto(
             artifact,

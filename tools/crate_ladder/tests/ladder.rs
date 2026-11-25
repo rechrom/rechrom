@@ -308,7 +308,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("renderer", "compositor", "B1: frame values move to viz_common"),
     ("renderer_skia", "compositor", "B1: frame values move to viz_common"),
     ("raster", "compositor", "B2: cc paint values move to cc_paint"),
-    ("raster", "paint", "B2: cc paint values move to cc_paint"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

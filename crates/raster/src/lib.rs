@@ -26,10 +26,9 @@ pub use execution::SkiaFontBackendFactory;
 pub use execution::{
     Canvas2DRasterBackendFactory, ImageBitmapRespectingOrientation, MapResourceForRead,
     MapVideoResourceForRead, Nv12ReadView, RasterEngine, RasterReadView,
-    RasterizeDocumentDragImage, RasterizeDocumentImageBitmap, ResizeAndOrientDragImage,
+    DocumentPaintRecord, RasterizeDocumentDragImage, RasterizeDocumentImageBitmap, ResizeAndOrientDragImage,
     ResizeDragImageBitmap, ScaleCachedDragImage, ScaleDocumentDragImage,
 };
-#[cfg(any(test, feature = "artifact_test_support"))]
 pub use execution::{
-    RasterizePaintArtifact, RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,
+    RasterizePaintOps, RasterizePaintOpsTransparent, RasterizePaintOpsWithScale,
 };

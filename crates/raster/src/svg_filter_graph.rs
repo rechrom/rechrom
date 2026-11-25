@@ -11,8 +11,8 @@ use paint_input_types::paint_input::{
     SvgFilterLength, SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
     SvgLightSource, SvgLightingType, SvgMeetOrSlice, SvgPreserveAspectRatioAlign,
 };
-use paint::paint_engine::PaintRect;
-use paint::svg_filter_geometry::{resolve_svg_filter_geometry, SvgFilterGeometryError};
+use paint_model::PaintRect;
+use paint_model::svg_filter_geometry::{resolve_svg_filter_geometry, SvgFilterGeometryError};
 use std::io;
 use std::sync::Arc;
 
