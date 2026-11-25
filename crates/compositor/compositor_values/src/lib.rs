@@ -31,6 +31,13 @@ pub mod snap_selection_strategy;
 pub mod touch_action;
 pub mod touch_action_region;
 
+// cc/metrics and cc/trees owners the main LayerTreeHost hands to the impl
+// side (CommitState and the Proxy messages).
+pub mod begin_main_frame_metrics;
+pub mod event_metrics;
+pub mod layer_tree_mutator;
+pub mod swap_promise;
+
 // LayerTreeSettings fields, proxy and scheduler values named by both proxies.
 pub mod commit_earlyout_reason;
 pub mod frame_sequence_metrics;

@@ -360,7 +360,7 @@ pub type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
 pub type ImplToMainTask = layerize::commit::proxy::ImplToMain<MainFamily>;
 /// The posted BeginMainFrameAndCommitState of this family.
 pub type BeginMainFrameState = layerize::commit::proxy::BeginMainFrameAndCommitState<MainFamily>;
-pub type ProxyImplInit = crate::runtime::engine_factory::ProxyImplInit<crate::runtime::skia::SkRegion>;
+pub type ProxyImplInit = layerize::commit::proxy::ProxyImplInit;
 /// The main half's PropertyTreeFeatures (draw_property_utils /
 /// LayerTreeHost::UpdateLayers inputs), built from the same settings as the
 /// impl half's.
@@ -471,7 +471,7 @@ impl CompositorEngine {
         &mut self,
         reason: crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason,
         main_thread_start_time: TimeTicks,
-        swap_promises: Vec<Box<crate::runtime::host_owners::SwapPromise<crate::runtime::skia::SkRegion>>>,
+        swap_promises: Vec<Box<crate::runtime::host_owners::SwapPromise>>,
         scroll_and_viewport_changes_synced: bool,
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.BeginMainFrameAborted(

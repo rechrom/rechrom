@@ -885,20 +885,8 @@ pub trait LayerTreeRenderSurface<B: LayerTreeTypes>: PropertyTreeRenderSurface {
     fn NoteAncestorPropertyChanged(&mut self);
 }
 
-pub trait LayerTreeMutatorHost {
-    fn HasAnyAnimationTargetingProperty(
-        &self,
-        id: ElementId,
-        property: crate::cc::trees::target_property::Type,
-    ) -> bool;
-    fn HasPotentiallyRunningAnimationForProperty(
-        &self,
-        id: ElementId,
-        list: ElementListType,
-        property: crate::cc::trees::target_property::Type,
-    ) -> bool;
-    fn MaximumScale(&self, id: ElementId, list: ElementListType) -> f32;
-}
+// cc::MutatorHost's LayerTreeImpl queries (cc/trees/mutator_host.h), shared.
+pub use layerize::commit::mutator_host::LayerTreeMutatorHost;
 
 /// Only borrowed owner fields required by draw_property_utils. This view never
 /// owns a layer, node, tree, raster result, or copied configuration aggregate.

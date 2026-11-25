@@ -180,7 +180,7 @@ impl EngineAssembly {
         &mut self,
         reason: crate::cc::scheduler::commit_earlyout_reason::CommitEarlyOutReason,
         main_thread_start_time: crate::adapter::time::TimeTicks,
-        swap_promises: Vec<Box<super::host_owners::SwapPromise<crate::runtime::skia::SkRegion>>>,
+        swap_promises: Vec<Box<super::host_owners::SwapPromise>>,
         scroll_and_viewport_changes_synced: bool,
     ) -> Result<CompositorOutput, CompositorError> {
         self.core.BeginMainFrameAbortedOnImpl(

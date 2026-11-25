@@ -32,11 +32,11 @@ use crate::{
 // is not posted yet and stays a unit value.
 impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTypes<R> {
     // BeginMainFrameAbortedOnImpl's std::vector<std::unique_ptr<SwapPromise>>.
-    type ProxySwapPromise = Box<super::host_owners::SwapPromise<R>>;
+    type ProxySwapPromise = Box<layerize::commit::swap_promise::SwapPromise>;
     // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
-    type LayerTreeMutator = super::host_owners::LayerTreeMutator;
+    type LayerTreeMutator = compositor_values::layer_tree_mutator::LayerTreeMutator;
     // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
-    type ImplInit = Box<super::engine_factory::ProxyImplInit<R>>;
+    type ImplInit = Box<layerize::commit::proxy::ProxyImplInit>;
     type ProxyDrawImage = ();
 }
 
@@ -54,9 +54,7 @@ impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
         row_bytes: usize,
         opaque: bool,
     ) -> super::host_resources::UIBitmap {
-        super::host_resources::UIBitmap(std::sync::Arc::new(
-            super::host_resources::RawUIBitmap::new(pixel_size, pixels, row_bytes, opaque),
-        ))
+        super::host_resources::UIBitmap::FromPixels(pixel_size, pixels, row_bytes, opaque)
     }
     // Source: cc/resources/ui_resource_request.h:17-56.
     fn CreateUIResourceRequest(
@@ -74,25 +72,22 @@ impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
     type Transform = Transform<R>;
     type RegionBackend = R;
-    type UIResourceBitmap = super::host_resources::UIBitmap;
+    type UIResourceBitmap = layerize::commit::ui_resource::UIBitmap;
     type Filters = R::Filters;
     type Path = R::Path;
     type CopyOutputRequest = super::types::CopyOutputRequest;
     type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
     type LocalSurfaceId = super::types::LocalSurfaceId;
     type SurfaceRange = super::types::SurfaceRange;
-    type SwapPromise = super::host_owners::SwapPromise<R>;
+    type SwapPromise = layerize::commit::swap_promise::SwapPromise;
     type CompositorFrameMetadata = super::metadata::CompositorFrameMetadata<viz_common::SoftwareMetadataValues>;
-    type UIResourceRequest = super::host_owners::UIResourceRequest;
-    type PresentationCallback =
-        crate::adapter::presentation::Callback<super::metadata::PresentationFeedback>;
+    type UIResourceRequest = layerize::commit::ui_resource::UIResourceRequest;
+    type PresentationCallback = layerize::commit::presentation_time_callback::PresentationCallback;
     type SuccessfulPresentationCallback =
-        crate::adapter::presentation::SuccessfulCallbackWithDetails<
-            super::metadata::FrameTimingDetails,
-        >;
-    type EventMetrics = super::input::EventMetrics;
+        layerize::commit::presentation_time_callback::SuccessfulPresentationCallback;
+    type EventMetrics = compositor_values::event_metrics::EventMetrics;
     type DelegatedInkMetadata = super::metadata::DelegatedInkMetadata;
-    type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
+    type ViewTransitionRequest = layerize::commit::view_transition_request::ViewTransitionRequest;
 }
 impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
     type Layer = CompositorLayer<Self>;
@@ -515,14 +510,14 @@ const _: fn() = || {
 };
 
 impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCompositorTypes<R> {
-    type BeginMainFrameMetrics = crate::adapter::scheduler_host::BeginMainFrameMetrics;
+    type BeginMainFrameMetrics = compositor_values::begin_main_frame_metrics::BeginMainFrameMetrics;
     type DrawImage = super::paint::DrawImage;
     type MicroBenchmarkImpl = super::host_owners::MicroBenchmark<R>;
     type MainRootLayer = LayerRef<Self>;
     type MainLayerRef = LayerBorrow<Self>;
     // The main AnimationHost itself (commit_state.h:205 raw_ptr<MutatorHost>);
     // its MutatorEvents are LayerTreeHostImpl::TakeMutatorEvents' value.
-    type MutatorHostHandle = super::animation_host::AnimationHostOwner;
+    type MutatorHostHandle = layerize::commit::animation_host::AnimationHostOwner;
 }
 
 /// Assembly entry to the canonical most-derived PictureLayerImpl constructor.

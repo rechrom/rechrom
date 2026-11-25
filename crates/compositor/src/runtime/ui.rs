@@ -154,7 +154,7 @@ impl HostUIResourceServices<CompositorTypes> for UiResourceServices {
     fn NotifyLatencyInfoSwapPromiseMonitor(
         &mut self,
         monitor: HostImplLatencyMonitorId,
-    ) -> Option<Box<super::host_owners::SwapPromise<super::skia::SkRegion>>> {
+    ) -> Option<Box<super::host_owners::SwapPromise>> {
         self.capabilities.latency_monitors.Notify(monitor)
     }
     // Source: cc/trees/task_runner_provider.cc:14-19. A single-threaded

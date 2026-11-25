@@ -120,37 +120,8 @@ impl CheckerImageClient for CheckerDelivery {
     }
 }
 
-/// The values ProxyMain::InitializeOnImplThread passes to the ProxyImpl
-/// constructor (proxy_main.cc:80-89): the LayerTreeHost id and settings
-/// source (the shared CompositorConfig), the impl AnimationHost instance
-/// (AnimationHost::CreateImplInstance, animation_host.cc:74-79) and the
-/// shared cc/paint value capability the impl tiles and images replay
-/// committed records with.
-pub struct ProxyImplInit<R: crate::runtime::types::CpuSkiaBackend> {
-    pub(crate) owner: u64,
-    pub(crate) impl_animations: AnimationHostOwner,
-    pub(crate) paint_values: Arc<dyn layerize::commit::paint::CpuPaintValueServices<R>>,
-}
-
-impl ProxyImplInit<SkRegion> {
-    /// The values ProxyMain::Start posts with Initialize: the main host's
-    /// `id`, the impl AnimationHost created from its main instance
-    /// (LayerTreeHost::CreateLayerTreeHostImpl ->
-    /// mutator_host_->CreateImplInstance(), cc/trees/layer_tree_host.cc;
-    /// animation_host.cc:74-79) and the main half's shared paint value
-    /// capability.
-    pub fn new(
-        id: u64,
-        main_animation_host: &AnimationHostOwner,
-        paint_values: Arc<dyn layerize::commit::paint::CpuPaintValueServices<SkRegion>>,
-    ) -> Self {
-        Self {
-            owner: id,
-            impl_animations: main_animation_host.CreateImplInstance(),
-            paint_values,
-        }
-    }
-}
+/// The ProxyImpl construction values are shared cc values (proxy_main.cc:80-89).
+pub use layerize::commit::proxy::ProxyImplInit;
 
 /// The main half's construction values (LayerTreeHost::InitParams and the
 /// Blink paint feature state), from the same settings policy as the impl.
@@ -198,7 +169,7 @@ pub(crate) fn MainHostParamsFor(
 pub(crate) fn CreateImpl(
     config: CompositorConfig,
     injected: CompositorServices,
-    init: Box<ProxyImplInit<SkRegion>>,
+    init: Box<ProxyImplInit>,
     to_main: layerize::commit::proxy::ProxyTaskQueue<crate::engine::ImplToMainTask>,
 ) -> Result<super::engine_assembly::EngineAssembly, CompositorError> {
     if config.thread {

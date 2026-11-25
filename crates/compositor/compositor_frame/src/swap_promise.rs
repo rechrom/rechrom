@@ -2,30 +2,9 @@
 
 use compositor_scheduler::TimeTicks;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DidNotSwapReason {
-    SWAP_FAILS,
-    COMMIT_FAILS,
-    COMMIT_NO_UPDATE,
-    ACTIVATION_FAILS,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DidNotSwapAction {
-    BREAK_PROMISE,
-    KEEP_ACTIVE,
-}
-
-// `Send`: swap promises queued on the main LayerTreeHost move to the impl
-// thread with the commit (cc/trees/layer_tree_host.cc WillCommit).
-pub trait SwapPromise<M: ?Sized>: Send {
-    fn DidActivate(&mut self);
-    fn WillSwap(&mut self, metadata: &mut M);
-    fn DidSwap(&mut self);
-    fn DidNotSwap(&mut self, reason: DidNotSwapReason, timestamp: TimeTicks) -> DidNotSwapAction;
-    fn OnCommit(&mut self) {}
-    fn GetTraceId(&self) -> i64;
-}
+// The cc::SwapPromise interface is shared with the main LayerTreeHost
+// (cc/trees/swap_promise.h); the impl list operations below stay here.
+pub use compositor_values::swap_promise::{DidNotSwapAction, DidNotSwapReason, SwapPromise};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SwapPromiseStats {

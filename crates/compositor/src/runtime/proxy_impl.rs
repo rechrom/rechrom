@@ -288,7 +288,7 @@ impl EngineCore {
         &mut self,
         reason: CommitEarlyOutReason,
         main_thread_start_time: crate::adapter::time::TimeTicks,
-        swap_promises: Vec<Box<super::host_owners::SwapPromise<SkRegion>>>,
+        swap_promises: Vec<Box<super::host_owners::SwapPromise>>,
         scroll_and_viewport_changes_synced: bool,
         scheduler: &mut Scheduler,
     ) {

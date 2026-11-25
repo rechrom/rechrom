@@ -143,6 +143,39 @@ pub trait ProxyTypes: LayerizeFamily {
     type ProxyDrawImage: Send;
 }
 
+/// The values ProxyMain::InitializeOnImplThread passes to the ProxyImpl
+/// constructor (proxy_main.cc:80-89): the LayerTreeHost id, the impl
+/// AnimationHost instance (LayerTreeHost::CreateLayerTreeHostImpl ->
+/// mutator_host_->CreateImplInstance(), cc/trees/layer_tree_host.cc;
+/// animation_host.cc:74-79) and the shared cc/paint value capability the impl
+/// tiles and images replay committed records with. Moved from
+/// compositor/src/runtime/engine_factory.rs.
+pub struct ProxyImplInit {
+    pub owner: u64,
+    pub impl_animations: crate::commit::animation_host::AnimationHostOwner,
+    pub paint_values:
+        Arc<dyn crate::commit::paint::CpuPaintValueServices<crate::commit::skia_region::SkRegion>>,
+}
+
+impl ProxyImplInit {
+    /// The values ProxyMain::Start posts with Initialize: the main host's
+    /// `id`, the impl AnimationHost created from its main instance and the
+    /// main half's shared paint value capability.
+    pub fn new(
+        id: u64,
+        main_animation_host: &crate::commit::animation_host::AnimationHostOwner,
+        paint_values: Arc<
+            dyn crate::commit::paint::CpuPaintValueServices<crate::commit::skia_region::SkRegion>,
+        >,
+    ) -> Self {
+        Self {
+            owner: id,
+            impl_animations: main_animation_host.CreateImplInstance(),
+            paint_values,
+        }
+    }
+}
+
 /// Rechrom: the impl notifications Chromium delivers to the main thread
 /// outside ProxyMain (ReportTimeSwapPromise's posted callbacks,
 /// cc/trees/swap_promise.h; LayerTreeFrameSink DidNotProduceFrame; the video

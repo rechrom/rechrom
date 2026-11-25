@@ -6,6 +6,9 @@
 
 // ui/gfx/color_space.h moved to the cc value root.
 pub use compositor_values::color_space;
+// cc/animation/animation_host.h: the one AnimationHost class serving the
+// main and the impl instance.
+pub mod animation_host;
 pub mod commit_state;
 pub mod completion_event;
 pub mod geometry;
@@ -20,6 +23,7 @@ pub mod layerize_family;
 pub mod main_callbacks;
 pub mod main_effects;
 pub mod main_mutator;
+pub mod mutator_host;
 pub mod main_paint_config;
 pub mod paint_holding;
 pub mod property_tree;
@@ -37,9 +41,14 @@ pub mod scroll_node;
 pub mod skia_filters;
 pub mod skia_value_backend;
 pub mod surface_range;
+pub mod swap_promise;
+pub mod ui_resource;
+// cc/trees/presentation_time_callback_buffer.h callback types.
+pub mod presentation_time_callback;
 // gfx::Transform lives in the cc shared root (both halves name it).
 pub use compositor_values::transform;
 pub mod values;
+pub mod view_transition_request;
 pub mod viz_metadata;
 
 // cc value modules translated in the shared model packages. Both halves name

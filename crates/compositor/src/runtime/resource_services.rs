@@ -244,7 +244,7 @@ impl HostPictureRedrawServices<CompositorTypes> for PictureReleaseServices {
     fn NotifyLatencyInfoSwapPromiseMonitor(
         &mut self,
         id: HostImplLatencyMonitorId,
-    ) -> Option<Box<super::host_owners::SwapPromise<super::skia::SkRegion>>> {
+    ) -> Option<Box<super::host_owners::SwapPromise>> {
         self.capabilities.latency_monitors.Notify(id)
     }
     fn SaveActiveEventMetrics(&mut self, m: &mut EventsMetricsManager) {

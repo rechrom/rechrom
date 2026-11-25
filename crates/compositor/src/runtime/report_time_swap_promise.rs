@@ -5,7 +5,6 @@ use super::{
     host_owners::SwapPromise,
     metadata::CompositorFrameMetadata,
     resource_events::{ResourceEffect, ResourceEffects},
-    skia::SkRegion,
 };
 use crate::{
     adapter::time::TimeTicks,
@@ -54,11 +53,11 @@ pub(super) fn Create(
     request: u64,
     effects: ResourceEffects,
     clock: Arc<dyn crate::CompositorExecutor>,
-) -> Box<SwapPromise<SkRegion>> {
+) -> Box<SwapPromise> {
     Box::new(SwapPromise(Box::new(ReportTimeSwapPromise {
         request,
         frame_token: 0,
         effects,
         clock,
-    }), std::marker::PhantomData))
+    })))
 }

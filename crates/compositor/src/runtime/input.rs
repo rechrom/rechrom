@@ -2,10 +2,7 @@
 //! Metrics owners retain their actual allocations; compositor input only moves
 //! their event values and borrows native services at the source call sites.
 use crate::adapter::{
-    input_types::ElementId,
     layer_tree_host_impl::{HostScrollLatency, HostScrollLatencyComponent},
-    layer_tree_impl::{ElementListType, LayerTreeMutatorHost},
-    property_tree::PropertyTreeMutatorHost,
     time::TimeTicks,
 };
 
@@ -84,8 +81,9 @@ impl HostScrollLatency for LatencyInfo {
 }
 /// Source: cc/metrics/events_metrics_manager.h:38-39. Returning None has native
 /// nullptr semantics; ownership of a real metrics event is moved to the caller.
-pub trait EventMetricsBackend: Send {}
-pub type EventMetrics = Box<dyn EventMetricsBackend>;
+/// cc/metrics/event_metrics.h is a shared cc value (the main LayerTreeHost
+/// queues it in CommitState).
+pub use compositor_values::event_metrics::{EventMetrics, EventMetricsBackend};
 pub type EventMetricsDoneCallback = Box<dyn FnOnce(bool) -> Option<EventMetrics>>;
 /// Native scope objects execute their external destruction behavior on Drop.
 /// No fabricated default monitor exists and neither can expose a tree/host.
@@ -97,74 +95,9 @@ pub trait EventMetricsScopedMonitor {
     fn SetSaveMetrics(&mut self);
 }
 pub trait InputTraceSpan {}
-
-/// Animation state remains owned by the actual external animation subsystem.
-/// This wrapper only provides the exact read interface consumed by cc trees.
-pub trait MutatorHostBackend:
-    LayerTreeMutatorHost + PropertyTreeMutatorHost + std::any::Any
-{
-    fn AsAnyMut(&mut self) -> &mut dyn std::any::Any;
-    fn SetLayerTreeMutator(&mut self, mutator: Option<Box<super::host_owners::LayerTreeMutator>>);
-    fn identity(&self) -> super::types::MainMutatorHostIdentity;
-    fn NextFrameHasPendingRAF(&self) -> bool;
-    fn HasCanvasInvalidation(&self) -> bool;
-    fn HasJSAnimation(&self) -> bool;
-    fn MainThreadAnimationsCount(&self) -> usize;
-    fn HasSmilAnimation(&self) -> bool;
-}
-pub struct MutatorHost(pub Box<dyn MutatorHostBackend>);
-impl MutatorHost {
-    pub(crate) fn identity(&self) -> super::types::MainMutatorHostIdentity {
-        self.0.identity()
-    }
-    pub(crate) fn SetLayerTreeMutator(
-        &mut self,
-        mutator: Option<Box<super::host_owners::LayerTreeMutator>>,
-    ) {
-        self.0.SetLayerTreeMutator(mutator)
-    }
-    pub(crate) fn NextFrameHasPendingRAF(&self) -> bool {
-        self.0.NextFrameHasPendingRAF()
-    }
-    pub(crate) fn HasCanvasInvalidation(&self) -> bool {
-        self.0.HasCanvasInvalidation()
-    }
-    pub(crate) fn HasJSAnimation(&self) -> bool {
-        self.0.HasJSAnimation()
-    }
-    pub(crate) fn MainThreadAnimationsCount(&self) -> usize {
-        self.0.MainThreadAnimationsCount()
-    }
-    pub(crate) fn HasSmilAnimation(&self) -> bool {
-        self.0.HasSmilAnimation()
-    }
-}
-impl LayerTreeMutatorHost for MutatorHost {
-    fn HasAnyAnimationTargetingProperty(
-        &self,
-        id: ElementId,
-        property: crate::cc::trees::target_property::Type,
-    ) -> bool {
-        self.0.HasAnyAnimationTargetingProperty(id, property)
-    }
-    fn HasPotentiallyRunningAnimationForProperty(
-        &self,
-        id: ElementId,
-        list: ElementListType,
-        property: crate::cc::trees::target_property::Type,
-    ) -> bool {
-        self.0
-            .HasPotentiallyRunningAnimationForProperty(id, list, property)
-    }
-    fn MaximumScale(&self, id: ElementId, list: ElementListType) -> f32 {
-        self.0.MaximumScale(id, list)
-    }
-}
-impl PropertyTreeMutatorHost for MutatorHost {
-    fn ScrollOffsetAnimationWasInterrupted(&self, id: ElementId) -> bool {
-        self.0.ScrollOffsetAnimationWasInterrupted(id)
-    }
-}
+/// The std::unique_ptr<MutatorHost> of LayerTreeHostImpl
+/// (cc/trees/mutator_host.h), shared with the main half.
+pub use layerize::commit::mutator_host::{MutatorHost, MutatorHostBackend};
 
 // Source dependency: cc/metrics/event_metrics.h:779-795. Native event lists
 // preserve the original driving thread; the event objects are moved, not copied.
