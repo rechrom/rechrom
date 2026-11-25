@@ -1,11 +1,11 @@
 //! cc/paint image identity and animation metadata values (PaintImage::Id,
 //! FrameMetadata, AnimatedImageMetadata), shared by recording on the main
 //! thread and image decode/animation on the impl thread.
-use crate::commit::input_types::ElementId;
+use compositor_values::input_types::ElementId;
 use scroll_animation::TimeDelta;
 use std::collections::{BTreeMap, BTreeSet};
 // Source dependency: cc/paint/paint_image.h:177-186; paint_image.cc:45-46.
-pub use paint::paint_engine::PaintImageResourceId as PaintImageId;
+pub use image_resource::PaintImageId as PaintImageId;
 pub const kInvalidId: PaintImageId = PaintImageId(-2);
 pub const kDefaultFrameIndex: usize = 0;
 // Source dependency: cc/paint/paint_image.h:218-219.

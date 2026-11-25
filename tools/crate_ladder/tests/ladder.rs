@@ -65,6 +65,7 @@ const ROOTS: &[(&str, Root)] = &[
     ("compositor_tree", Root::Value),
     ("compositor_values", Root::Value),
     ("compositor_animation", Root::Value),
+    ("cc_paint", Root::Value),
 ];
 
 struct Engine {

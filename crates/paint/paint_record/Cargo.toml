@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+# cc::PaintRecord: the record a recording or a DrawingDisplayItem hands cc.
+cc_paint = { path = "../../compositor/cc_paint" }
 browser_tracing = { path = "../../tracing" }
 canvas = { path = "../../canvas" }
 font_engine = { path = "../../font_engine" }

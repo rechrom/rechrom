@@ -283,7 +283,13 @@ fn ValidateArtifactGraph(
                     resource_id,
                     reason: "document image has no published PaintRecord",
                 })?;
-            ValidateArtifactGraph(&record.artifact, artifacts)?;
+            let artifact = paint::paint_engine::DocumentRecordArtifact(record).ok_or(
+                PaintInputError::ImagePlayback {
+                    resource_id,
+                    reason: "document image record has no Paint recording",
+                },
+            )?;
+            ValidateArtifactGraph(artifact, artifacts)?;
         }
         if image
             .ShouldAnimate()

@@ -7,9 +7,10 @@ use super::display_item_list_types::{
     DisplayCanvas, DisplayItemListTypes, DisplayNodeInfo, DisplayPaintOp, DisplayPaintOpBuffer,
     DisplayPaintOpType, DisplayPlaybackItem,
 };
-use crate::commit::{
-    geometry::Rect, input_types::ElementId, rtree::RTree, ContentColorUsage, ScrollOffsetMap,
-};
+use crate::{geometry::Rect, rtree::RTree};
+use compositor_values::input_types::ElementId;
+use compositor_values::surface_id::ContentColorUsage;
+use compositor_values::prioritized_tile::ScrollOffsetMap;
 use compositor_values::color4f::Color4f;
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
@@ -496,7 +497,7 @@ fn DirectlyCompositedImageInfoForPaintOpBuffer<B: DisplayItemListTypes>(
     }
     if let Some(info) = &mut result {
         if transpose {
-            info.default_raster_scale = crate::commit::geometry::Vector2dF::new(
+            info.default_raster_scale = crate::geometry::Vector2dF::new(
                 info.default_raster_scale.y(),
                 info.default_raster_scale.x(),
             );

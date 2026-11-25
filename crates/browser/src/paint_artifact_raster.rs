@@ -10,8 +10,8 @@ pub(crate) fn DocumentPaintRecord(
     record: &DocumentPaintArtifactRecord,
 ) -> raster::DocumentPaintRecord<'_> {
     raster::DocumentPaintRecord {
-        ops: &record.artifact.items,
-        resources: record.artifact.resources.as_deref(),
+        ops: record.record.ops(),
+        resources: record.record.resources().map(|resources| &**resources),
         record_size: record.record_size,
     }
 }

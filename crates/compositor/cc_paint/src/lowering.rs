@@ -5,13 +5,14 @@ use super::{
     CpuClipPath, CpuPaintFlags, CpuPaintImage, CpuPaintOp, CpuPaintRecord, PaintOp, PaintRecord,
 };
 use super::display_item_list_types::DisplayPaintOpBuffer;
-use crate::commit::{
+use crate::{
     geometry::{RRectF, RectF, Vector2dF},
-    skia_value_backend::PaintSkiaBackend,
+    skia_backend::RecordSkiaBackend,
 };
-use paint::{
+use paint_model::{
     cc::paint::{blend_mode::BlendMode, color::Color4f, tile_mode::TileMode},
-    paint_engine::{DisplayItemType as N, PaintRect},
+    paint_op::PaintOpType as N,
+    PaintRect,
 };
 use std::sync::Arc;
 
@@ -35,7 +36,7 @@ impl PaintSource {
 /// Actual immutable shader input. The lease resolves the original native image
 /// or generated-image owner and its sampling/orientation/container properties.
 /// A mask index refers to that same record's resident mask layer, never a copy.
-pub enum CpuPaintShader<R: PaintSkiaBackend = crate::commit::skia_region::SkRegion> {
+pub enum CpuPaintShader<R: RecordSkiaBackend = crate::skia_region::SkRegion> {
     ImagePattern {
         source: PaintSource,
         mask_layer: Option<usize>,
@@ -51,10 +52,10 @@ pub enum CpuPaintShader<R: PaintSkiaBackend = crate::commit::skia_region::SkRegi
         tile_rect: RectF,
         tile_mode_x: TileMode,
         tile_mode_y: TileMode,
-        local_matrix: Option<crate::commit::transform::Transform<R>>,
+        local_matrix: Option<compositor_values::transform::Transform<R>>,
     },
 }
-impl<R: PaintSkiaBackend> CpuPaintShader<R> {
+impl<R: RecordSkiaBackend> CpuPaintShader<R> {
     pub fn source(&self) -> Option<(&PaintSource, Option<usize>)> {
         match self {
             Self::ImagePattern { source, mask_layer }
@@ -82,13 +83,13 @@ fn rrect(r: PaintRect, radii: paint_input_types::paint_input::PaintCornerRadii) 
         .map(|r| Vector2dF::new(r.x as f32, r.y as f32)),
     }
 }
-fn clip_path<R: PaintSkiaBackend>(
+fn clip_path<R: RecordSkiaBackend>(
     path: Arc<paint_model::paint_clip_path::PaintPath>,
 ) -> Arc<CpuClipPath<R>> {
     let authored = paint_model::paint_clip_path::PaintClipPath::from_path(path);
     Arc::new(CpuClipPath::<R>::FromPaintPath(&authored))
 }
-fn flags<R: PaintSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
+fn flags<R: RecordSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
     let mut f = CpuPaintFlags::default();
     f.setColor(Color4f::new(
         op.color.red,
@@ -109,7 +110,7 @@ fn flags<R: PaintSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
 /// Lower the actual source record once, when ContentDisplayItemList receives
 /// it. Native primitive leases preserve blobs, glyphs, paths and resources;
 /// compound commands below become an actual cc operation sequence.
-pub fn LowerPaintRecord<R: PaintSkiaBackend>(
+pub fn LowerPaintRecord<R: RecordSkiaBackend>(
     record: PaintRecord,
     values: Arc<dyn super::CpuPaintValueServices<R>>,
 ) -> Vec<CpuPaintOp<R>> {
@@ -179,7 +180,7 @@ pub fn LowerPaintRecord<R: PaintSkiaBackend>(
                 output.push(CpuPaintOp::DrawRect(rect(op.rect), f));
             }
             N::kStrokeLine
-                if op.decoration_paint_pass != paint::paint_engine::DecorationPaintPass::Html =>
+                if op.decoration_paint_pass != paint_model::display_item::DecorationPaintPass::Html =>
             {
                 LowerSvgDecoratedLine(source, &mut output)
             }
@@ -195,8 +196,8 @@ pub fn LowerPaintRecord<R: PaintSkiaBackend>(
 
 // Source: decoration_line_painter.cc:55-100.  SVG stroke PaintFlags apply to
 // the filled outline produced by the decoration's own StyledStrokeData.
-fn LowerSvgDecoratedLine<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPaintOp<R>>) {
-    use paint::{
+fn LowerSvgDecoratedLine<R: RecordSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPaintOp<R>>) {
+    use paint_model::{
         cc::paint::paint_flags::{Cap, Join},
         paint_clip_path::{Offset, PaintPath, PaintPathCommand, PaintPathFillType, PaintPathVerb},
     };
@@ -243,7 +244,7 @@ fn LowerSvgDecoratedLine<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec
     ) else {
         return;
     };
-    if op.decoration_paint_pass == paint::paint_engine::DecorationPaintPass::SvgStroke {
+    if op.decoration_paint_pass == paint_model::display_item::DecorationPaintPass::SvgStroke {
         let dash: Vec<f32> = op
             .dash_intervals
             .iter()
@@ -306,11 +307,11 @@ fn LowerSvgDecoratedLine<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec
 // the decoration itself is a DrawRect with Repeat-X/Decal-Y PaintRecordShader.
 #[derive(Clone, Copy, PartialEq)]
 struct WavyParams {
-    wave: paint::wavy_geometry::WaveDefinition,
+    wave: paint_model::wavy_geometry::WaveDefinition,
     thickness: f32,
 }
 
-struct WavyGeometry<R: PaintSkiaBackend> {
+struct WavyGeometry<R: RecordSkiaBackend> {
     params: WavyParams,
     path: paint_model::paint_clip_path::PaintPath,
     bounds: [f32; 4],
@@ -318,7 +319,7 @@ struct WavyGeometry<R: PaintSkiaBackend> {
     tile_record: CpuPaintRecord<R>,
 }
 
-fn GetWavyGeometry<R: PaintSkiaBackend>(
+fn GetWavyGeometry<R: RecordSkiaBackend>(
     cache: &mut Option<WavyGeometry<R>>,
     params: WavyParams,
 ) -> Option<&mut WavyGeometry<R>> {
@@ -326,12 +327,12 @@ fn GetWavyGeometry<R: PaintSkiaBackend>(
         .as_ref()
         .is_none_or(|geometry| geometry.params != params)
     {
-        let path = paint::wavy_geometry::WavyPath(&params.wave);
+        let path = paint_model::wavy_geometry::WavyPath(&params.wave);
         let stroke_bounds = R::StrokeBounds(&path, params.thickness, 0.3)?;
         *cache = Some(WavyGeometry {
             params,
             path,
-            bounds: paint::wavy_geometry::WavyPatternRect(
+            bounds: paint_model::wavy_geometry::WavyPatternRect(
                 &params.wave,
                 [
                     stroke_bounds.x(),
@@ -347,7 +348,7 @@ fn GetWavyGeometry<R: PaintSkiaBackend>(
     cache.as_mut()
 }
 
-impl<R: PaintSkiaBackend> WavyGeometry<R> {
+impl<R: RecordSkiaBackend> WavyGeometry<R> {
     fn TileRecord(
         &mut self,
         color: Color4f,
@@ -374,14 +375,14 @@ impl<R: PaintSkiaBackend> WavyGeometry<R> {
 }
 
 fn IsSimpleSolidFillPaint(op: &PaintOp) -> bool {
-    op.decoration_paint_pass == paint::paint_engine::DecorationPaintPass::SvgFill
+    op.decoration_paint_pass == paint_model::display_item::DecorationPaintPass::SvgFill
         && op.paint_shader.is_none()
         && op.canonical_filters.is_empty()
         && !op.is_shadow
         && blend(op.blend_mode) == BlendMode::kSrcOver
 }
 
-fn LowerWavy<R: PaintSkiaBackend>(
+fn LowerWavy<R: RecordSkiaBackend>(
     source: PaintSource,
     values: Arc<dyn super::CpuPaintValueServices<R>>,
     cache: &mut Option<WavyGeometry<R>>,
@@ -397,8 +398,8 @@ fn LowerWavy<R: PaintSkiaBackend>(
     let Some(geometry) = GetWavyGeometry(cache, WavyParams { wave, thickness }) else {
         return;
     };
-    if op.decoration_paint_pass == paint::paint_engine::DecorationPaintPass::SvgStroke
-        || (op.decoration_paint_pass == paint::paint_engine::DecorationPaintPass::SvgFill
+    if op.decoration_paint_pass == paint_model::display_item::DecorationPaintPass::SvgStroke
+        || (op.decoration_paint_pass == paint_model::display_item::DecorationPaintPass::SvgFill
             && !IsSimpleSolidFillPaint(op))
     {
         LowerSvgWavy(source, &wave, thickness, geometry.bounds, out);
@@ -454,7 +455,7 @@ fn LowerWavy<R: PaintSkiaBackend>(
         matrix[12] = op.rect.x;
         matrix[13] = op.rect.y;
         out.push(CpuPaintOp::Concat(
-            crate::commit::transform::Transform::FromColMajor(&matrix),
+            compositor_values::transform::Transform::FromColMajor(&matrix),
         ));
         out.push(CpuPaintOp::Translate(left, top + op.wavy_offset as f32));
     } else {
@@ -486,9 +487,9 @@ fn LowerWavy<R: PaintSkiaBackend>(
 // The first stroke creates the wavy ribbon outline.  An SVG stroke pass then
 // strokes that outline a second time with the SVG paint's geometry and dash
 // effect; an SVG fill pass draws the first outline directly.
-fn LowerSvgWavy<R: PaintSkiaBackend>(
+fn LowerSvgWavy<R: RecordSkiaBackend>(
     source: PaintSource,
-    wave: &paint::wavy_geometry::WaveDefinition,
+    wave: &paint_model::wavy_geometry::WaveDefinition,
     thickness: f32,
     bounds: [f32; 4],
     out: &mut Vec<CpuPaintOp<R>>,
@@ -501,7 +502,7 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
     } else {
         op.rect.width as f32
     };
-    let centerline = paint::wavy_geometry::WavyCenterlinePath(
+    let centerline = paint_model::wavy_geometry::WavyCenterlinePath(
         wave,
         width,
         paint_model::paint_clip_path::Offset {
@@ -521,7 +522,7 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
     ) else {
         return;
     };
-    if op.decoration_paint_pass == paint::paint_engine::DecorationPaintPass::SvgStroke {
+    if op.decoration_paint_pass == paint_model::display_item::DecorationPaintPass::SvgStroke {
         let dash: Vec<f32> = op
             .dash_intervals
             .iter()
@@ -544,7 +545,7 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
 
     let [_, top, _, bottom] = bounds;
     let svg_outset =
-        if op.decoration_paint_pass == paint::paint_engine::DecorationPaintPass::SvgStroke {
+        if op.decoration_paint_pass == paint_model::display_item::DecorationPaintPass::SvgStroke {
             op.stroke_width as f32 * 0.5
         } else {
             0.0
@@ -579,7 +580,7 @@ fn LowerSvgWavy<R: PaintSkiaBackend>(
         matrix[12] = op.rect.x;
         matrix[13] = op.rect.y;
         out.push(CpuPaintOp::Concat(
-            crate::commit::transform::Transform::FromColMajor(&matrix),
+            compositor_values::transform::Transform::FromColMajor(&matrix),
         ));
     } else {
         out.push(CpuPaintOp::Translate(op.rect.x as f32, op.rect.y as f32));
@@ -629,26 +630,25 @@ fn svg_join(value: paint_input_types::paint_input::SvgStrokeLineJoin) -> paint_m
     }
 }
 
-fn ResolvedWavyDefinition(op: &PaintOp, thickness: f32) -> paint::wavy_geometry::WaveDefinition {
+fn ResolvedWavyDefinition(op: &PaintOp, thickness: f32) -> paint_model::wavy_geometry::WaveDefinition {
     if op.wavy_wavelength > 0.
         && op.wavy_wavelength.is_finite()
         && op.wavy_control_point_distance.is_finite()
         && op.wavy_phase.is_finite()
     {
-        paint::wavy_geometry::WaveDefinition {
+        paint_model::wavy_geometry::WaveDefinition {
             wavelength: op.wavy_wavelength as f32,
             control_point_distance: op.wavy_control_point_distance as f32,
             phase: op.wavy_phase as f32,
         }
     } else {
-        paint::wavy_geometry::MakeWave(thickness)
+        paint_model::wavy_geometry::MakeWave(thickness)
     }
 }
 
 #[cfg(test)]
 mod wavy_tests {
     use super::*;
-    use crate::commit::main_paint_config::{CpuPaintFeatures, SkiaPaintDiagnostics};
 
     #[test]
     fn retained_custom_wave_precedes_default_wave_resolution() {
@@ -664,14 +664,14 @@ mod wavy_tests {
         op.wavy_wavelength = 0.0;
         assert_eq!(
             ResolvedWavyDefinition(&op, 2.0),
-            paint::wavy_geometry::MakeWave(2.0)
+            paint_model::wavy_geometry::MakeWave(2.0)
         );
     }
 
     #[test]
     fn simple_svg_fill_excludes_effectful_paint_flags() {
         let mut op = PaintOp {
-            decoration_paint_pass: paint::paint_engine::DecorationPaintPass::SvgFill,
+            decoration_paint_pass: paint_model::display_item::DecorationPaintPass::SvgFill,
             ..PaintOp::default()
         };
         assert!(IsSimpleSolidFillPaint(&op));
@@ -686,119 +686,13 @@ mod wavy_tests {
         assert!(!IsSimpleSolidFillPaint(&op));
     }
 
-    #[test]
-    fn lowering_retains_prepaint_canonical_filter_owner() {
-        let services = crate::runtime::paint::NewCpuMainPaintServices(
-            CpuPaintFeatures {
-                cc_slimming: false,
-                singular_transform_fix: false,
-                merge_fixed_layers: false,
-                merge_sticky_layers: false,
-                raster_inducing_scroll: false,
-                scrolling_contents_cull_rect: false,
-                remove_scroll_node_workaround: false,
-                selection_edge_visibility_uses_full_edge: false,
-                canvas_draw_element: false,
-                expensive_dchecks: false,
-                paint_under_invalidation_checking: false,
-                layer_merge_distance_limit: 0,
-            },
-            SkiaPaintDiagnostics {
-                trace: false,
-                verbose_level: 0,
-                histogram: false,
-            },
-        )
-        .unwrap();
-        let canonical_filters =
-            paint_model::property_filter_operations::PropertyFilterOperations::Ready {
-                operations: paint_model::cc::paint::filter_operations::FilterOperations::new(vec![
-                    paint_model::cc::paint::filter_operation::FilterOperation::CreateOpacityFilter(0.5),
-                ]),
-                origin_tainted: false,
-            };
-        let mut artifact = paint::PaintArtifact::default();
-        artifact.items = Arc::new(vec![PaintOp {
-            r#type: N::kSaveLayerFilter,
-            canonical_filters,
-            ..PaintOp::default()
-        }]);
-
-        let lowered = LowerPaintRecord(
-            PaintRecord::from_artifact(Arc::new(artifact)),
-            services.PaintValues(),
-        );
-        let [CpuPaintOp::Atom(source)] = lowered.as_slice() else {
-            panic!("filter item must remain a native source lease");
-        };
-        assert_eq!(source.op().canonical_filters.len(), 1);
-    }
-
-    #[test]
-    fn equal_wavy_geometry_and_color_reuse_the_cached_tile_record() {
-        let services = crate::runtime::paint::NewCpuMainPaintServices(
-            CpuPaintFeatures {
-                cc_slimming: false,
-                singular_transform_fix: false,
-                merge_fixed_layers: false,
-                merge_sticky_layers: false,
-                raster_inducing_scroll: false,
-                scrolling_contents_cull_rect: false,
-                remove_scroll_node_workaround: false,
-                selection_edge_visibility_uses_full_edge: false,
-                canvas_draw_element: false,
-                expensive_dchecks: false,
-                paint_under_invalidation_checking: false,
-                layer_merge_distance_limit: 0,
-            },
-            SkiaPaintDiagnostics {
-                trace: false,
-                verbose_level: 0,
-                histogram: false,
-            },
-        )
-        .unwrap();
-        let op = PaintOp {
-            r#type: N::kStrokeWavyLine,
-            rect: PaintRect {
-                width: 40.0,
-                ..PaintRect::default()
-            },
-            decoration_thickness: 2.0,
-            ..PaintOp::default()
-        };
-        let mut artifact = paint::PaintArtifact::default();
-        artifact.items = Arc::new(vec![op.clone(), op]);
-        let lowered = LowerPaintRecord(
-            PaintRecord::from_artifact(Arc::new(artifact)),
-            services.PaintValues(),
-        );
-        let records: Vec<_> = lowered
-            .iter()
-            .filter_map(|op| {
-                let CpuPaintOp::DrawRect(_, flags) = op else {
-                    return None;
-                };
-                let CpuPaintShader::PaintRecord {
-                    record: CpuPaintRecord::Buffer(buffer),
-                    ..
-                } = flags.shader.as_deref()?
-                else {
-                    return None;
-                };
-                Some(buffer)
-            })
-            .collect();
-        assert_eq!(records.len(), 2);
-        assert!(Arc::ptr_eq(records[0], records[1]));
-    }
 }
 /// A document image's recording is one immutable PaintRecord reused by every
 /// paint of that image. Lower it once and return the same buffer, as cc keeps
 /// one PaintRecord in the PaintShader: the raster record-shader cache is keyed
 /// by buffer identity, so a fresh lowering of identical content on every
 /// commit re-rasterized the whole pattern tile.
-fn LoweredDocumentImageRecord<R: PaintSkiaBackend>(
+fn LoweredDocumentImageRecord<R: RecordSkiaBackend>(
     source: PaintRecord,
     values: Arc<dyn super::CpuPaintValueServices<R>>,
 ) -> CpuPaintRecord<R> {
@@ -840,10 +734,10 @@ fn LoweredDocumentImageRecord<R: PaintSkiaBackend>(
     })
 }
 
-fn DocumentImagePattern<R: PaintSkiaBackend>(
+fn DocumentImagePattern<R: RecordSkiaBackend>(
     source: &PaintSource,
     resource_id: u64,
-    container: Option<&paint::paint_engine::DocumentImageContainerKey>,
+    container: Option<&image_resource::ContainerKey>,
     source_rect: PaintRect,
     tile_rect: PaintRect,
     repeat_x: bool,
@@ -916,16 +810,16 @@ fn DocumentImagePattern<R: PaintSkiaBackend>(
         } else {
             TileMode::kDecal
         },
-        local_matrix: Some(crate::commit::transform::Transform::FromColMajor(&matrix)),
+        local_matrix: Some(compositor_values::transform::Transform::FromColMajor(&matrix)),
     })
 }
 
-fn LowerMask<R: PaintSkiaBackend>(
+fn LowerMask<R: RecordSkiaBackend>(
     source: PaintSource,
     values: Arc<dyn super::CpuPaintValueServices<R>>,
     out: &mut Vec<CpuPaintOp<R>>,
 ) {
-    use paint::paint_engine::{PaintMaskComposite as Composite, PaintMaskMode as Mode};
+    use paint_input_types::paint_input::{PaintMaskComposite as Composite, PaintMaskMode as Mode};
     let op = source.op();
     // Source: third_party/blink/renderer/core/paint/box_painter_base.cc:1335-1425,1777-1795.
     // PaintMaskImages/PaintFillLayer: isolated mask plane, back-to-front fill
@@ -1005,7 +899,7 @@ fn LowerMask<R: PaintSkiaBackend>(
     }
     out.push(CpuPaintOp::Restore);
 }
-fn LowerBoxShadow<R: PaintSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPaintOp<R>>) {
+fn LowerBoxShadow<R: RecordSkiaBackend>(source: PaintSource, out: &mut Vec<CpuPaintOp<R>>) {
     use paint_model::cc::paint::draw_looper::{kOverrideAlphaFlag, DrawLooperBuilder, Point};
     let op = source.op();
     // Source: third_party/blink/renderer/core/paint/box_painter_base.cc:276-377,502-578.

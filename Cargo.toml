@@ -61,6 +61,7 @@ members = [
     "crates/compositor/compositor_tree",
     "crates/compositor/compositor_tree_sync",
     "crates/compositor/compositor_values",
+    "crates/compositor/cc_paint",
     "crates/compositor/compositor_tile",
     "crates/compositor/compositor_raster",
     "crates/compositor/compositor_draw",

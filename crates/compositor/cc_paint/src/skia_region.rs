@@ -1,9 +1,9 @@
 //! Thin bindings to public canonical Skia value algorithms.
 //! No region boolean operations, scan conversion or path algorithms live here.
-//! Moved from compositor/src/runtime/skia.rs (which re-exports it): both the
-//! main and impl halves name this backend, and the traits it implements live
-//! in the commit vocabulary or its shared sub-crates.
-use super::region_backend::{SkIRect, SkRegionBackend, SkRegionOp};
+//! Moved from layerize::commit (which re-exports it): cc/paint records, both
+//! compositor halves and viz name this backend. It implements the cc root
+//! traits here; layerize adds the main-only MainSkiaBackend facet.
+use compositor_tree::region_backend::{SkIRect, SkRegionBackend, SkRegionOp};
 use compositor_tree::region::Region;
 use std::sync::OnceLock;
 
@@ -136,8 +136,8 @@ impl SkRegionBackend for SkRegion {
     }
 }
 
-use super::geometry::{RRectF, RectF, Vector2dF};
-use super::transform::RoundedRectTransformBackend;
+use compositor_tree::geometry::{RRectF, RectF, Vector2dF};
+use compositor_values::transform::RoundedRectTransformBackend;
 use skia::src::core::{
     SkMatrix::SkMatrix as TranslatedMatrix, SkPoint::SkPoint as TranslatedPoint,
     SkRRect::SkRRect as TranslatedRRect, SkRect::SkRect as TranslatedRect,
@@ -279,8 +279,7 @@ fn stroke_backend_path(
         .then(|| outline.detach(None))
 }
 
-impl super::skia_value_backend::MainSkiaBackend for SkRegion {
-    type Filters = FilterOperations;
+impl crate::skia_backend::RecordSkiaBackend for SkRegion {
     type Path = SkPath;
     fn FromPaintPath(path: &paint_model::paint_clip_path::PaintPath) -> Self::Path {
         paint_skia::path::FromPaintPath(path)
@@ -370,5 +369,47 @@ impl super::skia_value_backend::MainSkiaBackend for SkRegion {
             dash_phase,
             resolution_scale,
         )
+    }
+}
+
+// The Skia path projection, beside its trait (moved from
+// layerize/src/skia_path.rs).
+impl crate::skia_backend::Path for SkPath {
+    fn AsRRect(&self) -> Option<RRectF> {
+        {
+            let mut rr = skia::src::core::SkRRect::SkRRect::default();
+            self.isRRect(Some(&mut rr)).then(|| {
+                let b = rr.getBounds();
+                RRectF {
+                    rect: RectF::new(b.fLeft, b.fTop, b.fRight - b.fLeft, b.fBottom - b.fTop),
+                    corner_radii: std::array::from_fn(|i| {
+                        let r = rr.all_radii()[i];
+                        Vector2dF::new(r.fX, r.fY)
+                    }),
+                }
+            })
+        }
+    }
+    fn bounds(&self) -> RectF {
+        let b = self.getBounds();
+        return RectF::new(b.fLeft, b.fTop, b.fRight - b.fLeft, b.fBottom - b.fTop);
+    }
+    fn count_points(&self) -> i32 {
+        self.countPoints() as i32
+    }
+    fn count_verbs(&self) -> i32 {
+        self.countVerbs()
+    }
+    fn is_finite(&self) -> bool {
+        self.isFinite()
+    }
+    fn is_convex(&self) -> bool {
+        self.isConvex()
+    }
+    fn is_volatile(&self) -> bool {
+        self.isVolatile()
+    }
+    fn is_inverse_fill_type(&self) -> bool {
+        self.isInverseFillType()
     }
 }

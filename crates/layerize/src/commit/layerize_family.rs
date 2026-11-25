@@ -43,7 +43,7 @@ pub trait LayerizeFamily:
     PushPropertiesTypes<
         Transform = Transform<<Self as LayerizeFamily>::Skia>,
         Filters = <<Self as LayerizeFamily>::Skia as MainSkiaBackend>::Filters,
-        Path = <<Self as LayerizeFamily>::Skia as MainSkiaBackend>::Path,
+        Path = <<Self as LayerizeFamily>::Skia as cc_paint::skia_backend::RecordSkiaBackend>::Path,
         RegionBackend = <Self as LayerizeFamily>::Skia,
         CopyOutputRequest: MainLayerCopyOutputRequest<TaskRunner = TaskRunner>
                                + Send

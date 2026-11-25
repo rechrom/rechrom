@@ -48,6 +48,8 @@ pub mod surface_id;
 
 // base, gfx, Skia and cc/raster values.
 pub mod color4f;
+// ui/gfx/color_space.h values (named by cc/paint, cc and viz).
+pub mod color_space;
 mod float_clip_rect_transform;
 pub mod location;
 pub mod prioritized_tile;

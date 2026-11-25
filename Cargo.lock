@@ -411,6 +411,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc_paint"
+version = "0.0.1"
+dependencies = [
+ "canvas",
+ "compositor_animation",
+ "compositor_tree",
+ "compositor_values",
+ "foundation",
+ "image_resource",
+ "paint_input_types",
+ "paint_model",
+ "paint_skia",
+ "scroll_animation",
+ "skia",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2319,6 +2336,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
+ "cc_paint",
  "compositor_animation",
  "compositor_layerize",
  "compositor_tree",
@@ -3298,6 +3316,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
+ "cc_paint",
  "font_engine",
  "foundation",
  "image_resource",

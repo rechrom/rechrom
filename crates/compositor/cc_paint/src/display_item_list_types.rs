@@ -3,11 +3,10 @@
 //! cc; PaintOp storage, SkCanvas playback and solid-color analysis stay in the
 //! external Paint/raster implementation that owns those values.
 
-use crate::commit::{
-    geometry::{Rect, Vector2dF},
-    input_types::ElementId,
-    ContentColorUsage, ScrollOffsetMap,
-};
+use crate::geometry::{Rect, Vector2dF};
+use compositor_values::input_types::ElementId;
+use compositor_values::surface_id::ContentColorUsage;
+use compositor_values::prioritized_tile::ScrollOffsetMap;
 use compositor_values::color4f::Color4f;
 
 // Source dependency: cc/paint/directly_composited_image_info.h:14-19.

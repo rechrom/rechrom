@@ -3,8 +3,8 @@
 //! Nested CustomData must be substituted from actual canvas snapshots when a
 //! Canvas2D receiver consumes this input; it is not a pre-flattened record.
 use super::ContentDisplayItemList;
-use crate::commit::skia_region::SkRegion;
-use crate::adapter::geometry::Vector2dF;
+use crate::skia_region::SkRegion;
+use compositor_tree::geometry::Vector2dF;
 use std::sync::Arc;
 pub struct CanvasChildRecordReplay {
     pub list: Arc<ContentDisplayItemList<SkRegion>>,

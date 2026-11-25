@@ -9,6 +9,8 @@ publish = false
 # `compositor` facade or an impl package; the impl half depends on
 # `layerize::commit` only (guard: tests/layerize_boundary.rs).
 [dependencies]
+# cc/paint values (commit::paint re-exports them).
+cc_paint = { path = "../compositor/cc_paint" }
 compositor_tree = { path = "../compositor/compositor_tree" }
 # cc shared values (cc/input, LayerTreeSettings fields, viz, gfx) named by
 # both sides.
