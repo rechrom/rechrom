@@ -427,8 +427,8 @@ These apply to every boundary above.
 - **Focused interfaces.** Each interface has one clear focus. It may have
   several methods, each serving that focus; unrelated concerns get their own
   interface. No callbacks or getters that reach back.
-- Boundary tests enforce these rules; known violations are temporary
-  allowances (`crates/CRATE_LADDER_PLAN.md`).
+- Boundary tests enforce these rules; known violations are listed there as
+  temporary allowances.
 
 ---
 
