@@ -1,10 +1,5 @@
-use compositor::{
-    adapter::{
-        geometry::Size,
-        layer_tree_host_impl::{HostUICanvas, HostUISourceBitmap, HostUISurface},
-    },
-    runtime::ui::UiRasterServices,
-};
+use cc_raster::ui_resource::{HostUICanvas, HostUISourceBitmap, HostUISurface, UiRasterServices};
+use compositor_tree::geometry::Size;
 use raster::RasterEngine;
 
 #[test]

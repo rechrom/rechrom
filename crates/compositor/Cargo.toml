@@ -25,6 +25,7 @@ compositor_input = { path = "compositor_input" }
 compositor_animation = { path = "compositor_animation" }
 compositor_values = { path = "compositor_values" }
 viz_common = { path = "../viz/viz_common" }
+cc_raster = { path = "cc_raster" }
 paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
 foundation = { path = "../foundation" }

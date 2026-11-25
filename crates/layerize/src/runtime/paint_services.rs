@@ -132,7 +132,7 @@ impl<R: PaintSkiaBackend> RecordingSourceServices<paint::CpuRecordingTypes<R>>
         &self,
         recording: &RecordingSource<paint::CpuRecordingTypes<R>>,
     ) -> Arc<paint::RasterSourceStorage<R>> {
-        Arc::new(paint::RasterSourceStorage::from_recording(recording))
+        Arc::new(paint::CreateRasterSource(recording))
     }
     fn TraceScope(&self, category: &str, name: &str, count: Option<usize>) {
         self.platform.TraceScope(category, name, count)

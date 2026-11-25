@@ -17,6 +17,8 @@ compositor_tree = { path = "../compositor/compositor_tree" }
 compositor_values = { path = "../compositor/compositor_values" }
 # components/viz/common values (CopyOutputRequest, surface metadata).
 viz_common = { path = "../viz/viz_common" }
+# cc/raster RasterSource (created by RecordingSource::CreateRasterSource).
+cc_raster = { path = "../compositor/cc_raster" }
 compositor_animation = { path = "../compositor/compositor_animation" }
 # The main AnimationHost mutations (ScrollAnimationMutation and its
 # completions) the main half applies (commit::main_mutator), and base time.

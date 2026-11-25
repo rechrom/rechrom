@@ -6,7 +6,13 @@ edition = "2021"
 [dependencies]
 browser_tracing = { path = "../tracing" }
 canvas = { path = "../canvas" }
-compositor = { path = "../compositor" }
+# The cc/raster interfaces this service implements, the cc/paint records it
+# replays and the cc/viz/gfx values they carry; raster names no cc package.
+cc_raster = { path = "../compositor/cc_raster" }
+cc_paint = { path = "../compositor/cc_paint" }
+compositor_tree = { path = "../compositor/compositor_tree" }
+compositor_values = { path = "../compositor/compositor_values" }
+viz_common = { path = "../viz/viz_common" }
 foundation = { path = "../foundation" }
 font_engine = { path = "../font_engine" }
 image_resource = { path = "../image_resource" }

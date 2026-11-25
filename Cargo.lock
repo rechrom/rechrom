@@ -428,6 +428,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc_raster"
+version = "0.0.1"
+dependencies = [
+ "cc_paint",
+ "compositor_tree",
+ "compositor_values",
+ "viz_common",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -496,6 +506,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
+ "cc_raster",
  "compositor_animation",
  "compositor_draw",
  "compositor_frame",
@@ -2344,6 +2355,7 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "cc_paint",
+ "cc_raster",
  "compositor_animation",
  "compositor_layerize",
  "compositor_tree",
@@ -3722,7 +3734,10 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
- "compositor",
+ "cc_paint",
+ "cc_raster",
+ "compositor_tree",
+ "compositor_values",
  "font_engine",
  "foundation",
  "image_resource",
@@ -3730,6 +3745,7 @@ dependencies = [
  "paint_input_types",
  "paint_model",
  "skia",
+ "viz_common",
 ]
 
 [[package]]

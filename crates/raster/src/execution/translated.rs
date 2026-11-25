@@ -15,19 +15,13 @@ use crate::raster_commands::commands::{
     PaintPathCommand, PaintPathVerb, ResourceContext,
 };
 pub use canvas_2d::Canvas2DRasterBackendFactory;
-use compositor::{
-    adapter::{
-        display_item_list::DisplayCanvas,
-        geometry::{Rect, Transform as _},
-        picture_layer_impl::PictureRasterSource,
-    },
-    runtime::paint::{
-        ContentDisplayItemList, CpuDrawImage, CpuDynamicRangeLimit, CpuFilterQuality,
-        CpuPaintCanvas, CpuPaintColorFilter, CpuPaintFlags, CpuPaintImage, CpuPaintOp,
-        CpuPaintOpBuffer, CpuPaintOpRef, CpuPaintRecord, CpuPaintShader, CpuScopedRasterResult,
-        PaintRecord, RasterPlaybackParams,
-    },
+use cc_paint::{
+    display_item_list_types::DisplayCanvas, ContentDisplayItemList, CpuDrawImage,
+    CpuDynamicRangeLimit, CpuFilterQuality, CpuPaintCanvas, CpuPaintColorFilter, CpuPaintFlags,
+    CpuPaintImage, CpuPaintOp, CpuPaintOpBuffer, CpuPaintOpRef, CpuPaintRecord, CpuPaintShader,
+    CpuScopedRasterResult, PaintRecord, RasterPlaybackParams,
 };
+use compositor_tree::geometry::{Rect, Transform as _};
 use skia::{
     include::core::{
         SkAlphaType::SkAlphaType,
@@ -1596,7 +1590,7 @@ fn simple_drrect_stroke(outer: &SkRRect, inner: &SkRRect) -> Option<(SkRRect, f3
     Some((stroke_rrect, stroke_x))
 }
 
-fn converted_rrect(value: &compositor::adapter::geometry::RRectF) -> SkRRect {
+fn converted_rrect(value: &compositor_tree::geometry::RRectF) -> SkRRect {
     let mut result = SkRRect::default();
     result.setRectRadii(
         &SkRect::MakeLTRB(
@@ -3013,7 +3007,7 @@ fn provider_draw_image(
             matrix_is_decomposable = false;
         }
     }
-    let scale = compositor::adapter::geometry::Vector2dF::new(
+    let scale = compositor_tree::geometry::Vector2dF::new(
         extracted_scale.width(),
         extracted_scale.height(),
     );
@@ -3033,7 +3027,7 @@ fn provider_draw_image(
         ),
         scale,
         matrix_is_decomposable,
-        frame_index: compositor::adapter::image_animation::kDefaultFrameIndex,
+        frame_index: cc_paint::image_metadata::kDefaultFrameIndex,
         target: None,
     })
 }
@@ -3070,7 +3064,7 @@ fn provider_pattern_draw_image(
     let mut total_image_matrix = shader_local;
     total_image_matrix.preConcat(local_to_device);
 
-    let mut scale = compositor::adapter::geometry::Vector2dF::new(
+    let mut scale = compositor_tree::geometry::Vector2dF::new(
         total_image_matrix.rc(0, 0),
         total_image_matrix.rc(1, 1),
     );
@@ -3079,12 +3073,12 @@ fn provider_pattern_draw_image(
     if matrix33.getType() & SkMatrix::kAffine_Mask != 0 {
         let mut extracted = SkSize::Make(scale.x(), scale.y());
         if matrix33.decomposeScale(Some(&mut extracted), None) {
-            scale = compositor::adapter::geometry::Vector2dF::new(
+            scale = compositor_tree::geometry::Vector2dF::new(
                 extracted.width(),
                 extracted.height(),
             );
         } else {
-            scale = compositor::adapter::geometry::Vector2dF::new(1., 1.);
+            scale = compositor_tree::geometry::Vector2dF::new(1., 1.);
             matrix_is_decomposable = false;
         }
     }
@@ -3104,7 +3098,7 @@ fn provider_pattern_draw_image(
         ),
         scale,
         matrix_is_decomposable,
-        frame_index: compositor::adapter::image_animation::kDefaultFrameIndex,
+        frame_index: cc_paint::image_metadata::kDefaultFrameIndex,
         target: None,
     })
 }
@@ -3114,7 +3108,7 @@ fn provider_pattern_draw_image(
 fn decoded_pattern_local_matrix(
     tile_rect: command::PaintRect,
     source_rect: command::PaintRect,
-    adjustment: compositor::adapter::geometry::SizeF,
+    adjustment: compositor_tree::geometry::SizeF,
 ) -> io::Result<SkMatrix> {
     if adjustment.width() <= 0. || adjustment.height() <= 0. {
         return Err(io::Error::other(
@@ -4264,7 +4258,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         &mut self,
         command: &DrawCommand,
         record: &PaintRecord,
-        provider: &mut dyn compositor::runtime::paint::CpuImageProvider<SkRegion>,
+        provider: &mut dyn cc_paint::CpuImageProvider<SkRegion>,
     ) -> io::Result<bool> {
         let Some(draw_image) = provider_draw_image(command, record, &self.target.local_to_device())
         else {
@@ -4282,11 +4276,11 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             return Err(io::Error::other("decoded software image is empty"));
         }
         let color_type = if *lease.format()
-            == compositor::adapter::resource_types::SinglePlaneFormat::RGBA_8888
+            == compositor_values::shared_image_format::SinglePlaneFormat::RGBA_8888
         {
             SkColorType::kRGBA_8888_SkColorType
         } else if *lease.format()
-            == compositor::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+            == compositor_values::shared_image_format::SinglePlaneFormat::BGRA_8888
         {
             SkColorType::kBGRA_8888_SkColorType
         } else {
@@ -4405,7 +4399,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         &mut self,
         command: &DrawCommand,
         record: &PaintRecord,
-        provider: &mut dyn compositor::runtime::paint::CpuImageProvider<SkRegion>,
+        provider: &mut dyn cc_paint::CpuImageProvider<SkRegion>,
     ) -> io::Result<bool> {
         let tile_rect = if command.tile_rect.width > 0. && command.tile_rect.height > 0. {
             command.tile_rect
@@ -4454,11 +4448,11 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             return Err(io::Error::other("decoded image shader allocation is empty"));
         }
         let color_type = if *lease.format()
-            == compositor::adapter::resource_types::SinglePlaneFormat::RGBA_8888
+            == compositor_values::shared_image_format::SinglePlaneFormat::RGBA_8888
         {
             SkColorType::kRGBA_8888_SkColorType
         } else if *lease.format()
-            == compositor::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+            == compositor_values::shared_image_format::SinglePlaneFormat::BGRA_8888
         {
             SkColorType::kBGRA_8888_SkColorType
         } else {
@@ -4675,8 +4669,8 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
 
     fn looped_shape(
         &mut self,
-        outer: &compositor::adapter::geometry::RRectF,
-        inner: Option<&compositor::adapter::geometry::RRectF>,
+        outer: &compositor_tree::geometry::RRectF,
+        inner: Option<&compositor_tree::geometry::RRectF>,
         flags: &CpuPaintFlags<SkRegion>,
         alpha: f32,
     ) {
@@ -5195,14 +5189,14 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
 
     fn draw_record_shader_rect(
         &mut self,
-        destination: &compositor::adapter::geometry::RectF,
+        destination: &compositor_tree::geometry::RectF,
         flags: &CpuPaintFlags<SkRegion>,
         folded_alpha: f32,
         record: &CpuPaintRecord<SkRegion>,
-        tile_rect: &compositor::adapter::geometry::RectF,
+        tile_rect: &compositor_tree::geometry::RectF,
         tile_mode_x: paint_model::cc::paint::tile_mode::TileMode,
         tile_mode_y: paint_model::cc::paint::tile_mode::TileMode,
-        local_matrix: Option<&compositor::runtime::geometry::Transform<SkRegion>>,
+        local_matrix: Option<&compositor_values::transform::Transform<SkRegion>>,
         params: &mut RasterPlaybackParams<'_, SkRegion>,
     ) -> io::Result<()> {
         if flags.image_filter.is_some() || flags.color_filter.is_some() || flags.looper.is_some() {
@@ -7202,8 +7196,8 @@ pub fn RasterizePaintOpsTransparent(
 
 fn PrepareRasterPlayback(
     canvas: &mut TranslatedCanvas<'_, '_>,
-    content_rect: &compositor::adapter::geometry::Rect,
-    playback_rect: &compositor::adapter::geometry::Rect,
+    content_rect: &compositor_tree::geometry::Rect,
+    playback_rect: &compositor_tree::geometry::Rect,
     requires_clear: bool,
 ) -> io::Result<()> {
     let is_partial_raster = content_rect != playback_rect;
@@ -7253,7 +7247,7 @@ impl RasterBackend for TranslatedSkiaBackend {
 
     fn RasterDragImage(
         &self,
-        record: &compositor::engine::ImmutablePaintRecord,
+        record: &cc_paint::CpuPaintRecord<cc_paint::skia_region::SkRegion>,
         layout_size: (f64, f64),
         paint_offset: (f64, f64),
         scale: f32,
@@ -7670,7 +7664,7 @@ mod tests {
                 height: 82.0,
                 ..Default::default()
             },
-            compositor::adapter::geometry::SizeF::new(0.5, 0.25),
+            compositor_tree::geometry::SizeF::new(0.5, 0.25),
         )
         .expect("valid decoded shader matrix");
 
@@ -7689,7 +7683,7 @@ mod tests {
                 height: 10.0,
                 ..Default::default()
             },
-            compositor::adapter::geometry::SizeF::new(0.0, 1.0),
+            compositor_tree::geometry::SizeF::new(0.0, 1.0),
         )
         .is_err());
     }
@@ -8853,8 +8847,8 @@ mod tests {
             .expect("test raster target");
         {
             let mut canvas = TranslatedCanvas::new(&mut target, false, 1.);
-            let content = compositor::adapter::geometry::Rect::new(10, 20, 8, 8);
-            let dirty = compositor::adapter::geometry::Rect::new(12, 22, 2, 3);
+            let content = compositor_tree::geometry::Rect::new(10, 20, 8, 8);
+            let dirty = compositor_tree::geometry::Rect::new(12, 22, 2, 3);
             PrepareRasterPlayback(&mut canvas, &content, &dirty, true)
                 .expect("prepare partial raster");
             canvas.unwind_to_depth(0);

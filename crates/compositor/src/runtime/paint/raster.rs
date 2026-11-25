@@ -4,9 +4,7 @@
 use super::*;
 use crate::{
     adapter::{
-        geometry::Size,
         prioritized_tile::ScrollOffsetMap,
-        resource_types::SharedImageFormat,
         tile_manager::{
             RasterImageProvider, RasterPlaybackRequest, TileManagerRasterBuffer,
             WorkletImageProvider,
@@ -21,16 +19,8 @@ use std::{io, sync::Arc};
 pub trait RasterFailureHandler: Send + Sync {
     fn OnRasterFailure(&self, error: io::Error);
 }
-pub type CpuTileRasterBufferValueFor<R> = dyn for<'a> RasterBuffer<
-    RasterSourceStorage<R>,
-    RasterTransform,
-    RasterImageProviderRef<'a, R>,
-    ScrollOffsetMap,
->;
-/// The production compositor has one feature-selected Skia value family. Keep
-/// that selection behind the injected pixel boundary; generic cc machinery
-/// continues to use `CpuTileRasterBufferValueFor<R>` internally.
-pub type TileRasterBufferValue = CpuTileRasterBufferValueFor<crate::runtime::skia::SkRegion>;
+// The tile raster buffer values of the cc/raster interface (cc_raster).
+pub use cc_raster::raster_buffer_provider::{CpuTileRasterBufferValueFor, TileRasterBufferValue};
 pub struct TileRasterBuffer<R: CpuSkiaBackend> {
     external: Box<CpuTileRasterBufferValueFor<R>>,
     failure: Arc<dyn RasterFailureHandler>,

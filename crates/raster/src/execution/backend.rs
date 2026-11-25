@@ -96,7 +96,7 @@ pub(super) trait RasterBackend: Send + Sync {
     ) -> io::Result<Option<image_resource::ImmutableImageBitmap>>;
     fn RasterDragImage(
         &self,
-        record: &compositor::engine::ImmutablePaintRecord,
+        record: &cc_paint::CpuPaintRecord<cc_paint::skia_region::SkRegion>,
         layout_size: (f64, f64),
         paint_offset: (f64, f64),
         scale: f32,

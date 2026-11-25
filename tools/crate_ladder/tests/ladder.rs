@@ -66,6 +66,9 @@ const ROOTS: &[(&str, Root)] = &[
     ("compositor_values", Root::Value),
     ("compositor_animation", Root::Value),
     ("cc_paint", Root::Value),
+    // cc/raster service interfaces (RasterSource, RasterBufferProvider, the
+    // UI-resource raster capability) the raster service implements.
+    ("cc_raster", Root::Value),
     // components/viz/common: the CompositorFrame values cc fills and Viz and
     // the renderer read (crates/viz/viz_common).
     ("viz_common", Root::Value),
@@ -307,14 +310,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // (`Member<const CSSPropertyValueSet>`); Layout writes it during
     // out-of-flow layout.
     ("layout_base", "cssom", "third_party/blink/renderer/core/css/out_of_flow_data.h"),
-    // Temporary (crate ladder B1-B4); each step removes its entries.
-    // Raster names its cc paint values from cc_paint through the compositor
-    // and implements cc's injected raster service traits
-    // (RasterBufferProviderBackend, TilingRasterSource, PictureRasterSource,
-    // HostUI*), which still live in the compositor facade; cc/raster/
-    // raster_buffer_provider.h and cc/raster/raster_source.h are their
-    // Chromium homes. Clears when those interfaces move to a cc root.
-    ("raster", "compositor", "B2: cc raster service traits move to a cc root"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

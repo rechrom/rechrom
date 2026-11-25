@@ -251,7 +251,7 @@ fn StraightDragBitmap(
 /// border-box properties. Replay never scans/crops the ordinary Page artifact.
 pub(super) fn RasterDragImage(
     backend: &TranslatedSkiaBackend,
-    record: &compositor::engine::ImmutablePaintRecord,
+    record: &cc_paint::CpuPaintRecord<cc_paint::skia_region::SkRegion>,
     layout_size: (f64, f64),
     paint_offset: (f64, f64),
     scale: f32,

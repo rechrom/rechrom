@@ -10,12 +10,8 @@ use super::{
 use crate::cc::layers::recording_source::RecordingSource;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PartialRasterFullReplay {
-    pub outer: Rect,
-    pub inner: Rect,
-    pub replay_rect: Rect,
-}
+// cc::RasterSource partial-raster replay value (cc_raster).
+pub use cc_raster::raster_source::PartialRasterFullReplay;
 
 pub trait RecordingDisplayItemList<I>: Send + Sync {
     fn bounds(&self) -> Option<Rect>;
