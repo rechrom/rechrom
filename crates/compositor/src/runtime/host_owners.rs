@@ -394,38 +394,8 @@ impl<R: super::types::CpuSkiaBackend> RenderFrameMetadataObserver<R> {
 /// visibility state; the compositor neither caches that state nor emulates it.
 pub trait ContextVisibilityBackend {}
 pub struct ContextVisibility(pub Box<dyn ContextVisibilityBackend>);
-/// Animation events stay in their native animation subsystem allocation.
-/// The host only tests emptiness and transfers the same owner to the mutator.
-/// `Send`: ProxyImpl::ScheduledActionSendBeginMainFrame moves the events to
-/// ProxyMain::BeginMainFrame inside BeginMainFrameAndCommitState
-/// (cc/trees/proxy_impl.cc:820, proxy_main.cc:351-352).
-pub trait MutatorEventsBackend: Send {
-    fn IsEmpty(&self) -> bool;
-    fn WithScrollAnimationEvents(
-        &mut self,
-        callback: &mut dyn FnMut(
-            &mut crate::cc::animation::animation_events::AnimationEvents<
-                crate::cc::animation::keyframe_model::CompositorAnimationCurve,
-            >,
-        ),
-    );
-}
-pub struct MutatorEvents(pub Box<dyn MutatorEventsBackend>);
-impl MutatorEvents {
-    pub(crate) fn WithScrollAnimationEvents(
-        &mut self,
-        callback: &mut dyn FnMut(
-            &mut crate::cc::animation::animation_events::AnimationEvents<
-                crate::cc::animation::keyframe_model::CompositorAnimationCurve,
-            >,
-        ),
-    ) {
-        self.0.WithScrollAnimationEvents(callback)
-    }
-    pub(crate) fn IsEmpty(&self) -> bool {
-        self.0.IsEmpty()
-    }
-}
+/// cc::MutatorEvents (cc/trees/mutator_host.h), shared with the main half.
+pub use layerize::commit::mutator_host::{MutatorEvents, MutatorEventsBackend};
 /// cc::LayerTreeMutator (cc/trees/layer_tree_mutator.h) is a shared cc owner:
 /// the main thread creates it and ProxyMain::SetMutator moves it to the impl
 /// AnimationHost.

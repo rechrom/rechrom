@@ -780,12 +780,8 @@ pub struct HostImplNamedTrack {
 // LayerTreeTypes::SwapPromise additionally: adapter::commit_types::SwapPromise + 'static.
 // HostImplTypes adds: type HostTraceValue: HostTraceValue;
 
-// Source dependency: cc/trees/mutator_host.h:29-38.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct HostAnimationTickResult {
-    pub animated: bool,
-    pub needs_next_frame: bool,
-}
+// Source dependency: cc/trees/mutator_host.h:29-38 (shared cc value).
+pub use layerize::commit::mutator_host::HostAnimationTickResult;
 // Source dependency: cc/metrics/frame_sequence_metrics.h:29-49.
 // Named projection into external cc/metrics/FrameSequenceTrackerType. Not a
 // substitute tracker or a second metric state. Backend maps these names exactly.
@@ -1116,15 +1112,8 @@ pub trait HostImplLayerServices<B: HostImplTypes> {
 
 use super::layer_tree_impl::{ElementListType, LayerTreeTypes};
 use super::time::TimeTicks;
-// Source dependency: cc/trees/mutator_host_delegate.h:27-32.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(i32)]
-pub enum AnimationWorkletMutationState {
-    STARTED = 0,
-    COMPLETED_WITH_UPDATE = 1,
-    COMPLETED_NO_UPDATE = 2,
-    CANCELED = 3,
-}
+// Source dependency: cc/trees/mutator_host_delegate.h:27-32 (shared cc value).
+pub use layerize::commit::mutator_host::AnimationWorkletMutationState;
 // Source: cc/trees/layer_tree_host_impl.cc:173-179.
 
 // Source dependency: components/viz/common/surfaces/child_local_surface_id_allocator.h:39.

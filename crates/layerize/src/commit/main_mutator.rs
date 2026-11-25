@@ -12,11 +12,13 @@
 //! property_trees)`, cc/trees/layer_tree_impl.cc:814-817), i.e. inside the
 //! protected sequence of the commit lease.
 //!
-//! The AnimationHost itself is a compositor-engine object (its timelines,
-//! keyframe effects and scroll-offset animations are compositor crates), so
-//! the main half names it only through this trait. `LayerizeEngine` owns the
-//! main instance (the LayerTreeView role) and the main LayerTreeHost stores
-//! the same owner as `ThreadUnsafeCommitState::mutator_host`.
+//! The AnimationHost itself is the shared cc owner
+//! `super::animation_host::AnimationHostOwner` (its timelines, keyframe
+//! effects and scroll-offset animations are compositor_animation values); main
+//! code generic over the family names it only through this trait.
+//! `LayerizeEngine` owns the main instance (the LayerTreeView role) and the
+//! main LayerTreeHost stores the same owner as
+//! `ThreadUnsafeCommitState::mutator_host`.
 use super::input_types::ElementId;
 use compositor_animation::compositor_mutation::PropertyAnimationMutation;
 use scroll_animation::compositor_mutation::{ScrollAnimationCompletion, ScrollAnimationMutation};

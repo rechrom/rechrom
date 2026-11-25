@@ -6,6 +6,9 @@
 
 // ui/gfx/color_space.h moved to the cc value root.
 pub use compositor_values::color_space;
+// cc/animation/animation_host.h: the one AnimationHost class serving the
+// main and the impl instance.
+pub mod animation_host;
 pub mod commit_state;
 pub mod completion_event;
 pub mod geometry;
@@ -20,6 +23,7 @@ pub mod layerize_family;
 pub mod main_callbacks;
 pub mod main_effects;
 pub mod main_mutator;
+pub mod mutator_host;
 pub mod main_paint_config;
 pub mod paint_holding;
 pub mod property_tree;

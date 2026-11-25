@@ -72,10 +72,7 @@ pub enum ClientSequence {
     MainThreadAnimation,
     SETMainThreadAnimation,
 }
-pub struct TrackedAnimationSequenceInfo {
-    pub id: usize,
-    pub start: bool,
-}
+pub use layerize::commit::mutator_host::TrackedAnimationSequenceInfo;
 
 /// A benchmark call can borrow every actual resource it reads without lending
 /// the controller that is executing the callback. The source owner is never

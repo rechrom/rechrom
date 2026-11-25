@@ -226,7 +226,10 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
 and `ProxyMain`. Its public `layerize::commit` module is the commit vocabulary
 shared with the impl side (`CommitState`, `ThreadUnsafeCommitState`, cc
 property trees, cc paint records and display lists, proxy messages,
-`CompletionEvent`, push-target traits, `LayerizeFamily`). Main code is generic
+`CompletionEvent`, push-target traits, `LayerizeFamily`, and the cc owners
+both hosts hold: the one `AnimationHost` class for the main and the impl
+instance, `MutatorHost`, `SwapPromise`, UI-resource and view-transition
+requests). Main code is generic
 over `F: LayerizeFamily` only. Blink paint property nodes are read only here.
 Layerize packages depend only on the cc shared roots (below), never on a
 Compositor impl package or the `compositor` facade. Guard:
@@ -247,8 +250,8 @@ with `ProxyImpl` receiving the commit.
   render surfaces, quads) → `compositor_frame` (the moved `CompositorFrame`).
 - `compositor` is the Page-facing facade of the impl side. The cc shared
   roots `scroll_snap`, `scroll_animation`, `compositor_tree` (cc property
-  trees and their nodes), `compositor_animation` (cc/animation, one
-  AnimationHost class for the main and the impl instance) and
+  trees and their nodes), `compositor_animation` (cc/animation: animations,
+  timelines, keyframe models and scroll-offset animations) and
   `compositor_values` (cc input, settings, viz and gfx values named by both
   sides, including `gfx::Transform`, `gfx::ColorSpace` and the
   `InputToImpl` input-queue messages) and `cc_paint` (cc/paint: PaintRecord,

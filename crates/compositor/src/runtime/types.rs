@@ -119,8 +119,5 @@ impl crate::adapter::layer_impl::LayerImplDeletionTrace for DeletionTrace {
     }
 }
 
-/// Native ThreadUnsafeCommitState's non-owning MutatorHost* identity. The
-/// actual animation owner remains in its existing subsystem and is never
-/// resolved through a global registry or retained by a Layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MainMutatorHostIdentity(pub u64);
+/// Native ThreadUnsafeCommitState's non-owning MutatorHost* identity (shared).
+pub use layerize::commit::mutator_host::MainMutatorHostIdentity;

@@ -36,7 +36,7 @@ impl<R: CpuSkiaBackend> layerize::commit::proxy::ProxyTypes for CpuCompositorTyp
     // ProxyMain::SetMutator (cc/trees/proxy_main.cc:959-965).
     type LayerTreeMutator = compositor_values::layer_tree_mutator::LayerTreeMutator;
     // ProxyMain::InitializeOnImplThread (proxy_main.cc:80-89).
-    type ImplInit = Box<super::engine_factory::ProxyImplInit<R>>;
+    type ImplInit = Box<layerize::commit::proxy::ProxyImplInit>;
     type ProxyDrawImage = ();
 }
 
@@ -517,7 +517,7 @@ impl<R: CpuSkiaBackend> crate::adapter::commit_state::CommitStateTypes for CpuCo
     type MainLayerRef = LayerBorrow<Self>;
     // The main AnimationHost itself (commit_state.h:205 raw_ptr<MutatorHost>);
     // its MutatorEvents are LayerTreeHostImpl::TakeMutatorEvents' value.
-    type MutatorHostHandle = super::animation_host::AnimationHostOwner;
+    type MutatorHostHandle = layerize::commit::animation_host::AnimationHostOwner;
 }
 
 /// Assembly entry to the canonical most-derived PictureLayerImpl constructor.

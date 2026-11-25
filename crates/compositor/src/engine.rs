@@ -360,7 +360,7 @@ pub type MainToImplTask = layerize::commit::proxy::MainToImpl<MainFamily>;
 pub type ImplToMainTask = layerize::commit::proxy::ImplToMain<MainFamily>;
 /// The posted BeginMainFrameAndCommitState of this family.
 pub type BeginMainFrameState = layerize::commit::proxy::BeginMainFrameAndCommitState<MainFamily>;
-pub type ProxyImplInit = crate::runtime::engine_factory::ProxyImplInit<crate::runtime::skia::SkRegion>;
+pub type ProxyImplInit = layerize::commit::proxy::ProxyImplInit;
 /// The main half's PropertyTreeFeatures (draw_property_utils /
 /// LayerTreeHost::UpdateLayers inputs), built from the same settings as the
 /// impl half's.
