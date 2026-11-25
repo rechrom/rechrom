@@ -10,7 +10,7 @@ use super::{
     layer_tree_impl::LayerTreeImpl,
 };
 #[cfg(debug_assertions)]
-use crate::adapter::layer_tree_impl::PropertyTreesFor;
+use crate::adapter::layer_tree_impl::MainPropertyTreesFor;
 use crate::adapter::{
     layer_tree_impl::{
         LayerTreeLayer, LayerTreeLayerContext, LayerTreeLayerList, LayerTreeLayerStorage,
@@ -21,7 +21,7 @@ use crate::adapter::{
 #[cfg(debug_assertions)]
 fn AssertValidMainPropertyTreeIndices<B: SyncTypes>(
     layer: &B::MainLayer,
-    trees: &PropertyTreesFor<B>,
+    trees: &MainPropertyTreesFor<B>,
     c: &crate::adapter::main_layer::LayerContext<'_, B>,
 ) {
     debug_assert!(layer.transform_tree_index_is_valid(trees, c));
@@ -188,7 +188,8 @@ impl TreeSynchronizer {
         tree_context: &mut super::layer_tree_impl::LayerTreeContext<'_, B>,
         context: &mut C,
     ) where
-        for<'a> B: crate::adapter::main_layer::MainLayerTypes<
+        for<'a> B::Layer: crate::adapter::main_layer::MainLayerImpl<
+            B,
             ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
         >,
     {

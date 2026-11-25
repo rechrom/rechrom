@@ -16,7 +16,7 @@ use crate::{
         input_types::ElementId,
         layer_tree_host_impl::HostAnimationTickResult,
         layer_tree_impl::{
-            ElementListType, LayerTreeHostId, LayerTreeMutatorHost, PropertyTreesFor,
+            ElementListType, LayerTreeHostId, LayerTreeMutatorHost, MainPropertyTreesFor,
         },
         property_tree::PropertyTreeMutatorHost,
         time::{TimeDelta, TimeTicks},
@@ -224,7 +224,7 @@ struct AnimationActivationAdapter<'borrow, 'target> {
 
 struct TimelinePropertyPushAdapter<'owner, 'trees> {
     target_owner: &'owner AnimationHostOwner,
-    property_trees: &'trees PropertyTreesFor<CompositorTypes>,
+    property_trees: &'trees MainPropertyTreesFor<CompositorTypes>,
 }
 
 impl
@@ -962,7 +962,7 @@ impl AnimationHostOwner {
     pub(crate) fn PushMutatorPropertiesTo(
         &self,
         target: &mut MutatorHost,
-        property_trees: &PropertyTreesFor<CompositorTypes>,
+        property_trees: &MainPropertyTreesFor<CompositorTypes>,
     ) {
         debug_assert_eq!(
             self.thread_instance,
@@ -1137,7 +1137,7 @@ impl AnimationHostOwner {
     pub(crate) fn TickMutator(
         &self,
         _time: TimeTicks,
-        _trees: &PropertyTreesFor<CompositorTypes>,
+        _trees: &crate::adapter::layer_tree_impl::PropertyTreesFor<CompositorTypes>,
         _is_active: bool,
     ) {
         let mut state = self.lock();
@@ -1240,7 +1240,7 @@ impl KeyframeModelTrace for KeyframeTraceScope {
 struct AnimationCall<'a> {
     owner: &'a AnimationHostOwner,
     target: Option<&'a mut dyn AnimationMutationTarget>,
-    property_trees: Option<&'a PropertyTreesFor<CompositorTypes>>,
+    property_trees: Option<&'a MainPropertyTreesFor<CompositorTypes>>,
     selected_element: Option<ElementId>,
     // Timeline methods own their mutex while entering Animation. Preserve the
     // already-known kind in this synchronous call context so Animation does
@@ -1402,7 +1402,7 @@ impl<'a> AnimationCall<'a> {
 
     fn with_property_trees(
         owner: &'a AnimationHostOwner,
-        property_trees: &'a PropertyTreesFor<CompositorTypes>,
+        property_trees: &'a MainPropertyTreesFor<CompositorTypes>,
     ) -> Self {
         Self {
             owner,

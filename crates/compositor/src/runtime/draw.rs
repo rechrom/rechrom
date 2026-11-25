@@ -40,7 +40,7 @@ fn layer_id<B: LayerTreeTypes>(layer: &B::Layer) -> i32 {
 }
 pub type LayerIds<'a, B> = std::iter::Map<
     <<B as LayerTreeTypes>::LayerList as LayerTreeLayerList<B>>::Iter<'a>,
-    fn(&<B as layerize::commit::CommitTypes>::Layer) -> i32,
+    fn(&<B as LayerTreeTypes>::Layer) -> i32,
 >;
 
 pub struct DrawContext<'a, B: RenderSurfaceTypes> {

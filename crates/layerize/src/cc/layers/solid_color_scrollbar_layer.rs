@@ -170,19 +170,11 @@ impl<B: SolidColorScrollbarLayerTypes> LayerObject<B> for SolidColorScrollbarLay
     fn IsScrollbarLayerForTesting(&self) -> bool {
         self.base_.IsScrollbarLayerForTesting()
     }
-    // Source: cc/layers/solid_color_scrollbar_layer.h:20-21; cc/layers/solid_color_scrollbar_layer.cc:16-21.
-    fn CreateLayerImpl(
-        &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-        _c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
-        tree.CreateSolidColorScrollbarLayer(
-            self.base().id(),
-            self.base_.orientation(),
-            self.thumb_thickness_,
-            self.track_start_,
-            self.base_.is_left_side_vertical_scrollbar(),
-        )
+    fn DerivedLayer(&self) -> super::layer::DerivedLayerRef<'_, B>
+    where
+        B: super::layer::DerivedLayerTypes,
+    {
+        super::layer::DerivedLayerRef::SolidColorScrollbar(self)
     }
     // Source: cc/layers/solid_color_scrollbar_layer.h:38; cc/layers/solid_color_scrollbar_layer.cc:77-81.
     fn SetOpacity(&self, opacity: f32, c: &mut LayerContext<'_, B>) {
@@ -195,21 +187,6 @@ impl<B: SolidColorScrollbarLayerTypes> LayerObject<B> for SolidColorScrollbarLay
     fn OpacityCanAnimateOnImplThread(&self) -> bool {
         true
     }
-    // Source: cc/layers/solid_color_scrollbar_layer.h:51-53; cc/layers/solid_color_scrollbar_layer.cc:94-103.
-    fn PushDirtyPropertiesTo(
-        &self,
-        target: &mut B::Layer,
-        dirty: u8,
-        commit: &mut CommitState<B>,
-        c: &mut LayerContext<'_, B>,
-        tree: &mut B::ImplContext<'_>,
-    ) {
-        self.base_
-            .PushDirtyPropertiesTo(target, dirty, commit, c, tree);
-        if dirty & Layer::<B>::kChangedGeneralProperty != 0 {
-            target.scrollbar_set_color(self.color(c), tree);
-        }
-    }
     // Source: cc/layers/solid_color_scrollbar_layer.h:40; cc/layers/solid_color_scrollbar_layer.cc:105-110.
     fn SetLayerTreeHost(
         &self,
@@ -220,6 +197,38 @@ impl<B: SolidColorScrollbarLayerTypes> LayerObject<B> for SolidColorScrollbarLay
         if host != self.base().host_id() {
             LayerObject::SetLayerTreeHost(self.base(), allocation, host, c);
             self.SetColor(self.color(c), c);
+        }
+    }
+}
+impl<B: SolidColorScrollbarLayerTypes> SolidColorScrollbarLayer<B> {
+    // Source: cc/layers/solid_color_scrollbar_layer.h:20-21; cc/layers/solid_color_scrollbar_layer.cc:16-21.
+    pub(crate) fn CreateLayerImpl<L>(
+        &self,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+    ) -> Box<L> {
+        tree.CreateSolidColorScrollbarLayer(
+            self.base().id(),
+            self.base_.orientation(),
+            self.thumb_thickness_,
+            self.track_start_,
+            self.base_.is_left_side_vertical_scrollbar(),
+        )
+    }
+    // Source: cc/layers/solid_color_scrollbar_layer.h:51-53; cc/layers/solid_color_scrollbar_layer.cc:94-103.
+    pub(crate) fn PushDirtyPropertiesTo<
+        T: crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<B>,
+    >(
+        &self,
+        target: &mut T,
+        dirty: u8,
+        commit: &mut CommitState<B>,
+        c: &mut LayerContext<'_, B>,
+        tree: &mut T::ImplContext<'_>,
+    ) {
+        self.base_
+            .PushDirtyPropertiesTo(target, dirty, commit, c, tree);
+        if dirty & Layer::<B>::kChangedGeneralProperty != 0 {
+            target.scrollbar_set_color(self.color(c), tree);
         }
     }
 }

@@ -70,42 +70,13 @@ impl<R: CpuSkiaBackend> layerize::commit::layerize_family::LayerizeFamily
         use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
         bitmap.GetSize()
     }
-    // Source draw_property_utils.cc:1590-1605. The runtime DrawContext type
-    // is used only as the canonical CPU type family for ComputeClips; no
-    // impl-side tree, layer, or host object is constructed or queried.
-    // Moved from the main host's UpdateLayers (layerize runtime/main_host.rs).
-    fn UpdateMainPropertyTrees(
-        trees: &mut PropertyTreesFor<Self>,
-        ids: &crate::cc::trees::viewport_property_ids::ViewportPropertyIds,
-        features: &dyn crate::adapter::property_tree::PropertyTreeFeatures,
-    ) {
-        if trees.transform_tree().needs_update() {
-            trees.clip_tree_mutable().set_needs_update(true);
-            trees.effect_tree_mutable().set_needs_update(true);
-        }
-        {
-            let (tree, mut context) = trees.transform_tree_with_context();
-            crate::cc::trees::draw_property_utils::ComputeTransforms(tree, ids, &mut context);
-        }
-        {
-            let (tree, mut context) = trees.effect_tree_with_context(features);
-            crate::cc::trees::draw_property_utils::ComputeEffects::<
-                super::draw::DrawContext<'_, Self>,
-            >(tree, &mut context);
-        }
-        crate::cc::trees::draw_property_utils::ComputeClips::<super::draw::DrawContext<'_, Self>>(
-            trees,
-        );
-    }
 }
 impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> {
     type Transform = Transform<R>;
     type RegionBackend = R;
-    type Layer = CompositorLayer<Self>;
     type UIResourceBitmap = super::host_resources::UIBitmap;
     type Filters = R::Filters;
     type Path = R::Path;
-    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
     type CopyOutputRequest = super::types::CopyOutputRequest;
     type DisplayColorSpaces = super::resources::RasterDisplayColorSpaces;
     type LocalSurfaceId = super::types::LocalSurfaceId;
@@ -124,6 +95,8 @@ impl<R: CpuSkiaBackend> layerize::commit::CommitTypes for CpuCompositorTypes<R> 
     type ViewTransitionRequest = super::host_owners::ViewTransitionRequest;
 }
 impl<R: CpuSkiaBackend> LayerTreeTypes for CpuCompositorTypes<R> {
+    type Layer = CompositorLayer<Self>;
+    type RenderSurface = crate::cc::layers::render_surface_impl::RenderSurfaceImpl<Self>;
     type LayerTraceValue = super::host::TraceValue;
     type LayerStorage<'a> = LayerStorage<'a, CompositorLayer<Self>>;
     type LayerRemaining<'a> = LayerStorageRemaining<'a, CompositorLayer<Self>>;
@@ -233,7 +206,6 @@ impl<R: CpuSkiaBackend> layerize::commit::push_properties::PushPropertiesTypes
     type TrackedElementRects = super::metadata::TrackedElementRects;
     type FilterQuality = super::paint::FilterQuality;
     type DynamicRangeLimit = super::paint::DynamicRangeLimit;
-    type ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, Self>;
 }
 impl<R: CpuSkiaBackend>
     crate::adapter::scrollbar_layer_base::ScrollbarLayerImplTarget<CpuCompositorTypes<R>>
@@ -254,7 +226,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_SetHasFindInPageTickmarks(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
+        tree: &mut crate::adapter::layer_impl::LayerImplContext<'_, CpuCompositorTypes<R>>,
     ) {
         crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
             self,
@@ -266,7 +238,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_SetScrollElementId(
         &mut self,
         value: crate::adapter::input_types::ElementId,
-        _tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
+        _tree: &mut crate::adapter::layer_impl::LayerImplContext<'_, CpuCompositorTypes<R>>,
     ) {
         crate::cc::layers::scrollbar_layer_impl_base::ScrollbarLayerImplOwner::AsScrollbarBaseMutable(
             self,
@@ -326,7 +298,7 @@ impl<R: CpuSkiaBackend>
     fn scrollbar_set_color(
         &mut self,
         color: crate::adapter::layer_tree_impl::Color4f,
-        _tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
+        _tree: &mut crate::adapter::layer_impl::LayerImplContext<'_, CpuCompositorTypes<R>>,
     ) {
         let CompositorLayer::SolidColorScrollbar(layer) = self else {
             panic!("native solid-color scrollbar target subtype")
@@ -341,7 +313,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
         &mut self,
         range: <CpuCompositorTypes<R> as layerize::commit::CommitTypes>::SurfaceRange,
         deadline: Option<u32>,
-        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
+        tree: &mut crate::adapter::layer_impl::LayerImplContext<'_, CpuCompositorTypes<R>>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -352,7 +324,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
     fn SurfaceSetStretchContentToFillBounds(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
+        tree: &mut crate::adapter::layer_impl::LayerImplContext<'_, CpuCompositorTypes<R>>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")
@@ -363,7 +335,7 @@ impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<Cp
     fn SurfaceSetIsReflection(
         &mut self,
         value: bool,
-        tree: &mut <CpuCompositorTypes<R> as layerize::commit::push_properties::PushPropertiesTypes>::ImplContext<'_>,
+        tree: &mut crate::adapter::layer_impl::LayerImplContext<'_, CpuCompositorTypes<R>>,
     ) {
         let CompositorLayer::Surface(layer) = self else {
             panic!("native SurfaceLayerImpl target subtype")

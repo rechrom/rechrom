@@ -4,25 +4,29 @@
 // found in the LICENSE file.
 // Source: cc/trees/draw_property_utils.h:1-124; cc/trees/draw_property_utils.cc:1-51.
 use super::{
-    clip_node::{ClipNode, ConditionalClip},
+    clip_node::ConditionalClip,
     effect_node::{EffectNode, RenderSurfaceReason, RenderSurfaceReasonToString},
     property_ids::*,
-    property_tree::{ClipTree, EffectTree, EffectTreeContext, TransformTree, TransformTreeContext},
+    property_tree::{ClipTree, TransformTree},
     transform_node::TransformNode,
-    viewport_property_ids::ViewportPropertyIds,
 };
 use crate::adapter::{
     draw_property::*,
-    geometry::{Rect, RectF, ToEnclosingRectIgnoringError, Transform, Vector2dF},
+    geometry::{Rect, RectF, Transform, Vector2dF},
     property_tree::{PropertyTreeFilters, PropertyTreeTransform},
     property_types::{MaskFilterInfo, ViewTransitionElementResourceId},
 };
 use crate::cc::base::math_util::MathUtil;
 use std::collections::BTreeMap;
-// Source: cc/trees/draw_property_utils.cc:52-55.
-fn ToEnclosingClipRect(rect: RectF) -> Rect {
-    ToEnclosingRectIgnoringError(rect, 0.00001)
-}
+// The property-tree updates and clip mapping shared with the main
+// LayerTreeHost (UpdatePropertyTrees(LayerTreeHost*)) live with the shared
+// property trees; this module keeps the impl-only draw-property walk.
+use layerize::commit::draw_property_utils::{
+    ApplyClipNodeToAccumulatedClip, ComputeCurrentClip, ToEnclosingClipRect,
+};
+pub use layerize::commit::draw_property_utils::{
+    ComputeClips, ComputeEffects, ComputeTransforms, ConcatInverseSurfaceContentsScale,
+};
 // Source: cc/trees/draw_property_utils.cc:57-63.
 fn IsRootLayer<C: DrawContext>(context: &C, layer: C::Layer, _main_thread: bool) -> bool {
     // Native overload is selected by the actual context's Layer/LayerImpl
@@ -30,43 +34,6 @@ fn IsRootLayer<C: DrawContext>(context: &C, layer: C::Layer, _main_thread: bool)
     context.IsRootLayer(layer)
 }
 
-// Source: cc/trees/draw_property_utils.cc:65-70.
-fn PostConcatSurfaceContentsScale<C: DrawContext>(
-    node: &EffectNode<C::Filters, C::Path>,
-    transform: &mut C::Transform,
-) {
-    debug_assert!(node.HasRenderSurface());
-    transform.PostScale(
-        node.surface_contents_scale.x(),
-        node.surface_contents_scale.y(),
-    );
-}
-// Source: cc/trees/draw_property_utils.cc:72-104.
-fn ConvertRectBetweenSurfaceSpaces<C: DrawContext>(
-    p: &DrawPropertyTrees<C>,
-    source_effect_id: i32,
-    dest_effect_id: i32,
-    clip_in_source_space: RectF,
-    clip_in_dest_space: &mut RectF,
-) -> bool {
-    let source = p.effect_tree().Node(source_effect_id);
-    let dest = p.effect_tree().Node(dest_effect_id);
-    let mut transform = C::Transform::default();
-    if source.transform_id > dest.transform_id {
-        if p.GetToTarget(source.transform_id, dest_effect_id, &mut transform) {
-            ConcatInverseSurfaceContentsScale::<C>(source, &mut transform);
-            *clip_in_dest_space = MathUtil::MapClippedRect(&transform, clip_in_source_space);
-        } else {
-            return false;
-        }
-    } else if p.GetFromTarget(dest.transform_id, source_effect_id, &mut transform) {
-        PostConcatSurfaceContentsScale::<C>(dest, &mut transform);
-        *clip_in_dest_space = MathUtil::ProjectClippedRect(&transform, clip_in_source_space);
-    } else {
-        return false;
-    }
-    true
-}
 // Source: cc/trees/draw_property_utils.cc:106-125.
 fn ComputeTargetRectInLocalSpace<C: DrawContext>(
     rect: RectF,
@@ -87,105 +54,6 @@ fn ComputeTargetRectInLocalSpace<C: DrawContext>(
             MathUtil::ProjectClippedRect(&transform, rect)
         },
     }
-}
-// Source: cc/trees/draw_property_utils.cc:127-146.
-fn ComputeLocalRectInTargetSpace<C: DrawContext>(
-    rect: RectF,
-    p: &DrawPropertyTrees<C>,
-    current_transform_id: i32,
-    target_transform_id: i32,
-    target_effect_id: i32,
-) -> ConditionalClip {
-    let mut transform = C::Transform::default();
-    if !p.GetToTarget(current_transform_id, target_effect_id, &mut transform) {
-        return ConditionalClip::default();
-    }
-    ConditionalClip {
-        is_clipped: true,
-        clip_rect: if current_transform_id > target_transform_id {
-            MathUtil::MapClippedRect(&transform, rect)
-        } else {
-            MathUtil::ProjectClippedRect(&transform, rect)
-        },
-    }
-}
-// Source: cc/trees/draw_property_utils.cc:148-168.
-fn ComputeCurrentClip<C: DrawContext>(
-    node: &ClipNode,
-    p: &DrawPropertyTrees<C>,
-    target_transform_id: i32,
-    target_effect_id: i32,
-) -> ConditionalClip {
-    if node.transform_id != target_transform_id {
-        return ComputeLocalRectInTargetSpace::<C>(
-            node.clip,
-            p,
-            node.transform_id,
-            target_transform_id,
-            target_effect_id,
-        );
-    }
-    let mut clip = node.clip;
-    let scale = p
-        .effect_tree()
-        .Node(target_effect_id)
-        .surface_contents_scale;
-    if scale.x() > 0.0 && scale.y() > 0.0 && node.transform_id != kRootPropertyNodeId {
-        clip.Scale(scale.x(), scale.y());
-    }
-    ConditionalClip {
-        is_clipped: true,
-        clip_rect: clip,
-    }
-}
-// Source: cc/trees/draw_property_utils.cc:170-205.
-fn ExpandClipForPixelMovingFilter<C: DrawContext>(
-    p: &DrawPropertyTrees<C>,
-    target_id: i32,
-    node: &EffectNode<C::Filters, C::Path>,
-    clip: &mut RectF,
-) -> bool {
-    let mut mapping = RectF::default();
-    if !ConvertRectBetweenSurfaceSpaces::<C>(p, target_id, node.id, *clip, &mut mapping) {
-        return false;
-    }
-    let expanded = RectF::from(
-        node.filters
-            .ExpandRect(ToEnclosingClipRect(mapping), node.surface_contents_scale),
-    );
-    let original = *clip;
-    if !ConvertRectBetweenSurfaceSpaces::<C>(p, node.id, target_id, expanded, clip) {
-        return false;
-    }
-    clip.Union(original);
-    true
-}
-// Source: cc/trees/draw_property_utils.cc:207-231.
-fn ApplyClipNodeToAccumulatedClip<C: DrawContext>(
-    p: &DrawPropertyTrees<C>,
-    include_expanding_clips: bool,
-    target_id: i32,
-    target_transform_id: i32,
-    node: &ClipNode,
-    clip: &mut RectF,
-) -> bool {
-    if !node.AppliesLocalClip() {
-        if !include_expanding_clips {
-            return true;
-        }
-        return ExpandClipForPixelMovingFilter::<C>(
-            p,
-            target_id,
-            p.effect_tree().Node(node.pixel_moving_filter_id),
-            clip,
-        );
-    }
-    let current = ComputeCurrentClip::<C>(node, p, target_transform_id, target_id);
-    if !current.is_clipped {
-        return false;
-    }
-    clip.Intersect(current.clip_rect);
-    true
 }
 // Source: cc/trees/draw_property_utils.cc:233-350.
 fn ComputeAccumulatedClip<C: DrawContext>(
@@ -240,7 +108,7 @@ fn ComputeAccumulatedClip<C: DrawContext>(
     let mut accumulated;
     if cache_hit && cached_clip.is_clipped {
         accumulated = cached_clip.clip_rect;
-        if !ApplyClipNodeToAccumulatedClip::<C>(
+        if !ApplyClipNodeToAccumulatedClip(
             p,
             include_expanding_clips,
             target_id,
@@ -259,7 +127,7 @@ fn ComputeAccumulatedClip<C: DrawContext>(
             cached_data.clip = unclipped;
             return unclipped;
         }
-        let current = ComputeCurrentClip::<C>(node, p, target_transform_id, target_id);
+        let current = ComputeCurrentClip(node, p, target_transform_id, target_id);
         if !current.is_clipped {
             cached_data.clip = unclipped;
             return unclipped;
@@ -268,7 +136,7 @@ fn ComputeAccumulatedClip<C: DrawContext>(
     }
     while let Some(id) = parent_chain.pop() {
         node = clips.Node(id);
-        if !ApplyClipNodeToAccumulatedClip::<C>(
+        if !ApplyClipNodeToAccumulatedClip(
             p,
             include_expanding_clips,
             target_id,
@@ -663,7 +531,7 @@ fn SetSurfaceDrawTransform<C: DrawContext>(p: &mut DrawPropertyTrees<C>, surface
     let mut transform = C::Transform::default();
     let target = effects.Node(effect.target_id);
     p.GetToTarget(node.id, target.id, &mut transform);
-    ConcatInverseSurfaceContentsScale::<C>(effect, &mut transform);
+    ConcatInverseSurfaceContentsScale(effect, &mut transform);
     let mut offset = Vector2dF::default();
     transform.PostTranslate(
         effects
@@ -853,77 +721,6 @@ impl<C: DrawContext> compositor_tree_sync::render_target_update::RenderTargetUpd
 fn UpdateRenderTarget<C: DrawContext>(context: &C, p: &mut DrawPropertyTrees<C>) {
     let mut adapter = RenderTargetUpdateAdapter { context, p };
     compositor_tree_sync::render_target_update::UpdateRenderTargets(&mut adapter);
-}
-// Source: cc/trees/draw_property_utils.cc:858-885.
-struct ClipTreeUpdateAdapter<'a, C: DrawContext> {
-    p: &'a mut DrawPropertyTrees<C>,
-}
-
-impl<C: DrawContext> compositor_tree_sync::clip_tree_update::ClipTreeUpdateContext
-    for ClipTreeUpdateAdapter<'_, C>
-{
-    fn needs_update(&self) -> bool {
-        self.p.clip_tree().needs_update()
-    }
-
-    fn first_node_id(&self) -> i32 {
-        kViewportPropertyNodeId
-    }
-
-    fn node_count(&self) -> i32 {
-        self.p.clip_tree().size() as i32
-    }
-
-    fn clear_node_cache(&mut self, id: i32) {
-        self.p
-            .clip_tree()
-            .Node(id)
-            .cached_clip_rects
-            .borrow_mut()
-            .clear();
-    }
-
-    fn initialize_viewport_clip(&mut self, id: i32) {
-        let clip = self.p.clip_tree().Node(id).clip;
-        self.p
-            .clip_tree_mutable()
-            .MutableNode(id)
-            .cached_accumulated_rect_in_screen_space = clip;
-    }
-
-    fn update_accumulated_clip(&mut self, id: i32) -> bool {
-        let node = self.p.clip_tree().Node(id);
-        let mut clip = self
-            .p
-            .clip_tree()
-            .parent(node)
-            .cached_accumulated_rect_in_screen_space;
-        let success = ApplyClipNodeToAccumulatedClip::<C>(
-            self.p,
-            true,
-            kContentsRootPropertyNodeId,
-            kRootPropertyNodeId,
-            node,
-            &mut clip,
-        );
-        if success {
-            self.p
-                .clip_tree_mutable()
-                .MutableNode(id)
-                .cached_accumulated_rect_in_screen_space = clip;
-        }
-        success
-    }
-
-    fn clear_needs_update(&mut self) {
-        self.p.clip_tree_mutable().set_needs_update(false);
-    }
-}
-
-pub(crate) fn ComputeClips<C: DrawContext>(p: &mut DrawPropertyTrees<C>) {
-    debug_assert!(!p.transform_tree().needs_update());
-    let mut adapter = ClipTreeUpdateAdapter::<C> { p };
-    compositor_tree_sync::clip_tree_update::UpdateClipTree(&mut adapter);
 }
 // Source: cc/trees/draw_property_utils.cc:887-907.
 fn ComputeSurfaceDrawProperties<C: DrawContext>(p: &mut DrawPropertyTrees<C>, surface_id: i32) {
@@ -1763,19 +1560,6 @@ pub fn IsLayerBackFaceVisibleForTesting<C: DrawContext>(
 ) -> bool {
     IsLayerBackFaceVisible::<C>(context, layer, p, false)
 }
-// Source: cc/trees/draw_property_utils.h:36-37; cc/trees/draw_property_utils.cc:1525-1533.
-pub fn ConcatInverseSurfaceContentsScale<C: DrawContext>(
-    node: &EffectNode<C::Filters, C::Path>,
-    transform: &mut C::Transform,
-) {
-    debug_assert!(node.HasRenderSurface());
-    if node.surface_contents_scale.x() != 0.0 && node.surface_contents_scale.y() != 0.0 {
-        transform.Scale(
-            (1.0_f64 / node.surface_contents_scale.x() as f64) as f32,
-            (1.0_f64 / node.surface_contents_scale.y() as f64) as f32,
-        );
-    }
-}
 // Source: cc/trees/draw_property_utils.h:54-55; cc/trees/draw_property_utils.cc:1535-1551.
 struct LayerUpdateListAdapter<'a, C: DrawContext> {
     context: &'a C,
@@ -1846,31 +1630,6 @@ pub fn FindLayersThatNeedUpdates<C: DrawContext>(
         compositor_draw::draw_property_walk::FindLayersThatNeedUpdates(&adapter, false);
     list.extend(updates);
 }
-// Source: cc/trees/draw_property_utils.cc:1576-1579.
-pub fn ComputeTransforms<T: PropertyTreeTransform>(
-    tree: &mut TransformTree<T>,
-    ids: &ViewportPropertyIds,
-    context: &mut TransformTreeContext<'_, T>,
-) {
-    tree.UpdateAllTransforms(ids, context);
-}
-// Source: cc/trees/draw_property_utils.h:46-46; cc/trees/draw_property_utils.cc:1581-1588.
-pub fn ComputeEffects<C: DrawContext>(
-    tree: &mut EffectTree<C::Filters, C::Path, C::Surface, C::CopyRequest>,
-    context: &mut EffectTreeContext<'_, C::Transform>,
-) {
-    let needs_update = tree.needs_update();
-    let end = tree.size() as i32;
-    let stats = compositor_tree::effect_tree_update::UpdateEffectTree(
-        needs_update,
-        kContentsRootPropertyNodeId,
-        end,
-        |id| tree.UpdateEffects(id, context),
-    );
-    if stats.updated {
-        tree.set_needs_update(false);
-    }
-}
 // Source: cc/trees/draw_property_utils.h:48-48; cc/trees/draw_property_utils.cc:1590-1605.
 struct PropertyTreeUpdateAdapter<'a, C: DrawContext> {
     context: &'a C,
@@ -1903,11 +1662,11 @@ impl<C: DrawContext> compositor_tree_sync::property_tree_update::PropertyTreeUpd
 
     fn update_effects(&mut self) {
         let (tree, mut view) = self.p.effect_tree_with_context(self.context);
-        ComputeEffects::<C>(tree, &mut view);
+        ComputeEffects(tree, &mut view);
     }
 
     fn update_clips(&mut self) {
-        ComputeClips::<C>(self.p);
+        ComputeClips(self.p);
     }
 }
 

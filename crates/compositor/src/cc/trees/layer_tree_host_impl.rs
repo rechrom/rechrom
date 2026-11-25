@@ -241,7 +241,10 @@ fn IsFixedOrStickyOccluderTransform<T: PropertyTreeTransform>(
     nearest != kInvalidPropertyNodeId && nearest != outer
 }
 // Source: cc/trees/layer_tree_host_impl.cc:366-411
-fn CalculateVisibleBounds<T: PropertyTreeTransform, L: HostImplLayer<Transform = T>>(
+fn CalculateVisibleBounds<
+    T: PropertyTreeTransform + crate::adapter::layer_tree_impl::ImplTreeTransform,
+    L: HostImplLayer<Transform = T>,
+>(
     layer: &L,
     trees: &PropertyTreesFor<L::Types>,
     rect: &impl HostImplTrackedElementRect,
@@ -11241,7 +11244,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::LayerTreeHost<B>
     fn PushMutatorPropertiesFrom(
         &mut self,
         unsafe_state: &B::UnsafeCommitState,
-        trees: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        trees: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
     ) {
         self.context
             .services

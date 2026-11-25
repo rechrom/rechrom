@@ -17,7 +17,7 @@ use super::{
     page_scale_animation::PendingPageScaleAnimation,
     property_tree::PropertyTrees,
     property_tree_services::{
-        PropertyTreeCopyOutputRequest, PropertyTreeFilters, PropertyTreeRenderSurface,
+        NoRenderSurface, PropertyTreeCopyOutputRequest, PropertyTreeFilters,
         PropertyTreeTransform, PropertyTreesOwnerId,
     },
     property_types::PropertyPath,
@@ -42,14 +42,9 @@ pub trait CommitTypes: Sized + 'static {
     type Transform: PropertyTreeTransform;
     type Filters: PropertyTreeFilters;
     type Path: PropertyPath;
-    type RenderSurface: PropertyTreeRenderSurface;
     type CopyOutputRequest: PropertyTreeCopyOutputRequest;
     // cc::Region backend shared by Layer and LayerImpl invalidation state.
     type RegionBackend;
-    // The impl-side LayerImpl that Layer::PushPropertiesTo writes and
-    // Layer::CreateLayerImpl allocates (the push target).
-    // Source: cc/layers/layer.h CreateLayerImpl, PushPropertiesTo.
-    type Layer;
     // Source: cc/trees/commit_state.h:77,101,104,126,132,140-152.
     type SurfaceRange: Clone + Ord + Send + Sync + 'static;
     type DisplayColorSpaces: Clone + Default + PartialEq;
@@ -66,13 +61,15 @@ pub trait CommitTypes: Sized + 'static {
     type UIResourceBitmap;
 }
 
-/// The single cc::PropertyTrees shape shared by LayerTreeHost and
-/// LayerTreeImpl.
+/// The main LayerTreeHost's cc::PropertyTrees, carried by CommitState. The
+/// main side owns no RenderSurfaceImpl (EffectTree::operator= does not copy
+/// render_surfaces_, cc/trees/property_tree.cc:1716-1723); the impl
+/// LayerTreeImpl adds them to its own trees.
 pub type PropertyTreesFor<B> = PropertyTrees<
     <B as CommitTypes>::Transform,
     <B as CommitTypes>::Filters,
     <B as CommitTypes>::Path,
-    <B as CommitTypes>::RenderSurface,
+    NoRenderSurface,
     <B as CommitTypes>::CopyOutputRequest,
 >;
 

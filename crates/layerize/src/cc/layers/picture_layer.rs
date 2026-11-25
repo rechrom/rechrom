@@ -221,35 +221,24 @@ impl<B: PictureLayerTypes> PictureLayer<B> {
         Some(LiveFieldRead::new(recording, |r| r.display_list().unwrap()))
     }
 }
-impl<B: PictureLayerTypes> LayerObject<B> for PictureLayer<B> {
-    fn base(&self) -> &Layer<B> {
-        &self.base_
-    }
-    fn AsPictureLayer(&self) -> Option<&dyn PictureLayerObject<B>> {
-        Some(self)
-    }
-    fn ShutdownLayer(&self, c: &mut LayerContext<'_, B>) {
-        self.DestroyMembers(c);
-        self.base_.Shutdown(c);
-    }
+impl<B: PictureLayerTypes> PictureLayer<B> {
     // Source: cc/layers/picture_layer.h:37-38;
     //         cc/layers/picture_layer.cc:38-41.
-    fn CreateLayerImpl(
+    pub(crate) fn CreateLayerImpl<L>(
         &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-        _c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+    ) -> Box<L> {
         tree.CreatePictureLayer(self.base_.id())
     }
     // Source: cc/layers/picture_layer.h:64-66;
     //         cc/layers/picture_layer.cc:43-74.
-    fn PushDirtyPropertiesTo(
+    pub(crate) fn PushDirtyPropertiesTo<T: PictureLayerImplTarget<B>>(
         &self,
-        target: &mut B::Layer,
+        target: &mut T,
         dirty: u8,
         commit: &mut CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut T::ImplContext<'_>,
     ) {
         self.base_
             .PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree);
@@ -284,6 +273,24 @@ impl<B: PictureLayerTypes> LayerObject<B> for PictureLayer<B> {
             .as_ref()
             .unwrap()
             .IsEmpty());
+    }
+}
+impl<B: PictureLayerTypes> LayerObject<B> for PictureLayer<B> {
+    fn base(&self) -> &Layer<B> {
+        &self.base_
+    }
+    fn AsPictureLayer(&self) -> Option<&dyn PictureLayerObject<B>> {
+        Some(self)
+    }
+    fn ShutdownLayer(&self, c: &mut LayerContext<'_, B>) {
+        self.DestroyMembers(c);
+        self.base_.Shutdown(c);
+    }
+    fn DerivedLayer(&self) -> super::layer::DerivedLayerRef<'_, B>
+    where
+        B: super::layer::DerivedLayerTypes,
+    {
+        super::layer::DerivedLayerRef::Picture(self)
     }
     // Source: cc/layers/picture_layer.h:39;
     //         cc/layers/picture_layer.cc:80-92.

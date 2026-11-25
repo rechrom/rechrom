@@ -226,24 +226,41 @@ impl<B: PaintedScrollbarLayerTypes> LayerObject<B> for PaintedScrollbarLayer<B> 
     fn Update(&self, c: &mut LayerContext<'_, B>) -> bool {
         self.UpdatePainted(c)
     }
-    fn CreateLayerImpl(
+    fn DerivedLayer(&self) -> super::layer::DerivedLayerRef<'_, B>
+    where
+        B: super::layer::DerivedLayerTypes,
+    {
+        super::layer::DerivedLayerRef::PaintedScrollbar(self)
+    }
+    fn SetLayerTreeHost(
         &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-        _c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
+        allocation: &LayerBorrow<B>,
+        host: Option<MainLayerHostId>,
+        c: &mut LayerContext<'_, B>,
+    ) {
+        LayerObject::SetLayerTreeHost(self.base(), allocation, host, c);
+    }
+}
+impl<B: PaintedScrollbarLayerTypes> PaintedScrollbarLayer<B> {
+    // Source: cc/layers/painted_scrollbar_layer.cc CreateLayerImpl.
+    pub(crate) fn CreateLayerImpl<L>(
+        &self,
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+    ) -> Box<L> {
         tree.CreatePaintedScrollbarLayer(
             self.base().id(),
             self.base_.orientation(),
             self.base_.is_left_side_vertical_scrollbar(),
         )
     }
-    fn PushDirtyPropertiesTo(
+    // Source: cc/layers/painted_scrollbar_layer.cc PushPropertiesTo.
+    pub(crate) fn PushDirtyPropertiesTo<T: PaintedScrollbarLayerImplTarget<B>>(
         &self,
-        target: &mut B::Layer,
+        target: &mut T,
         dirty: u8,
         commit: &mut CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        tree: &mut B::ImplContext<'_>,
+        tree: &mut T::ImplContext<'_>,
     ) {
         self.base_
             .PushDirtyPropertiesTo(target, dirty, commit, c, tree);
@@ -261,14 +278,6 @@ impl<B: PaintedScrollbarLayerTypes> LayerObject<B> for PaintedScrollbarLayer<B> 
         target.painted_SetMinimumThumbLength(state.minimum_thumb_length);
         target.painted_SetThumbThickness(state.thumb_thickness);
         target.painted_set_is_overlay_scrollbar(state.is_overlay);
-    }
-    fn SetLayerTreeHost(
-        &self,
-        allocation: &LayerBorrow<B>,
-        host: Option<MainLayerHostId>,
-        c: &mut LayerContext<'_, B>,
-    ) {
-        LayerObject::SetLayerTreeHost(self.base(), allocation, host, c);
     }
 }
 

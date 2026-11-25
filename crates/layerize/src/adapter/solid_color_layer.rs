@@ -8,7 +8,6 @@ use std::sync::Arc;
 pub trait SolidColorLayerTypes:
     MainLayerTypes<
     DerivedServices: SolidColorLayerServices<Self>,
-    Layer: SolidColorLayerImplTarget<Self>,
 >
 {
     type SolidPictureRecorder: SolidColorPictureRecorder<Self>;

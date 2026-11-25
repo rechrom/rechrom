@@ -10,7 +10,7 @@ use super::layer::{Layer, LayerObject, LayerRef};
 use crate::{
     adapter::{
         main_layer::{LayerContext, MainLayerServices},
-        surface_layer::{SurfaceLayerImplTarget, SurfaceLayerTypes},
+        surface_layer::SurfaceLayerTypes,
     },
 };
 use std::sync::RwLock;
@@ -125,20 +125,31 @@ impl<B: SurfaceLayerTypes> LayerObject<B> for SurfaceLayer<B> {
         };
         valid && self.base_.HasDrawableContent(c)
     }
-    fn CreateLayerImpl(
+    fn DerivedLayer(&self) -> super::layer::DerivedLayerRef<'_, B>
+    where
+        B: super::layer::DerivedLayerTypes,
+    {
+        super::layer::DerivedLayerRef::Surface(self)
+    }
+}
+impl<B: SurfaceLayerTypes> SurfaceLayer<B> {
+    // Source: cc/layers/surface_layer.cc SurfaceLayer::CreateLayerImpl.
+    pub(crate) fn CreateLayerImpl<L>(
         &self,
-        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<B::Layer>,
-        _c: &mut LayerContext<'_, B>,
-    ) -> Box<B::Layer> {
+        tree: &mut dyn crate::adapter::main_layer::LayerImplFactory<L>,
+    ) -> Box<L> {
         tree.CreateSurfaceLayer(self.base_.id())
     }
-    fn PushDirtyPropertiesTo(
+    // Source: cc/layers/surface_layer.cc SurfaceLayer::PushPropertiesTo.
+    pub(crate) fn PushDirtyPropertiesTo<
+        T: crate::adapter::surface_layer::SurfaceLayerImplTarget<B>,
+    >(
         &self,
-        target: &mut B::Layer,
+        target: &mut T,
         dirty: u8,
         commit: &mut crate::cc::trees::commit_state::CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        impl_tree: &mut B::ImplContext<'_>,
+        impl_tree: &mut T::ImplContext<'_>,
     ) {
         self.base_
             .PushDirtyPropertiesTo(target, dirty, commit, c, impl_tree);

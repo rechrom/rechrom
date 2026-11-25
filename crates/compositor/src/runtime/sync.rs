@@ -3,7 +3,7 @@
 //! discovers the main owner or retains a reverse reference to it.
 use crate::{
     adapter::{
-        main_layer::{LayerContext, MainLayerHostId, MainLayerTypes},
+        main_layer::{LayerContext, MainLayerHostId},
         tree_sync::{SyncMainLayer, SyncTypes, SynchronizationTrace},
     },
     cc::{
@@ -24,7 +24,7 @@ impl<B: SyncTypes> SyncMainLayer<B> for LayerBorrow<B> {
     }
     fn transform_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| {
@@ -33,21 +33,21 @@ impl<B: SyncTypes> SyncMainLayer<B> for LayerBorrow<B> {
     }
     fn effect_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| layer.base().effect_tree_index_is_valid(p, c))
     }
     fn clip_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| layer.base().clip_tree_index_is_valid(p, c))
     }
     fn scroll_tree_index_is_valid(
         &self,
-        p: &crate::adapter::layer_tree_impl::PropertyTreesFor<B>,
+        p: &crate::adapter::layer_tree_impl::MainPropertyTreesFor<B>,
         c: &LayerContext<'_, B>,
     ) -> bool {
         self.WithSourceRef(c, |layer, c| layer.base().scroll_tree_index_is_valid(p, c))
@@ -67,11 +67,9 @@ impl<B: SyncTypes> SyncMainLayer<B> for LayerBorrow<B> {
         target: &mut B::Layer,
         commit: &mut CommitState<B>,
         c: &mut LayerContext<'_, B>,
-        ic: &mut B::ImplContext<'_>,
+        ic: &mut crate::adapter::tree_sync::PushImplContext<'_, B>,
     ) {
-        self.WithSource(c, |layer, c| {
-            layer.base().PushPropertiesTo(layer, target, commit, c, ic)
-        });
+        self.WithSource(c, |layer, c| layer.PushPropertiesTo(target, commit, c, ic));
     }
 }
 
@@ -131,8 +129,10 @@ where
     >,
     B::Layer: crate::adapter::tree_sync::SyncImplLayer<B>,
     B::LayerList: crate::adapter::tree_sync::SyncLayerList<B>,
-    for<'a> B:
-        layerize::commit::push_properties::PushPropertiesTypes<ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>>,
+    for<'a> B::Layer: crate::adapter::main_layer::MainLayerImpl<
+        B,
+        ImplContext<'a> = crate::adapter::layer_impl::LayerImplContext<'a, B>,
+    >,
 {
     type MainContext<'a, 'c>
         = MainSynchronizationContext<'a, 'c, B>

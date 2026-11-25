@@ -1180,10 +1180,12 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         self.set_needs_update_draw_properties();
         result
     }
-    // Source: cc/trees/layer_tree_impl.cc:672-737.
-    pub fn SetPropertyTrees(
+    // Source: cc/trees/layer_tree_impl.cc:672-737. `trees` is the main
+    // LayerTreeHost's (commit) or the pending tree's (activation); only this
+    // tree's render surfaces are kept.
+    pub fn SetPropertyTrees<R2: crate::adapter::property_tree::PropertyTreeRenderSurface>(
         &mut self,
-        trees: &mut PropertyTreesFor<B>,
+        trees: &mut PropertyTrees<B::Transform, B::Filters, B::Path, R2, B::CopyOutputRequest>,
         viewport: &ViewportPropertyIds,
         preserve: bool,
         context: &mut LayerTreeContext<'_, B>,
@@ -2181,9 +2183,7 @@ impl<B: LayerTreeTypes> compositor_draw::occlusion_walk::OcclusionWalkContext
                 .property_trees_
                 .effect_tree()
                 .Node(DrawSurface::EffectTreeIndex(surface));
-            crate::cc::trees::draw_property_utils::ConcatInverseSurfaceContentsScale::<
-                B::DrawContext<'_>,
-            >(node, &mut transform);
+            crate::cc::trees::draw_property_utils::ConcatInverseSurfaceContentsScale(node, &mut transform);
             crate::adapter::property_tree::PropertyTreeTransform::PostTranslate(
                 &mut transform,
                 DrawSurface::pixel_alignment_offset(target),

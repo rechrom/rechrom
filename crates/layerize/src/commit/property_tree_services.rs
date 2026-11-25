@@ -17,6 +17,31 @@ pub trait PropertyTreeRenderSurface {
     fn ApplyPropertyChangeFlags(&mut self, flags: RenderSurfacePropertyChangedFlags);
     fn ResetPropertyChangedFlags(&mut self);
 }
+/// The render-surface slot type of the main LayerTreeHost's PropertyTrees.
+/// cc::RenderSurfaceImpl exists only on the impl side: the main trees never
+/// create one, and LayerTreeImpl::SetPropertyTrees copies only the effect
+/// nodes (EffectTree::operator=, cc/trees/property_tree.cc:1716-1723 resizes
+/// render_surfaces_ without copying them). Uninhabited, so every main
+/// `render_surfaces_` slot is `None` by construction.
+#[derive(Debug)]
+pub enum NoRenderSurface {}
+impl PropertyTreeRenderSurface for NoRenderSurface {
+    fn id(&self) -> super::input_types::ElementId {
+        match *self {}
+    }
+    fn set_effect_tree_index(&mut self, _id: i32) {
+        match *self {}
+    }
+    fn GetPropertyChangeFlags(&self) -> RenderSurfacePropertyChangedFlags {
+        match *self {}
+    }
+    fn ApplyPropertyChangeFlags(&mut self, _flags: RenderSurfacePropertyChangedFlags) {
+        match *self {}
+    }
+    fn ResetPropertyChangedFlags(&mut self) {
+        match *self {}
+    }
+}
 pub trait PropertyTreeRenderSurfaceFactory<R: PropertyTreeRenderSurface> {
     fn CreateRenderSurface(&mut self, id: super::input_types::ElementId) -> Box<R>;
 }
