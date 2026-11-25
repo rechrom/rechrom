@@ -177,6 +177,9 @@ pub struct BrowserGestureDisposition {
 pub enum MainThreadEventAck {
     Wheel(WheelDisposition),
     BrowserGesture(BrowserGestureDisposition),
+    /// A touch start or first touch move: the posted callback is the
+    /// browser's DispatchEventCallback (the host's touch-start handling).
+    Touch(TouchDisposition),
 }
 /// WidgetInputHandlerManager::DidHandleInputEventSentToMain
 /// (third_party/blink/renderer/platform/widget/input/
@@ -201,7 +204,6 @@ impl Default for FrameAlignedInputQueue {
             needs_dispatch_task: AtomicBool::new(false),
             widget_scale: AtomicU32::new(1.0f32.to_bits()),
             clock: Mutex::new(Arc::new(super::host_event_clock::HostEventClock)),
-            touch_dispositions: Mutex::new(Vec::new()),
             did_handle_input_event_sent_to_main: Mutex::new(None),
             recognizer: Mutex::new(FilteredGestureProvider::default()),
             document_generation: AtomicU64::new(1),
@@ -249,9 +251,6 @@ impl FrameAlignedInputQueue {
 
     pub fn SetHasPointerRawUpdateEventHandlers(&self, value: bool) {
         self.queue.SetHasPointerRawUpdateEventHandlers(value);
-    }
-    pub fn TakeTouchDispositions(&self) -> Vec<TouchDisposition> {
-        std::mem::take(&mut *self.ports.touch_dispositions.lock().unwrap())
     }
     /// Binds the compositor-thread poster of main-thread acknowledgements
     /// (WidgetInputHandlerManager's role).
@@ -633,14 +632,15 @@ impl FrameAlignedInputQueue {
                     };
                     ports.PublishGeneratedGestures(document_generation, events);
                     if disposition {
-                        ports
-                            .touch_dispositions
-                            .lock()
-                            .unwrap()
-                            .push(TouchDisposition {
+                        // Posted from the callback, as
+                        // DidHandleInputEventSentToMain posts CallCallback
+                        // (widget_input_handler_manager.cc:1209-1218).
+                        ports.DidHandleInputEventSentToMain(MainThreadEventAck::Touch(
+                            TouchDisposition {
                                 unique_touch_event_id: id,
                                 consumed,
-                            });
+                            },
+                        ));
                     }
                 }))
             }
@@ -901,7 +901,6 @@ struct HostPorts {
     needs_dispatch_task: AtomicBool,
     widget_scale: AtomicU32,
     clock: Mutex<Arc<dyn super::host_event_clock::HostInputClock>>,
-    touch_dispositions: Mutex<Vec<TouchDisposition>>,
     did_handle_input_event_sent_to_main: Mutex<Option<DidHandleInputEventSentToMain>>,
     recognizer: Mutex<FilteredGestureProvider>,
     generated_gestures: Mutex<Vec<WebGestureEvent>>,

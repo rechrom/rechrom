@@ -83,7 +83,11 @@ acknowledgements and document detach (`browser::page::CompositorThreadTask`).
 The embedding injects the Page's `CompositorTaskRunner` over the same ordered
 queue as ProxyMain's tasks (Blink's compositor-thread default task runner);
 each task is posted where WidgetInputHandlerManager / WebFrameWidgetImpl post
-it, never collected for a later drain. The synchronous presenter runs each
+it, never collected for a later drain. The main-thread hit-test reply alone
+goes to the Page's `CompositorInputBlockingTaskRunner` (Blink's
+compositor-thread input task runner, kHighestPriority): the impl runner keeps
+it in a separate input-blocking queue selected before the default queue at
+every task selection. The synchronous presenter runs each
 message where the compositor task runner would. Page-scale animations are
 LayerTreeHost state carried by the commit, not input tasks. The document side
 never builds a `CompositorMutation`.
@@ -455,8 +459,10 @@ These apply to every boundary above.
   root-to-engine edges; a type needed further down moves to a value root.
 - **Neighbours only.** A request for a stage further away goes through the
   neighbour's channel (the Proxy queue or the input queue), never a direct
-  call. Post at the point Chromium posts, on one ordered task runner per
-  target thread; never buffer or batch where Chromium does not.
+  call. Post at the point Chromium posts, on the ordered task runner
+  Chromium posts to (one default runner per target thread, plus a
+  higher-priority runner only where Chromium has one); never buffer or batch
+  where Chromium does not.
 - **Live data, no copies.** Pass the live owner, as the paint property nodes
   are passed: borrow it (`&`, `&mut`, a lease) or share the existing `Arc`.
   Across threads, move it. No snapshots, frozen or immutable result copies,

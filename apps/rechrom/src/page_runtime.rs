@@ -255,6 +255,12 @@ pub(crate) enum ImplCommand {
         dispatch_id: u64,
         result: InputEventResultState,
     },
+    /// The document's touch acknowledgement, posted from the event's
+    /// callback; this runner runs the host's DispatchEventCallback.
+    TouchAck {
+        unique_touch_event_id: u32,
+        consumed: bool,
+    },
     DebounceExpired,
     DocumentDetached {
         generation: u64,
@@ -295,6 +301,10 @@ pub(crate) enum ImplCommand {
     /// (`CompositorThreadTask::ImplInput` / `GestureScroll`), converted to
     /// its InputHandlerProxy call when this runner runs it.
     InputHandler(browser::page::CompositorThreadTask),
+    /// A task posted to the compositor thread's input-blocking runner
+    /// (`CompositorInputBlockingTaskRunner`); this runner moves it to its
+    /// input-blocking queue on arrival and selects that queue first.
+    InputBlocking(browser::page::CompositorThreadTask),
     Reclaim(Vec<PageReturnedResource>),
     Stop,
 }
@@ -654,6 +664,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let impl_self = impl_sender.clone();
     let impl_source = params.source.clone();
     let impl_frames = params.frames.clone();
+    let impl_events = params.events.clone();
     let impl_executor = threads.compositor_executor.clone();
     let impl_raster_executor = threads.raster_executor.clone();
     let impl_viewport = params.viewport;
@@ -679,6 +690,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     impl_raster_executor,
                     impl_source,
                     impl_frames,
+                    impl_events,
                     visual_properties_ack,
                 )
             }));
@@ -1504,6 +1516,9 @@ fn run_impl(
     raster_executor: Arc<dyn executor::Executor>,
     source: Arc<dyn BeginFrameSource>,
     frames: mpsc::Sender<window_runtime::Command>,
+    // The browser host's input-acknowledgement endpoint (the
+    // DispatchEventCallback this compositor thread runs).
+    events: Arc<dyn Fn(Document, Event) + Send + Sync>,
     visual_properties_ack: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), RuntimeFailure> {
     let pump_pending = Arc::new(AtomicBool::new(false));
@@ -1578,12 +1593,18 @@ fn run_impl(
         presentation_feedback,
     );
     let mut queued_commands = VecDeque::new();
+    // The compositor thread's input-blocking task queue: a separate FIFO at
+    // kHighestPriority that the sequence manager selects before the
+    // normal-priority default queue at every task selection
+    // (non_main_thread_scheduler_helper.cc:27-33). Only the control-priority
+    // shutdown (`Stop`) outranks it.
+    let mut input_blocking_commands: VecDeque<ImplCommand> = VecDeque::new();
     // Once input from a snapshot has run ahead of an already observed
     // BeginFrame, later arrivals cannot overtake that frame. Chromium's
     // CompositorThreadEventQueue similarly closes a batch at BeginFrame.
     let mut tick_due_after_input = false;
     'commands: loop {
-        if queued_commands.is_empty() {
+        if queued_commands.is_empty() && input_blocking_commands.is_empty() {
             let command = if let Some(deadline) = presentation.gestures.NextDebounceDeadline() {
                 let now = presentation.input_time(Instant::now());
                 let delay = Duration::from_micros(
@@ -1626,6 +1647,9 @@ fn run_impl(
         let mut has_pump = false;
         for (index, pending) in drained.into_iter().enumerate() {
             match pending {
+                ImplCommand::InputBlocking(task) => {
+                    input_blocking_commands.push_back(CompositorThreadCommand(task))
+                }
                 ImplCommand::Tick(_) if Some(index) != last_tick_index => {}
                 ImplCommand::Pump if has_pump => {}
                 ImplCommand::Pump => {
@@ -1696,20 +1720,29 @@ fn run_impl(
             .iter()
             .take(input_boundary)
             .position(|command| matches!(command, ImplCommand::Tick(_)));
-        let urgent = queued_commands
+        let stop = queued_commands
             .iter()
-            .position(|command| matches!(command, ImplCommand::Stop))
-            .or_else(|| tick_due_after_input.then_some(pending_tick).flatten())
-            .or_else(|| {
+            .position(|command| matches!(command, ImplCommand::Stop));
+        let command = match (stop, input_blocking_commands.pop_front()) {
+            (None, Some(command)) => command,
+            (stop, input_blocking) => {
+                if let Some(command) = input_blocking {
+                    input_blocking_commands.push_front(command);
+                }
+                let urgent = stop
+                    .or_else(|| tick_due_after_input.then_some(pending_tick).flatten())
+                    .or_else(|| {
+                        queued_commands
+                            .iter()
+                            .take(input_boundary)
+                            .position(|command| matches!(command, ImplCommand::Wheel { .. }))
+                    })
+                    .unwrap_or(0);
                 queued_commands
-                    .iter()
-                    .take(input_boundary)
-                    .position(|command| matches!(command, ImplCommand::Wheel { .. }))
-            })
-            .unwrap_or(0);
-        let command = queued_commands
-            .remove(urgent)
-            .expect("selected queued impl command");
+                    .remove(urgent)
+                    .expect("selected queued impl command")
+            }
+        };
         if matches!(command, ImplCommand::Wheel { .. }) && pending_tick.is_some() {
             tick_due_after_input = true;
         } else if matches!(command, ImplCommand::Tick(_)) {
@@ -1718,6 +1751,9 @@ fn run_impl(
         match command {
             ImplCommand::BindGestureTouchActionFilter(filter) => {
                 presentation.gesture_touch_action = Some(filter)
+            }
+            ImplCommand::InputBlocking(_) => {
+                unreachable!("input-blocking tasks run from their own queue")
             }
             ImplCommand::WheelAck {
                 document_generation,
@@ -1736,6 +1772,21 @@ fn run_impl(
                     InputEventResultSource::kMainThread,
                     result,
                     &main,
+                );
+            }
+            ImplCommand::TouchAck {
+                unique_touch_event_id,
+                consumed,
+            } => {
+                // CallCallback on the compositor thread: the browser's
+                // DispatchEventCallback receives the main-thread result
+                // (widget_input_handler_manager.cc:1209-1218).
+                events(
+                    document,
+                    Event::TouchDisposition {
+                        unique_touch_event_id,
+                        consumed,
+                    },
                 );
             }
             ImplCommand::DebounceExpired => {
@@ -2621,12 +2672,31 @@ fn run_document(
                 .map_err(|mpsc::SendError(command)| CompositorThreadTaskOf(command))
         }))
     };
+    // The compositor thread's input-blocking runner
+    // (CompositorThreadScheduler::InputTaskRunner(), kHighestPriority:
+    // non_main_thread_scheduler_helper.cc:27-33). Its tasks cross the same
+    // channel and enter the impl runner's input-blocking queue, which the
+    // runner selects before its default queue.
+    let compositor_input_blocking_task_runner = {
+        let sender = Mutex::new(impl_sender.clone());
+        browser::page::CompositorInputBlockingTaskRunner::Posting(Arc::new(move |task| {
+            sender
+                .lock()
+                .unwrap()
+                .send(ImplCommand::InputBlocking(task))
+                .map_err(|mpsc::SendError(command)| match command {
+                    ImplCommand::InputBlocking(task) => task,
+                    _ => unreachable!("posted input-blocking task"),
+                })
+        }))
+    };
     page.StartExternalCompositor(
         viewport.width,
         viewport.height,
         viewport.scale,
         to_impl,
         compositor_task_runner,
+        compositor_input_blocking_task_runner,
     )?;
     *source.animate.lock().unwrap() = page.CompositorAnimateRequests();
     page.SetBeginFrameSource(Some(source.clone()));
@@ -3149,15 +3219,6 @@ fn run_document(
             // browser-UI commit acknowledgement.
             source.request_begin_frame();
         }
-        for disposition in page.TakeTouchDispositions() {
-            (params.events)(
-                params.document,
-                Event::TouchDisposition {
-                    unique_touch_event_id: disposition.unique_touch_event_id,
-                    consumed: disposition.consumed,
-                },
-            );
-        }
         for event in page.TakeDispatchedFrameInputs() {
             let _scope = browser_tracing::scope(browser_tracing::Context {
                 input_id: browser_tracing::instant_id(event.queued_at),
@@ -3308,6 +3369,13 @@ fn CompositorThreadCommand(task: browser::page::CompositorThreadTask) -> ImplCom
                 InputEventResultState::kNotConsumed
             },
         },
+        Task::TouchEventAck {
+            unique_touch_event_id,
+            consumed,
+        } => ImplCommand::TouchAck {
+            unique_touch_event_id,
+            consumed,
+        },
     }
 }
 /// The task of a command the stopped compositor thread handed back.
@@ -3331,6 +3399,13 @@ fn CompositorThreadTaskOf(command: ImplCommand) -> browser::page::CompositorThre
         } => Task::GestureEventAck {
             dispatch_id,
             consumed: result == InputEventResultState::kConsumed,
+        },
+        ImplCommand::TouchAck {
+            unique_touch_event_id,
+            consumed,
+        } => Task::TouchEventAck {
+            unique_touch_event_id,
+            consumed,
         },
         _ => unreachable!("posted compositor-thread task"),
     }

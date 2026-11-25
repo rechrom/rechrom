@@ -257,7 +257,9 @@ struct VideoSurfaceEntry {
 /// Blink posts it and runs in posting order with the ProxyMain -> ProxyImpl
 /// tasks, which Blink posts to the same runner (WidgetBase::
 /// InitializeCompositing passes `DefaultTaskRunner()` as the impl task
-/// runner, platform/widget/widget_base.cc:239-245).
+/// runner, platform/widget/widget_base.cc:239-245). The one exception is
+/// the main-thread hit-test reply, which Blink posts to the compositor
+/// thread's input-blocking runner (`CompositorInputBlockingTaskRunner`).
 pub enum CompositorThreadTask {
     /// The document input target was replaced (the input router retires
     /// its target-bound gesture state).
@@ -279,6 +281,13 @@ pub enum CompositorThreadTask {
     },
     /// DidHandleInputEventSentToMain of a browser-dispatched gesture.
     GestureEventAck { dispatch_id: u64, consumed: bool },
+    /// DidHandleInputEventSentToMain of a touch start or first touch move;
+    /// the compositor thread runs the browser's DispatchEventCallback
+    /// (CallCallback, widget_input_handler_manager.cc:1209-1218).
+    TouchEventAck {
+        unique_touch_event_id: u32,
+        consumed: bool,
+    },
 }
 /// The compositor thread's task runner as the Page holds it. The embedding
 /// injects the posting form over the same ordered queue its ProxyMain tasks
@@ -287,6 +296,15 @@ pub enum CompositorThreadTask {
 /// InputThreadTaskRunner() falls back to the main-thread task runner
 /// (widget_input_handler_manager.cc:1257-1258).
 pub type CompositorTaskRunner = layerize::commit::proxy::ProxyTaskQueue<CompositorThreadTask>;
+/// The compositor thread's input-blocking task runner: Blink's
+/// CompositorThreadScheduler::InputTaskRunner(), whose queue runs at
+/// TaskPriority::kHighestPriority, so the compositor thread's sequence
+/// manager selects its tasks before those of the normal-priority default
+/// queue (scheduler/worker/non_main_thread_scheduler_helper.cc:27-33,51-52;
+/// compositor_thread_scheduler_impl.cc:81-84;
+/// widget_input_handler_manager.cc:303-306,1250-1258). Only
+/// FindScrollTargetOnMainThread posts to it (cc:504-520).
+pub type CompositorInputBlockingTaskRunner = CompositorTaskRunner;
 fn PostMainThreadEventAck(
     runner: &CompositorTaskRunner,
     ack: interaction::frame_aligned_input_queue::MainThreadEventAck,
@@ -313,6 +331,12 @@ fn PostMainThreadEventAck(
         MainThreadEventAck::BrowserGesture(disposition) => {
             let _ = runner.PostTask(CompositorThreadTask::GestureEventAck {
                 dispatch_id: disposition.dispatch_id,
+                consumed: disposition.consumed,
+            });
+        }
+        MainThreadEventAck::Touch(disposition) => {
+            let _ = runner.PostTask(CompositorThreadTask::TouchEventAck {
+                unique_touch_event_id: disposition.unique_touch_event_id,
                 consumed: disposition.consumed,
             });
         }
@@ -748,6 +772,11 @@ struct PageDomainServices {
     main_compositor_effects: RefCell<Vec<CompositorMainThreadEffect>>,
     // The compositor thread's task runner (input-queue posts).
     compositor_task_runner: RefCell<CompositorTaskRunner>,
+    // Its input-blocking runner. Absent (single-thread compositing), the
+    // hit-test reply runs in place where the main-thread runner would run it
+    // (InputThreadTaskRunner(kInputBlocking) falls back to the main-thread
+    // runner, widget_input_handler_manager.cc:1250-1258).
+    compositor_input_blocking_task_runner: RefCell<Option<CompositorInputBlockingTaskRunner>>,
     // PaintArtifactCompositor update sequence (paint_artifact_compositor.cc
     // g_s_property_tree_sequence_number role).
     compositor_pac_sequence: Cell<i32>,
@@ -2767,6 +2796,7 @@ impl PageState {
                     in_main_compositor_frame: Cell::new(false),
                     main_compositor_effects: RefCell::new(Vec::new()),
                     compositor_task_runner: RefCell::new(CompositorTaskRunner::default()),
+                    compositor_input_blocking_task_runner: RefCell::new(None),
                     compositor_pac_sequence: Cell::new(0),
                     compositor_local_surface_id: Cell::new(None),
                     compositor_surface_parameters: Cell::new(None),
@@ -6013,12 +6043,16 @@ impl Page {
         scale: f64,
         to_impl: MainToImplQueue,
         compositor_task_runner: CompositorTaskRunner,
+        compositor_input_blocking_task_runner: CompositorInputBlockingTaskRunner,
     ) -> io::Result<()> {
         assert!(self.external_compositor && self.state.external_presentation.get());
         assert!(
-            !compositor_task_runner.IsInProcess(),
+            !compositor_task_runner.IsInProcess()
+                && !compositor_input_blocking_task_runner.IsInProcess(),
             "the embedding posts to its compositor thread"
         );
+        *self.state.compositor_input_blocking_task_runner.borrow_mut() =
+            Some(compositor_input_blocking_task_runner);
         // WidgetInputHandlerManager posts each main-thread acknowledgement
         // from the event's callback (DidHandleInputEventSentToMain,
         // widget_input_handler_manager.cc:1171-1230).

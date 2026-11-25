@@ -230,11 +230,6 @@ impl Page {
     pub fn TakeDispatchedFrameInputs(&mut self) -> Vec<DispatchedFrameInput> {
         std::mem::take(&mut self.begin_frame.dispatched)
     }
-    pub fn TakeTouchDispositions(
-        &self,
-    ) -> Vec<interaction::frame_aligned_input_queue::TouchDisposition> {
-        self.begin_frame.inputs.TakeTouchDispositions()
-    }
     pub(super) fn RequestBeginFrameIfNeeded(&mut self) {
         if self.begin_frame.executing {
             return;
