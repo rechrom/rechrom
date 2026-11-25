@@ -311,7 +311,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("compositor", "paint", "B2: cc paint values move to cc_paint"),
     ("raster", "paint", "B2: cc paint values move to cc_paint"),
     ("renderer_skia", "paint", "B2: cc paint values move to cc_paint"),
-    ("paint_model", "layout", "B4: Paint sidecar types move into paint_model"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,3 +1,3 @@
-//! Source filter geometry is shared with native SVG Layout; do not maintain
-//! a second bounds algorithm in Paint. Existing package API remains unchanged.
-pub use layout::paint::svg_filter_geometry::*;
+//! Resolved SVG filter geometry lives with the filter graph values in
+//! `paint_input_types`; Layout, Paint and Raster share the one algorithm.
+pub use paint_input_types::svg_filter_geometry::*;

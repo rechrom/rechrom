@@ -4,7 +4,7 @@
 //! shared source geometry owner resolves reference box/viewport/filter scale;
 //! Raster consumes these same values when building source image filters.
 
-use crate::internal::paint_input::{
+use crate::paint_input::{
     SvgCompositeOperator, SvgFilterGraph, SvgFilterInput, SvgFilterLength, SvgFilterPrimitive,
     SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits, SvgTransferFunction,
 };
@@ -665,7 +665,7 @@ pub fn map_svg_filter_forward_bounds(
         }
         let affects_transparent = match &primitive.kind {
             kColorMatrix { kind, values } => {
-                *kind == crate::internal::paint_input::SvgColorMatrixType::kMatrix
+                *kind == crate::paint_input::SvgColorMatrixType::kMatrix
                     && values.len() >= 20
                     && values[19] > 0.0
             }
@@ -695,7 +695,7 @@ pub fn map_svg_filter_forward_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::paint_input::{SvgColorMatrixType, SvgFilterPrimitive};
+    use crate::paint_input::{SvgColorMatrixType, SvgFilterPrimitive};
 
     fn absolute(value: f64) -> Option<SvgFilterLength> {
         Some(SvgFilterLength {
@@ -791,7 +791,7 @@ mod tests {
                 bias: 0.0,
                 target_x: 1,
                 target_y: 2,
-                edge_mode: crate::internal::paint_input::SvgFilterEdgeMode::kDuplicate,
+                edge_mode: crate::paint_input::SvgFilterEdgeMode::kDuplicate,
                 preserve_alpha: false,
             }),
             PaintRect {
@@ -805,8 +805,8 @@ mod tests {
             bounds(SvgFilterPrimitiveKind::kDisplacementMap {
                 input2: SvgFilterInput::kSourceGraphic,
                 scale: 10.0,
-                x_channel: crate::internal::paint_input::SvgFilterChannel::kA,
-                y_channel: crate::internal::paint_input::SvgFilterChannel::kA,
+                x_channel: crate::paint_input::SvgFilterChannel::kA,
+                y_channel: crate::paint_input::SvgFilterChannel::kA,
             }),
             PaintRect {
                 x: 15.0,

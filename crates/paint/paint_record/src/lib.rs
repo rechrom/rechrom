@@ -106,8 +106,9 @@ pub use scrollbar_display_item::ScrollbarDisplayItemData;
 pub use subsequence_recorder::SubsequenceRecorder;
 
 pub use paint_chunk::paint_chunker;
+pub use prepaint::contoured_border_geometry;
 pub use paint_model::{
-    contoured_border_geometry, display_item_id, geometry_mapper, paint_property_tree,
+    display_item_id, geometry_mapper, paint_property_tree,
 };
 pub mod paint_engine {
     pub use crate::{

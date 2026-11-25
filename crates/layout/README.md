@@ -1103,6 +1103,11 @@ Chromium shape-image lookup and bitmap validation are likewise owned by
 TLS scope, and current-resolver contract are colocated in
 `shape_image_services.rs` rather than generic core.
 
+- `paint_input_types` (shared root, not an internal package) holds the plain
+  paint values Layout publishes, including the resolved SVG filter geometry
+  (`svg_filter_geometry`, one algorithm for SVG Layout, Paint and Raster) and
+  the sticky-constraint and overscroll-behavior values PrePaint reads.
+
 ## Performance attribution contract
 
 - Every concrete formatting entry is traced as

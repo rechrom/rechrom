@@ -3283,7 +3283,6 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "image_resource",
- "layout",
  "layout_geometry",
  "layout_style",
  "paint_input_types",

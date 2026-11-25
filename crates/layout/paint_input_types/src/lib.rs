@@ -15,6 +15,10 @@ pub mod layout_input;
 pub mod layout_input_types;
 pub mod paint_input;
 pub mod paint_resources;
+// Resolved SVG filter region/primitive geometry over the authored filter
+// graph values (Blink SVGFilterBuilder / FilterEffect geometry): shared by
+// SVG Layout, Paint property filters and Raster image filters.
+pub mod svg_filter_geometry;
 
 pub use caret_shape::CaretShape;
 pub use paint_resources::{PaintGlyph, PaintGlyphRun, PaintResources};

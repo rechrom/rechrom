@@ -16,7 +16,6 @@ pub mod geometry;
 pub mod geometry_mapper;
 pub mod paint_clip_path;
 pub mod paint_flags;
-pub mod paint_order;
 pub mod paint_phase;
 pub mod paint_property_tree;
 pub mod paint_result;
