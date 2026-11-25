@@ -424,8 +424,9 @@ These apply to every boundary above.
   are passed: borrow it (`&`, `&mut`, a lease) or share the existing `Arc`.
   Across threads, move it. No snapshots, frozen or immutable result copies,
   published second trees or rebuilt models.
-- **Small interfaces.** One entry call or mutation enum per boundary; no
-  callbacks or getters that reach back.
+- **Focused interfaces.** Each interface has one clear focus. It may have
+  several methods, each serving that focus; unrelated concerns get their own
+  interface. No callbacks or getters that reach back.
 - Boundary tests enforce these rules; known violations are temporary
   allowances (`crates/CRATE_LADDER_PLAN.md`).
 
