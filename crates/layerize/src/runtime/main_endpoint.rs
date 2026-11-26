@@ -188,9 +188,15 @@ impl CpuMainHostEndpoint for EngineMainEndpoint {
         self.commit_requested.store(true, Ordering::Release);
         self.Post(MainHostEffect::NeedsCommit { urgent });
     }
-    fn NotifyLatencyInfoSwapPromiseMonitors(&self) {
-        self.Post(MainHostEffect::NotifyLatencyInfoSwapPromiseMonitors)
-    }
+    // Source: cc/trees/layer_tree_host.cc:835-849 calls the main
+    // LayerTreeHost's own `swap_promise_manager_`
+    // (SwapPromiseManager::NotifyLatencyInfoSwapPromiseMonitors), which
+    // notifies only monitors registered on the main thread through
+    // LayerTreeHost::CreateLatencyInfoSwapPromiseMonitor. The main half has no
+    // such registration site, so the notification visits an empty set. It is
+    // a main-thread call, never a ProxyMain -> ProxyImpl task: the impl
+    // LayerTreeHostImpl notifies its own monitors from its own redraw paths.
+    fn NotifyLatencyInfoSwapPromiseMonitors(&self) {}
     fn SaveActiveEventMetrics(&self) {
         self.Post(MainHostEffect::SaveActiveEventMetrics)
     }
