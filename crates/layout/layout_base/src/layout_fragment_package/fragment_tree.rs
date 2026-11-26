@@ -689,6 +689,13 @@ pub trait ResidentBoxGeometry {
     /// Scroll container inputs from the resident box's LayoutBox and
     /// PaintLayerScrollableArea.
     fn ViewScrollContainer(&self) -> Option<ScrollContainerPaintData>;
+    /// `ViewScrollContainer().is_some()` without materializing the inputs.
+    fn ViewHasScrollContainer(&self) -> bool;
+    /// `ViewScrollContainer()`'s `scroll_origin` alone.
+    fn ViewScrollOrigin(&self) -> Option<Offset>;
+    /// `ViewScrollbars()`'s `should_paint_as_overlay` alone (`None` when the
+    /// box owns no overflow controls).
+    fn ViewScrollbarsPaintAsOverlay(&self) -> Option<bool>;
     /// Scroll size, CSSOM client size and ScrollsOverflow of the resident box.
     fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool);
     /// Overflow-control paint data from the resident box's scrollable area.
@@ -1377,6 +1384,44 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 crate::internal::boundary::layout_boundary::LiveScrollContainer(box_fragment)
             }
             None => self.paint.scroll_container.clone(),
+        }
+    }
+
+    fn ViewHasScrollContainer(&self) -> bool {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveScrollContainerBox(box_fragment)
+                    .is_some()
+            }
+            None => self.paint.scroll_container.is_some(),
+        }
+    }
+
+    fn ViewScrollOrigin(&self) -> Option<Offset> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveScrollOrigin(box_fragment)
+            }
+            None => self
+                .paint
+                .scroll_container
+                .as_ref()
+                .map(|scroll| scroll.scroll_origin),
+        }
+    }
+
+    fn ViewScrollbarsPaintAsOverlay(&self) -> Option<bool> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveScrollbarsPaintAsOverlay(
+                    box_fragment,
+                )
+            }
+            None => self
+                .paint
+                .scrollbars
+                .as_ref()
+                .map(|scrollbars| scrollbars.should_paint_as_overlay),
         }
     }
 

@@ -255,13 +255,14 @@ pub(crate) fn ExportReplacedContentPaintData(
     }
 }
 
-/// Source: core/paint/paint_property_tree_builder.cc:499-530,3574-3614.
-/// The Scroll/ScrollTranslation inputs of a scroll container, read from the
-/// LayoutBox and its PaintLayerScrollableArea (stage 3 of the borrowed-view
-/// boundary); `None` when the box needs no local scroll node.
-pub(crate) fn LiveScrollContainer(
-    box_fragment: &PhysicalBoxFragment,
-) -> Option<ScrollContainerPaintData> {
+/// Source: core/paint/paint_property_tree_builder.cc:499-530
+/// (NeedsScrollAndScrollTranslation). The LayoutBox of `box_fragment` when
+/// it needs a local Scroll/ScrollTranslation pair, else `None`. Paint asks
+/// this decision (and the scroll origin) per box and phase, as Chromium reads
+/// `properties->ScrollTranslation()` and `box.ScrollOrigin()` directly
+/// (scoped_paint_state.cc:143-150); it must not materialize the complete
+/// ScrollContainerPaintData for that.
+pub(crate) fn LiveScrollContainerBox(box_fragment: &PhysicalBoxFragment) -> Option<&LayoutBox> {
     let layout_box = unsafe { DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject()).as_ref() }?;
     let object = unsafe { &*box_fragment.GetLayoutObject() };
     let area = layout_box.GetScrollableArea();
@@ -293,9 +294,32 @@ pub(crate) fn LiveScrollContainer(
             || offset.y() != 0.0
             || !area.CanPropagateScroll()
     };
-    if !(layout_box.IsLayoutView() || needs_local_scroll) {
-        return None;
-    }
+    (layout_box.IsLayoutView() || needs_local_scroll).then_some(layout_box)
+}
+
+/// The scroll origin of a box that needs a local scroll node
+/// (`LiveScrollContainerBox`); the same value `LiveScrollContainer` exports
+/// as `scroll_origin` (PaintLayerScrollableArea::ScrollOrigin).
+pub(crate) fn LiveScrollOrigin(box_fragment: &PhysicalBoxFragment) -> Option<Offset> {
+    let layout_box = LiveScrollContainerBox(box_fragment)?;
+    let area = layout_box.GetScrollableArea();
+    assert!(!area.is_null());
+    let origin = unsafe { &*area }.ScrollOrigin();
+    Some(Offset {
+        x: origin.x() as f64,
+        y: origin.y() as f64,
+    })
+}
+
+/// Source: core/paint/paint_property_tree_builder.cc:499-530,3574-3614.
+/// The Scroll/ScrollTranslation inputs of a scroll container, read from the
+/// LayoutBox and its PaintLayerScrollableArea (stage 3 of the borrowed-view
+/// boundary); `None` when the box needs no local scroll node.
+pub(crate) fn LiveScrollContainer(
+    box_fragment: &PhysicalBoxFragment,
+) -> Option<ScrollContainerPaintData> {
+    let layout_box = LiveScrollContainerBox(box_fragment)?;
+    let area = layout_box.GetScrollableArea();
     {
         // Source: core/paint/paint_property_tree_builder.cc:3574-3614.
         // UpdateScrollNode consumes the retained ScrollableArea directly;

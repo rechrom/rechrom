@@ -311,18 +311,17 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
                 _chunk_properties: None,
             };
         }
-        if fragment.ViewScrollContainer().is_some()
-            && !Arc::ptr_eq(
-                &node.properties.nodes.transform,
-                &node.contents_properties.nodes.transform,
-            )
-        {
-            let scroll_origin = fragment
-                .ViewScrollContainer()
-                .unwrap()
-                .scroll_origin;
-            state.paint_offset.x += scroll_origin.x;
-            state.paint_offset.y += scroll_origin.y;
+        // Source: scoped_paint_state.cc:143-150. A ScrollTranslation (the
+        // contents transform differs from the border-box transform) adds the
+        // box's ScrollOrigin().
+        if !Arc::ptr_eq(
+            &node.properties.nodes.transform,
+            &node.contents_properties.nodes.transform,
+        ) {
+            if let Some(scroll_origin) = fragment.ViewScrollOrigin() {
+                state.paint_offset.x += scroll_origin.x;
+                state.paint_offset.y += scroll_origin.y;
+            }
         }
         state
             .input_paint_info
