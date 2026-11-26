@@ -492,6 +492,16 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
             &context,
         );
     }
+    // Source: core/layout/layout_object.cc LayoutObject::SetStyle, the
+    // `diff.needs_recompute_visual_overflow` branch after StyleDidChange
+    // (skipped, like the rest of the tail, for an unparented object). An
+    // ink-overflow-only change such as box-shadow or outline needs no
+    // layout: the painting layer recomputes the object's visual overflow in
+    // PaintLayer::UpdateDescendantDependentFlags before PrePaint compares
+    // the new visual rect.
+    if visual_difference.needs_recompute_visual_overflow() && !object.Parent().is_null() {
+        object.InvalidateVisualOverflow();
+    }
     // Source: core/layout/layout_object.cc:3258-3269. Normal style paint
     // invalidation is recorded on the LayoutObject and exported to PrePaint;
     // PaintController then rejects the resident cached drawing for this

@@ -27,3 +27,24 @@ pub(super) fn PreservePaintOnlyFontBinding(
     }
     builder.TakeStyle()
 }
+
+/// Whether the platform Font resolved for `previous` also serves `current`:
+/// the boundary's FontRequest (layout_invalidation_prepare_tree::rebind_font)
+/// reads only the FontDescription, writing mode, text orientation and zoom,
+/// plus the parent's font for a MathML depth. Chromium's FontBuilder likewise
+/// keeps the existing Font when no font property changed
+/// (core/css/resolver/font_builder.cc FontBuilder::CreateFont).
+#[inline(never)]
+pub(super) fn FontRequestInputsEqual(
+    previous: &StyleComputedStyle,
+    current: &StyleComputedStyle,
+) -> bool {
+    previous.MathDepth() == 0
+        && current.MathDepth() == 0
+        && !previous.GetFont().is_null()
+        && !current.GetFont().is_null()
+        && previous.GetWritingMode() == current.GetWritingMode()
+        && previous.GetTextOrientation() == current.GetTextOrientation()
+        && previous.EffectiveZoom() == current.EffectiveZoom()
+        && previous.GetFontDescription() == current.GetFontDescription()
+}

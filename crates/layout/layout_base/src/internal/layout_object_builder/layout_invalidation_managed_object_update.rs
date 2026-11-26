@@ -469,7 +469,21 @@ fn create_managed_object(
         };
         prepare_style(&input, parent_style, parent_kind)
     };
-    let layout_style = if paint_only {
+    // A geometry-only style change (width, inset, ...) keeps the element's
+    // font request: retain its resolved platform Font as Chromium's
+    // FontBuilder retains the Font of an unchanged font description, instead
+    // of re-resolving it and dirtying layout for kFontsChanged.
+    let font_request_retained = !paint_only
+        && kind != NodeKind::kText
+        && first_line_style.is_null()
+        && previous.as_ref().is_some_and(|old| {
+            let old_style = unsafe { &*old.object }.StyleRef();
+            !old_style.GetFont().is_null()
+                && unsafe { old.input.computed_style.as_ref() }.is_some_and(|old_canonical| {
+                    FontRequestInputsEqual(old_canonical, unsafe { &*layout_style })
+                })
+        });
+    let layout_style = if paint_only || font_request_retained {
         let old = previous
             .as_ref()
             .expect("paint-only update has a previous object");
@@ -563,7 +577,7 @@ fn create_managed_object(
             )
         }) as *mut Node
     };
-    if paint_only && !old_font_dirty {
+    if (paint_only || font_request_retained) && !old_font_dirty {
         unsafe { &mut *metadata_node }.ClearInputFontBinding();
     }
     unsafe { &mut *metadata_node }.SetInputFirstLineStyle(layout_first_line_style);
