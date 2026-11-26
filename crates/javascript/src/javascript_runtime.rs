@@ -615,6 +615,14 @@ pub trait JavaScriptHostBindings {
     }
 
     fn GlobalNames(&self) -> Vec<String>;
+    /// A regular operation of the [Global] interface whose function never
+    /// changes for this realm. WebIDL places such operations on the global
+    /// object itself as writable data properties (V8 installs Window's
+    /// operations on its instance template), so reading one is an ordinary
+    /// property load, not a host call.
+    fn IsGlobalOperation(&self, _name: &str) -> bool {
+        false
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult;
     // Rust reborrow adapter for a host calling its bound engine while that
     // engine is already executing a host call. Avoids aliasing a runtime or

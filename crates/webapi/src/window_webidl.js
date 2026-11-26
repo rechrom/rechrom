@@ -1,5 +1,20 @@
 (function() {
 'use strict';
+// performance.idl: the Window's Performance is an ordinary platform object
+// whose operations and attributes live on Performance.prototype
+// (window_performance.cc). The Window host supplies their native values.
+{
+  const now = __performanceNow, timeOrigin = __performanceTimeOrigin, timing = __performanceTiming;
+  function Performance() { throw new TypeError('Illegal constructor'); }
+  Object.defineProperties(Performance.prototype, {
+    now: {value: now, writable: true, enumerable: true, configurable: true},
+    timeOrigin: {get() { return timeOrigin(); }, enumerable: true, configurable: true},
+    timing: {get() { return timing(); }, enumerable: true, configurable: true},
+    [Symbol.toStringTag]: {value: 'Performance', configurable: true},
+  });
+  Object.setPrototypeOf(performance, Performance.prototype);
+  Object.defineProperty(globalThis, 'Performance', {value: Performance, writable: true, configurable: true});
+}
 // Window CSSOM View, LocalDOMWindow::scrollTo/scrollBy. Native viewport state
 // and writes use the same scroll owner as input and Element scrolling.
 const scrollInvoke = __domInvoke, queueScrollCompletion = __queueScrollCompletion;
