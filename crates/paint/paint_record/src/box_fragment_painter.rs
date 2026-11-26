@@ -4081,7 +4081,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let context = self.context.borrow();
             context
                 .caret
-                .zip(context.TextSource(fragment.ViewFragmentInstanceId()))
+                .zip(PaintContext::TextSource(self.node))
                 .and_then(|(caret, cursor)| {
                     let (offset, color) = caret.BlockCaretTextPaint(cursor)?;
                     let local = cursor.TextRangeRect(offset, offset + 1)?;
@@ -4131,10 +4131,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if svg.as_ref().is_some_and(|svg| svg.hidden) {
             return;
         }
-        if !self
-            .context
-            .borrow()
-            .HasTextSource(fragment.ViewFragmentInstanceId())
+        if PaintContext::TextSource(self.node).is_none()
             && fragment.ViewTextItemFacts().2.is_none()
         {
             return;
@@ -4171,9 +4168,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .flatten()
             .filter(|state| fragment.paint.TextControlHost() == state.text_control_host);
         let range_rect = |range: (u32, u32), selects_soft_line_break: bool| {
-            self.context
-                .borrow()
-                .TextSource(fragment.ViewFragmentInstanceId())
+            PaintContext::TextSource(self.node)
                 .and_then(|cursor| {
                     cursor.TextSelectionRangeRect(range.0, range.1, selects_soft_line_break)
                 })
@@ -4403,10 +4398,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if cached {
             return;
         }
-        let glyph_runs = self
-            .context
-            .borrow_mut()
-            .TextGlyphRuns(fragment.ViewFragmentInstanceId());
+        let glyph_runs = self.context.borrow_mut().TextGlyphRuns(self.node);
         let _drawing = visual_rect.map(|visual_rect| {
             if let Some((id, client)) = selection_client {
                 DrawingRecorder::with_client(self.context, self.node, id, client, visual_rect)
@@ -5087,10 +5079,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 // highlight_painter.cc:973-986 inflates the text-proper clip by
                 // ceil(stroke_width / 2). Decoration and background clips keep
                 // the uninflated selection range.
-                let source = self
-                    .context
-                    .borrow()
-                    .TextSource(fragment.ViewFragmentInstanceId());
+                let source = PaintContext::TextSource(self.node);
                 let item = source.and_then(|cursor| cursor.Cursor().InlineItem());
                 let mut physical_box_offset = self.node.paint_offset;
                 // text_fragment_painter.cc:69-103 line-top snap.

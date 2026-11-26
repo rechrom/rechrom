@@ -67,7 +67,6 @@ pub struct PaintContext<'o> {
     /// Borrowed source text sources exist only for this synchronous Paint
     /// recording. The committed PaintArtifact retains final immutable drawing
     /// payloads, never LayoutResult or FragmentItem pointers.
-    text_sources: HashMap<u64, PaintFragmentCursor<'o>>,
     svg_resource_root: Option<&'o PaintTreeNode<'static>>,
     /// Multiple paint phases and decorations for one FragmentItem share the
     /// single payload built from ShapeResult during this recording.
@@ -276,7 +275,6 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             paint_controller: crate::PaintController::default(),
-            text_sources: HashMap::default(),
             svg_resource_root: None,
             text_runs: HashMap::default(),
             walk_metrics: Default::default(),
@@ -333,7 +331,6 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             paint_controller,
-            text_sources: HashMap::default(),
             svg_resource_root: None,
             text_runs: HashMap::default(),
             walk_metrics: Default::default(),
@@ -437,50 +434,36 @@ impl<'o> PaintContext<'o> {
     pub fn SvgResourceNode(&self, client: u64) -> Option<&'o PaintTreeNode<'static>> {
         self.svg_resource_root?.SvgResourceNode(client)
     }
-    pub fn BindTextSources(&mut self, root: PaintFragmentCursor<'o>) {
-        fn collect<'a>(
-            cursor: PaintFragmentCursor<'a>,
-            output: &mut HashMap<u64, PaintFragmentCursor<'a>>,
-        ) {
-            if matches!(
+    /// The text fragment's own source cursor, which its PrePaint node holds.
+    /// TextFragmentPainter paints from the InlineCursor it is constructed
+    /// with (text_fragment_painter.h); it never searches the fragment tree.
+    pub fn TextSource<'n>(node: &'n PaintTreeNode<'_>) -> Option<PaintFragmentCursor<'n>> {
+        node.SourceCursor().filter(|cursor| {
+            matches!(
                 cursor.ViewKind(),
                 layout::fragment::FragmentKind::kText
                     | layout::fragment::FragmentKind::kGeneratedText
-            ) {
-                output.insert(cursor.FragmentInstanceId(), cursor);
-            }
-            for child in cursor.Children() {
-                collect(child, output);
-            }
-        }
-        collect(root, &mut self.text_sources);
-    }
-
-    pub fn HasTextSource(&self, fragment_instance_id: u64) -> bool {
-        self.text_sources.contains_key(&fragment_instance_id)
-    }
-
-    pub fn TextSource(&self, fragment_instance_id: u64) -> Option<PaintFragmentCursor<'o>> {
-        self.text_sources.get(&fragment_instance_id).copied()
+            )
+        })
     }
 
     /// Resolve ShapeResult only after a cache miss has committed Paint to
     /// recording this text item. Later phases share the same immutable owner.
-    pub fn TextGlyphRuns(&mut self, fragment_instance_id: u64) -> Arc<Vec<PaintGlyphRun>> {
+    pub fn TextGlyphRuns(&mut self, node: &PaintTreeNode<'_>) -> Arc<Vec<PaintGlyphRun>> {
+        let source = Self::TextSource(node);
+        let Some(fragment_instance_id) = source.map(|cursor| cursor.FragmentInstanceId()) else {
+            return Arc::new(Vec::new());
+        };
         if let Some(runs) = self.text_runs.get(&fragment_instance_id) {
             return Arc::clone(runs);
         }
-        let runs = self
-            .text_sources
-            .get(&fragment_instance_id)
-            .copied()
+        let runs = source
             .and_then(PaintFragmentCursor::PaintGlyphRuns)
             .unwrap_or_else(|| Arc::new(Vec::new()));
         self.text_runs
             .insert(fragment_instance_id, Arc::clone(&runs));
         runs
     }
-
     pub fn CacheMetrics(&self) -> paint_reuse::PaintReuseMetrics {
         self.paint_controller.Metrics()
     }

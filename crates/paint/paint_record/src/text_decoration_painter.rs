@@ -234,10 +234,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
             .expect("paint tree node has a fragment");
         let style = &fragment.paint.style;
         let text_clip = self.paint_phase == PaintPhase::kTextClip;
-        let glyph_runs = self
-            .context
-            .borrow_mut()
-            .TextGlyphRuns(fragment.ViewFragmentInstanceId());
+        let glyph_runs = self.context.borrow_mut().TextGlyphRuns(self.node);
         let metrics = glyph_runs
             .first()
             .map(|run| {

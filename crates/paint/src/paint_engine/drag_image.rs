@@ -86,9 +86,8 @@ impl PaintEngine {
                 output.resources = source.DocumentResources().cloned();
                 let mut paint_context = PaintContext::WithEditing(&mut output, editing);
                 paint_context.BindForeignLayers(foreign_layers);
-                // Same original borrowed text sources and SVG resource directory as
-                // normal recording. No fragment payload/tree is materialized here.
-                paint_context.BindTextSources(source);
+                // Same SVG resource directory as normal recording. No fragment
+                // payload/tree is materialized here.
                 paint_context.BindSvgResourceTree(root);
                 paint_context.SetDocumentElementIsInvisible(source.paint.style.opacity() == 0.0);
                 paint_context.SetNextPropertyId(next_property_id);

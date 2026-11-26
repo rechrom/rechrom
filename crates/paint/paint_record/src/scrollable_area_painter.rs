@@ -3,7 +3,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout::paint::ScrollbarPaintAxis;
+use layout::paint::{ScrollbarPaintAxis, ScrollbarPaintData};
 use paint_input_types::layout_input::{Offset, PaintPathCommand, PaintPathVerb, Size};
 use paint_input_types::layout_input_types::Color;
 
@@ -402,21 +402,21 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        self.PaintResizer(info);
+        self.PaintResizer(info, &data);
     }
 
     // Source: core/paint/scrollable_area_painter.cc:43-95,116-216. Custom
     // ::-webkit-resizer pseudo painting remains outside this source payload;
     // the ordinary platform resizer follows the source recorder and path.
-    fn PaintResizer(&self, info: &PaintInfo<'c, 'o>) {
+    // PaintOverflowControls passes the scrollable area's control geometry it
+    // already read: PaintOverflowControls (scrollable_area_painter.cc:218-446)
+    // paints the resizer from the same PaintLayerScrollableArea.
+    fn PaintResizer(&self, info: &PaintInfo<'c, 'o>, data: &ScrollbarPaintData) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.ViewScrollbars() else {
-            return;
-        };
         if data.resizer_pointer_size.width <= 0.0 || data.resizer_pointer_size.height <= 0.0 {
             return;
         }
