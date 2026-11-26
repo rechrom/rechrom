@@ -45,8 +45,23 @@ pub(super) fn update_node_input(
         {
             return None;
         }
-        let mut input = record.input.clone();
-        input.computed_style = style.style;
+        // The retained descriptor's scalar and text fields carry over; its
+        // style envelope, resources and element data are replaced below, so
+        // they are not copied (first-line inputs were declined above).
+        let mut input = NodeConstructionData {
+            id: record.input.id,
+            kind: record.input.kind,
+            style_generated: record.input.style_generated,
+            computed_style: style.style,
+            style: Arc::clone(&shared_style),
+            resources: Arc::clone(&shared_resources),
+            text: record.input.text.clone(),
+            element: None,
+            debug_name: record.input.debug_name.clone(),
+            first_line_computed_style: record.input.first_line_computed_style,
+            first_line_style: None,
+            first_line_resources: None,
+        };
         // Resource bindings remain with their owner. A resource completion may
         // refresh this exact input; SVG graph ownership remains resident.
         // Only a retained graph that differs from the restyle's needs an

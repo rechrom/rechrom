@@ -10,6 +10,7 @@ pub mod block_child_iterator;
 pub mod block_inline_layout;
 pub mod block_layout_algorithm;
 pub mod block_layout_utils;
+pub mod simplified_layout_algorithm;
 pub mod unpositioned_list_marker;
 
 #[cfg(feature = "block_only_host")]
