@@ -173,7 +173,8 @@ pub(crate) use layout_fragment_fragment_geometry_export::{
 };
 mod layout_fragment_scrollbar_paint_export;
 pub(crate) use layout_fragment_scrollbar_paint_export::{
-    ExportScrollbarPaintData, LiveScrollbarsPaintAsOverlay,
+    ExportScrollbarPaintData, LiveScrollbarClients, LiveScrollbarsPaintAsOverlay,
+    LiveScrollingBackgroundClient,
 };
 mod layout_fragment_specialized_paint_export;
 pub(crate) use layout_fragment_specialized_paint_export::ExportTablePaintData;
@@ -271,13 +272,13 @@ mod layout_fragment_retained_paint_refresh;
 /// geometry, shaping, physical fragment identities and resource ownership.
 /// Special geometry clients retain ordinary export until its proof is available.
 pub(crate) fn RefreshRetainedPaintInputs(
-    root: &mut LayoutObject,
-    fragments: crate::layout_engine::PaintFragmentCursor<'_>,
+    tree: &crate::internal::layout_object_builder::LayoutObjectTree,
+    fragments: &crate::layout_result_handle::LayoutResultHandle,
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
 ) -> bool {
     layout_fragment_retained_paint_refresh::refresh_retained_paint_inputs(
-        root,
+        tree,
         fragments,
         changed,
         inline_ink_changes,

@@ -26,11 +26,30 @@ impl PageState {
             maximum_layout_scroll_offset: native.maximum_scroll_offset,
         })
     }
+    /// Source: core/frame/visual_viewport.cc
+    /// VisualViewport::UpdatePaintPropertyNodesIfNeeded. The visual
+    /// viewport's paint properties depend only on its own size, scale and
+    /// offset and on LocalFrameView::Size() (VisualViewport::ContentsSize);
+    /// none of them reads the layout viewport's scroll geometry, so this does
+    /// not query the LayoutView's PaintLayerScrollableArea.
     pub(super) fn SyncVisualViewportPaintState(&self) {
-        let Some(facts) = self.PageScaleViewportFacts() else {
-            return;
+        let size = {
+            let constraints = self.constraints.borrow();
+            let Some(viewport) = constraints.viewport.as_ref() else {
+                return;
+            };
+            foundation::gfx::Size::new(viewport.size.width, viewport.size.height)
         };
         let zoom = self.web_view_zoom.borrow();
+        let facts = ViewportFacts {
+            size,
+            document_size: size,
+            layout_scroll_offset: Default::default(),
+            visual_scroll_offset: zoom.VisualOffset(),
+            layout_viewport_size: size,
+            minimum_layout_scroll_offset: Default::default(),
+            maximum_layout_scroll_offset: Default::default(),
+        };
         self.paint_engine
             .borrow_mut()
             .SetVisualViewportState(paint::PaintVisualViewportState {

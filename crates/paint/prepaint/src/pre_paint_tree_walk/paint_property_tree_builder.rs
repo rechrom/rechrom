@@ -12,7 +12,7 @@ use crate::compositing_reason_finder::CompositingReasonFinder;
 // boundary materializes ScrollContainerPaintData from the source predicate,
 // including root-scroller, non-zero-position and non-propagating cases.
 fn NeedsScrollAndScrollTranslation(fragment: &FragmentPaintData) -> bool {
-    fragment.paint.IsOverscrollContainer() || fragment.ViewScrollContainer().is_some()
+    fragment.paint.IsOverscrollContainer() || fragment.ViewHasScrollContainer()
 }
 
 // Source: core/paint/paint_property_tree_builder.cc,
@@ -109,6 +109,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         fragment
             .paint
             .UpdateSourcePaintLayerDescendantDependentFlags();
+        // Source: PaintPropertyTreeBuilder reads the box's PaintLayerScrollableArea
+        // directly for every scroll and overflow-control update of this object.
+        // Materialize the positioned control payload and the scroll container
+        // facts once per object visit rather than once per reading site.
+        let scrollbars_once = std::cell::OnceCell::new();
+        let view_scrollbars = || scrollbars_once.get_or_init(|| fragment.ViewScrollbars()).clone();
+        let scroll_container_once = std::cell::OnceCell::new();
+        let view_scroll_container =
+            || scroll_container_once.get_or_init(|| fragment.ViewScrollContainer()).clone();
         let own_key_start = self.walk.own_key_log.len();
         let own_change_start = self.walk.own_change_log.len();
         let inherited = InheritedContext {
@@ -1192,7 +1201,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         }
         // Source: paint_property_tree_builder.cc:2998-3062. This clip belongs
         // only to overflow controls and never enters the descendant context.
-        if let Some(scrollbars) = fragment.ViewScrollbars() {
+        if let Some(scrollbars) = view_scrollbars() {
             let mut controls_bounds: Option<PaintRect> = None;
             // Source: paint_layer_scrollable_area.cc:2304-2308 and
             // paint_property_tree_builder.cc:3004-3005. With no scroll corner,
@@ -1318,7 +1327,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 local.height = replaced.size.height;
             }
             let inner_radius_clip = local;
-            if let Some(scrollbars) = fragment.ViewScrollbars() {
+            if let Some(scrollbars) = view_scrollbars() {
                 if !scrollbars.uses_overlay_scrollbars {
                     if let Some(vertical) = scrollbars.vertical.as_ref() {
                         let thickness = vertical.track_size.width;
@@ -1342,7 +1351,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // physical clip geometry when present.
             let mut precise_layout_clip = local;
             local = node.PixelSnappedRect(&local);
-            if let Some(scroll) = fragment.ViewScrollContainer() {
+            if let Some(scroll) = view_scroll_container() {
                 precise_layout_clip = PaintRect {
                     x: node.paint_offset.x + scroll.container_rect.offset.x,
                     y: node.paint_offset.y + scroll.container_rect.offset.y,
@@ -1428,8 +1437,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             }
             node.properties.clip_id = self.walk.RegisterProperty(fragment, PaintPropertyRole::OverflowClip);
             let mut excluding_overlay = precise_layout_clip;
-            if let Some(scrollbars) = fragment
-                .ViewScrollbars()
+            if let Some(scrollbars) = view_scrollbars()
                 .filter(|bars| bars.uses_overlay_scrollbars)
             {
                 if let Some(vertical) = &scrollbars.vertical {
@@ -1480,15 +1488,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 // pixel and make main/impl offsets alternate at the end.
                 // Source: core/paint/paint_property_tree_builder.cc:3706-3726;
                 //         core/paint/paint_layer_scrollable_area.cc.
+                let scroll_container = view_scroll_container();
+                let scroll_size = fragment.ViewScrollGeometry().0;
                 let snapped_contents = node.PixelSnappedRect(&PaintRect {
                     x: precise_layout_clip.x,
                     y: precise_layout_clip.y,
-                    width: fragment
-                        .ViewScrollGeometry().0
+                    width: scroll_size
                         .width
                         .max(precise_layout_clip.width),
-                    height: fragment
-                        .ViewScrollGeometry().0
+                    height: scroll_size
                         .height
                         .max(precise_layout_clip.height),
                 });
@@ -1510,8 +1518,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                                 direct_reasons,
                             ) {
                                 paint_model::paint_property_tree::PaintCompositedScrollingPreference::Preferred
-                            } else if fragment
-                                .ViewScrollContainer()
+                            } else if scroll_container
+                                .as_ref()
                                 .and_then(|scroll| scroll.prefers_non_composited_scrolling)
                                 == Some(true)
                             {
@@ -1533,7 +1541,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             fragment.paint.OverscrollBehaviorX(),
                             fragment.paint.OverscrollBehaviorY(),
                         ];
-                        if let Some(scroll) = fragment.ViewScrollContainer() {
+                        if let Some(scroll) = scroll_container.as_ref() {
                             state.compositor_element_id = scroll.compositor_element_id;
                             if let Some(scroll_snap_type) = scroll.scroll_snap_type {
                                 if scroll_snap_type.is_none {
@@ -1598,18 +1606,18 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         width: snapped_contents.width.max(local.width),
                         height: snapped_contents.height.max(local.height),
                     },
-                    minimum_scroll_offset: fragment
-                        .ViewScrollContainer()
+                    minimum_scroll_offset: scroll_container
+                        .as_ref()
                         .map_or(Offset::default(), |scroll| scroll.minimum_scroll_offset),
-                    maximum_scroll_offset: fragment.ViewScrollContainer().map_or_else(
+                    maximum_scroll_offset: scroll_container.as_ref().map_or_else(
                         || Offset {
-                            x: (fragment.ViewScrollGeometry().0.width - local.width).max(0.0),
-                            y: (fragment.ViewScrollGeometry().0.height - local.height).max(0.0),
+                            x: (scroll_size.width - local.width).max(0.0),
+                            y: (scroll_size.height - local.height).max(0.0),
                         },
                         |scroll| scroll.maximum_scroll_offset,
                     ),
-                    user_scrollable_horizontal: fragment
-                        .ViewScrollContainer()
+                    user_scrollable_horizontal: scroll_container
+                        .as_ref()
                         .map_or_else(
                             || {
                                 matches!(
@@ -1619,7 +1627,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             },
                             |scroll| scroll.user_scrollable_horizontal,
                         ),
-                    user_scrollable_vertical: fragment.ViewScrollContainer().map_or_else(
+                    user_scrollable_vertical: scroll_container.as_ref().map_or_else(
                         || {
                             matches!(
                                 fragment.paint.OverflowY(),
@@ -1636,8 +1644,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // Overlay scrollbar opacity is animated on the compositor. Each axis
         // therefore needs its own effect node; sharing the page effect would
         // make the scrollbar fade mutate the entire document's opacity.
-        if let Some(scrollbars) = fragment
-            .ViewScrollbars()
+        if let Some(scrollbars) = view_scrollbars()
             .filter(|scrollbars| scrollbars.uses_overlay_scrollbars)
         {
             for (axis, role, horizontal) in [
@@ -1722,8 +1729,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // the child paint offset gains ScrollOrigin. The two origin terms
         // cancel visually while the property tree retains Chromium's exact
         // scroll-coordinate basis.
-        let (scroll_origin, scroll_position) = fragment
-            .ViewScrollContainer()
+        let (scroll_origin, scroll_position) = view_scroll_container()
             .map_or((Offset::default(), geometry_scroll), |scroll| {
                 (scroll.scroll_origin, scroll.scroll_position)
             });

@@ -198,3 +198,61 @@ pub(crate) fn ExportScrollbarPaintData(
     }
     Some(Arc::new(data))
 }
+
+/// The DisplayItemClient facts of a live client, as PaintController reads
+/// them (display_item_client.h:60-80).
+fn LiveClientFacts(client: &DisplayItemClient) -> (u64, crate::fragment_tree::PaintClientState) {
+    (
+        client.Id() as u64,
+        crate::fragment_tree::PaintClientState {
+            invalidation_reason: Some(client.GetPaintInvalidationReason()),
+            is_cacheable: client.IsCacheable(),
+            is_just_created: client.IsJustCreated(),
+        },
+    )
+}
+
+/// The overflow-control DisplayItemClients of the box (scroll corner and
+/// scrollbars), under the same condition as `ExportScrollbarPaintData`.
+/// PrePaint's client directory and just-created checks read these clients
+/// directly from PaintLayerScrollableArea (paint_layer_scrollable_area.h
+/// ScrollCornerDisplayItemClient, Scrollbar::DisplayItemClient), not from a
+/// positioned paint payload.
+pub(crate) fn LiveScrollbarClients(
+    box_fragment: &PhysicalBoxFragment,
+) -> Option<crate::fragment_tree::ScrollbarClients> {
+    let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
+    if layout_box.is_null() {
+        return None;
+    }
+    let layout_box = unsafe { &*layout_box };
+    let area = layout_box.GetScrollableArea();
+    if area.is_null()
+        || (!unsafe { &*area }.HasHorizontalScrollbar()
+            && !unsafe { &*area }.HasVerticalScrollbar()
+            && !layout_box.CanResize())
+    {
+        return None;
+    }
+    let area = unsafe { &*area };
+    Some(crate::fragment_tree::ScrollbarClients {
+        corner: area.ScrollCornerDisplayItemClient().map(LiveClientFacts),
+        horizontal: unsafe { area.HorizontalScrollbar().as_ref() }
+            .map(|scrollbar| LiveClientFacts(scrollbar.DisplayItemClient())),
+        vertical: unsafe { area.VerticalScrollbar().as_ref() }
+            .map(|scrollbar| LiveClientFacts(scrollbar.DisplayItemClient())),
+    })
+}
+
+/// PaintLayerScrollableArea::GetScrollingBackgroundDisplayItemClient() of a
+/// box that `LiveScrollContainer` reports, without its scroll geometry.
+pub(crate) fn LiveScrollingBackgroundClient(
+    box_fragment: &PhysicalBoxFragment,
+) -> Option<(u64, crate::fragment_tree::PaintClientState)> {
+    let layout_box = LiveScrollContainerBox(box_fragment)?;
+    let area = layout_box.GetScrollableArea();
+    assert!(!area.is_null());
+    Some(LiveClientFacts(
+        unsafe { &*area }.GetScrollingBackgroundDisplayItemClient(),
+    ))
+}

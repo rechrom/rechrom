@@ -124,8 +124,8 @@ impl BoxPaintInvalidator {
         let paints_contents = BackgroundPaintsInContentsSpace(fragment);
         let paints_border_box = BackgroundPaintsInBorderBoxSpace(fragment);
         let scrolling_background_client = fragment
-            .ViewScrollContainer()
-            .map(|scroll| scroll.scrolling_background_client_id);
+            .ViewScrollingBackgroundClient()
+            .map(|(id, _)| id);
         if let Some(client_id) = scrolling_background_client {
             if invalidation.invalidate_both_spaces
                 || (paints_contents && invalidation.kind != BackgroundInvalidationType::None)

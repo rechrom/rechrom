@@ -37,6 +37,15 @@ pub struct PaintClientState {
     pub is_cacheable: bool,
     pub is_just_created: bool,
 }
+
+/// The overflow-control DisplayItemClients of a box (scroll corner,
+/// horizontal and vertical scrollbar), each with its live state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollbarClients {
+    pub corner: Option<(u64, PaintClientState)>,
+    pub horizontal: Option<(u64, PaintClientState)>,
+    pub vertical: Option<(u64, PaintClientState)>,
+}
 use crate::internal::selection_state::SelectionState;
 
 /// Opaque reference to a resident source LayoutObject that PrePaint retains
@@ -696,6 +705,12 @@ pub trait ResidentBoxGeometry {
     /// `ViewScrollbars()`'s `should_paint_as_overlay` alone (`None` when the
     /// box owns no overflow controls).
     fn ViewScrollbarsPaintAsOverlay(&self) -> Option<bool>;
+    /// `ViewScrollContainer()`'s scrolling-background client id and state
+    /// alone, without materializing the scroll geometry.
+    fn ViewScrollingBackgroundClient(&self) -> Option<(u64, PaintClientState)>;
+    /// `ViewScrollbars()`'s corner and scrollbar client ids and states alone,
+    /// without positioning or materializing the overflow controls.
+    fn ViewScrollbarClients(&self) -> Option<ScrollbarClients>;
     /// Scroll size, CSSOM client size and ScrollsOverflow of the resident box.
     fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool);
     /// Overflow-control paint data from the resident box's scrollable area.
@@ -1407,6 +1422,65 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 .scroll_container
                 .as_ref()
                 .map(|scroll| scroll.scroll_origin),
+        }
+    }
+
+    fn ViewScrollingBackgroundClient(&self) -> Option<(u64, PaintClientState)> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveScrollingBackgroundClient(
+                    box_fragment,
+                )
+            }
+            None => self.paint.scroll_container.as_ref().map(|scroll| {
+                (
+                    scroll.scrolling_background_client_id,
+                    self.paint.ScrollClientState(
+                        scroll.scrolling_background_client_id,
+                        scroll.scrolling_background_client_invalidation_reason,
+                        scroll.scrolling_background_client_is_cacheable,
+                        scroll.scrolling_background_client_is_just_created.get(),
+                    ),
+                )
+            }),
+        }
+    }
+
+    fn ViewScrollbarClients(&self) -> Option<ScrollbarClients> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveScrollbarClients(box_fragment)
+            }
+            None => self.paint.scrollbars.as_ref().map(|bars| {
+                let axis = |axis: &Option<ScrollbarPaintAxis>| {
+                    axis.as_ref().map(|axis| {
+                        (
+                            axis.display_item_client_id,
+                            self.paint.ScrollClientState(
+                                axis.display_item_client_id,
+                                axis.display_item_client_invalidation_reason,
+                                axis.display_item_client_is_cacheable,
+                                axis.display_item_client_is_just_created.get(),
+                            ),
+                        )
+                    })
+                };
+                ScrollbarClients {
+                    corner: (bars.corner_client_id != 0).then(|| {
+                        (
+                            bars.corner_client_id,
+                            self.paint.ScrollClientState(
+                                bars.corner_client_id,
+                                bars.corner_client_invalidation_reason,
+                                bars.corner_client_is_cacheable,
+                                bars.corner_client_is_just_created.get(),
+                            ),
+                        )
+                    }),
+                    horizontal: axis(&bars.horizontal),
+                    vertical: axis(&bars.vertical),
+                }
+            }),
         }
     }
 

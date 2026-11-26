@@ -56,7 +56,7 @@ fn ContentsRect(fragment: &FragmentPaintData) -> PaintRect {
 fn CanExpandForScroll(fragment: &FragmentPaintData) -> bool {
     let container = ContainerRect(fragment);
     let contents = ContentsRect(fragment);
-    fragment.ViewScrollContainer().is_some()
+    fragment.ViewHasScrollContainer()
         && (contents.width > container.width || contents.height > container.height)
 }
 
