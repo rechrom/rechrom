@@ -277,6 +277,14 @@ pub struct DOMJavaScriptBindings {
     services: services::DOMServices,
     emit_mutation: Rc<RefCell<DOMMutationEmitter>>,
     scoped_emit_mutation: Option<ScopedDOMMutationEmitter>,
+    // PrepareInvocation's capture of the one mutation a scoped host call
+    // emits. Built once; each invocation swaps it in instead of allocating
+    // a capturing emitter and its slot.
+    captured_mutation: Rc<RefCell<Option<DOMMutation>>>,
+    capturing_emit_mutation: Rc<RefCell<DOMMutationEmitter>>,
+    // The current main-world CSSOM world value, reused while the realm and
+    // world are unchanged instead of reallocated per host call.
+    cssom_world_value: Option<Rc<style::ProductionCSSDOMWrapperWorld>>,
     prototypes: HashMap<String, JavaScriptValue>,
     method_wrappers: HashMap<String, JavaScriptFunction>,
     runtime_realm: WeakJavaScriptRealm,
@@ -543,7 +551,19 @@ impl DOMJavaScriptBindings {
             &document,
             form_validation_state.clone(),
         );
+        let captured_mutation = Rc::new(RefCell::new(None));
+        let capture = captured_mutation.clone();
+        let capturing_emit_mutation: DOMMutationEmitter = Box::new(move |m: &DOMMutation| {
+            assert!(
+                capture.borrow().is_none(),
+                "a DOM host invocation emits one mutation"
+            );
+            *capture.borrow_mut() = Some(m.clone());
+        });
         Self {
+            captured_mutation,
+            capturing_emit_mutation: Rc::new(RefCell::new(capturing_emit_mutation)),
+            cssom_world_value: None,
             form_validation_state,
             native_mutation_observers,
             native_document_owner: None,
@@ -4334,22 +4354,15 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         // one mutation, emits it, then returns a value independent of the DOM.
         // Reuse that exact argument/return-value logic; no tree mutation or
         // connected-subtree preparation occurs under the bindings borrow.
-        let mutation = Rc::new(RefCell::new(None));
-        let pending = mutation.clone();
         let original = std::mem::replace(
             &mut self.emit_mutation,
-            Rc::new(RefCell::new(Box::new(move |m: &DOMMutation| {
-                assert!(
-                    pending.borrow().is_none(),
-                    "a DOM host invocation emits one mutation"
-                );
-                *pending.borrow_mut() = Some(m.clone());
-            }))),
+            self.capturing_emit_mutation.clone(),
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.Invoke(call)));
         self.emit_mutation = original;
+        // Empty the reused slot before any unwind resumes.
+        let mutation = self.captured_mutation.borrow_mut().take();
         let result = result.unwrap_or_else(|error| std::panic::resume_unwind(error));
-        let mutation = mutation.borrow_mut().take();
         let catches_errors = matches!(
             member,
             "attachShadow"
@@ -4383,9 +4396,14 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             }
             let mut outcome = result;
             if let Some(mutation) = mutation {
+                // Attribution of the binding -> Page mutation route (popup
+                // routing, Page.ApplyDOMMutation, lifecycle drains).
+                let mut emit_trace = browser_tracing::span("dom", "DOM.ScriptMutation");
+                emit_trace.set("mutation_type", mutation.mutation_type as u8 as f64);
                 let emitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     emitter(&mutation, runtime)
                 }));
+                drop(emit_trace);
                 match emitted {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) if catches_errors => {
@@ -4452,18 +4470,26 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 *self.slot.borrow_mut() = self.previous.take();
             }
         }
+        let callback_context = runtime.CallbackContext();
+        let world_id = callback_context.WorldId();
         let slot = self.callback_context.clone();
-        let previous = slot.borrow_mut().replace(runtime.CallbackContext());
+        let previous = slot.borrow_mut().replace(callback_context);
         let _callback_scope = CallbackScope { slot, previous };
         let slot = self.cssom_world.clone();
         // This binding is installed only for the actual main-world ScriptState;
         // no isolated-world constructor is admitted by BindRuntime.
-        let previous = slot
-            .borrow_mut()
-            .replace(Rc::new(style::ProductionCSSDOMWrapperWorld {
-                identity: runtime.RealmIdentity(),
-                world_id: runtime.CallbackContext().WorldId(),
-            }));
+        let identity = runtime.RealmIdentity();
+        let world = match &self.cssom_world_value {
+            Some(world) if world.identity == identity && world.world_id == world_id => {
+                world.clone()
+            }
+            _ => {
+                let world = Rc::new(style::ProductionCSSDOMWrapperWorld { identity, world_id });
+                self.cssom_world_value = Some(world.clone());
+                world
+            }
+        };
+        let previous = slot.borrow_mut().replace(world);
         let _scope = WorldScope { slot, previous };
         self.Invoke(call)
     }

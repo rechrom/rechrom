@@ -4,7 +4,8 @@ use std::{
 };
 
 use crate::{
-    CaretGeometry, DisplayItem, DisplayItemList, DisplayItemListJsonOption, RecordedDisplayItem,
+    CaretGeometry, DisplayItem, DisplayItemList, DisplayItemListJsonOption, RecordSource,
+    RecordedDisplayItem,
 };
 use image_resource::downcast_document_paint_record;
 use paint_input_types::PaintResources;
@@ -153,7 +154,11 @@ impl ImageDependencyIndex {
         let mut by_image: HashMap<_, Vec<_>> = HashMap::new();
         for (record_index, record) in records.iter().enumerate() {
             let mut ids = std::collections::HashSet::new();
-            for item in &items[record.record_begin..record.record_end] {
+            let ops: &[DisplayItem] = match &record.record_source {
+                Some(source) => source.Ops(),
+                None => &items[record.record_begin..record.record_end],
+            };
+            for item in ops {
                 if item.resource_id != 0 {
                     ids.insert(item.resource_id);
                 }
@@ -216,12 +221,21 @@ impl ImageDependencyIndex {
 /// The cc::PaintRecord over a whole recording: its shared ops, resource
 /// catalog and resource-revision sidecar (no copy).
 /// Source: cc/paint/paint_record.h; svg_image.cc PaintRecordForCurrentFrame.
+/// Drawings moved in from the cache keep their own record allocations; only
+/// then is the whole recording's replay stream assembled (Chromium builds a
+/// new PaintRecord over the artifact here too, paint_artifact.cc
+/// GetPaintRecord).
 pub fn PaintRecordForArtifact(artifact: &Arc<PaintRecording>) -> cc_paint::PaintRecord {
+    let ops = match artifact.ReplayOps() {
+        std::borrow::Cow::Borrowed(_) => Arc::clone(&artifact.items),
+        std::borrow::Cow::Owned(ops) => Arc::new(ops),
+    };
+    let len = ops.len();
     cc_paint::PaintRecord::new(
-        Arc::clone(&artifact.items),
+        ops,
         artifact.resources.clone(),
         Arc::clone(&artifact.image_content_revisions),
-        0..artifact.items.len(),
+        0..len,
     )
     .expect("a recording covers its own ops")
 }
@@ -232,11 +246,12 @@ pub fn PaintRecordForItem(
     artifact: &Arc<PaintRecording>,
     item: &RecordedDisplayItem,
 ) -> Option<cc_paint::PaintRecord> {
+    let (ops, range) = item.RecordOwner(artifact);
     cc_paint::PaintRecord::new(
-        Arc::clone(&artifact.items),
+        Arc::clone(ops),
         artifact.resources.clone(),
         Arc::clone(&artifact.image_content_revisions),
-        item.record_begin..item.record_end,
+        range,
     )
 }
 
@@ -401,6 +416,37 @@ impl PartialEq for PaintRecording {
 }
 
 impl PaintRecording {
+    /// The recording's flat replay stream: its own ops with each drawing
+    /// moved in from the cache replayed from its record allocation at its
+    /// recorded position. Borrowed when no drawing was moved in.
+    pub fn ReplayOps(&self) -> std::borrow::Cow<'_, [DisplayItem]> {
+        if self.display_items.iter().all(|item| item.record_source.is_none()) {
+            return std::borrow::Cow::Borrowed(self.items.as_slice());
+        }
+        let mut ops = Vec::with_capacity(self.items.len());
+        let mut cursor = 0;
+        for item in self.display_items.iter() {
+            let Some(source) = &item.record_source else {
+                continue;
+            };
+            ops.extend_from_slice(&self.items[cursor..item.record_begin]);
+            ops.extend_from_slice(source.Ops());
+            cursor = item.record_begin;
+        }
+        ops.extend_from_slice(&self.items[cursor..]);
+        std::borrow::Cow::Owned(ops)
+    }
+
+    /// Every op the recording replays, in no particular order.
+    pub fn AllOps(&self) -> impl Iterator<Item = &DisplayItem> + '_ {
+        self.items.iter().chain(
+            self.display_items
+                .iter()
+                .filter_map(|item| item.record_source.as_ref())
+                .flat_map(RecordSource::Ops),
+        )
+    }
+
     pub fn PaintedLayoutImageResourceIds(
         &self,
     ) -> impl Iterator<Item = image_resource::ImageId> + '_ {
@@ -783,7 +829,7 @@ impl PaintRecording {
             }
         }
         let mut output = Vec::new();
-        for item in self.items.iter() {
+        for item in self.AllOps() {
             if let Some(key) = &item.document_image_container_key {
                 let pair = (item.resource_id, key.clone());
                 if item.resource_id != 0 && !output.contains(&pair) {
@@ -992,6 +1038,7 @@ mod paint_artifact_tests {
             record_has_text: false,
             record_begin: 0,
             record_end: items.len(),
+            record_source: None,
             scroll_translation: None,
         };
         let index = ImageDependencyIndex::build(&items, &[record], &[]);

@@ -191,6 +191,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         record_has_text: false,
         record_begin: 0,
         record_end: 1,
+        record_source: None,
         scroll_translation: None,
     };
     let items: Arc<Vec<_>> = Arc::new(vec![draw]);

@@ -543,6 +543,12 @@ pub enum HostObjectTraceChange {
 }
 pub trait HostObjectTraceSource {
     fn TakeChanges(&self) -> Vec<HostObjectTraceChange>;
+    /// Conservative dirty bit: false only when TakeChanges would return no
+    /// change. Lets the backend skip the per-call ownership drain; Blink's
+    /// wrapper tracing has no per-binding-call synchronization step.
+    fn HasChanges(&self) -> bool {
+        true
+    }
     /// Owner-thread notification, never a GC callback. Owners may retire
     /// ephemeral host records; host DOM storage remains with its own owner.
     fn Released(&self, _ids: &[HostObjectId]) {}

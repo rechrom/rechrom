@@ -20,6 +20,14 @@ pub(super) fn update_node_input(
     if keys.is_empty() {
         return None;
     }
+    // cpp: core/layout/layout_object.cc:2991-2995 (LayoutObject::SetStyle).
+    // Element::RecalcOwnStyle hands every LayoutObject of the element the
+    // same ComputedStyle, and Text::RecalcTextStyle gives its LayoutText the
+    // parent's style; neither copies it. Build this restyle's envelope and
+    // its resource projection once and share them with every retained input.
+    let shared_style = Arc::new(style.clone());
+    let shared_resources =
+        Arc::new(crate::internal::layout_input::StyleResourceData::FromLegacyInput(&shared_style));
     let mut inputs = Vec::new();
     let mut relations_changed = false;
     for key in &keys {
@@ -38,15 +46,26 @@ pub(super) fn update_node_input(
             return None;
         }
         let mut input = record.input.clone();
-        input.style = Arc::new(style.clone());
         input.computed_style = style.style;
         // Resource bindings remain with their owner. A resource completion may
         // refresh this exact input; SVG graph ownership remains resident.
-        Arc::make_mut(&mut input.style).paint.svg_filter_graphs =
-            record.effective_style.paint.svg_filter_graphs.clone();
-        input.resources = Arc::new(
-            crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
-        );
+        // Only a retained graph that differs from the restyle's needs an
+        // envelope of its own.
+        let retained_filter_graphs = &record.effective_style.paint.svg_filter_graphs;
+        let shared_filter_graphs = &shared_style.paint.svg_filter_graphs;
+        if Arc::ptr_eq(retained_filter_graphs, shared_filter_graphs)
+            || (retained_filter_graphs.is_empty() && shared_filter_graphs.is_empty())
+        {
+            input.style = Arc::clone(&shared_style);
+            input.resources = Arc::clone(&shared_resources);
+        } else {
+            let mut own_style = (*shared_style).clone();
+            own_style.paint.svg_filter_graphs = Arc::clone(retained_filter_graphs);
+            input.style = Arc::new(own_style);
+            input.resources = Arc::new(
+                crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
+            );
+        }
         input.element = if input.kind == NodeKind::kText {
             None
         } else {
@@ -111,11 +130,9 @@ pub(super) fn update_node_input(
                     return None;
                 }
                 let mut input = record.input.clone();
-                input.style = Arc::new(style.clone());
+                input.style = Arc::clone(&shared_style);
                 input.computed_style = style.style;
-                input.resources = Arc::new(
-                    crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
-                );
+                input.resources = Arc::clone(&shared_resources);
                 inputs.push((
                     key.clone(),
                     record.parent,
@@ -140,7 +157,7 @@ pub(super) fn update_node_input(
         } else {
             std::ptr::null()
         };
-        storage.Create(
+        storage.CreateWithStyleOwner(
             parent,
             input.id,
             input.kind,
@@ -149,10 +166,8 @@ pub(super) fn update_node_input(
             input.debug_name,
             input.text,
             text_style,
-            false,
-            std::ptr::null(),
-            std::ptr::null(),
-            Some(key),
+            key,
+            (&input.style, &input.resources),
         );
     }
     if !relations_changed {

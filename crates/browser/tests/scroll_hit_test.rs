@@ -446,7 +446,7 @@ fn resizer_records_the_expanded_touch_hit_test_chunk() {
             .iter()
             .find(|item| item.id.r#type == DisplayItemIdType::kResizer)
             .expect("platform resizer drawing");
-        let record = &artifact.items[drawing.record_begin..drawing.record_end];
+        let record = drawing.RecordOps(&artifact);
         assert_eq!(
             record
                 .iter()
@@ -528,7 +528,7 @@ fn resizer_geometry_scales_from_dip() {
             (drawing.visual_rect.width, drawing.visual_rect.height),
             (30.0, 30.0)
         );
-        assert!(artifact.items[drawing.record_begin..drawing.record_end]
+        assert!(drawing.RecordOps(&artifact)
             .iter()
             .filter(|item| item.r#type == DisplayItemType::kStrokePath)
             .all(|item| item.stroke_width == 2.0));

@@ -82,6 +82,14 @@ impl LayoutResultHandle {
         }
     }
 
+    /// Keep this canonical source result alive without exposing it. A Paint
+    /// lease holds it so the fragments a retained PrePaint tree last walked
+    /// stay resident until that tree has been brought up to date with a
+    /// replacement result of the same retained Paint state.
+    pub(crate) fn ResultOwner(&self) -> Persistent<()> {
+        self.owner.clone()
+    }
+
     pub fn IsEmpty(&self) -> bool {
         self.owner.Get().is_null()
     }

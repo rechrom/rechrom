@@ -28,6 +28,19 @@ impl CSSInlineStyle {
             parsed: RefCell::new(None),
         }))
     }
+    /// Adopt an already-owned WTF String (one shared StringImpl), as
+    /// SetSynchronizedLazyAttribute stores the serializer's result without
+    /// copying its code units (element.cc:13671-13676).
+    pub fn FromString(source: foundation::String) -> Self {
+        if source.IsNull() {
+            // A declaration's source is never the null String.
+            return Self::FromUTF16(&[]);
+        }
+        Self(Rc::new(InlineStyleData {
+            source,
+            parsed: RefCell::new(None),
+        }))
+    }
     /// The exact source value used by parsing, CSSOM and DOM attribute
     /// mutation. SourceText remains a display/legacy UTF-8 projection only.
     pub fn SourceTextValue(&self) -> &foundation::String {

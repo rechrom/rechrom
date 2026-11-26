@@ -1230,13 +1230,12 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                 continue;
             };
             let before = &artifact.display_items[index];
-            if record.record_end - record.record_begin != before.record_end - before.record_begin {
+            let before_ops = before.RecordOps(artifact);
+            if record.RecordOps(&controls).len() != before_ops.len() {
                 return Err(ScrollbarChanged);
             }
-            let mut ops = controls.items[record.record_begin..record.record_end].to_vec();
-            for (op, before) in ops
-                .iter_mut()
-                .zip(&artifact.items[before.record_begin..before.record_end])
+            let mut ops = record.RecordOps(&controls).to_vec();
+            for (op, before) in ops.iter_mut().zip(before_ops)
             {
                 if op.r#type != before.r#type {
                     return Err(ScrollbarChanged);
@@ -1267,12 +1266,21 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             record.scrollbar = scrollbar;
             changed = true;
         }
-        let record_begin = record.record_begin;
-        let record_end = record.record_end;
-        if &artifact.items[record_begin..record_end] != ops.as_slice() {
-            let old_ops =
-                &mut std::sync::Arc::make_mut(&mut artifact.items)[record_begin..record_end];
-            old_ops.clone_from_slice(&ops);
+        let record = &artifact.display_items[index];
+        if record.RecordOps(artifact) != ops.as_slice() {
+            if record.record_source.is_some() {
+                // A drawing moved in from the cache shares its record
+                // allocation with earlier recordings: give it its own record.
+                let range = 0..ops.len();
+                artifact.display_items[index].record_source = Some(paint_record::RecordSource {
+                    ops: std::sync::Arc::new(ops),
+                    range,
+                });
+            } else {
+                let (record_begin, record_end) = (record.record_begin, record.record_end);
+                std::sync::Arc::make_mut(&mut artifact.items)[record_begin..record_end]
+                    .clone_from_slice(&ops);
+            }
             changed = true;
         }
         if changed {

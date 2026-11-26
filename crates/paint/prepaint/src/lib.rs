@@ -74,6 +74,9 @@ pub struct PrePaintUpdateStats {
     pub post_walk: bool,
     pub rebound_nodes: usize,
     pub rebind_walk: bool,
+    /// The walk's source is a replacement LayoutResult of the retained Paint
+    /// publication state (no rebind walk; clean reused subtrees are skipped).
+    pub source_result_replaced: bool,
     /// Nodes whose cull-rect change forced a layer repaint this pass.
     pub cull_change_repaints: usize,
     /// UpdateNode self time by section, excluding child recursion. Recorded

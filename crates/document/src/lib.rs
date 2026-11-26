@@ -300,6 +300,12 @@ impl DocumentEngine {
         let geometry_changed =
             self.dom.borrow().GetMeasurementGeometryRevision() != geometry_before;
         let connected_subtree = match mutation.mutation_type {
+            // InlineCSSStyleDeclaration::DidMutate -> Element::
+            // InvalidateStyleAttribute (inline_css_style_declaration.cc:36-55,
+            // element.cc:13195-13203) never reaches AttributeChanged, so no
+            // element ParseAttribute hook (script, image or style sheet
+            // preparation) observes a CSSOM declaration write.
+            DOMMutationType::kSetAttribute if mutation.inline_style.is_some() => None,
             DOMMutationType::kAppendChild | DOMMutationType::kInsertBefore => {
                 Some(ConnectedSubtreeRequest {
                     root_node_id: mutation.child_node_id,

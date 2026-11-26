@@ -472,6 +472,11 @@ impl BoundEvents {
             });
         }
     }
+    /// Conservative: an active event may have finished dispatch since the
+    /// last drain, so it reports a change until TakeChanges retires it.
+    pub(super) fn HasChanges(&self) -> bool {
+        !self.active.is_empty() || !self.pending.is_empty()
+    }
     pub(super) fn TakeChanges(
         &mut self,
     ) -> Vec<javascript::javascript_runtime::HostObjectTraceChange> {

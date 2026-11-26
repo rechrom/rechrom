@@ -168,6 +168,7 @@ mod tests {
             record_has_text: false,
             record_begin: 0,
             record_end: 0,
+            record_source: None,
             scroll_translation,
         }
     }

@@ -438,11 +438,10 @@ impl PaintController {
                 });
         output.display_items.reserve(display_items);
         if let Some(previous) = &self.previous {
+            // Source: paint_controller.cc:116-124 reserves the chunk and
+            // display-item lists only. Cached drawings keep their own
+            // PaintRecord allocations, so the op backing is not reserved.
             output.chunks.reserve(previous.chunks.len());
-            // Rechrom's flat PaintOp backing is the PaintRecord payload owned
-            // by each DrawingDisplayItem. Preserve its allocation alongside
-            // the source DisplayItemList/paint-chunk reservations.
-            Arc::make_mut(&mut output.items).reserve(previous.items.len());
         }
     }
 
@@ -511,32 +510,33 @@ impl PaintController {
         client: DisplayItemClientInfo,
         check_under_invalidation: bool,
     ) -> Option<CachedDrawing> {
-        let mut record = Vec::new();
-        let item =
-            self.TakeCachedDrawingInto(id, client, check_under_invalidation, &mut record)?;
+        let item = self.TakeCachedDrawingInto(id, client, check_under_invalidation, 0)?;
+        let record = item
+            .record_source
+            .as_ref()
+            .map_or_else(Vec::new, |source| source.Ops().to_vec());
         Some(CachedDrawing { item, record })
     }
 
-    /// TakeCachedDrawing, appending the cached record items straight to
-    /// `record` (the new artifact's item list) instead of through an
-    /// intermediate Vec. Source: paint_controller.cc:283-286 moves the item
-    /// from the old list into the new one.
+    /// TakeCachedDrawing, moving the cached item with its PaintRecord into the
+    /// new list at op-stream `position`. Source: paint_controller.cc:283-286
+    /// moves the item from the old list into the new one.
     pub(crate) fn TakeCachedDrawingInto(
         &mut self,
         id: DisplayItemId,
         client: DisplayItemClientInfo,
         check_under_invalidation: bool,
-        record: &mut Vec<DisplayItem>,
+        position: usize,
     ) -> Option<RecordedDisplayItem> {
         let index = self.TakeCachedDrawingIndex(id, client, check_under_invalidation)?;
         // Source: paint_controller.cc:283-286. The item moves into the new
-        // list and leaves a tombstone in the current one. The previous
-        // artifact stays shared with the frame snapshots holding it: copy
-        // only this item's record and note the tombstone locally.
+        // list, with its PaintRecord, and leaves a tombstone in the current
+        // one. The previous artifact stays shared with the layerization
+        // state still holding it: the item takes a share of its record
+        // allocation (no op copy) and the tombstone is noted locally.
         let previous = self.previous.as_ref().unwrap();
-        let old = &previous.display_items[index];
-        record.extend_from_slice(&previous.items[old.record_begin..old.record_end]);
-        let item = old.clone();
+        let mut item = previous.display_items[index].clone();
+        item.MoveRecordFrom(previous, position);
         self.moved_previous_items[index] = MovedItem::Item;
         Some(item)
     }
@@ -750,7 +750,8 @@ impl PaintController {
         // previous artifact stays shared with the frame snapshots that still
         // hold it, so the moved range is copied into the new list and its
         // tombstones are recorded on this controller instead of copying the
-        // whole artifact to write them.
+        // whole artifact to write them. Each item keeps its PaintRecord
+        // allocation (MoveRecordFrom); no op is copied.
         let previous = Arc::clone(self.previous.as_ref().unwrap());
         for chunk_index in start_chunk_index..end_chunk_index {
             self.paint_chunker
@@ -767,16 +768,11 @@ impl PaintController {
             *moved = MovedItem::Subsequence;
         }
         for offset in 0..end_item_index - start_item_index {
-            let old = &previous.display_items[start_item_index + offset];
             let item_index = new_item_start_index + offset;
-            let items = Arc::make_mut(&mut output.items);
-            let record_begin = items.len();
-            items.extend_from_slice(&previous.items[old.record_begin..old.record_end]);
-            let record_end = items.len();
+            let position = output.items.len();
             let client_id = {
                 let item = &mut output.display_items[item_index];
-                item.record_begin = record_begin;
-                item.record_end = record_end;
+                item.MoveRecordFrom(&previous, position);
                 item.SetPaintInvalidationReason(if item.IsCacheable() {
                     foundation::PaintInvalidationReason::kNone
                 } else {
@@ -921,6 +917,7 @@ mod tests {
             record_has_text: false,
             record_begin: 0,
             record_end: 0,
+            record_source: None,
             scroll_translation: None,
         }
     }

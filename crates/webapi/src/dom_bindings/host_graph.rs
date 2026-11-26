@@ -260,6 +260,39 @@ impl Drop for ListenerCellRoots {
     }
 }
 impl HostObjectTraceSource for DOMHostGraph {
+    // Mirrors every producer drained by TakeChanges, without allocating.
+    fn HasChanges(&self) -> bool {
+        if !self.retire.borrow().is_empty()
+            || !self.pending.borrow().is_empty()
+            || !self.reaction_roots.borrow().is_empty()
+        {
+            return true;
+        }
+        // TakeChanges reads Document facts only under a successful mutable
+        // borrow; a borrowed Document contributes nothing to that drain.
+        if let Ok(owner) = self.document.try_borrow_mut() {
+            let document = owner.GetDocument();
+            if document.HasElementInternalsAnchorReferences()
+                || document.HasPendingCustomElementReferenceRoots()
+                || !self.streams.borrow().contains_key(&document.RootHandle())
+            {
+                return true;
+            }
+        }
+        if self
+            .streams
+            .borrow()
+            .values()
+            .any(|stream| stream.HasChanges())
+        {
+            return true;
+        }
+        // TakeChanges borrows the events mutably; a held borrow is reported
+        // as dirty so that drain observes it exactly as before.
+        self.events
+            .try_borrow()
+            .map_or(true, |events| events.HasChanges())
+    }
     fn TakeChanges(&self) -> Vec<C> {
         self.RetireRecords();
         // Parser swaps transfer the actual arena during a JS turn. Subscribe

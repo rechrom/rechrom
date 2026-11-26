@@ -139,12 +139,14 @@ impl PaintUnderInvalidationChecker {
             );
         }
 
-        // DisplayItem owns its PaintRecord in Blink. Rechrom's resident item
-        // owns a range into PaintRecording::items, so preserve the exact source
-        // move while relocating that range into the new artifact's backing.
-        let old_record = old_artifact.items[old_item.record_begin..old_item.record_end].to_vec();
-        let (new_record_begin, new_record_end) = (new_item.record_begin, new_item.record_end);
-        debug_assert_eq!(new_record_end, new_artifact.items.len());
+        // DisplayItem owns its PaintRecord in Blink. The moved old item keeps
+        // its record allocation (MoveRecordFrom) at the position the freshly
+        // recorded duplicate occupied in the new artifact's op stream.
+        let new_record_begin = new_item.record_begin;
+        debug_assert!(new_item.record_source.is_none());
+        debug_assert_eq!(new_item.record_end, new_artifact.items.len());
+        let mut relocated = old_item.clone();
+        relocated.MoveRecordFrom(old_artifact, new_record_begin);
 
         let moved = new_artifact
             .display_items
@@ -154,17 +156,14 @@ impl PaintUnderInvalidationChecker {
         } else {
             PaintInvalidationReason::kUncacheable
         });
-        let new_items = std::sync::Arc::make_mut(&mut new_artifact.items);
-        new_items.truncate(new_record_begin);
-        let moved_record_begin = new_items.len();
-        new_items.extend(old_record);
-        let moved_record_end = new_items.len();
+        std::sync::Arc::make_mut(&mut new_artifact.items).truncate(new_record_begin);
         let moved = new_artifact
             .display_items
             .last_mut()
             .expect("moved cached display item");
-        moved.record_begin = moved_record_begin;
-        moved.record_end = moved_record_end;
+        moved.record_begin = relocated.record_begin;
+        moved.record_end = relocated.record_end;
+        moved.record_source = relocated.record_source;
 
         if self.subsequence_client_id_.is_some() {
             self.old_item_index_ = Some(old_item_index + 1);
@@ -443,6 +442,7 @@ mod tests {
             record_has_text: false,
             record_begin: begin,
             record_end: end,
+            record_source: None,
             scroll_translation: None,
         }
     }
