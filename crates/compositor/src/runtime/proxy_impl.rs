@@ -197,14 +197,6 @@ impl EngineCore {
                 .NotifyNewLocalSurfaceIdExpectedWhilePaused(&mut HostImplContext {
                     services: &mut self.services,
                 }),
-            MainToImpl::NotifyLatencyInfoSwapPromiseMonitors => self
-                .host
-                .as_mut()
-                .unwrap()
-                .BaseMutable()
-                .NotifyLatencyInfoSwapPromiseMonitors(&mut HostImplContext {
-                    services: &mut self.services,
-                }),
             MainToImpl::Initialize { .. } | MainToImpl::Stop { .. } => {
                 unreachable!("the embedder runs Initialize and Stop")
             }

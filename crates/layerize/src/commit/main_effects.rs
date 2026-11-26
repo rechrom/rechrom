@@ -58,7 +58,6 @@ pub fn NewParentLocalSurfaceId() -> LocalSurfaceId {
 pub enum MainHostEffect {
     NeedsUpdateLayers,
     NeedsCommit { urgent: bool },
-    NotifyLatencyInfoSwapPromiseMonitors,
     SaveActiveEventMetrics,
     SetTargetLocalSurfaceId(LocalSurfaceId),
     NewLocalSurfaceIdExpectedWhilePaused,

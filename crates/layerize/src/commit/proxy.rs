@@ -289,10 +289,6 @@ pub enum MainToImpl<F: ProxyTypes> {
     /// ProxyMain::Stop -> DestroyProxyImplOnImplThread
     /// (proxy_main.cc:916-946).
     Stop { completion: CompletionSignal },
-    /// Rechrom: the main LayerTreeHost's commit request notifies the
-    /// LatencyInfoSwapPromiseMonitors, whose registry is owned by the impl
-    /// half (cc/trees/latency_info_swap_promise_monitor.cc).
-    NotifyLatencyInfoSwapPromiseMonitors,
 }
 
 /// The posted-task queue of one Proxy direction (the PostTask of
