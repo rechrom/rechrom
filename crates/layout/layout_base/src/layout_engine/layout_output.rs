@@ -30,16 +30,37 @@ pub use hit_test::{
     NativeHitTestTarget,
 };
 
-/// Opaque lifetime lease for the canonical per-result Paint sidecar. It
-/// carries no Layout API and exposes no storage to Paint.
+/// Opaque lifetime lease for the canonical Paint publication state and the
+/// LayoutResult it was taken from. It carries no Layout API and exposes no
+/// storage to Paint.
+///
+/// The publication state outlives a replacement LayoutResult (see
+/// LayoutPaintState::AdoptReplacementResult), as Chromium's FragmentData
+/// outlives relayout on its LayoutObject; the lease additionally keeps the
+/// exact result alive, so every fragment a consumer retained from it stays
+/// resident until that consumer has moved to a newer lease.
 #[derive(Clone)]
 pub struct PaintFragmentLease {
     owner: Arc<dyn std::any::Any>,
     generation: u64,
+    result: foundation::Persistent<()>,
 }
 
 impl PaintFragmentLease {
+    /// The same publication state and the same LayoutResult: every cursor
+    /// taken from one lease names exactly the fragments of the other.
     pub fn PtrEq(&self, other: &Self) -> bool {
+        self.SameSidecarOwner(other) && self.result.Get() == other.result.Get()
+    }
+
+    /// The same publication state, possibly over a replacement LayoutResult.
+    /// Cursors and FragmentPaintData sidecar references taken through
+    /// `other` remain valid for `self`'s state; a cursor still names its own
+    /// fragment, which the replacement result reaches only if Layout reused
+    /// it (a cache hit keeps a clean child's fragment across its parent's
+    /// relayout; only relaid-out boxes replace theirs,
+    /// core/layout/layout_box.cc:2523-2561,2620-2661).
+    pub fn SameSidecarOwner(&self, other: &Self) -> bool {
         self.generation == other.generation && Arc::ptr_eq(&self.owner, &other.owner)
     }
 }
@@ -308,14 +329,24 @@ struct FragmentDataSyncCounts {
 /// WalkInternal); likewise the first cursor of a publication to reach an
 /// occurrence rebinds and refreshes its sidecar from the owner.
 ///
-/// Lifetime: the state retains its LayoutResult. A PaintFragmentLease (or
-/// handle) therefore keeps the result's fragments alive, they keep every
+/// Lifetime: the state retains its current LayoutResult, and each
+/// PaintFragmentLease (or handle) retains the result it was taken from. A
+/// lease therefore keeps that result's fragments alive, they keep every
 /// LayoutObject they reach (destroyed or not) through their Member edges,
 /// and each object keeps its FragmentDataList and sidecars; a destroyed
 /// object's sidecars are released by the GC only once no retained result
 /// reaches it. The one way a sidecar can lose its FragmentData earlier is
 /// FragmentDataList::Shrink of a fragmented box; such sidecars are pinned by
 /// every state that reached them (`pinned`).
+///
+/// A replacement LayoutResult keeps the state (AdoptReplacementResult): as
+/// Chromium keeps FragmentData on the LayoutObject while LayoutBox::
+/// SetCachedLayoutResult / ReplaceLayoutResult replace only the relaid-out
+/// boxes' results (core/layout/layout_box.cc:2523-2561,2620-2661), the
+/// publication owner, its
+/// document resources and its resource epoch stay in place, and every clean
+/// fragment the replacement result reuses keeps both its sidecar and the
+/// cursors PrePaint retained into it.
 thread_local! {
     /// Serial of the current paint-input refresh on this document thread
     /// (PaintFragmentCursor::AdvancePrePaintInvalidationEpoch).
@@ -323,10 +354,11 @@ thread_local! {
 }
 
 pub(crate) struct LayoutPaintState {
-    /// The LayoutResult this state publishes, held for lifetime only (see
-    /// the note above).
+    /// The LayoutResult this state currently publishes, held for lifetime
+    /// only (see the note above). Replaced in place by
+    /// AdoptReplacementResult.
     #[allow(dead_code)]
-    result: foundation::Persistent<()>,
+    result: UnsafeCell<foundation::Persistent<()>>,
     /// Sidecars of occurrences without a Chromium FragmentData: line box
     /// fragments, fragments and items without a LayoutObject, the last
     /// fragmentainer (no break token). Keyed by the owner-derived instance
@@ -368,9 +400,9 @@ pub(crate) struct LayoutPaintState {
 impl LayoutPaintState {
     pub(crate) fn New(result: &LayoutResult) -> Arc<Self> {
         Arc::new(Self {
-            result: foundation::Persistent::from_ptr(
+            result: UnsafeCell::new(foundation::Persistent::from_ptr(
                 result as *const LayoutResult as *mut LayoutResult as *mut (),
-            ),
+            )),
             fallback: UnsafeCell::new(Default::default()),
             pinned: UnsafeCell::new(Default::default()),
             superseded: Cell::new(false),
@@ -428,6 +460,49 @@ impl LayoutPaintState {
         *unsafe { &mut *self.fallback.get() } = inherited;
         self.resource_epoch.set(previous.resource_epoch.get());
         *unsafe { &mut *self.document_resources.get() } = previous.DocumentResources().cloned();
+    }
+
+    /// Keep this state as the publication owner of the replacement
+    /// LayoutResult `result`. Returns false when it cannot stand for it, and
+    /// the caller publishes a new state that supersedes this one.
+    ///
+    /// Chromium replaces only the relaid-out boxes' LayoutResults
+    /// (LayoutBox::SetCachedLayoutResult / ReplaceLayoutResult,
+    /// core/layout/layout_box.cc:2523-2561,2620-2661) and keeps every FragmentData on its
+    /// LayoutObject (core/paint/fragment_data.h), so PrePaintTreeWalk visits
+    /// only dirty objects afterwards (pre_paint_tree_walk.cc:418-437). The
+    /// FragmentData sidecars already live on the LayoutObjects; keeping the
+    /// state keeps the remaining publication owner in place as well, and with
+    /// it the cursors PrePaint retained into clean fragments the replacement
+    /// result reuses. Each lease retains the result it was taken from, so the
+    /// fragments of this state's previous result stay alive for as long as a
+    /// consumer still holds a lease of it.
+    ///
+    /// The state's own fallback and pinned sidecars are keyed by, or pinned
+    /// for, occurrences of the previous result; a retained reference may
+    /// name one of them, and the state could neither prune them without a
+    /// walk nor keep them without growing per relayout. Only a state with
+    /// neither (no fragmentation-context or FragmentData-less occurrence was
+    /// reached) is kept.
+    pub(crate) fn AdoptReplacementResult(&self, result: &LayoutResult) -> bool {
+        if self.superseded.get()
+            || !unsafe { &*self.fallback.get() }.is_empty()
+            || !unsafe { &*self.pinned.get() }.is_empty()
+        {
+            return false;
+        }
+        *unsafe { &mut *self.result.get() } = foundation::Persistent::from_ptr(
+            result as *const LayoutResult as *mut LayoutResult as *mut (),
+        );
+        true
+    }
+
+    /// The owner-keyed fallback and pinned sidecar counts (trace only).
+    pub(crate) fn PrivateSidecarCounts(&self) -> (usize, usize) {
+        (
+            unsafe { &*self.fallback.get() }.len(),
+            unsafe { &*self.pinned.get() }.len(),
+        )
     }
 
     /// Visit the sidecars of `object`'s fragment occurrences that the current
@@ -1705,6 +1780,7 @@ pub(crate) fn PaintLeaseForHandle(handle: &LayoutResultHandle) -> PaintFragmentL
             .PaintStateLease()
             .expect("layout result handle has no committed paint state"),
         generation: state.Generation(),
+        result: handle.ResultOwner(),
     }
 }
 

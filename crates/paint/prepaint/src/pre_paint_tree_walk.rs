@@ -1117,7 +1117,15 @@ pub struct PrePaintTreeWalk {
     pub retained_tree: Option<Box<PaintTreeNode<'static>>>,
     retained_source_lease: Option<PaintFragmentLease>,
     pending_source_lease: Option<PaintFragmentLease>,
+    /// The walk's lease names a different Paint publication state than the
+    /// retained tree's: every retained cursor and sidecar reference must move
+    /// to the new owner before the preceding lease is released.
     source_owner_changed: bool,
+    /// The walk's lease names a replacement LayoutResult (or a different
+    /// state). Under the same state, the clean fragments the replacement
+    /// reused keep their retained cursors; a retained node skips its subtree
+    /// only while it names the same fragment (WalkedSameSourceOwner).
+    source_result_changed: bool,
     retained_tree_valid: bool,
     logical_tree_changed: bool,
     viewport: Option<PaintRect>,
@@ -1210,6 +1218,7 @@ impl Default for PrePaintTreeWalk {
             retained_source_lease: None,
             pending_source_lease: None,
             source_owner_changed: false,
+            source_result_changed: false,
             retained_tree_valid: false,
             logical_tree_changed: false,
             viewport: None,
@@ -4724,12 +4733,48 @@ fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 
 // Chromium's display-lock path retains children because their LayoutObject and
 // FragmentData owners remain resident. Rechrom may do that only while the same
-// Paint sidecar lease remains current.
+// LayoutResult remains current: the locked children are not compared, so their
+// retained cursors must name fragments the current lease keeps alive.
 fn CanRetainDisplayLockedChildren(
     child_pre_paint_blocked_by_display_lock: bool,
-    source_owner_changed: bool,
+    source_result_changed: bool,
 ) -> bool {
-    child_pre_paint_blocked_by_display_lock && !source_owner_changed
+    child_pre_paint_blocked_by_display_lock && !source_result_changed
+}
+
+/// Whether the retained `node` was last walked over exactly `source`'s
+/// occurrence: the same PhysicalFragment, or the same FragmentItem in the
+/// same container fragment. Addresses only; the walked cursor is never
+/// dereferenced. Under one Paint publication state this is the proof that a
+/// replacement LayoutResult reused the fragment, and with it every fragment,
+/// item and sidecar the retained subtree reaches through its immutable
+/// links: Chromium likewise leaves a clean subtree's FragmentData untouched
+/// across an ancestor's relayout and PrePaintTreeWalk does not descend into
+/// it (pre_paint_tree_walk.cc:398-437). Hand-built nodes have no cursor.
+fn WalkedSameSourceOwner(node: &PaintTreeNode<'_>, source: PaintFragmentSource<'_>) -> bool {
+    use layout::output::FragmentCursor;
+    let Some(walked) = node.source_cursor else {
+        return false;
+    };
+    match (walked.Cursor(), source.Cursor().Cursor()) {
+        (
+            FragmentCursor::Physical { fragment: walked, .. },
+            FragmentCursor::Physical { fragment: current, .. },
+        ) => std::ptr::eq(walked, current),
+        (
+            FragmentCursor::Inline {
+                item: walked,
+                container: walked_container,
+                ..
+            },
+            FragmentCursor::Inline {
+                item: current,
+                container: current_container,
+                ..
+            },
+        ) => std::ptr::eq(walked, current) && std::ptr::eq(walked_container, current_container),
+        _ => false,
+    }
 }
 
 fn RequiresFullSourceWalk(source_owner_changed: bool, retained_tree_valid: bool) -> bool {
@@ -6504,7 +6549,7 @@ impl PrePaintTreeWalk {
             || (fragment.paint.IsLayoutView()
                 && self.active_blocking_wheel_targets.binary_search(&0).is_ok());
         let should_update = inherited.blocking_wheel_event_handler_changed
-            || (self.source_owner_changed
+            || (self.source_result_changed
                 && (fragment.paint.LayoutObjectIdentity().is_some()
                     || !self.active_blocking_wheel_targets.is_empty()));
         let inside = inherited.inside_blocking_wheel_event_handler
@@ -6599,7 +6644,15 @@ impl PrePaintTreeWalk {
         // A replacement source owner forces this complete walk. Clean-subtree
         // admission is therefore available only while the resident sidecar
         // itself remains the owner of every raw FragmentPaintData pointer.
-        let source_tree_compatible = !self.source_owner_changed;
+        // Under the same owner, a replacement LayoutResult leaves a retained
+        // subtree's references valid exactly when its root names the same
+        // reused fragment (pre_paint_tree_walk.cc:418-437 then skips it as
+        // Chromium skips an object whose FragmentData no dirty bit reached).
+        let source_tree_compatible = !self.source_owner_changed
+            && (!self.source_result_changed
+                || previous
+                    .as_deref()
+                    .is_some_and(|node| WalkedSameSourceOwner(node, fragment)));
         self.stats.self_unchanged_nodes += self_unchanged as usize;
         self.stats.subtree_unchanged_nodes += subtree_unchanged as usize;
         self.stats.source_tree_compatible_nodes += source_tree_compatible as usize;
@@ -6714,7 +6767,7 @@ impl PrePaintTreeWalk {
         let shift_delta = if !self_clean && !invalidation_only && !force && self_unchanged {
             previous.as_ref().and_then(|node| {
                 let cache = node.cache.as_ref()?;
-                if (self.source_owner_changed
+                if (self.source_result_changed
                     && !(SamePreviousSourceIdentity(node, &fragment)
                         && SameClientDirectory(node, &fragment)))
                     || !ShiftKeepsSvgPrefix(node, &cache.inherited, &inherited)
@@ -6745,7 +6798,7 @@ impl PrePaintTreeWalk {
                     2
                 }
                 Some((node, _))
-                    if self.source_owner_changed
+                    if self.source_result_changed
                         && !(SamePreviousSourceIdentity(node, &fragment)
                             && SameClientDirectory(node, &fragment)) =>
                 {
@@ -6800,7 +6853,11 @@ impl PrePaintTreeWalk {
             self.stats.reused_nodes += 1;
             let mut node = previous.take().unwrap();
             RefreshRetainedFlatTransforms(&mut node, &inherited);
-            if self.source_owner_changed {
+            // A replacement owner, or a replacement LayoutResult carrying this
+            // clean object in a new fragment: the node reads the current one.
+            if self.source_owner_changed
+                || (self.source_result_changed && !WalkedSameSourceOwner(&node, fragment))
+            {
                 self.stats.rebound_nodes += 1;
                 node.BindSource(fragment);
             }
@@ -7284,7 +7341,7 @@ impl PrePaintTreeWalk {
             .child_pre_paint_blocked_by_display_lock;
         if CanRetainDisplayLockedChildren(
             child_pre_paint_blocked_by_display_lock,
-            self.source_owner_changed,
+            self.source_result_changed,
         ) {
             let mut keys = own_keys;
             let mut nodes = 1;
@@ -8186,18 +8243,32 @@ impl PrePaintTreeWalk {
         source_lease: PaintFragmentLease,
     ) -> Box<PaintTreeNode<'static>> {
         self.active_blocking_wheel_targets = self.root_blocking_wheel_targets.clone();
-        let source_owner_changed = self
-            .retained_source_lease
-            .as_ref()
-            .is_none_or(|retained| !retained.PtrEq(&source_lease));
+        // Layout keeps its Paint publication state across a replacement
+        // LayoutResult (LayoutPaintState::AdoptReplacementResult), as Chromium
+        // keeps FragmentData on the LayoutObject across relayout
+        // (core/layout/layout_box.cc:2523-2561,2620-2661). Only a different
+        // state invalidates every retained reference; a replacement result of
+        // the same state leaves the retained cursors into its reused clean
+        // fragments valid, and the retained lease keeps the previous result
+        // alive until RetainTree.
+        let (source_owner_changed, source_result_changed) =
+            match self.retained_source_lease.as_ref() {
+                Some(retained) => (
+                    !retained.SameSidecarOwner(&source_lease),
+                    !retained.PtrEq(&source_lease),
+                ),
+                None => (true, true),
+            };
         let source_owner_changed = source_owner_changed || self.local_frame_sources_changed;
+        let source_result_changed = source_result_changed || source_owner_changed;
         self.source_owner_changed = source_owner_changed;
+        self.source_result_changed = source_result_changed;
         self.pending_source_lease = Some(source_lease);
         self.completed_local_frame_prepaint.clear();
         self.paint_invalidator.BeginPass();
         // The root's dirty bits decide the clean-tree admission below.
         unsafe { root.Cursor().ReadPrePaintInvalidationForVisit() };
-        if source_owner_changed {
+        if source_result_changed {
             // Sliced inline strips depend on every fragment of the object;
             // resolve them before any node reads them.
             crate::inline_stitched_decoration::PopulateInlineStitchedDecorations(root.Cursor());
@@ -8211,6 +8282,7 @@ impl PrePaintTreeWalk {
         // Do not clone and rebind the resident graph here: that would preserve
         // a second snapshot-local marker model which Chromium does not have.
         self.stats = PrePaintUpdateStats::default();
+        self.stats.source_result_replaced = source_result_changed && !source_owner_changed;
         self.transform_world_memo.clear();
         self.intersection_observation_state = Default::default();
         self.walk_generation = self
@@ -8336,6 +8408,9 @@ impl PrePaintTreeWalk {
         // raw references into the preceding sidecar, so Chromium's in-place
         // FragmentData update cannot be emulated by identity-only rebinding.
         // Force one linear old/new walk before releasing that preceding lease.
+        // A replacement LayoutResult of the same owner needs no such walk:
+        // UpdateNode visits the dirty objects and skips each clean subtree
+        // whose root still names the same reused fragment.
         let force = RequiresFullSourceWalk(source_owner_changed, self.retained_tree_valid);
         // Source: pre_paint_tree_walk.cc:418-437. With no dirty bit on the
         // LayoutView and none below it, no object requires PrePaint. This is
@@ -8344,9 +8419,11 @@ impl PrePaintTreeWalk {
             && self.retained_local_frame_leases.is_empty()
             && !force
             && previous.as_deref().is_some_and(|node| {
-                node.cache
-                    .as_ref()
-                    .is_some_and(|cache| self.SameContext(&cache.inherited, &context))
+                (!source_result_changed || WalkedSameSourceOwner(node, root))
+                    && node
+                        .cache
+                        .as_ref()
+                        .is_some_and(|cache| self.SameContext(&cache.inherited, &context))
                     && self.RetainedSelfUnchanged(node, root)
                     && self.RetainedDescendantsUnchanged(node, root)
             });
@@ -8493,6 +8570,11 @@ impl PrePaintTreeWalk {
             );
             // What the admitted nodes became.
             admission.set("skipped_subtrees", self.stats.skipped_subtrees as f64);
+            admission.set(
+                "source_result_replaced",
+                self.stats.source_result_replaced as u8 as f64,
+            );
+            admission.set("rebound_nodes", self.stats.rebound_nodes as f64);
             admission.set("shifted", self.stats.shifted_nodes as f64);
             admission.set(
                 "invalidation_only",

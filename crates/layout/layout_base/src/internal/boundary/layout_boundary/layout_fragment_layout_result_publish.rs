@@ -39,12 +39,12 @@ pub(super) fn install_layout_result_paint_state(
     }
     let result_identity = result as *const LayoutResult as usize;
     let result_changed = cache.fragment_identity_result != result_identity;
-    // A retained update of the same LayoutResult republishes the same state.
-    // A replacement LayoutResult gets its own state, whose lease retains that
-    // result for the handles Paint keeps; the FragmentPaintData sidecars
-    // themselves stay on their LayoutObjects' FragmentData across both, as
-    // Chromium's FragmentData does (core/paint/fragment_data.h), so nothing
-    // is seeded or moved between the states.
+    // A retained update of the same LayoutResult republishes the same state,
+    // and so does a replacement LayoutResult whenever the state can stand for
+    // it (below); otherwise the replacement gets its own state. Either way
+    // the FragmentPaintData sidecars stay on their LayoutObjects'
+    // FragmentData, as Chromium's FragmentData does
+    // (core/paint/fragment_data.h), so nothing is seeded or moved.
     let retained_paint_state = !result_changed && cache.fragment_paint_state.is_some();
     // A topology mutation cleared the object index.
     let objects_rebuilt = cache.objects.is_empty();
@@ -60,7 +60,30 @@ pub(super) fn install_layout_result_paint_state(
         );
         crate::layout_engine::LayoutPaintState::New(result)
     };
-    let paint_state = if result_changed {
+    // A replacement LayoutResult normally keeps the publication state, as
+    // Chromium keeps FragmentData on its LayoutObject while only the
+    // relaid-out boxes replace their results (LayoutBox::
+    // SetCachedLayoutResult / ReplaceLayoutResult, core/layout/
+    // layout_box.cc:2523-2561,2620-2661). PrePaint then keeps its retained
+    // cursors into the clean fragments the replacement reuses and skips
+    // those subtrees (pre_paint_tree_walk.cc:418-437) instead of rebinding
+    // every node. Each lease keeps its own result, so the previous result's
+    // fragments stay alive until PrePaint has moved to the new lease.
+    let reused_paint_state = result_changed
+        && purpose == LayoutUpdateKind::Paint
+        && cache.fragment_paint_state.as_ref().is_some_and(|previous| {
+            let (fallback, pinned) = previous.PrivateSidecarCounts();
+            trace.set("previous_fallback_sidecars", fallback as f64);
+            trace.set("previous_pinned_sidecars", pinned as f64);
+            previous.AdoptReplacementResult(result)
+        });
+    trace.set("paint_state_reused", reused_paint_state as u8 as f64);
+    let paint_state = if reused_paint_state {
+        cache
+            .fragment_paint_state
+            .clone()
+            .expect("a reused paint state exists")
+    } else if result_changed {
         let state = new_paint_state(result);
         if let Some(previous) = &cache.fragment_paint_state {
             trace.set("previous_paint_state_refs", Arc::strong_count(previous) as f64);
@@ -183,7 +206,10 @@ pub(super) fn install_layout_result_paint_state(
         let _phase = layout_commit::fragment_trace::span(
             layout_commit::fragment_trace::TracePhase::FinishPublication,
         );
-        paint_state.FinishPublication(topology_retained);
+        // A kept state stays the same sidecar owner for its leases
+        // (PaintFragmentLease::SameSidecarOwner); the result each lease
+        // retains tells its consumers that fragments were replaced.
+        paint_state.FinishPublication(topology_retained || reused_paint_state);
     }
     trace.set("topology_retained", topology_retained as u8 as f64);
     // Replacing the cached state may release the superseded one (its
