@@ -299,6 +299,21 @@ impl FragmentData {
             .or_insert_with(FragmentPaintSidecar::New)
     }
 
+    /// Rust-only, first entry: every occurrence sidecar already keyed on this
+    /// entry (see `keyed_paint_sidecars_`), without creating one.
+    pub fn VisitKeyedPaintSidecars(&self, mut visit: impl FnMut(&Rc<FragmentPaintSidecar>)) {
+        if let Some(table) = unsafe { &*self.keyed_paint_sidecars_.get() } {
+            for sidecar in table.values() {
+                visit(sidecar);
+            }
+        }
+    }
+
+    /// Rust-only: this entry's own sidecar if one was created.
+    pub fn ExistingOwnPaintSidecar(&self) -> Option<&Rc<FragmentPaintSidecar>> {
+        unsafe { &*self.paint_sidecar_.get() }.as_ref()
+    }
+
     /// Rust-only, first entry: the paint publication under which the
     /// object's FragmentData list was last synchronized with its physical
     /// fragments (see `fragment_list_sync_publication_`).

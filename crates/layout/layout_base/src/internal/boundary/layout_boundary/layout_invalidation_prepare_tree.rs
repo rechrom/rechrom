@@ -95,6 +95,19 @@ fn rebind_targeted_font(object: *mut LayoutObject) -> bool {
     let node = current.GetNode();
     debug_assert!(!node.is_null());
     let previous_font = unsafe { &*node }.InputBoundFont();
+    // The style update already carried the element's bound platform Font
+    // over (an unchanged font request; see FontRequestInputsEqual and
+    // PreservePaintOnlyFontBinding): the binding is current, so neither a
+    // re-resolution nor a kFontsChanged layout is due. Any layout the style
+    // change itself needs was marked by LayoutObject::SetStyle.
+    if !unsafe { &*node }.IsTextNode()
+        && !unsafe { &*node }.NeedsInputFontBinding()
+        && unsafe { &*node }.InputFirstLineStyle().is_null()
+        && !previous_font.is_null()
+        && current.StyleRef().GetFont() as *mut font_engine::fonts::font::Font == previous_font
+    {
+        return false;
+    }
     if unsafe { &*node }.IsTextNode() {
         let mut logical_parent = unsafe { &*node }.parentNode() as *mut Node;
         while !logical_parent.is_null() && unsafe { &*logical_parent }.GetLayoutObject().is_null() {

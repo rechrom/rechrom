@@ -424,6 +424,38 @@ impl LayoutPaintState {
         *unsafe { &mut *self.document_resources.get() } = previous.DocumentResources().cloned();
     }
 
+    /// Visit the sidecars of `object`'s fragment occurrences that the current
+    /// publication bound: each FragmentData entry's own sidecar and the first
+    /// entry's keyed occurrence sidecars, i.e. the FragmentData Chromium's
+    /// LayoutObject::SetStyle / StyleDidChange reach from the object itself
+    /// (core/layout/layout_object.cc:2970-3120) without walking the tree.
+    /// Returns false for a superseded state, whose handles may read private
+    /// fallback sidecars that only a cursor walk reaches.
+    pub(crate) fn VisitBoundObjectPaintData(
+        &self,
+        object: &LayoutObject,
+        visit: &mut dyn FnMut(&mut FragmentPaintData),
+    ) -> bool {
+        if self.superseded.get() {
+            return false;
+        }
+        let publication = self.publication.get();
+        let mut visit_sidecar = |sidecar: &FragmentPaintSidecar| {
+            if sidecar.Binding().publication == publication {
+                visit(unsafe { &mut *sidecar.Data() });
+            }
+        };
+        let list = object.PaintSidecarFragments();
+        for index in 0..list.size() {
+            if let Some(sidecar) = list.at(index).ExistingOwnPaintSidecar() {
+                visit_sidecar(sidecar);
+            }
+        }
+        list.front()
+            .VisitKeyedPaintSidecars(|sidecar| visit_sidecar(sidecar));
+        true
+    }
+
     /// A replacement LayoutResult's state now owns the sidecar bindings.
     pub(crate) fn Supersede(&self) {
         self.superseded.set(true);

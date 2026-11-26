@@ -90,6 +90,20 @@ impl DisplayItemList {
     // Source: display_item_list.h:209-232. Unlike a single-item move, Blink
     // clears every old subsequence slot because raster invalidation will not
     // inspect it. CreateSubsequenceTombstone performs that zero-state mapping.
+    /// AppendSubsequenceByMoving's append half, for a current list that stays
+    /// shared with other frame owners: the caller records the tombstones.
+    pub fn AppendSubsequenceByCopying(
+        &mut self,
+        from: &DisplayItemList,
+        begin_index: usize,
+        end_index: usize,
+    ) {
+        assert!(end_index >= begin_index);
+        assert!(end_index <= from.len());
+        self.items_
+            .extend_from_slice(&from.items_[begin_index..end_index]);
+    }
+
     pub fn AppendSubsequenceByMoving(
         &mut self,
         from: &mut DisplayItemList,

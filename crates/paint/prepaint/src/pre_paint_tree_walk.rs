@@ -1446,7 +1446,7 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
     };
     if NeedsIsolationNodes(fragment)
         || HasTransformPayload(style)
-        || fragment.ViewScrollContainer().is_some()
+        || fragment.ViewHasScrollContainer()
         || fragment.paint.StickyConstraint().is_some()
         || fragment.paint.StickyOffset().x != 0.0
         || fragment.paint.StickyOffset().y != 0.0
@@ -4485,8 +4485,8 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
                 && !(style.outline_width() <= 0.0)
                 && !(style.outline_color().alpha <= 0.0)));
     node.needs_overflow_controls_phase = fragment
-        .ViewScrollbars()
-        .is_some_and(|scrollbars| scrollbars.should_paint_as_overlay && node.is_paint_layer);
+        .ViewScrollbarsPaintAsOverlay()
+        .is_some_and(|overlay| overlay && node.is_paint_layer);
     for child in &mut node.children {
         MarkPaintPhaseNeeds(child);
         if !child.is_paint_layer {
@@ -4822,8 +4822,8 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         clients: ClientDirectoryIds(f),
         selection_client_id: p.SelectionClientId(),
         scrolling_background_client_id: f
-            .ViewScrollContainer()
-            .map_or(0, |scroll| scroll.scrolling_background_client_id),
+            .ViewScrollingBackgroundClient()
+            .map_or(0, |(id, _)| id),
     }
 }
 
@@ -5814,11 +5814,11 @@ fn ClientDirectoryIds(fragment: &FragmentPaintData) -> ClientIds {
     ClientIds {
         display_item: paint.DisplayItemClientId(),
         paint_layer: paint.PaintLayerClientId(),
-        scrollbars: fragment.ViewScrollbars().map(|bars| {
+        scrollbars: fragment.ViewScrollbarClients().map(|bars| {
             (
-                bars.corner_client_id,
-                bars.horizontal.as_ref().map(|axis| axis.display_item_client_id),
-                bars.vertical.as_ref().map(|axis| axis.display_item_client_id),
+                bars.corner.map_or(0, |(id, _)| id),
+                bars.horizontal.map(|(id, _)| id),
+                bars.vertical.map(|(id, _)| id),
             )
         }),
     }
@@ -5867,49 +5867,15 @@ fn HasUnrecordedJustCreatedClient(recorded: &PrePaintPrevious, fragment: &Fragme
         &recorded,
         paint.PaintLayerClientId(),
         paint.PaintLayerClientState().is_just_created,
-    ) || fragment.ViewScrollContainer().is_some_and(|scroll| {
-        IsNewClient(
-            &recorded,
-            scroll.scrolling_background_client_id,
-            paint
-                .ScrollClientState(
-                    scroll.scrolling_background_client_id,
-                    scroll.scrolling_background_client_invalidation_reason,
-                    scroll.scrolling_background_client_is_cacheable,
-                    scroll.scrolling_background_client_is_just_created.get(),
-                )
-                .is_just_created,
-        )
-    }) || fragment.ViewScrollbars().is_some_and(|bars| {
-        IsNewClient(
-            &recorded,
-            bars.corner_client_id,
-            paint
-                .ScrollClientState(
-                    bars.corner_client_id,
-                    bars.corner_client_invalidation_reason,
-                    bars.corner_client_is_cacheable,
-                    bars.corner_client_is_just_created.get(),
-                )
-                .is_just_created,
-        ) || [&bars.horizontal, &bars.vertical]
-            .into_iter()
-            .flatten()
-            .any(|axis| {
-                IsNewClient(
-                    &recorded,
-                    axis.display_item_client_id,
-                    paint
-                        .ScrollClientState(
-                            axis.display_item_client_id,
-                            axis.display_item_client_invalidation_reason,
-                            axis.display_item_client_is_cacheable,
-                            axis.display_item_client_is_just_created.get(),
-                        )
-                        .is_just_created,
-                )
-            })
-    })
+    ) || fragment
+        .ViewScrollingBackgroundClient()
+        .is_some_and(|(id, state)| IsNewClient(&recorded, id, state.is_just_created))
+        || fragment.ViewScrollbarClients().is_some_and(|bars| {
+            [bars.corner, bars.horizontal, bars.vertical]
+                .into_iter()
+                .flatten()
+                .any(|(id, state)| IsNewClient(&recorded, id, state.is_just_created))
+        })
 }
 
 /// Whether `b` keeps the client directory of the retained node `previous`.
@@ -8485,17 +8451,16 @@ impl PrePaintTreeWalk {
                 add(f.paint.DisplayItemClientId());
                 add(f.paint.SelectionClientId());
                 add(f.paint.PaintLayerClientId());
-                if let Some(scroll) = f.ViewScrollContainer() {
-                    add(scroll.scrolling_background_client_id);
+                if let Some((id, _)) = f.ViewScrollingBackgroundClient() {
+                    add(id);
                 }
-                if let Some(bars) = f.ViewScrollbars() {
-                    if let Some(axis) = &bars.horizontal {
-                        add(axis.display_item_client_id);
+                if let Some(bars) = f.ViewScrollbarClients() {
+                    for (id, _) in [bars.horizontal, bars.vertical, bars.corner]
+                        .into_iter()
+                        .flatten()
+                    {
+                        add(id);
                     }
-                    if let Some(axis) = &bars.vertical {
-                        add(axis.display_item_client_id);
-                    }
-                    add(bars.corner_client_id);
                 }
                 for child in &mut node.children {
                     collect(child, clients, nodes);

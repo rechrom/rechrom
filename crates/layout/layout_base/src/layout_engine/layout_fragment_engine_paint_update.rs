@@ -107,12 +107,15 @@ impl EnginePaintUpdate for LayoutEngine {
         let Some(fragments) = &mut self.fragments else {
             return false;
         };
+        let Some(tree) = self.tree_.as_ref() else {
+            return false;
+        };
         // Targeted updates mutate the canonical FragmentData sidecars in
         // place; publishing a copied snapshot would break retained identity.
         let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
         if !crate::internal::boundary::layout_boundary::RefreshRetainedPaintInputs(
-            unsafe { &mut *root },
-            PaintFragmentCursor::FromHandle(fragments),
+            tree,
+            fragments,
             &self.pending_paint_ids_,
             &self.pending_inline_ink_ids_,
         ) {

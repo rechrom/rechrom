@@ -176,12 +176,19 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
+        // Source: ScrollableAreaPainter::PaintOverflowControls
+        // (scrollable_area_painter.cc). The phase test reads
+        // ShouldOverflowControlsPaintAsOverlay() from the scrollable area
+        // before any control geometry is read or recorded.
+        let Some(paint_as_overlay) = fragment.ViewScrollbarsPaintAsOverlay() else {
+            return;
+        };
+        if !ShouldPaintOverflowControls(self.node, paint_as_overlay, info.phase) {
+            return;
+        }
         let Some(data) = fragment.ViewScrollbars() else {
             return;
         };
-        if !ShouldPaintOverflowControls(self.node, data.should_paint_as_overlay, info.phase) {
-            return;
-        }
         let _border_properties = self
             .node
             .overflow_controls_properties

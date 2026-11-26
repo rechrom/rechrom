@@ -45,7 +45,7 @@ use layout_invalidation_managed_input_admission::{
     NonStyleInputsEqual, RetainInputStyles,
 };
 use layout_reuse_managed_input_index::BuildManagedInputIndex;
-use layout_reuse_paint_only_font_binding::PreservePaintOnlyFontBinding;
+use layout_reuse_paint_only_font_binding::{FontRequestInputsEqual, PreservePaintOnlyFontBinding};
 
 // The one-argument constructor is defined by //src/main/default_layout_engine.cc
 // and supplies FullLayoutRegistry().objects from outside this Bazel package.
@@ -693,6 +693,15 @@ impl LayoutObjectTree {
         element: Option<ElementData>,
     ) -> Option<PaintInputUpdate> {
         layout_fragment_paint_input::update_paint_input(self, id, style, resources, element)
+    }
+
+    /// The resident LayoutObjects attached for input node `id`.
+    pub(crate) fn InputObjects(&self, id: u64) -> impl Iterator<Item = *mut LayoutObject> + '_ {
+        let storage = unsafe { &*self.storage_ };
+        storage
+            .InputKeys(id)
+            .iter()
+            .map(move |key| storage.managed[key].object)
     }
 
     /// Exclusive access to the tree-owned root for the layout entry point.
