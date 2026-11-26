@@ -1257,6 +1257,20 @@ fn create_realm(
             arguments: &[],
         });
         host_namespaces::RecordGlobalResult(&state, &answer.value);
+        // A fixed [Global] operation is the per-context function itself,
+        // held as a writable data property (WebIDL "regular operations" on
+        // the global object), so each read is an ordinary property load.
+        let operation = answer.exception.is_none()
+            && matches!(&answer.value, HostValue::Method(method)
+                if method.receiver == 0 && method.name == name)
+            && host.borrow().IsGlobalOperation(&name);
+        if operation {
+            if let Ok(function) = to_js(&mut context, &state, &answer.value) {
+                let key = PropKey::from_string(&context.intern(&name));
+                context.define_own(&global, key, Property::data(function, PropFlags::C_W_E));
+                continue;
+            }
+        }
         if answer.exception.is_none() {
             if let Ok(value) = to_js(&mut context, &state, &answer.value) {
                 state.borrow_mut().fallbacks.insert(name.clone(), value);

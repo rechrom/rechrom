@@ -50,6 +50,9 @@ const WINDOW_GLOBAL_NAMES: &[&str] = &[
     "clearInterval",
     "requestAnimationFrame",
     "cancelAnimationFrame",
+    "__performanceNow",
+    "__performanceTimeOrigin",
+    "__performanceTiming",
 ];
 // Blink DOMTimer uses the same values. Timers installed by deeply nested
 // timer callbacks must stop behaving like an unrestricted busy loop.
@@ -1093,6 +1096,11 @@ impl WindowJavaScriptBindings {
                     "navigator" => return object(NAVIGATOR),
                     "screen" => return object(SCREEN),
                     "performance" => return object(PERFORMANCE),
+                    // Native operations of the ordinary Performance wrapper,
+                    // read once by the Window bootstrap (performance.idl).
+                    "__performanceNow" => return method(PERFORMANCE, "now"),
+                    "__performanceTimeOrigin" => return method(PERFORMANCE, "timeOrigin"),
+                    "__performanceTiming" => return method(PERFORMANCE, "timing"),
                     _ => {}
                 }
             }
@@ -1201,6 +1209,12 @@ impl WindowJavaScriptBindings {
         if call.operation == HostOperation::kCall {
             if receiver == PERFORMANCE && name == "now" {
                 return number(self.performance_timing.Now());
+            }
+            if receiver == PERFORMANCE && name == "timeOrigin" {
+                return number(self.performance_timing.TimeOrigin());
+            }
+            if receiver == PERFORMANCE && name == "timing" {
+                return object(PERFORMANCE_TIMING);
             }
             if receiver == LOCATION && name == "toString" {
                 return string(self.location["href"].clone());
@@ -1346,6 +1360,22 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
     fn GlobalNames(&self) -> Vec<String> {
         self.globals.clone()
     }
+    // window.idl / window_or_worker_global_scope.idl regular operations that
+    // invoke() answers with the same Window method for every read.
+    fn IsGlobalOperation(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "setTimeout"
+                | "setInterval"
+                | "clearTimeout"
+                | "clearInterval"
+                | "requestAnimationFrame"
+                | "cancelAnimationFrame"
+                | "queueMicrotask"
+                | "reportError"
+                | "structuredClone"
+        )
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
         self.invoke(call, None)
     }
@@ -1360,9 +1390,18 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
         // Window still supplies Document's location/URL/cookie/domain access
         // through property interception. Its other DOM wrappers use the
         // already installed ordinary IDL descriptors supplied by DOM.
-        id != self.document_id && self.dom.borrow().UsesOrdinaryProperties(id)
+        // Performance (performance.idl) is an ordinary platform object:
+        // its members live on Performance.prototype, installed by the Window
+        // bootstrap, so reading performance.now is a property load.
+        id == PERFORMANCE
+            || (id != self.document_id && self.dom.borrow().UsesOrdinaryProperties(id))
     }
     fn PrototypeFor(&mut self, id: u64) -> HostResult {
+        // The Window bootstrap gives Performance its prototype; no DOM
+        // interface owns this id.
+        if id == PERFORMANCE {
+            return unhandled();
+        }
         self.dom.borrow_mut().PrototypeFor(id)
     }
 }

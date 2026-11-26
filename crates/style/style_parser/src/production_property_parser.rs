@@ -308,6 +308,30 @@ pub fn ParseProperty(
     ParsePropertyWithContext(unresolved, text, important, &context)
 }
 
+// CSSProperty::Exposure gates applied before any value consumer runs (both
+// the declaration and the token-stream entry). Also consulted by
+// css_parser_fast_paths before it accepts a value without this parser.
+pub(crate) fn ExposureError(id: CSSPropertyID, mode: CSSParserMode) -> Option<PropertyParseError> {
+    let operation = if !crate::production_corner_features::IsExposed(id) {
+        "CSSProperty::Exposure / CSSCornersShorthand"
+    } else if !crate::production_interaction_features::IsExposed(id) {
+        "CSSProperty::Exposure / interaction runtime flags"
+    } else if !crate::production_line_features::IsExposed(id) {
+        "CSSProperty::Exposure / CSSLineClamp runtime flags"
+    } else if !crate::production_typography_features::IsExposed(id) {
+        "CSSProperty::Exposure / typography runtime flags"
+    } else if !crate::production_render_delay_features::IsExposed(id) {
+        "CSSProperty::Exposure / CSSGridLanesLayout"
+    } else if !crate::production_text_box_features::IsExposed(id) {
+        "CSSProperty::Exposure / text box runtime flags"
+    } else if palette_internal_parser::IsUAOnly(id) && mode != CSSParserMode::kUASheetMode {
+        "CSSProperty::Exposure / kUA internal property"
+    } else {
+        return None;
+    };
+    Some(unsupported(id, operation))
+}
+
 pub fn ParsePropertyWithContext<
     P: CSSParserContextPlatform<URL = crate::production_css_value::ProductionURL>,
 >(
@@ -324,47 +348,8 @@ pub fn ParsePropertyWithContext<
             "CSSVariableParser::ParseDeclarationIncludingCSSWide",
         ));
     }
-    if !crate::production_corner_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / CSSCornersShorthand",
-        ));
-    }
-    if !crate::production_interaction_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / interaction runtime flags",
-        ));
-    }
-    if !crate::production_line_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / CSSLineClamp runtime flags",
-        ));
-    }
-    if !crate::production_typography_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / typography runtime flags",
-        ));
-    }
-    if !crate::production_render_delay_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / CSSGridLanesLayout",
-        ));
-    }
-    if !crate::production_text_box_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / text box runtime flags",
-        ));
-    }
-    if palette_internal_parser::IsUAOnly(id) && mode != CSSParserMode::kUASheetMode {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / kUA internal property",
-        ));
+    if let Some(error) = ExposureError(id, mode) {
+        return Err(error);
     }
     let (mut data, parsed_important) =
         ParseVariableData(text, true, true).map_err(|_| invalid(id))?;
@@ -417,47 +402,8 @@ fn ParsePropertyStream<
 ) -> Result<Vec<PropertyValue>, PropertyParseError> {
     let mode = context.Mode();
     let id = ResolveCSSPropertyID(unresolved);
-    if !crate::production_corner_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / CSSCornersShorthand",
-        ));
-    }
-    if !crate::production_interaction_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / interaction runtime flags",
-        ));
-    }
-    if !crate::production_line_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / CSSLineClamp runtime flags",
-        ));
-    }
-    if !crate::production_typography_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / typography runtime flags",
-        ));
-    }
-    if !crate::production_render_delay_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / CSSGridLanesLayout",
-        ));
-    }
-    if !crate::production_text_box_features::IsExposed(id) {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / text box runtime flags",
-        ));
-    }
-    if palette_internal_parser::IsUAOnly(id) && mode != CSSParserMode::kUASheetMode {
-        return Err(unsupported(
-            id,
-            "CSSProperty::Exposure / kUA internal property",
-        ));
+    if let Some(error) = ExposureError(id, mode) {
+        return Err(error);
     }
     stream.ConsumeWhitespace();
     let mut parsed = Vec::new();

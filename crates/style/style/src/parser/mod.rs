@@ -6,6 +6,7 @@ pub use style_parser::css_at_rule_id;
 pub mod css_if_parser;
 pub use style_parser::css_nesting_type;
 pub mod css_parser;
+pub use style_parser::css_parser_fast_paths;
 pub use style_parser::css_parser_context;
 pub use style_parser::css_parser_idioms;
 pub mod css_parser_impl;
