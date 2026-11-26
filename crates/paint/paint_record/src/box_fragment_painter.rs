@@ -1179,11 +1179,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // post-children hook derives the same condition and skips the
             // duplicate late pass.
             if fragment
-                .ViewScrollbars()
-                .is_some_and(|scrollbars| {
+                .ViewScrollbarsPaintAsOverlay()
+                .is_some_and(|should_paint_as_overlay| {
                     PaintsOverflowControlsBeforeContents(
                         paint_info.phase,
-                        scrollbars.should_paint_as_overlay,
+                        should_paint_as_overlay,
                     )
                 })
             {
@@ -1192,7 +1192,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             if !theme_owns_decoration {
                 let paints_contents = fragment.paint.BackgroundPaintLocation().PaintsContents();
-                if paints_contents || fragment.ViewScrollGeometry().2 {
+                let scrolls_overflow = fragment.ViewScrollGeometry().2;
+                if paints_contents || scrolls_overflow {
                     let _contents_properties =
                         crate::scoped_paint_state::ScopedBoxContentsPaintState::new(
                             paint_info, self.node,
@@ -1203,7 +1204,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     if decoration_data.ShouldPaintGapDecorations() {
                         self.PaintGapRules(phase);
                     }
-                    if fragment.ViewScrollGeometry().2 {
+                    if scrolls_overflow {
                         self.PaintColumnRules(phase);
                     }
                 } else {
@@ -1222,7 +1223,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && is_visible
             && fragment.ViewKind() == FragmentKind::kBox
             && ShouldRecordHitTestData(fragment.paint.Display())
-            && fragment.ViewScrollContainer().is_some()
+            && fragment.ViewHasScrollContainer()
             && ShouldRecordScrollHitTestDataForPaint(
                 paint_info.ShouldOmitCompositingInfo(),
                 fragment.paint.CanvasDrawElementEnabled(),
@@ -1480,15 +1481,15 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             TablePainter::new(self.node, self.context).PaintCollapsedBorders(paint_info);
         }
         let overflow_controls_were_painted_before_contents = fragment
-            .ViewScrollbars()
-            .is_some_and(|scrollbars| {
+            .ViewScrollbarsPaintAsOverlay()
+            .is_some_and(|should_paint_as_overlay| {
                 PaintsOverflowControlsBeforeContents(
                     paint_info.phase,
-                    scrollbars.should_paint_as_overlay,
+                    should_paint_as_overlay,
                 )
             });
         if fragment.ViewEstablishesPaintState()
-            && fragment.ViewScrollbars().is_some()
+            && fragment.ViewScrollbarsPaintAsOverlay().is_some()
             && !overflow_controls_were_painted_before_contents
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);
@@ -7439,7 +7440,7 @@ fn EffectiveBackgroundAttachment(
         // A local attachment only establishes scrolling geometry on an actual
         // source scroll owner. Without one, Chromium paints it in border-box
         // space and it is visually equivalent to scroll attachment.
-        BackgroundAttachment::kLocal if fragment.ViewScrollContainer().is_none() => {
+        BackgroundAttachment::kLocal if !fragment.ViewHasScrollContainer() => {
             BackgroundAttachment::kScroll
         }
         attachment => attachment,

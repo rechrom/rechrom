@@ -13,6 +13,29 @@ use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 // core/paint/paint_layer_scrollable_area.cc:2141-2184,2283-2308 and the
 // scrollbar identities from core/scroll/scrollbar.{h,cc}. The projection is
 // consumed by Paint without recreating Blink's in-process LayoutObject graph.
+/// Whether the box owns overflow controls (the condition under which
+/// `ExportScrollbarPaintData` returns a payload) and, if so, its
+/// PaintLayerScrollableArea::ShouldOverflowControlsPaintAsOverlay(). Paint
+/// tests this per phase, as Chromium reads the scrollable area directly
+/// (box_fragment_painter.cc:739-750,1459-1467); materializing the complete
+/// payload (and repositioning the controls) for the test is not source work.
+pub(crate) fn LiveScrollbarsPaintAsOverlay(box_fragment: &PhysicalBoxFragment) -> Option<bool> {
+    let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
+    if layout_box.is_null() {
+        return None;
+    }
+    let layout_box = unsafe { &*layout_box };
+    let area = layout_box.GetScrollableArea();
+    if area.is_null()
+        || (!unsafe { &*area }.HasHorizontalScrollbar()
+            && !unsafe { &*area }.HasVerticalScrollbar()
+            && !layout_box.CanResize())
+    {
+        return None;
+    }
+    Some(unsafe { &*area }.ShouldOverflowControlsPaintAsOverlay())
+}
+
 #[inline(never)]
 pub(crate) fn ExportScrollbarPaintData(
     box_fragment: &PhysicalBoxFragment,

@@ -167,12 +167,14 @@ use layout_fragment_text_paint_export::{ExportShapeResult, ExportTextCombineEmph
 mod layout_fragment_fragment_geometry_export;
 use layout_fragment_fragment_geometry_export::ExportBoxPaintGeometry;
 pub(crate) use layout_fragment_fragment_geometry_export::{
-    ExportReplacedContentPaintData, ExportSvgTextPaintData, LiveScrollContainer,
+    ExportReplacedContentPaintData, ExportSvgTextPaintData, LiveScrollContainer, LiveScrollContainerBox, LiveScrollOrigin,
     ExportSelfOutlineGeometry, ExportStitchedDecorationData, LiveBoxDecorationBreak,
     LiveScrollGeometry,
 };
 mod layout_fragment_scrollbar_paint_export;
-pub(crate) use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;
+pub(crate) use layout_fragment_scrollbar_paint_export::{
+    ExportScrollbarPaintData, LiveScrollbarsPaintAsOverlay,
+};
 mod layout_fragment_specialized_paint_export;
 pub(crate) use layout_fragment_specialized_paint_export::ExportTablePaintData;
 pub(crate) use layout_fragment_specialized_paint_export::ExportOverflowClipMargin;
