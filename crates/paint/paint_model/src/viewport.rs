@@ -20,7 +20,7 @@ pub struct PaintCompositorViewport {
 
 /// VisualViewport's source-owned constructor identity and scalar state. These
 /// values do not expose its owner or Paint's derived property-node storage.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaintVisualViewportState {
     pub unique_id: u64,
     pub scale: f32,

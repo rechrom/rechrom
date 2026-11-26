@@ -2562,6 +2562,20 @@ pub struct PaintPropertyNodeStore {
     /// Source PaintPropertyTreeBuilder.cc:4754-4763, effective local changes.
     pub intersection_observation_state:
         foundation::intersection_observation_state::IntersectionObservationState,
+    /// VisualViewport::needs_paint_property_update_ (visual_viewport.h): the
+    /// inputs the viewport nodes were last updated from, with those nodes.
+    viewport_nodes: Option<(ViewportNodeInputs, ViewportNodes)>,
+}
+type ViewportNodes = (
+    Arc<TransformPaintPropertyNode>,
+    Arc<TransformPaintPropertyNode>,
+    Arc<TransformPaintPropertyNode>,
+);
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ViewportNodeInputs {
+    viewport: PaintRect,
+    visual_offset: Option<(foundation::CompositorElementId, foundation::gfx::Vector2dF)>,
+    visual_state: Option<crate::PaintVisualViewportState>,
 }
 impl Default for PaintPropertyNodeStore {
     fn default() -> Self {
@@ -2576,6 +2590,7 @@ impl Default for PaintPropertyNodeStore {
             changed: Default::default(),
             compositor_update_generation: NextCompositorUpdateGeneration(),
             intersection_observation_state: Default::default(),
+            viewport_nodes: None,
         }
     }
 }
@@ -2922,6 +2937,32 @@ impl PaintPropertyNodeStore {
         Arc<TransformPaintPropertyNode>,
         Arc<TransformPaintPropertyNode>,
     ) {
+        // VisualViewport::UpdatePaintPropertyNodesIfNeeded returns early
+        // unless needs_paint_property_update_ (visual_viewport.cc:96-102); the
+        // flag is set only when the viewport's size, scale or offset change.
+        // The same resident nodes stay valid while those inputs are equal.
+        let inputs = ViewportNodeInputs {
+            viewport,
+            visual_offset,
+            visual_state,
+        };
+        if let Some((previous, nodes)) = &self.viewport_nodes {
+            let resident = |role, node: &Arc<TransformPaintPropertyNode>| {
+                self.transforms
+                    .get(&PaintPropertyKey {
+                        owner: PaintPropertyOwner::Viewport,
+                        role,
+                    })
+                    .is_some_and(|current| Arc::ptr_eq(current, node))
+            };
+            if *previous == inputs
+                && resident(PaintPropertyRole::OverscrollElasticityTransform, &nodes.0)
+                && resident(PaintPropertyRole::PageScale, &nodes.1)
+                && resident(PaintPropertyRole::VisualViewportScrollTranslation, &nodes.2)
+            {
+                return nodes.clone();
+            }
+        }
         let roots = PropertyTreeState::default();
         let unique_id = if let Some(state) = visual_state {
             if let Some(id) = self.visual_viewport_unique_id {
@@ -3079,7 +3120,9 @@ impl PaintPropertyNodeStore {
         }
         let visual_translation =
             self.UpdateTransform(writer, Some(visual_translation_key), visual_translation).0;
-        (overscroll, page_scale, visual_translation)
+        let nodes = (overscroll, page_scale, visual_translation);
+        self.viewport_nodes = Some((inputs, nodes.clone()));
+        nodes
     }
 
     pub fn overscroll_elasticity_transform(&self) -> Option<&Arc<TransformPaintPropertyNode>> {

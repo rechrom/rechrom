@@ -5353,13 +5353,17 @@ impl Page {
         let requirements = {
             let constraints = self.state.constraints.borrow();
             let mut requirements = BTreeMap::new();
-            collect(
-                output.PaintCursor(),
-                &constraints.images,
-                constraints.device_pixel_ratio,
-                preferred_color_scheme,
-                &mut requirements,
-            );
+            // Only document (SVG) images have per-container variants
+            // (SVGImageForContainer); without one the walk finds nothing.
+            if constraints.images.iter().any(|image| image.IsDocumentImage()) {
+                collect(
+                    output.PaintCursor(),
+                    &constraints.images,
+                    constraints.device_pixel_ratio,
+                    preferred_color_scheme,
+                    &mut requirements,
+                );
+            }
             requirements
         };
         let resources = self.resources.clone();
