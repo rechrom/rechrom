@@ -115,10 +115,27 @@ impl PaintControllerPersistentData {
     }
 }
 
+/// How a current-list item left for the new list (DisplayItem::CreateTombstone
+/// for a single cached item, the subsequence tombstone for a moved range).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum MovedItem {
+    #[default]
+    None,
+    Item,
+    Subsequence,
+}
+
 #[derive(Default)]
 pub struct PaintController {
     paint_chunker: PaintChunker,
     previous: Option<Arc<PaintRecording>>,
+    /// The tombstones Chromium's MoveItemFromCurrentListToNewList and
+    /// AppendSubsequenceByMoving leave in the current list
+    /// (paint_controller.cc:283-286,737-820), indexed like
+    /// `previous.display_items`. The previous artifact stays shared with
+    /// the frame snapshots still holding it, so the moves are recorded here
+    /// instead of copying the whole artifact to write them into it.
+    moved_previous_items: Vec<MovedItem>,
     previous_subsequences: SubsequencesData,
     new_subsequences: SubsequencesData,
     out_of_order_item_id_index_map: HashMap<DisplayItemId, usize>,
@@ -143,6 +160,7 @@ impl PaintController {
         Self {
             paint_chunker: PaintChunker::default(),
             previous,
+            moved_previous_items: vec![MovedItem::None; candidates],
             previous_subsequences,
             new_subsequences: SubsequencesData::default(),
             out_of_order_item_id_index_map: HashMap::default(),
@@ -154,6 +172,39 @@ impl PaintController {
                 ..Default::default()
             },
         }
+    }
+
+    /// Whether the current-list item `index` is a tombstone: recorded so in
+    /// the artifact, or moved into the new list by this controller.
+    pub(crate) fn PreviousItemIsTombstone(&self, index: usize) -> bool {
+        self.moved_previous_items.get(index).is_some_and(|moved| *moved != MovedItem::None)
+            || self
+                .previous
+                .as_ref()
+                .is_some_and(|previous| previous.display_items[index].is_tombstone)
+    }
+
+    /// Make the controller's previous artifact unique and write the recorded
+    /// moves into it as Chromium's tombstones, for the under-invalidation
+    /// checker, which inspects and edits the current list itself.
+    fn MaterializePreviousTombstones<'a>(
+        previous: &'a mut Option<Arc<PaintRecording>>,
+        moved_items: &mut [MovedItem],
+    ) -> &'a mut PaintRecording {
+        let previous = Arc::make_mut(
+            previous
+                .as_mut()
+                .expect("under-invalidation checking requires an old artifact"),
+        );
+        for (index, moved) in moved_items.iter_mut().enumerate() {
+            let item = &mut previous.display_items[index];
+            match std::mem::replace(moved, MovedItem::None) {
+                MovedItem::None => {}
+                MovedItem::Item => item.CreateTombstone(),
+                MovedItem::Subsequence => item.CreateSubsequenceTombstone(),
+            }
+        }
+        previous
     }
 
     /// Source: `paint_controller.h:154-156`.
@@ -399,7 +450,7 @@ impl PaintController {
         let index = *self.out_of_order_item_id_index_map.get(&id)?;
         let previous = self.previous.as_ref()?;
         let item = &previous.display_items[index];
-        if item.is_tombstone {
+        if item.is_tombstone || self.PreviousItemIsTombstone(index) {
             return None;
         }
         debug_assert_eq!(item.id, id);
@@ -419,7 +470,7 @@ impl PaintController {
                 let item = &self.previous.as_ref().unwrap().display_items[index];
                 (item.id, item.is_tombstone, item.is_cacheable)
             };
-            if is_tombstone {
+            if is_tombstone || self.PreviousItemIsTombstone(index) {
                 continue;
             }
             if item_id == id {
@@ -438,7 +489,7 @@ impl PaintController {
         if let Some(previous) = self.previous.as_ref() {
             if self.next_item_to_match < previous.display_items.len() {
                 let item = &previous.display_items[self.next_item_to_match];
-                if !item.is_tombstone && item.id == id {
+                if !self.PreviousItemIsTombstone(self.next_item_to_match) && item.id == id {
                     return Some(self.next_item_to_match);
                 }
             }
@@ -478,14 +529,15 @@ impl PaintController {
         record: &mut Vec<DisplayItem>,
     ) -> Option<RecordedDisplayItem> {
         let index = self.TakeCachedDrawingIndex(id, client, check_under_invalidation)?;
-        // Source: paint_controller.cc:283-286. The controller's private old
-        // artifact is made unique before leaving the real tombstone. Other
-        // immutable frame snapshots keep their Arc-owned value unchanged.
-        let previous = Arc::make_mut(self.previous.as_mut().unwrap());
+        // Source: paint_controller.cc:283-286. The item moves into the new
+        // list and leaves a tombstone in the current one. The previous
+        // artifact stays shared with the frame snapshots holding it: copy
+        // only this item's record and note the tombstone locally.
+        let previous = self.previous.as_ref().unwrap();
         let old = &previous.display_items[index];
         record.extend_from_slice(&previous.items[old.record_begin..old.record_end]);
         let item = old.clone();
-        previous.display_items[index].CreateTombstone();
+        self.moved_previous_items[index] = MovedItem::Item;
         Some(item)
     }
 
@@ -570,7 +622,7 @@ impl PaintController {
         let start_item_index = previous.chunks[markers.start_chunk_index].begin_index as usize;
         let end_item_index = previous.chunks[markers.end_chunk_index - 1].end_index as usize;
         if end_item_index > start_item_index
-            && previous.display_items[start_item_index].IsTombstone()
+            && self.PreviousItemIsTombstone(start_item_index)
         {
             self.metrics.subsequence_rejected_tombstone += 1;
             return None;
@@ -693,28 +745,34 @@ impl PaintController {
             )
         };
 
-        let previous = Arc::make_mut(self.previous.as_mut().unwrap());
-        let records: Vec<Vec<DisplayItem>> = previous.display_items
-            [start_item_index..end_item_index]
-            .iter()
-            .map(|item| previous.items[item.record_begin..item.record_end].to_vec())
-            .collect();
+        // Source: paint_controller.cc:737-820. Chromium moves the chunks and
+        // items out of the current list, leaving subsequence tombstones. The
+        // previous artifact stays shared with the frame snapshots that still
+        // hold it, so the moved range is copied into the new list and its
+        // tombstones are recorded on this controller instead of copying the
+        // whole artifact to write them.
+        let previous = Arc::clone(self.previous.as_ref().unwrap());
         for chunk_index in start_chunk_index..end_chunk_index {
-            let chunk = std::mem::take(&mut previous.chunks[chunk_index]);
-            self.paint_chunker.AppendByMoving(&mut output.chunks, chunk);
+            self.paint_chunker
+                .AppendByMoving(&mut output.chunks, previous.chunks[chunk_index].clone());
         }
 
         let new_item_start_index = output.display_items.len();
-        output.display_items.AppendSubsequenceByMoving(
-            &mut previous.display_items,
+        output.display_items.AppendSubsequenceByCopying(
+            &previous.display_items,
             start_item_index,
             end_item_index,
         );
-        for (offset, record) in records.into_iter().enumerate() {
+        for moved in &mut self.moved_previous_items[start_item_index..end_item_index] {
+            *moved = MovedItem::Subsequence;
+        }
+        for offset in 0..end_item_index - start_item_index {
+            let old = &previous.display_items[start_item_index + offset];
             let item_index = new_item_start_index + offset;
-            let record_begin = output.items.len();
-            Arc::make_mut(&mut output.items).extend(record);
-            let record_end = output.items.len();
+            let items = Arc::make_mut(&mut output.items);
+            let record_begin = items.len();
+            items.extend_from_slice(&previous.items[old.record_begin..old.record_end]);
+            let record_end = items.len();
             let client_id = {
                 let item = &mut output.display_items[item_index];
                 item.record_begin = record_begin;
@@ -791,10 +849,9 @@ impl PaintController {
         }
         let old_subsequences = &self.previous_subsequences.tree;
         let new_subsequences = &self.new_subsequences.tree;
-        let previous = Arc::make_mut(
-            self.previous
-                .as_mut()
-                .expect("under-invalidation checking requires an old artifact"),
+        let previous = Self::MaterializePreviousTombstones(
+            &mut self.previous,
+            &mut self.moved_previous_items,
         );
         if let CheckNewItemResult::CacheSkipping { old_item_index } =
             self.under_invalidation_checker.CheckNewItem(
@@ -921,7 +978,7 @@ mod tests {
                 .id,
             ids[1]
         );
-        assert!(controller.previous.as_ref().unwrap().display_items[1].IsTombstone());
+        assert!(controller.PreviousItemIsTombstone(1));
         assert_eq!(
             controller
                 .TakeCachedDrawing(ids[0], valid, false)
@@ -963,7 +1020,7 @@ mod tests {
         controller.CheckNewItem(&mut output, false);
 
         assert!(!controller.under_invalidation_checker.IsChecking());
-        assert!(controller.previous.as_ref().unwrap().display_items[0].IsTombstone());
+        assert!(controller.PreviousItemIsTombstone(0));
         assert_eq!(
             output.display_items[0].GetPaintInvalidationReason(),
             Some(foundation::PaintInvalidationReason::kNone)
@@ -1114,12 +1171,7 @@ mod tests {
         controller.EndSubsequence(subsequence, &output);
 
         assert!(!controller.under_invalidation_checker.IsChecking());
-        assert!(controller
-            .previous
-            .as_ref()
-            .unwrap()
-            .display_items
-            .iter()
-            .all(RecordedDisplayItem::IsTombstone));
+        let count = controller.previous.as_ref().unwrap().display_items.len();
+        assert!((0..count).all(|index| controller.PreviousItemIsTombstone(index)));
     }
 }
