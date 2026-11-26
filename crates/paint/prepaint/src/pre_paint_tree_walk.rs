@@ -1166,6 +1166,10 @@ pub struct PrePaintTreeWalk {
     /// RECHROM_PREPAINT_SHIFT_CHECK: rebuild offset-only nodes anyway and
     /// compare them with the shifted retained node (diagnostic).
     shift_check: bool,
+    /// RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK: rebuild builder-context
+    /// objects the invalidation-only refresh would retain and report the
+    /// first rebuilt value that differs (diagnostic).
+    invalidation_only_check: bool,
     pub stats: PrePaintUpdateStats,
     intersection_observation_state:
         foundation::intersection_observation_state::IntersectionObservationState,
@@ -1230,6 +1234,8 @@ impl Default for PrePaintTreeWalk {
             needs_post_update: false,
             transform_world_memo: HashMap::default(),
             shift_check: std::env::var_os("RECHROM_PREPAINT_SHIFT_CHECK").is_some(),
+            invalidation_only_check: std::env::var_os("RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK")
+                .is_some(),
             stats: PrePaintUpdateStats::default(),
             intersection_observation_state: Default::default(),
             client_nodes: HashMap::default(),
@@ -5971,23 +5977,38 @@ fn ObjectRequiresTreeBuilderContext(object: &FragmentPaintData) -> bool {
 /// geometry/property/phase data only when the direct layout inputs also prove
 /// unchanged. Any property update or geometry/topology change falls back to
 /// the complete builder comparison.
-fn CanRefreshInvalidationOnlySource(
+///
+/// An object that only has a tree-builder context reason other than its own
+/// NeedsPaintPropertyUpdate (its ShouldCheckLayoutForPaintInvalidation, or a
+/// descendant's property/layout bits; pre_paint_tree_walk.cc:430-437) gets
+/// a builder context in Chromium, but PaintPropertyTreeBuilder::UpdateForSelf
+/// and UpdateForChildren (paint_property_tree_builder.cc:4220-4397) change
+/// its ObjectPaintProperties only under NeedsPaintPropertyUpdate
+/// (paint_property_tree_builder.cc:349-352: the object's bit or a forced
+/// subtree update, which reaches this node as a different inherited
+/// context). UpdateForObjectLocation (4234) runs regardless; with the
+/// recorded link offset, size and scrollable content size unchanged, the
+/// paint offset, its slots and child context
+/// are those the builder would produce. Returns None when the retained
+/// slots cannot stand, else whether the object has such a builder reason.
+fn InvalidationOnlySourceRefresh(
     previous: &PaintTreeNode<'_>,
     new: &FragmentPaintData,
     current: &PrePaintPrevious,
-) -> bool {
+) -> Option<bool> {
     let invalidation = new.pre_paint_invalidation;
     if !invalidation.own()
-        || ObjectRequiresTreeBuilderContext(new)
+        || invalidation.needs_paint_property_update
         || !SamePreviousSourceIdentity(previous, new)
     {
-        return false;
+        return None;
     }
     let recorded = &RecordOf(previous);
-    SamePreviousPhaseInputs(recorded, current)
+    (SamePreviousPhaseInputs(recorded, current)
         && recorded.offset == current.offset
         && recorded.content_size == current.content_size
-        && SamePreviousLogicalPosition(recorded, current)
+        && SamePreviousLogicalPosition(recorded, current))
+    .then(|| ObjectRequiresTreeBuilderContext(new))
 }
 
 // ViewportGeometry is a host/CSS-pixel input, while the fragment tree and
@@ -6183,24 +6204,42 @@ impl PrePaintTreeWalk {
         b: &PaintTreeNode<'_>,
         current: &PrePaintPrevious,
     ) -> bool {
+        self.GeometryMismatch(a, b, current).is_none()
+    }
+
+    /// The first value by which the rebuilt node `b` differs from the
+    /// retained node `a` (SameGeometry), or None.
+    fn GeometryMismatch(
+        &self,
+        a: &PaintTreeNode<'_>,
+        b: &PaintTreeNode<'_>,
+        current: &PrePaintPrevious,
+    ) -> Option<&'static str> {
         let new = b.cache.as_ref().expect("new geometry");
         let bf = b.fragment.as_deref().unwrap();
         if IsNewClient(
             &RecordedClientIds(&RecordOf(a)),
             bf.paint.DisplayItemClientId(),
             bf.paint.DisplayItemClientState().is_just_created,
-        ) || !SamePreviousSourceIdentity(a, bf)
-        {
-            return false;
+        ) {
+            return Some("just_created");
+        }
+        if !SamePreviousSourceIdentity(a, bf) {
+            return Some("identity");
         }
         let recorded = RecordOf(a);
-        if !SamePreviousPhaseInputs(&recorded, current)
-            || !SamePreviousLogicalPosition(&recorded, current)
-        {
-            return false;
+        if !SamePreviousPhaseInputs(&recorded, current) {
+            return Some("phase_inputs");
         }
-        macro_rules! same { ($($field:ident),* $(,)?) => { true $(&& a.$field == b.$field)* }; }
-        same!(
+        if !SamePreviousLogicalPosition(&recorded, current) {
+            return Some("logical_position");
+        }
+        macro_rules! first_difference {
+            ($($field:ident),* $(,)?) => {
+                $(if a.$field != b.$field { return Some(stringify!($field)); })*
+            };
+        }
+        first_difference!(
             absolute_offset,
             paint_offset,
             directly_composited_container_paint_offset_subpixel_delta,
@@ -6261,48 +6300,44 @@ impl PrePaintTreeWalk {
             applies_mask,
             mask_layers,
             overflow_controls_properties
-        ) && a.opacity == b.opacity
-            && new.own_change == PaintPropertyChangeType::Unchanged
-            && state_compare::SameBuilderState(
-                &a.properties.nodes,
-                &b.properties.nodes,
-            )
-            && state_compare::SameBuilderState(
-                &a.contents_properties.nodes,
-                &b.contents_properties.nodes,
-            )
-            && match (&a.mask_properties, &b.mask_properties) {
-                (None, None) => true,
-                (Some(a), Some(b)) => state_compare::SameBuilderState(
-                    a,
-                    b,
-                ),
-                _ => false,
-            }
-            && match (&a.fixed_background_properties, &b.fixed_background_properties) {
-                (None, None) => true,
-                (Some(a), Some(b)) => state_compare::SameBuilderState(
-                    a,
-                    b,
-                ),
-                _ => false,
-            }
-            && match (&a.horizontal_scrollbar_properties, &b.horizontal_scrollbar_properties) {
-                (None, None) => true,
-                (Some(a), Some(b)) => state_compare::SameBuilderState(
-                    a,
-                    b,
-                ),
-                _ => false,
-            }
-            && match (&a.vertical_scrollbar_properties, &b.vertical_scrollbar_properties) {
-                (None, None) => true,
-                (Some(a), Some(b)) => state_compare::SameBuilderState(
-                    a,
-                    b,
-                ),
-                _ => false,
-            }
+        );
+        if a.opacity != b.opacity {
+            return Some("opacity");
+        }
+        if new.own_change != PaintPropertyChangeType::Unchanged {
+            return Some("own_change");
+        }
+        if !state_compare::SameBuilderState(&a.properties.nodes, &b.properties.nodes) {
+            return Some("properties");
+        }
+        if !state_compare::SameBuilderState(
+            &a.contents_properties.nodes,
+            &b.contents_properties.nodes,
+        ) {
+            return Some("contents_properties");
+        }
+        type State = paint_model::paint_property_tree::PropertyTreeState;
+        let same_optional = |a: &Option<State>, b: &Option<State>| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => state_compare::SameBuilderState(a, b),
+            _ => false,
+        };
+        if !same_optional(&a.mask_properties, &b.mask_properties) {
+            return Some("mask_properties");
+        }
+        if !same_optional(&a.fixed_background_properties, &b.fixed_background_properties) {
+            return Some("fixed_background_properties");
+        }
+        if !same_optional(
+            &a.horizontal_scrollbar_properties,
+            &b.horizontal_scrollbar_properties,
+        ) {
+            return Some("horizontal_scrollbar_properties");
+        }
+        if !same_optional(&a.vertical_scrollbar_properties, &b.vertical_scrollbar_properties) {
+            return Some("vertical_scrollbar_properties");
+        }
+        None
     }
 
     /// The first rule by which the retained `node` cannot stand for
@@ -6642,17 +6677,27 @@ impl PrePaintTreeWalk {
             .as_ref()
             .and_then(|node| node.cache.as_ref())
             .map(|cache| cache.resource_usage);
-        // Both the invalidation-only and same-geometry proofs compare the old
-        // sidecar's style projection with the new one. After a replacement
-        // LayoutResult the old projection may reference a ComputedStyle that
-        // has since been released and its address reused, so only the
-        // identity-based rebind above may cross owners.
-        let invalidation_only = same_context
-            && !self.source_owner_changed
-            && previous.as_ref().is_some_and(|node| {
-                SameClientDirectory(node, &fragment)
-                    && CanRefreshInvalidationOnlySource(node, &fragment, &current_record)
-            });
+        // Both the invalidation-only and same-geometry proofs compare the
+        // values this node recorded (PrePaintPrevious, its client ids and
+        // its built geometry) with the current fragment; neither reads the
+        // preceding sidecar, so both also hold across a replacement
+        // LayoutResult, whose sidecar slot the retained node then rebinds
+        // (BindSource) like a clean node.
+        let invalidation_only_refresh = same_context
+            .then(|| {
+                previous.as_ref().and_then(|node| {
+                    SameClientDirectory(node, &fragment)
+                        .then(|| InvalidationOnlySourceRefresh(node, &fragment, &current_record))
+                        .flatten()
+                })
+            })
+            .flatten();
+        // RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK (diagnostic): rebuild the
+        // objects admitted only for a builder-context reason and report the
+        // first value the rebuilt node differs in.
+        let verify_invalidation_only =
+            self.invalidation_only_check && invalidation_only_refresh == Some(true);
+        let invalidation_only = invalidation_only_refresh.is_some() && !verify_invalidation_only;
         let t_admitted = checkpoint();
         self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
         let retained_before = (
@@ -6909,10 +6954,28 @@ impl PrePaintTreeWalk {
                     }
                     saved.Restore(&mut old);
                 }
-                let same_geometry =
-                    !force
-                        && !self.source_owner_changed
-                        && self.SameGeometry(&old, &built, &current_record);
+                let mismatch = if force {
+                    Some("forced")
+                } else {
+                    self.GeometryMismatch(&old, &built, &current_record)
+                };
+                if self.invalidation_only_check {
+                    let name = built.fragment.as_deref().map_or_else(
+                        || Arc::<str>::from("?"),
+                        |f| f.paint.DisplayItemClientDebugName(),
+                    );
+                    browser_tracing::instant_with_text(
+                        "prepaint",
+                        if verify_invalidation_only {
+                            "PrePaint.InvalidationOnlyCheck"
+                        } else {
+                            "PrePaint.GeometryMismatch"
+                        },
+                        &format!("{name}: {}", mismatch.unwrap_or("same")),
+                        &[],
+                    );
+                }
+                let same_geometry = mismatch.is_none();
                 if same_geometry {
                     self.stats.same_geometry_rebuilds += 1;
                     // Bit 2 of the recorded phase flags is the previous
