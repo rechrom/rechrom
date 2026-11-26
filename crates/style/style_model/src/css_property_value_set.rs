@@ -625,6 +625,16 @@ impl<D: CSSPropertyValueSetBackend> ImmutableCSSPropertyValueSet<D> {
         mode: CSSParserMode,
         contains_cursor_hand: bool,
     ) -> Rc<CSSPropertyValueSet<D>> {
+        Self::CreateFromVector(properties.to_vec(), mode, contains_cursor_hand)
+    }
+    /// Create over an already-owned property vector (the finished mutable
+    /// set of a CSSOM write), adopting its storage instead of copying every
+    /// CSSPropertyValue a second time.
+    pub fn CreateFromVector(
+        properties: Vec<CSSPropertyValue<D>>,
+        mode: CSSParserMode,
+        contains_cursor_hand: bool,
+    ) -> Rc<CSSPropertyValueSet<D>> {
         debug_assert!(properties.len() <= CSSPropertyValueSetState::kMaxArraySize as usize);
         let mut set = CSSPropertyValueSet {
             state: CSSPropertyValueSetState::ImmutableBase(
@@ -635,7 +645,7 @@ impl<D: CSSPropertyValueSetBackend> ImmutableCSSPropertyValueSet<D> {
                     .expect("checked unsigned array size"),
                 contains_cursor_hand,
             ),
-            properties: properties.to_vec(),
+            properties,
         };
         // The packed array size is capped by the source constructor.
         let size = (set.state.bits_.load(Ordering::Relaxed)
@@ -1076,6 +1086,9 @@ impl<D: CSSPropertyValueSetBackend> MutableCSSPropertyValueSet<D> {
     }
     pub fn IntoBase(self) -> CSSPropertyValueSet<D> {
         self.set
+    }
+    pub fn IntoProperties(self) -> Vec<CSSPropertyValue<D>> {
+        self.set.properties
     }
 }
 

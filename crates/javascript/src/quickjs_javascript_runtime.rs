@@ -113,6 +113,10 @@ struct State {
     // a collected wrapper's address cannot alias a new object in this index.
     wrapper_ids: HashMap<(usize, usize), HostObjectId>,
     fallbacks: HashMap<String, Value>,
+    // V8PerContextData's per-context function cache for operations of the
+    // Window and its realm-lifetime singletons (receiver 0 and global host
+    // objects): one function per (receiver, operation) in this context.
+    methods: HashMap<HostObjectId, HashMap<String, Value>>,
     reflect_get: Value,
     reflect_set: Value,
     hooks: Rc<Hooks>,
@@ -169,6 +173,7 @@ impl Drop for QuickJsRealm {
             namespace.wrappers.clear();
             namespace.host_graph.Clear();
             namespace.fallbacks.clear();
+            namespace.methods.clear();
             namespace.global = Value::Undefined;
             namespace.reflect_get = Value::Undefined;
             namespace.reflect_set = Value::Undefined;
@@ -179,6 +184,7 @@ impl Drop for QuickJsRealm {
         state.wrappers.clear();
         state.host_graph.Clear();
         state.fallbacks.clear();
+        state.methods.clear();
         state.global = Value::Undefined;
         state.reflect_get = Value::Undefined;
         state.reflect_set = Value::Undefined;
@@ -353,13 +359,10 @@ fn from_js_identity(value: &Value, context: &Context, state: &Rc<RefCell<State>>
         Value::Bool(v) => HostValue::Boolean(*v),
         Value::Int(v) => HostValue::Number(*v as f64),
         Value::Float(v) => HostValue::Number(*v),
-        Value::Str(v) => {
-            let units = v.to_utf16();
-            match String::from_utf16(&units) {
-                Ok(value) => HostValue::String(value),
-                Err(_) => HostValue::String16(units.into()),
-            }
-        }
+        Value::Str(v) => match v.to_host_string() {
+            Ok(value) => HostValue::String(value),
+            Err(units) => HostValue::String16(units.into()),
+        },
         Value::Object(o) => {
             let state = state.borrow();
             if Value::strict_equals(value, &state.global) {
@@ -613,7 +616,19 @@ fn invoke(
     };
     if argument_namespace.is_some() || !Rc::ptr_eq(&host, &global) {
         let namespace = JavaScriptHostObjectNamespace::new(runtime_origin);
-        answer.value = namespace.Wrap(answer.value);
+        // A primitive converts identically in every namespace of this
+        // Context; only values naming host objects carry their origin.
+        if !matches!(
+            answer.value,
+            HostValue::Undefined(_)
+                | HostValue::Null(_)
+                | HostValue::Boolean(_)
+                | HostValue::Number(_)
+                | HostValue::String(_)
+                | HostValue::String16(_)
+        ) {
+            answer.value = namespace.Wrap(answer.value);
+        }
         answer.thrown = answer.thrown.map(|value| namespace.Wrap(value));
     } else {
         host_namespaces::RecordGlobalResult(state, &answer.value);
@@ -964,15 +979,31 @@ fn to_js_value(
                 .ok_or_else(|| ctx.type_error("Function belongs to another engine"))?,
         ),
         HostValue::Method(m) => {
-            // A bound host method retains its receiver through engine-marked
-            // captures, even if the caller stores the method separately.
-            let capture = state
-                .borrow()
-                .wrappers
-                .get(&m.receiver)
-                .and_then(|wrapper| wrapper.object.get());
-            Value::Object(
-                ctx.new_host_function(
+            // Window and realm-singleton operations keep one function per
+            // context (V8PerContextData::FunctionTemplate cache), so a global
+            // read such as requestAnimationFrame does not allocate a function.
+            let cacheable = host_namespaces::IsGlobalObject(state, m.receiver);
+            let cached = cacheable
+                .then(|| {
+                    state
+                        .borrow()
+                        .methods
+                        .get(&m.receiver)
+                        .and_then(|names| names.get(&m.name))
+                        .cloned()
+                })
+                .flatten();
+            if let Some(cached) = cached {
+                cached
+            } else {
+                // A bound host method retains its receiver through engine-marked
+                // captures, even if the caller stores the method separately.
+                let capture = state
+                    .borrow()
+                    .wrappers
+                    .get(&m.receiver)
+                    .and_then(|wrapper| wrapper.object.get());
+                let function = Value::Object(ctx.new_host_function(
                     Rc::new(HostFunction {
                         state: state.clone(),
                         action: Action::Method(m.clone()),
@@ -982,8 +1013,17 @@ fn to_js_value(
                         .unwrap_or_default(),
                     &m.name,
                     0,
-                ),
-            )
+                ));
+                if cacheable {
+                    state
+                        .borrow_mut()
+                        .methods
+                        .entry(m.receiver)
+                        .or_default()
+                        .insert(m.name.clone(), function.clone());
+                }
+                function
+            }
         }
         HostValue::Object(o) if o.id == 0 => state.borrow().global.clone(),
         HostValue::Object(o) => {
@@ -1201,6 +1241,7 @@ fn create_realm(
         host_graph: HostGraph::new(host.borrow().ObjectTraceSource()),
         wrapper_ids: HashMap::new(),
         fallbacks: HashMap::new(),
+        methods: HashMap::new(),
         reflect_get,
         reflect_set,
         hooks,

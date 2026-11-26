@@ -490,6 +490,10 @@ fn SynchronizeNamespaceGraph(
     if !released.is_empty() {
         source.Released(&released);
     }
+    // Nothing queued here or in the source: Apply would return no roots.
+    if state.borrow().host_graph.pending.is_empty() && !source.HasChanges() {
+        return Ok(Vec::new());
+    }
     let changes = {
         let _collect = bridge_profile::enter(bridge_profile::Phase::GraphSource);
         source.TakeChanges()

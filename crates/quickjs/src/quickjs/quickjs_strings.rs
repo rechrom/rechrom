@@ -485,6 +485,35 @@ pub unsafe fn JS_CopyString16(value: JSValueConst) -> Vec<u16> {
     }
 }
 
+/// Code units of a flat engine string, borrowed for the caller's conversion
+/// (V8 String::Write analogue). 8-bit JSStrings hold Latin-1 code units.
+pub enum JSStringCodeUnits<'a> {
+    Latin1(&'a [u8]),
+    Utf16(&'a [u16]),
+}
+/// Borrow a flat string's storage without copying it through a temporary
+/// UTF-16 vector. Ropes return None; JS_CopyString16 flattens them. The
+/// caller holds the string value for the lifetime of the borrow.
+pub unsafe fn JS_FlatStringCodeUnits<'a>(value: JSValueConst) -> Option<JSStringCodeUnits<'a>> {
+    debug_assert!(JS_IsString(value) != 0);
+    if JS_VALUE_GET_TAG(value) == JS_TAG_STRING_ROPE {
+        return None;
+    }
+    let string = JS_VALUE_GET_PTR(value).cast::<JSString>();
+    let len = (*string).len() as usize;
+    Some(if (*string).is_wide_char() != 0 {
+        JSStringCodeUnits::Utf16(core::slice::from_raw_parts(
+            ptr::addr_of!((*string).u).cast::<u16>(),
+            len,
+        ))
+    } else {
+        JSStringCodeUnits::Latin1(core::slice::from_raw_parts(
+            ptr::addr_of!((*string).u).cast::<u8>(),
+            len,
+        ))
+    })
+}
+
 pub unsafe fn JS_NewStringLen(ctx: *mut JSContext, buf: *const c_char, buf_len: usize) -> JSValue {
     let p_start = buf.cast::<u8>();
     let p_end = p_start.add(buf_len);

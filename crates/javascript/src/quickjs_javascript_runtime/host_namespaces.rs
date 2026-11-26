@@ -112,6 +112,7 @@ pub(super) fn Create(
         host_graph: HostGraph::new(host.borrow().ObjectTraceSource()),
         wrapper_ids: HashMap::new(),
         fallbacks: HashMap::new(),
+        methods: HashMap::new(),
         reflect_get: root.reflect_get.clone(),
         reflect_set: root.reflect_set.clone(),
         hooks: root.hooks.clone(),
@@ -198,6 +199,16 @@ pub(super) fn RemoveWrapper(state: &Rc<RefCell<State>>, identity: (usize, usize)
         .wrappers
         .borrow_mut()
         .remove(&identity);
+}
+/// The Window (id 0) or one of its realm-lifetime host objects.
+pub(super) fn IsGlobalObject(state: &Rc<RefCell<State>>, id: HostObjectId) -> bool {
+    id == 0
+        || state
+            .borrow()
+            .namespaces
+            .global_objects
+            .borrow()
+            .contains(&id)
 }
 pub(super) fn ObjectState(state: &Rc<RefCell<State>>, id: HostObjectId) -> Rc<RefCell<State>> {
     let registry = state.borrow().namespaces.clone();

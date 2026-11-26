@@ -651,7 +651,10 @@ fn SetInlineCSSPropertyInternal(
         let text = crate::production_style_sheet::SerializeProperties(&properties);
         drop(serialize);
         let next = cssom::CSSInlineStyle::FromString(text);
-        let immutable = ImmutableCSSPropertyValueSet::Create(properties.Properties(), mode, false);
+        // The edited copy-on-write set becomes the retained declaration
+        // directly (no second per-property copy).
+        let immutable =
+            ImmutableCSSPropertyValueSet::CreateFromVector(properties.IntoProperties(), mode, false);
         RetainInlineProperties(&next, immutable, mode);
         if result == SetResult::kModifiedExisting
             && crate::properties::css_property::CSSProperty::Get(
@@ -690,8 +693,8 @@ pub fn SetInlineCSSPropertyValue(
     properties.SetLonghandPropertyValue(id, value);
     let text = crate::production_style_sheet::SerializeProperties(&properties);
     let next = cssom::CSSInlineStyle::FromString(text);
-    let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(
-        properties.Properties(),
+    let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::CreateFromVector(
+        properties.IntoProperties(),
         mode,
         false,
     );
@@ -717,8 +720,8 @@ pub fn RemoveInlineCSSPropertyValue(
     }
     let text = crate::production_style_sheet::SerializeProperties(&properties);
     let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
-    let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(
-        properties.Properties(),
+    let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::CreateFromVector(
+        properties.IntoProperties(),
         mode,
         false,
     );

@@ -204,7 +204,10 @@ impl<'a> StylePropertySerializer<'a> {
             .expect("common shorthand checks proved required longhands")
     }
     pub fn AsText(&self) -> String {
-        let mut result = String::from("");
+        // style_property_serializer.cc AsText appends into one StringBuilder
+        // and materializes the String once. Accumulate code units the same
+        // way instead of rebuilding the String owner on every append.
+        let mut result: Vec<u16> = Vec::new();
         let mut serialized = HashSet::new();
         let mut appeared = HashSet::new();
         let mut count = 0usize;
@@ -216,9 +219,9 @@ impl<'a> StylePropertySerializer<'a> {
             let id = property.name.Id();
             if id == Id::kVariable {
                 if count != 0 {
-                    result.push(' ');
+                    result.push(u16::from(b' '));
                 }
-                result.push_string(&style_model::css_markup::SerializeIdentifier(
+                style_model::css_markup::SerializeIdentifierTo(
                     &String::from_utf16(
                         property
                             .name
@@ -226,14 +229,15 @@ impl<'a> StylePropertySerializer<'a> {
                             .utf16_units()
                             .unwrap_or_default(),
                     ),
+                    &mut result,
                     count != 0,
-                ));
-                result.push_str(": ");
-                result.push_string(&property.value.CssText());
+                );
+                result.extend(": ".encode_utf16());
+                result.extend_from_slice(property.value.CssText().Span16().unwrap_or_default());
                 if property.important {
-                    result.push_str(" !important");
+                    result.extend(" !important".encode_utf16());
                 }
-                result.push(';');
+                result.push(u16::from(b';'));
                 count += 1;
                 continue;
             }
@@ -291,27 +295,29 @@ impl<'a> StylePropertySerializer<'a> {
                 count += 1;
             }
         }
-        result
+        if result.is_empty() {
+            String::from("")
+        } else {
+            String::from_utf16(&result)
+        }
     }
     fn AppendPropertyText(
-        result: &mut String,
+        result: &mut Vec<u16>,
         name: &CSSPropertyName,
         value: &String,
         important: bool,
         not_first: bool,
     ) {
         if not_first {
-            result.push(' ');
+            result.push(u16::from(b' '));
         }
-        result.push_string(&String::from_utf16(
-            name.ToAtomicString().utf16_units().unwrap_or_default(),
-        ));
-        result.push_str(": ");
-        result.push_string(value);
+        result.extend_from_slice(name.ToAtomicString().utf16_units().unwrap_or_default());
+        result.extend(": ".encode_utf16());
+        result.extend_from_slice(value.Span16().unwrap_or_default());
         if important {
-            result.push_str(" !important");
+            result.extend(" !important".encode_utf16());
         }
-        result.push(';');
+        result.push(u16::from(b';'));
     }
     fn CommonShorthandChecks(&self, shorthand: Shorthand) -> Option<String> {
         assert!(

@@ -34,6 +34,9 @@ impl NodeReferenceQueue {
     pub fn TakeChanges(&self) -> Vec<NodeReferenceChange> {
         std::mem::take(&mut *self.pending.borrow_mut())
     }
+    pub fn HasChanges(&self) -> bool {
+        !self.pending.borrow().is_empty()
+    }
     pub(super) fn push(&self, change: NodeReferenceChange) {
         self.pending.borrow_mut().push(change);
     }
