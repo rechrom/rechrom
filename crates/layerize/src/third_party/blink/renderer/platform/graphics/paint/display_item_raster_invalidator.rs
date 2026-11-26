@@ -323,7 +323,7 @@ impl<
         }
         let rect = self.invalidator_.ClipByLayerBounds(mapped_rect);
         let inner_rect = self.invalidator_.ClipByLayerBounds(inner_rect);
-        if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some()) } {
             eprintln!(
                 "display-item-invalidation id={} reason={:?} old={:?} source={:?} mapped={:?} clipped={:?}",
                 id, reason, old, source_rect, mapped_rect, rect

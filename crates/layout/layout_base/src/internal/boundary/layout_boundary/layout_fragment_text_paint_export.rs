@@ -358,7 +358,7 @@ fn ResolveTextPaintBaseline(item: &FragmentItem) -> f64 {
     let ascent = unsafe { &*primary_font }
         .GetFontMetrics()
         .FixedAscent(FontBaseline::kAlphabeticBaseline);
-    if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() {
+    if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()) } {
         let data = unsafe { &*primary_font };
         let family = data.PlatformData().RawFont().FamilyName();
         if family.contains("Mona") {

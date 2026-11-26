@@ -4178,7 +4178,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                 )
             };
             if let Err(error) = result {
-                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) } {
                     eprintln!(
                         "typed longhand rejected property={:?} class={:?} value={}",
                         property.PropertyID(),

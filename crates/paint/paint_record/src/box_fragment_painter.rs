@@ -4594,7 +4594,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     glyphs: Arc::clone(&input_run.glyphs),
                     ..Default::default()
                 };
-                if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()
+                if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()) }
                     && !is_shadow
                     && !stroke_glyphs
                     && item.text_blob_origin.y < 60.0

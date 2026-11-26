@@ -501,7 +501,7 @@ impl<B: PaintArtifactCompositorTypes> OldPendingLayerMatcher<B> {
         }
     }
     fn Find(&mut self, new_layer: &PendingLayer<B>) -> Option<&mut PendingLayer<B>> {
-        let trace = std::env::var_os("RECHROM_DIAG_LAYER_MATCH").is_some();
+        let trace = { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_LAYER_MATCH").is_some()) };
         if self.pending_layers_.is_empty() {
             if trace {
                 eprintln!(
@@ -1319,7 +1319,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::layerize_walk::Layeri
             compositing_type,
             self.services,
         ));
-        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()) } {
             let pending = self.pending_layers_.last().unwrap();
             let transform = pending.GetPropertyTreeState().TransformNode();
             let direct = transform.NearestDirectlyCompositedAncestor();
@@ -1721,7 +1721,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
         .Layerize();
         self.compositor.pending_layers_ = pending;
         self.merged_sticky_transforms = merged_sticky_transforms;
-        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()) } {
             for (index, pending) in self.compositor.pending_layers_.iter().enumerate() {
                 let transform = pending.GetPropertyTreeState().TransformNode();
                 eprintln!(
@@ -1738,7 +1738,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
             }
         }
         PendingLayer::DecompositeTransforms(&mut self.compositor.pending_layers_);
-        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()) } {
             for (index, pending) in self.compositor.pending_layers_.iter().enumerate() {
                 let transform = pending.GetPropertyTreeState().TransformNode();
                 eprintln!(
@@ -1826,7 +1826,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
                 self.context.services,
             );
             let layer = pending.CcLayer();
-            if std::env::var_os("RECHROM_DIAG_STACKING").is_some() {
+            if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_STACKING").is_some()) } {
                 eprintln!(
                     "pending-layer index={} cc_layer={} {:?}",
                     index,

@@ -6590,7 +6590,7 @@ impl PersistentDocument {
             self.arena[element].attributes[i] == attribute
                 && self.arena[element].attribute_utf16[i] == utf16_attribute
         });
-        if std::env::var_os("BROWSER_PROFILE_STYLE_INVALIDATION").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("BROWSER_PROFILE_STYLE_INVALIDATION").is_some()) } {
             eprintln!(
                 "style-attribute-mutation-profile node_id={} name={:?} namespace={:?} changed={} inline_style={}",
                 self.arena[element].id,
@@ -7128,7 +7128,7 @@ impl PersistentDocument {
         self.BumpCollectionMembershipRevision();
         self.InvalidateSelectorAttributes(element, local_name, true);
         self.InvalidateSVGAttribute(element, local_name);
-        if std::env::var_os("BROWSER_PROFILE_STYLE_INVALIDATION").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("BROWSER_PROFILE_STYLE_INVALIDATION").is_some()) } {
             eprintln!(
                 "style-attribute-mutation-profile node_id={} name={:?} namespace={:?} changed=true inline_style={} removed=true",
                 self.arena[element].id,
