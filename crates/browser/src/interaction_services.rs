@@ -761,6 +761,17 @@ impl PageInteraction {
         bool,
         interaction::adapter::page_event_dispatcher::pointer_dom_effects::PointerDomError,
     > {
+        // pointer_dom_effects::ApplyPopupMutation owns only the popover and
+        // dialog method mutations (HTMLElement::ShowPopoverInternal,
+        // HTMLDialogElement::showModal/close); every other DOM mutation is not
+        // a popup operation and needs no script invocation scope.
+        if !matches!(
+            mutation.mutation_type,
+            dom::dom_mutation::DOMMutationType::kSetPopoverOpen
+                | dom::dom_mutation::DOMMutationType::kSetDialogModal
+        ) {
+            return Ok(false);
+        }
         self.WithScriptRuntime(runtime, |engine| {
             engine.ApplyPopupMutation(&self.document, mutation)
         })
@@ -771,6 +782,19 @@ impl PageInteraction {
         runtime: &mut dyn JavaScriptHostRuntime,
     ) -> Result<(), interaction::adapter::page_event_dispatcher::pointer_dom_effects::PointerDomError>
     {
+        // Popover/dialog attribute hooks run only for a recorded lifecycle
+        // fact (HTMLElement::AttributeChanged popover branch,
+        // HTMLDialogElement::ParseAttribute); with none queued there is no
+        // work and no reason to open a script invocation scope.
+        let idle = self.document.try_borrow().is_ok_and(|document| {
+            !document
+                .GetDocument()
+                .AttributeLifecycle()
+                .HasPopupLifecycleChanges()
+        });
+        if idle {
+            return Ok(());
+        }
         self.WithScriptRuntime(runtime, |engine| engine.DrainPopupLifecycle(&self.document))
     }
 }

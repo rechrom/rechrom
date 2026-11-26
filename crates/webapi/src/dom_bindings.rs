@@ -4383,9 +4383,14 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             }
             let mut outcome = result;
             if let Some(mutation) = mutation {
+                // Attribution of the binding -> Page mutation route (popup
+                // routing, Page.ApplyDOMMutation, lifecycle drains).
+                let mut emit_trace = browser_tracing::span("dom", "DOM.ScriptMutation");
+                emit_trace.set("mutation_type", mutation.mutation_type as u8 as f64);
                 let emitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     emitter(&mutation, runtime)
                 }));
+                drop(emit_trace);
                 match emitted {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) if catches_errors => {

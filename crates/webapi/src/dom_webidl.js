@@ -1672,8 +1672,13 @@ const cssPropertyName = (node, key) => {
   cssPropertyInfo.set(key, name);
   return name;
 };
+// ElementCSSInlineStyle::style returns the element's one retained
+// InlineCSSStyleDeclaration (element.cc EnsureElementRareData().
+// EnsureInlineCSSStyleDeclaration); look the wrapper up once per access.
 Object.defineProperty(Element.prototype, 'style', {get() {
-  if (!styles.has(this)) { const node = this; const methods = {
+  const existing = styles.get(this);
+  if (existing !== undefined) return existing;
+  { const node = this; const methods = {
     getPropertyValue(name) { return invoke(node, 'getStyle', String(name)); },
     setProperty(name, value, priority = '') { invoke(node, 'setStyle', String(name), String(value ?? ''), String(priority)); },
     removeProperty(name) { const old = this.getPropertyValue(name); this.setProperty(name, ''); return old; }

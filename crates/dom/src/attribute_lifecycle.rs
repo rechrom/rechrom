@@ -154,6 +154,11 @@ impl AttributeLifecycleQueue {
             .as_ref()
             .and_then(Weak::upgrade)
     }
+    /// Whether a popover/dialog lifecycle fact is waiting for its owner. Blink
+    /// runs those hooks only from the attribute/insertion that produced them.
+    pub fn HasPopupLifecycleChanges(&self) -> bool {
+        !self.popup_pending.borrow().is_empty()
+    }
     pub fn TakePopupLifecycleChanges(&self) -> VecDeque<PopupLifecycleChange> {
         std::mem::take(&mut *self.popup_pending.borrow_mut())
     }

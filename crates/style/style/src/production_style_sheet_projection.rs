@@ -587,6 +587,9 @@ fn SetInlineCSSPropertyInternal(
         },
     };
     use foundation::{CSSPropertyID, StringView};
+    // Attribution boundary for AbstractPropertySetCSSStyleDeclaration::
+    // SetPropertyInternal (resolve, parse, projection) inside a JS callback.
+    let mut trace = browser_tracing::span("style", "CSSOM.SetInlineProperty");
     let mode = InlineParserMode(standard_mode);
     let parsed = source_context.map_or_else(
         || ResolveInlineStyle(style, mode),
@@ -632,11 +635,22 @@ fn SetInlineCSSPropertyInternal(
             )
         }
     };
+    trace.set(
+        "changed",
+        if result >= SetResult::kModifiedExisting {
+            1.0
+        } else {
+            0.0
+        },
+    );
     if result >= SetResult::kModifiedExisting {
         // Attribute text is still required by the current DOM mutation input.
         // It is a projection of this property set, never its replacement owner.
+        let mut serialize = browser_tracing::span("style", "CSSOM.SerializeInlineStyle");
+        serialize.set("properties", properties.PropertyCount() as f64);
         let text = crate::production_style_sheet::SerializeProperties(&properties);
-        let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
+        drop(serialize);
+        let next = cssom::CSSInlineStyle::FromString(text);
         let immutable = ImmutableCSSPropertyValueSet::Create(properties.Properties(), mode, false);
         RetainInlineProperties(&next, immutable, mode);
         if result == SetResult::kModifiedExisting
@@ -675,7 +689,7 @@ pub fn SetInlineCSSPropertyValue(
     }
     properties.SetLonghandPropertyValue(id, value);
     let text = crate::production_style_sheet::SerializeProperties(&properties);
-    let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
+    let next = cssom::CSSInlineStyle::FromString(text);
     let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(
         properties.Properties(),
         mode,
