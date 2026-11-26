@@ -230,7 +230,7 @@ fn ValidateArtifactGraph(
         .image_dependencies
         .image_ids()
         .collect::<std::collections::BTreeSet<_>>();
-    for op in artifact.items.iter() {
+    for op in artifact.AllOps() {
         if op.resource_id != 0 {
             image_ids.insert(op.resource_id);
         }

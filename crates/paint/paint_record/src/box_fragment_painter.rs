@@ -10571,6 +10571,7 @@ mod background_attachment_tests {
             record_has_text: false,
             record_begin: 0,
             record_end: 1,
+            record_source: None,
             scroll_translation: None,
         });
         let previous = Arc::new(previous);

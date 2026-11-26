@@ -80,26 +80,3 @@ pub(super) fn VisitMutablePaintInputs(
     unsafe { visit(PaintFragmentCursor::FromHandle(fragments), visitor) };
 }
 
-#[inline(never)]
-pub(super) fn UpdatePrePaintInputs(
-    fragments: &LayoutResultHandle,
-    objects: &LayoutObjectFactorySet,
-) -> usize {
-    // Keep source child traversal inside the engine's virtual-dispatch scope.
-    // Refresh each canonical sidecar in place. Do not flatten the source
-    // topology into another document-sized Vec first.
-    let _object_factory_scope = LayoutObjectFactoryScope::new(objects);
-    fn refresh(cursor: PaintFragmentCursor<'_>) -> usize {
-        let descendants = cursor
-            .Children()
-            .into_iter()
-            .map(|child| refresh(child))
-            .sum::<usize>();
-        // Host notifications delivered after population (resource catalog
-        // rebinding, event-handler registry changes) set Chromium dirty bits
-        // on the resident LayoutObjects; republish every fragment's view.
-        unsafe { cursor.RefreshPrePaintInvalidation() };
-        descendants + 1
-    }
-    refresh(PaintFragmentCursor::FromHandle(fragments))
-}

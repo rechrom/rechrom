@@ -18,7 +18,7 @@ pub(crate) fn DocumentPaintRecord(
 
 /// Rasterize a Paint publication onto an opaque white RGBA target.
 pub fn RasterizePaintArtifact(artifact: &PaintArtifact, width: u32, height: u32) -> Vec<u8> {
-    raster::RasterizePaintOps(&artifact.items, artifact.resources.as_deref(), width, height)
+    raster::RasterizePaintOps(&artifact.ReplayOps(), artifact.resources.as_deref(), width, height)
 }
 
 /// Rasterize a Paint publication onto an opaque white scaled RGBA target.
@@ -29,7 +29,7 @@ pub fn RasterizePaintArtifactWithScale(
     scale: f64,
 ) -> Vec<u8> {
     raster::RasterizePaintOpsWithScale(
-        &artifact.items,
+        &artifact.ReplayOps(),
         artifact.resources.as_deref(),
         width,
         height,
@@ -43,5 +43,5 @@ pub fn RasterizePaintArtifactTransparent(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    raster::RasterizePaintOpsTransparent(&artifact.items, artifact.resources.as_deref(), width, height)
+    raster::RasterizePaintOpsTransparent(&artifact.ReplayOps(), artifact.resources.as_deref(), width, height)
 }

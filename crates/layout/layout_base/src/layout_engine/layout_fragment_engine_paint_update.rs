@@ -224,12 +224,9 @@ impl EnginePaintUpdate for LayoutEngine {
             )
         };
         trace.set("committed_origins", committed as f64);
-        {
-            let _phase = layout_commit::fragment_trace::span(
-                layout_commit::fragment_trace::TracePhase::UpdatePrePaintInputs,
-            );
-            UpdatePrePaintInputs(fragments, &self.objects_);
-        }
+        // No document-wide dirty-bit republish: PrePaint reads each visited
+        // object's bits at its visit (pre_paint_tree_walk.cc:418-436).
+        PaintFragmentCursor::AdvancePrePaintInvalidationEpoch();
         self.pending_scroll_ids_.clear();
         true
     }

@@ -185,10 +185,10 @@ pub fn CalculateRectKnownToBeOpaqueForRecord(
 impl RecordedDisplayItem {
     // Source: drawing_display_item.h:32-35. The range is the PaintRecord owner
     // mapping for Rechrom's flat immutable artifact ABI.
-    pub fn GetPaintRecord<'a>(&self, artifact: &'a PaintRecording) -> &'a [DisplayItem] {
+    pub fn GetPaintRecord<'a>(&'a self, artifact: &'a PaintRecording) -> &'a [DisplayItem] {
         assert!(!self.IsTombstone());
         assert!(self.IsDrawing());
-        &artifact.items[self.record_begin..self.record_end]
+        self.RecordOps(artifact)
     }
 
     // Source: drawing_display_item.h:37-44,104-110.
@@ -266,6 +266,7 @@ mod tests {
             record_has_text: false,
             record_begin: begin,
             record_end: end,
+            record_source: None,
             scroll_translation: None,
         }
     }

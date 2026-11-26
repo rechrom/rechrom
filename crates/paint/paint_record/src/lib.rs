@@ -90,7 +90,7 @@ pub use artifact::{
 };
 pub use display_item::{
     CaretGeometry, CaretPosition, DecorationPaintPass, DisplayItem, DisplayMaskLayer,
-    EditingPaintState, RecordedDisplayItem, RecordedDisplayItemKind,
+    EditingPaintState, RecordSource, RecordedDisplayItem, RecordedDisplayItemKind,
 };
 pub use display_item_list::{DisplayItemList, DisplayItemListJsonOption};
 pub use foreign_layer_display_item::{

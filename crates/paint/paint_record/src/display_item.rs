@@ -9,6 +9,42 @@ pub use paint_model::DisplayMaskLayer;
 
 pub use paint_model::display_item::{DecorationPaintPass, DisplayItem};
 
+/// A cached drawing's PaintRecord: the op allocation of the recording that
+/// recorded it and its range there. Blink's DrawingDisplayItem owns its
+/// PaintRecord (drawing_display_item.h:32-35), so PaintController's move of
+/// a cached item into the new list (paint_controller.cc:283-286,768-790)
+/// transfers that record and never copies its ops, even while cc still holds
+/// the same record. Rechrom records ops into one flat allocation per
+/// recording; a reused drawing keeps the allocation it was recorded into.
+#[derive(Clone)]
+pub struct RecordSource {
+    pub ops: Arc<Vec<DisplayItem>>,
+    pub range: std::ops::Range<usize>,
+}
+
+impl RecordSource {
+    pub fn Ops(&self) -> &[DisplayItem] {
+        &self.ops[self.range.clone()]
+    }
+}
+
+impl PartialEq for RecordSource {
+    fn eq(&self, other: &Self) -> bool {
+        (Arc::ptr_eq(&self.ops, &other.ops) && self.range == other.range)
+            || self.Ops() == other.Ops()
+    }
+}
+
+impl std::fmt::Debug for RecordSource {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output
+            .debug_struct("RecordSource")
+            .field("ops", &Arc::as_ptr(&self.ops))
+            .field("range", &self.range)
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordedDisplayItemKind {
     Drawing,
@@ -39,6 +75,13 @@ pub struct RecordedDisplayItem {
     pub record_has_text: bool,
     pub record_begin: usize,
     pub record_end: usize,
+    /// The PaintRecord this drawing moved in with from an earlier recording.
+    /// None: the record is `record_begin..record_end` of the owning
+    /// recording's op allocation. Some: the drawing was reused from the cache
+    /// and keeps the op allocation it was recorded into, and
+    /// `record_begin == record_end` is its position in this recording's flat
+    /// op stream (orphan save/restore ops around it keep their order).
+    pub record_source: Option<RecordSource>,
     pub scroll_translation:
         Option<Arc<paint_model::paint_property_tree::TransformPaintPropertyNode>>,
 }
@@ -164,6 +207,8 @@ impl RecordedDisplayItem {
         // tombstone. Rust must explicitly release the old owner slot after the
         // destination clone has retained it.
         self.foreign_layer = None;
+        self.record_source = None;
+        self.record_end = self.record_begin;
         self.draws_content = false;
         self.is_tombstone = true;
     }
@@ -188,6 +233,7 @@ impl RecordedDisplayItem {
         self.record_has_text = false;
         self.record_begin = 0;
         self.record_end = 0;
+        self.record_source = None;
         self.scroll_translation = None;
     }
 
@@ -275,6 +321,40 @@ impl RecordedDisplayItem {
     pub fn DrawsContent(&self) -> bool {
         self.draws_content
     }
+
+    /// The ops of this item's PaintRecord, wherever they were recorded.
+    pub fn RecordOps<'a>(&'a self, artifact: &'a crate::PaintRecording) -> &'a [DisplayItem] {
+        match &self.record_source {
+            Some(source) => source.Ops(),
+            None => &artifact.items[self.record_begin..self.record_end],
+        }
+    }
+
+    /// The op allocation and range holding this item's PaintRecord.
+    pub fn RecordOwner<'a>(
+        &'a self,
+        artifact: &'a crate::PaintRecording,
+    ) -> (&'a Arc<Vec<DisplayItem>>, std::ops::Range<usize>) {
+        match &self.record_source {
+            Some(source) => (&source.ops, source.range.clone()),
+            None => (&artifact.items, self.record_begin..self.record_end),
+        }
+    }
+
+    /// Source: paint_controller.cc:283-286,768-790. Move this cached item's
+    /// PaintRecord from `previous` into a recording whose flat op stream is
+    /// at `position`: the record allocation is shared, its ops are not
+    /// copied.
+    pub fn MoveRecordFrom(&mut self, previous: &crate::PaintRecording, position: usize) {
+        if self.record_source.is_none() && self.record_begin != self.record_end {
+            self.record_source = Some(RecordSource {
+                ops: Arc::clone(&previous.items),
+                range: self.record_begin..self.record_end,
+            });
+        }
+        self.record_begin = position;
+        self.record_end = position;
+    }
 }
 
 // Source: display_item.cc:271-273.
@@ -316,6 +396,7 @@ mod recorded_display_item_debug_tests {
             record_has_text: false,
             record_begin: 0,
             record_end: 0,
+            record_source: None,
             scroll_translation: None,
         }
     }

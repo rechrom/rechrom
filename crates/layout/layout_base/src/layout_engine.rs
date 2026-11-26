@@ -81,7 +81,7 @@ pub enum LayoutEngineError {
 
 mod layout_fragment_prepaint_input_update;
 use layout_fragment_prepaint_input_update::{
-    UpdateFragmentPaintStyle, UpdatePrePaintInputs, VisitMutablePaintInputs,
+    UpdateFragmentPaintStyle, VisitMutablePaintInputs,
 };
 mod layout_fragment_engine_paint_update;
 use layout_fragment_engine_paint_update::EnginePaintUpdate;
@@ -999,15 +999,15 @@ impl LayoutEngine {
         EnginePaintUpdate::refresh_targeted_paint_inputs(self)
     }
 
-    /// Republish canonical FragmentData dirty-bit snapshots after Page binds a
-    /// newer resource catalog to the move-only output. This walks the existing
-    /// source graph by reference; it creates no fragment snapshot or Paint copy.
-    pub fn RefreshOutputPrePaintInputs(&mut self, output: &mut LayoutPaintOutput) {
-        let mut trace = layout_commit::fragment_trace::span(
+    /// Page bound a newer resource catalog to the move-only output: the
+    /// notifications set Chromium dirty bits on the resident LayoutObjects,
+    /// which PrePaint reads at each visited object (pre_paint_tree_walk.cc:
+    /// 418-436). No document-wide dirty-bit republish.
+    pub fn RefreshOutputPrePaintInputs(&mut self, _output: &mut LayoutPaintOutput) {
+        let _trace = layout_commit::fragment_trace::span(
             layout_commit::fragment_trace::TracePhase::UpdatePrePaintInputs,
         );
-        let nodes = UpdatePrePaintInputs(&output.fragments, &self.objects_);
-        trace.set("nodes", nodes as f64);
+        PaintFragmentCursor::AdvancePrePaintInvalidationEpoch();
     }
 
     /// Deliver the resource-observer notification for document images whose

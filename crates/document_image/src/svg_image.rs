@@ -595,7 +595,7 @@ impl SVGDocumentAnimation {
                 self.container.height,
                 artifact.items.len()
             );
-            for item in artifact.items.iter() {
+            for item in artifact.AllOps() {
                 eprintln!(
                     "svg-artifact-item type={:?} node={} rect=({:.2},{:.2},{:.2},{:.2}) rgba=({:.3},{:.3},{:.3},{:.3}) opacity={:.3} masks={} canonical_filters_empty={}",
                     item.r#type,

@@ -503,17 +503,15 @@ impl<'o> PaintContext<'o> {
         client: DisplayItemClientInfo,
         debug: Option<(i32, Arc<str>)>,
     ) -> bool {
-        let record_begin = self.output.items.len();
         let Some(cached_item) = self.paint_controller.TakeCachedDrawingInto(
             id,
             client,
             self.paint_under_invalidation_checking,
-            Arc::make_mut(&mut self.output.items),
+            self.output.items.len(),
         ) else {
             return false;
         };
         let old = &cached_item;
-        let record_end = self.output.items.len();
         if let Some((owner, name)) = debug {
             self.output
                 .RecordDebugInfo(id.client_id as usize, name, owner);
@@ -530,10 +528,8 @@ impl<'o> PaintContext<'o> {
             old.record_background,
             old.record_has_text,
         );
-        let mut moved = old.clone();
+        let mut moved = cached_item;
         moved.paint_invalidation_reason = Some(foundation::PaintInvalidationReason::kNone);
-        moved.record_begin = record_begin;
-        moved.record_end = record_end;
         self.output.display_items.push(moved);
         true
     }
@@ -650,6 +646,7 @@ impl<'o> PaintContext<'o> {
             record_has_text,
             record_begin: self.output.items.len(),
             record_end: self.output.items.len() + 1,
+            record_source: None,
         });
         std::sync::Arc::make_mut(&mut self.output.items).push(item);
         self.paint_controller
@@ -886,6 +883,7 @@ impl<'o> PaintContext<'o> {
             record_has_text,
             record_begin,
             record_end,
+            record_source: None,
         });
         self.paint_controller
             .CheckNewItem(self.output, self.skipping_cache_count != 0);
@@ -2148,6 +2146,7 @@ mod opaque_record_tests {
             record_has_text: false,
             record_begin: 0,
             record_end: 1,
+            record_source: None,
             scroll_translation: None,
         });
         let previous = Arc::new(previous);
