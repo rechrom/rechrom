@@ -2895,6 +2895,7 @@ fn run_document(
                     result,
                     browser::page::MainFrameResult::ReadyToCommit { .. }
                 );
+                let _finish_trace = browser_tracing::span("frame", "MainFrameCycle.Finish");
                 if let Some(current) = page.CurrentFrame() {
                     let content = ContentFrameProvenance {
                         sequence: current.sequence,

@@ -1247,7 +1247,7 @@ impl Context {
         {
             return self.eval_named(source, SourceType::Script, name);
         }
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        let profile = browser_tracing::profile_input();
         let started = profile.then(std::time::Instant::now);
         let cached = BOOTSTRAP_BYTECODE.with(|cache| {
             cache
@@ -1320,7 +1320,7 @@ impl Context {
     }
 
     pub fn eval_named(&mut self, source: &str, kind: SourceType, name: &str) -> JsResult<Value> {
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        let profile = browser_tracing::profile_input();
         self.eval_named_profiled(source, kind, name, profile)
     }
     /// Compile a real global classic script, retaining UTF-16 (including lone
@@ -1747,7 +1747,7 @@ impl Context {
         }
     }
     pub fn run_jobs_errors(&mut self) -> Vec<Value> {
-        self.run_jobs_errors_profiled(std::env::var_os("BROWSER_PROFILE_INPUT").is_some())
+        self.run_jobs_errors_profiled(browser_tracing::profile_input())
     }
     fn run_jobs_errors_profiled(&mut self, profile: bool) -> Vec<Value> {
         self.resume_dynamic_imports();
@@ -1994,7 +1994,7 @@ impl Context {
         Ok(value)
     }
     pub fn compile_module_unregistered(&mut self, name: &str, source: &str) -> JsResult<Value> {
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        let profile = browser_tracing::profile_input();
         let started = profile.then(std::time::Instant::now);
         if profile {
             eprintln!(
@@ -2066,7 +2066,7 @@ impl Context {
         bytes: &[u8],
         metadata: &JSCompiledSourceMetadata,
     ) -> JsResult<Value> {
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        let profile = browser_tracing::profile_input();
         let started = profile.then(std::time::Instant::now);
         let result = unsafe {
             let raw = JS_ReadObject(

@@ -1325,8 +1325,7 @@ impl ScriptScheduler {
         {
             return Ok(());
         }
-        let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let mut trace = browser_tracing::span("loading", "ParserScriptExecute");
         trace.set("script_node", script.node_id as f64);

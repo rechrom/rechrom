@@ -84,8 +84,7 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     // Their nested scopes must not collect every resident Page on this thread.
     // Allocation pressure requests collection; the host services it from a
     // low-priority owner turn, matching cppgc's scheduled-GC boundary.
-    let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-        .is_some()
+    let profile = browser_tracing::profile_input()
         .then(std::time::Instant::now);
     let mut heap_scope = foundation::LayoutHeapScope::new();
     SynchronizeLayoutTreeWithEngine(engine, owner, interaction, constraints);

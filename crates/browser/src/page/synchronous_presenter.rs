@@ -295,8 +295,7 @@ impl PageDomainServices {
         format: PixelFormat,
         stride: usize,
     ) -> io::Result<RenderUpdate> {
-        let profile_started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let profile_started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         self.CommitArtifact(artifact, width, height, scale)?;
         let committed_at = profile_started.map(|_| std::time::Instant::now());

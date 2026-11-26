@@ -91,14 +91,13 @@ impl<B: DirectRendererBackend> Renderer<B> {
         input: &mut VizOutput,
         target: B::Target,
     ) -> io::Result<(RenderUpdate, B::Target)> {
-        let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let viewport = self.direct.backend.ValidateTarget(input, &target)?;
         let validated_at = started.map(|_| std::time::Instant::now());
         let cull = self.occlusion_culler.RemoveOverdrawQuads(input.FrameMut());
         let culled_at = started.map(|_| std::time::Instant::now());
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!(
                 "occlusion-profile quads_before={} quads_after={} fully_culled={} reduced={} split={} opaque_groups={}",
                 cull.quads_before,

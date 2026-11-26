@@ -125,8 +125,7 @@ impl PageScripts {
             .unwrap_or_else(|error| std::panic::panic_any(error));
         web_api.BindRuntime(script.Realm());
         let bootstrap_sources = WebApiEngine::BootstrapSources();
-        let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let bootstrap_bytes = bootstrap_sources
             .iter()
@@ -284,10 +283,32 @@ impl PageScripts {
         // Chromium gathers intersection and resize observations from committed
         // post-layout geometry.  The JS helpers only queue observer delivery,
         // so callbacks remain a later task and cannot re-enter this paint.
-        let result = self.script.borrow_mut().EvaluateRaw(
-            "globalThis.__browserUpdateIntersectionObservations?.();globalThis.__browserUpdateResizeObservations?.()",
-            "browser:observer-update",
-        );
+        // cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:1618-1623,2246-2250
+        //      Without an IntersectionObserverController or a
+        //      ResizeObserverController, the post-lifecycle steps do nothing.
+        let controllers = self
+            .owners
+            .web_api
+            .DOMBindings()
+            .try_borrow()
+            .map_or(
+                webapi::dom_bindings::ScriptObserverControllers {
+                    intersection: true,
+                    resize: true,
+                },
+                |bindings| bindings.ScriptObserverControllers(),
+            );
+        let source = match (controllers.intersection, controllers.resize) {
+            (false, false) => return,
+            (true, false) => "globalThis.__browserUpdateIntersectionObservations?.()",
+            (false, true) => "globalThis.__browserUpdateResizeObservations?.()",
+            (true, true) => "globalThis.__browserUpdateIntersectionObservations?.();globalThis.__browserUpdateResizeObservations?.()",
+        };
+        let _trace = browser_tracing::span("lifecycle", "Page.UpdateScriptObservations");
+        let result = self
+            .script
+            .borrow_mut()
+            .EvaluateRaw(source, "browser:observer-update");
         if let Some(error) = result.exception {
             self.owners
                 .state

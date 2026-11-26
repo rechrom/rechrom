@@ -222,8 +222,7 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         viewport: Size,
         target: B::Target,
     ) -> io::Result<(crate::RenderUpdate, B::Target)> {
-        let profile_started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let profile_started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         assert!(self.visible);
         let surface_size = self.CalculateSizeForOutputSurface(viewport);

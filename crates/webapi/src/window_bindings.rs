@@ -1579,8 +1579,7 @@ impl WindowJavaScriptBindings {
                 // Profile the one selected macrotask, without interrupting its
                 // callback or splitting the mandatory microtask checkpoint.
                 // Callback time includes checkpoints performed by a host task.
-                let task_started = std::env::var_os("BROWSER_PROFILE_INPUT")
-                    .is_some()
+                let task_started = browser_tracing::profile_input()
                     .then(Instant::now);
                 let task_kind = match &task {
                     Task::Network(_) => "network",

@@ -675,6 +675,7 @@ fn RecordPaint(
     foreign_layers: &foundation::TrustedIdentityHashMap<u64, Arc<dyn ForeignLayer>>,
     lifecycle: Option<&dyn PaintLifecycleObserver>,
     prepared: Option<PreparedPrePaint>,
+    reuse_admissible: bool,
 ) -> (
     PaintRecording,
     paint_record::SubsequencesData,
@@ -773,6 +774,36 @@ fn RecordPaint(
         } else {
             output.resources = Some(resources.clone());
         }
+    }
+    // cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:3183-3226
+    //      LocalFrameView::PaintTree creates a PaintController and walks the
+    //      paint tree only when the LayoutView layer
+    //      SelfOrDescendantNeedsRepaint(); otherwise the persistent data keeps
+    //      the previous PaintArtifact. Live property nodes already carry this
+    //      PrePaint's values, so a property-only frame records nothing.
+    if let Some(previous) = previous.as_ref().filter(|previous| {
+        reuse_admissible
+            && !pre_paint.RootNeedsRepaint(&paint_tree)
+            && previous.compositor_viewport == output.compositor_viewport
+            && match (&previous.resources, &output.resources) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }) {
+        trace.set("reused_artifact", 1.0);
+        {
+            let _trace = browser_tracing::span("prepaint", "PrePaint.RetainTree");
+            pre_paint.RetainTree(paint_tree);
+        }
+        return (
+            PaintRecording::clone(previous),
+            previous_subsequences,
+            crate::performance::PaintPerformanceSnapshot {
+                prepaint: pre_paint.stats,
+                ..Default::default()
+            },
+        );
     }
     let caret_geometry = editing.caret.and_then(|state| {
         state
@@ -929,7 +960,7 @@ fn RecordPaint(
     trace.set("items", output.items.len() as f64);
     trace.set("display_items", output.display_items.len() as f64);
     trace.set("chunks", output.chunks.len() as f64);
-    if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+    if browser_tracing::profile_input() {
         let stats = pre_paint.stats;
         eprintln!(
             "prepaint-update computed_nodes={} reused_nodes={} invalidation_only_nodes={} skipped_subtrees={} post_walk={}",
@@ -968,6 +999,10 @@ pub struct PaintEngine {
     performance: crate::performance::PaintPerformanceSnapshot,
     animation_targeted_nodes: Vec<u64>,
     foreign_layers: foundation::TrustedIdentityHashMap<u64, Arc<dyn ForeignLayer>>,
+    foreign_layers_changed: bool,
+    recorded_since_commit: bool,
+    /// The editing state the current artifact was recorded with.
+    last_editing: Option<EditingPaintState>,
 }
 impl PaintEngine {
     pub fn new() -> Self {
@@ -985,7 +1020,18 @@ impl PaintEngine {
         let layout_result = PaintFragmentSource::FromCursor(layout_output.PaintCursor());
         let source_lease = layout_output.PaintLease();
         let previous = self.persistent_data.GetPaintArtifact().cloned();
-        let previous_subsequences = self.persistent_data.GetSubsequences().clone();
+        let previous_subsequences = self.persistent_data.TakeSubsequences();
+        // Inputs that reach the recording without a PaintLayer repaint bit:
+        // the editing state, foreign layer bindings and embedded frames.
+        // A second recording before CommitPaintResult (document-image
+        // container re-recording) always records.
+        let reuse_admissible = !self.foreign_layers_changed
+            && !self.recorded_since_commit
+            && !self.pre_paint.HasLocalFrameViews()
+            && self.last_editing.as_ref() == Some(&editing);
+        self.last_editing = Some(editing.clone());
+        self.foreign_layers_changed = false;
+        self.recorded_since_commit = true;
         let (mut result, subsequences, performance) = RecordPaint(
             &mut self.pre_paint,
             layout_result,
@@ -996,6 +1042,7 @@ impl PaintEngine {
             &self.foreign_layers,
             lifecycle,
             prepared,
+            reuse_admissible,
         );
         result.canvas_document = document;
         // This recording consumed every PrePaint walk so far; the retained
@@ -1240,6 +1287,7 @@ impl PaintLifecycle for PaintEngine {
     }
 
     fn SetForeignLayer(&mut self, node_id: u64, layer: Option<Arc<dyn ForeignLayer>>) {
+        self.foreign_layers_changed = true;
         if let Some(layer) = layer {
             self.foreign_layers.insert(node_id, layer);
         } else {
@@ -1261,6 +1309,7 @@ impl PaintLifecycle for PaintEngine {
 
     fn CommitPaintResult(&mut self) -> PaintOutput {
         let mut trace = browser_tracing::span("paint_commit", "PaintCommit.Publish");
+        self.recorded_since_commit = false;
         let artifact = Arc::make_mut(
             self.persistent_data
                 .GetPaintArtifactMut()

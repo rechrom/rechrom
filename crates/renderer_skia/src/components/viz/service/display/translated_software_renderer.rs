@@ -104,7 +104,7 @@ impl TranslatedSoftwareRenderer {
     fn BeginDrawingFrame(&mut self, input: &VizOutput) -> io::Result<()> {
         self.update = RenderUpdate::default();
         self.video_bypass_passes.clear();
-        self.profile_input = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        self.profile_input = browser_tracing::profile_input();
         self.n32_tile_blit = std::env::var_os("BROWSER_DISABLE_N32_TILE_BLIT").is_none();
         self.framebuffer_damage.clear();
         self.drawn_damage.clear();

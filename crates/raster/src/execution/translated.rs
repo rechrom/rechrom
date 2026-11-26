@@ -4739,7 +4739,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         // Image patterns receive the decoded cache's replay quality, not the
         // pre-decode Blink interpolation quality carried by the display item.
         let sampling = software_decoded_image_sampling(item.image_interpolation_quality);
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             let matrix = self.target.local_to_device();
             eprintln!(
                 "raster-image-profile kind=tiled quality={:?} repeat_x={} repeat_y={} ctm=[{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}] src=[{:.3},{:.3}] tile=[{:.3},{:.3}]",
@@ -6179,7 +6179,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 }
                 if let Some(image) = raster_image(item, resources)? {
                     let sampling = image_sampling(item.image_interpolation_quality);
-                    if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+                    if browser_tracing::profile_input() {
                         let matrix = self.target.local_to_device();
                         eprintln!(
                             "raster-image-profile kind=rect quality={:?} ctm=[{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}] src=[{:.3},{:.3}] dst=[{:.3},{:.3}]",

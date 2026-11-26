@@ -2424,6 +2424,7 @@ impl PageState {
     /// sampling, and Document owns the sampled cascade declarations.
     fn SynchronizeCSSAnimations(&self) -> bool {
         use animation::{CSSAnimationDefinition, CSSAnimationKey, CSSKeyframe};
+        let _trace = browser_tracing::span("lifecycle", "Page.SynchronizeCSSAnimations");
 
         let media_data = crate::style_services::MediaValuesForLayout(
             &self.constraints.borrow(),
@@ -2435,7 +2436,7 @@ impl PageState {
             {
                 let owner = self.document.borrow();
                 let document = owner.GetDocument();
-                let mut rules = HashMap::<String, cssom::CSSKeyframesRule>::new();
+                let mut rules = HashMap::<&str, &cssom::CSSKeyframesRule>::new();
                 for sheet in document.ActiveStyleSheetsAllScopes() {
                     if !sheet
                         .owner_media_conditions
@@ -2452,7 +2453,7 @@ impl PageState {
                             // the last winning name has the same replacement rule as
                             // StyleEngine::KeyframeStylesForAnimation for ordinary
                             // document-scoped author sheets.
-                            rules.insert(rule.name.clone(), rule.clone());
+                            rules.insert(rule.name.as_str(), rule);
                         }
                     }
                 }
@@ -2474,7 +2475,7 @@ impl PageState {
                             continue;
                         }
                         let name = unsafe { &*name }.GetName().Utf8();
-                        let Some(rule) = rules.get(&name) else {
+                        let Some(rule) = rules.get(name.as_str()) else {
                             continue;
                         };
                         let mut keyframes = BTreeMap::<u64, Vec<cssom::CSSDeclaration>>::new();
@@ -3967,7 +3968,7 @@ impl PageState {
                 (scroll_layout == crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry)
                     as u8 as f64,
             );
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some()
+            if browser_tracing::profile_input()
                 && (!self.scroll_only.get()
                     || scroll_layout
                         != crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry)
@@ -4027,7 +4028,7 @@ impl PageState {
             }
             let paint_output = if !reused_recordings {
                 trace.set("full_paint", 1.0);
-                if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+                if browser_tracing::profile_input() {
                     if let Some(Err(reason)) = property_update {
                         eprintln!("scroll-paint-reuse rejected={reason:?}");
                     }
@@ -6113,10 +6114,19 @@ impl Page {
         let mut failure = None;
         let result = main.BeginMainCompositorFrame(state, &mut |effects| {
             let lifecycle = (|| -> io::Result<()> {
-                self.ApplyCompositorWheelEffects(effects)?;
-                before_lifecycle(self);
+                {
+                    let _trace =
+                        browser_tracing::span("lifecycle", "Page.ApplyCompositorWheelEffects");
+                    self.ApplyCompositorWheelEffects(effects)?;
+                }
+                {
+                    let _trace = browser_tracing::span("lifecycle", "Page.BeforeLifecycle");
+                    before_lifecycle(self);
+                }
                 self.UpdateRendering(args)?;
                 if let Some(frame) = self.CurrentFrame() {
+                    let _trace =
+                        browser_tracing::span("lifecycle", "Page.PushPaintArtifactToCompositor");
                     let artifact = frame.display_items.clone();
                     main.UpdateMainCompositorPaintArtifact(&artifact, width, height, scale)?;
                 }
@@ -6129,6 +6139,7 @@ impl Page {
         if let Some(error) = failure {
             return Err(error);
         }
+        let _trace = browser_tracing::span("lifecycle", "Page.ApplyMainCompositorEffects");
         let effects = main.TakeMainCompositorEffects();
         self.ApplyCompositorWheelEffects(effects)?;
         Ok(result)
@@ -6435,8 +6446,7 @@ impl Page {
                 .borrow()
                 .GetDocument()
                 .FireDueRenderBlockingTimers(std::time::Instant::now());
-            let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-                .is_some()
+            let started = browser_tracing::profile_input()
                 .then(std::time::Instant::now);
             let was_loading = self.open_engine.IsLoading();
             self.PumpLoading()?;
@@ -6639,7 +6649,7 @@ impl Page {
         // already performs this barrier in FlushFrameInputs, while an immediate
         // input may arrive after a DOM/style mutation with no queued samples.
         self.CompleteLifecycleForImmediateInput()?;
-        let started = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
+        let started = browser_tracing::profile_input().then(std::time::Instant::now);
         let result = self.DispatchInputWithoutLifecycle(input)?;
         let dispatched = started.map(|start| start.elapsed());
         self.UpdateFrameAndStartVisibleDeferredImages()?;
@@ -6747,8 +6757,7 @@ impl Page {
         // receives the same event, marked with the impl-thread disposition, so
         // its default action does not apply the delta a second time. Regions
         // with a cancelable listener are assigned wholly to the main thread.
-        let dispatch_profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let dispatch_profile = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let mut routed_input = input.clone();
         let mut compositor_wheel = CompositorWheelResult::default();
@@ -7929,6 +7938,7 @@ impl Page {
         // resident LayoutNG result; ordinary frames keep their existing order.
         let defer_caret_for_scroll = !self.state.scroll_updates.borrow().is_empty();
         if !defer_caret_for_scroll {
+            let _trace = browser_tracing::span("lifecycle", "Page.UpdateCaret");
             self.UpdateCaret(false);
         }
         if self.DeferLifecycleForBeginFrame() {
@@ -8003,7 +8013,7 @@ impl Page {
             .GetDocument()
             .SnapshotCanvasPaintResources();
         self.state.constraints.borrow_mut().canvases = canvases.into();
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
+        let profile = browser_tracing::profile_input().then(std::time::Instant::now);
         // Resource completions are separate Page tasks. An offset-only input
         // must not synchronously decode images or dispatch unrelated load
         // listeners before presenting its already committed paint artifact.
@@ -8025,9 +8035,15 @@ impl Page {
             // compositor active tree drawable while BeginMainFrame is busy.
             self.ResolveStylesAndLoadResources(0)?;
         }
-        self.ApplyPendingPropertyAnimationReplacements()?;
-        self.ApplyPendingPropertyAnimationRemovals()?;
-        self.state.SynchronizeNonVisualStyleOwners();
+        {
+            let _trace = browser_tracing::span("lifecycle", "Page.ApplyPendingPropertyAnimations");
+            self.ApplyPendingPropertyAnimationReplacements()?;
+            self.ApplyPendingPropertyAnimationRemovals()?;
+        }
+        {
+            let _trace = browser_tracing::span("lifecycle", "Page.SynchronizeNonVisualStyleOwners");
+            self.state.SynchronizeNonVisualStyleOwners();
+        }
         let resources_done = profile.map(|start| start.elapsed());
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
@@ -8080,6 +8096,7 @@ impl Page {
         let published_layout_revision = self.state.layout_revision.get();
         let layout_revision_current = published_layout_revision == Some(revision);
         let layout_output_current = self.state.layout_engine.borrow().Output().is_some();
+        let measurement_trace = browser_tracing::span("lifecycle", "Page.MeasurementInputsMatch");
         let measurement_inputs_match = layout_revision_current
             && layout_output_current
             && crate::persistent_layout::MeasurementInputsMatch(
@@ -8087,6 +8104,7 @@ impl Page {
                 &mut self.state.document.borrow_mut(),
                 &self.state.interaction.borrow(),
             );
+        drop(measurement_trace);
         let layout_geometry_current =
             layout_revision_current && layout_output_current && measurement_inputs_match;
         browser_tracing::instant(
@@ -8639,6 +8657,7 @@ impl Page {
                 paint.CompositedAnimationPropertyBindings(&compositor_animation_nodes);
             paint.CommitPaintResult()
         };
+        let commit_trace = browser_tracing::span("lifecycle", "Page.CommitPaintToLayout");
         self.state
             .local_frames
             .get()
@@ -8649,6 +8668,7 @@ impl Page {
             paint_output,
             Some(&self.state.layout_editing),
         );
+        drop(commit_trace);
         self.state
             .window_performance_timing
             .EventTimingSource()
@@ -8723,10 +8743,13 @@ impl Page {
         if let Some(scripts) = &mut self.scripts {
             scripts.DidPaint();
         }
-        self.state
-            .client
-            .borrow_mut()
-            .DidPresentFrame(self.frame.as_ref().unwrap());
+        {
+            let _trace = browser_tracing::span("lifecycle", "Page.DidPresentFrame");
+            self.state
+                .client
+                .borrow_mut()
+                .DidPresentFrame(self.frame.as_ref().unwrap());
+        }
         // The complete PaintArtifact must enter the Page-domain compositor
         // before its KeyframeModels. This is the package-boundary form of
         // Chromium's single main-frame commit: the element ids above name the

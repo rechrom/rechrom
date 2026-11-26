@@ -442,8 +442,7 @@ impl DynamicScriptTasks {
         self.bindings
             .borrow_mut()
             .SetCurrentScript(if kind == Kind::Classic { id } else { 0 });
-        let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let result = match kind {
             Kind::Classic => runtime.Evaluate(realm, &source, &name),

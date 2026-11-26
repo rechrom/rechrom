@@ -558,8 +558,7 @@ impl OpenEngine {
         &mut self,
         adapter: &mut dyn OpenDocumentAdapter,
     ) -> io::Result<Vec<OpenEffect>> {
-        let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let profile = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let mut effects = Vec::new();
         if self.loader.Status() == DocumentLoaderStatus::kLoading {

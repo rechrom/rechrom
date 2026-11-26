@@ -2088,8 +2088,7 @@ impl ResourceFetcher {
         max_completions: usize,
     ) -> usize {
         self.RunPendingHTMLImageLoaderTasks();
-        let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-            .is_some()
+        let started = browser_tracing::profile_input()
             .then(std::time::Instant::now);
         let count = self.pending_images.borrow().len();
         let mut completed = 0;

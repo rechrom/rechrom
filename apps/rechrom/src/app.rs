@@ -212,7 +212,7 @@ impl App {
             let command = match command {
                 Command::Input(input)
                     if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some()
-                        || std::env::var_os("BROWSER_PROFILE_INPUT").is_some()
+                        || browser_tracing::profile_input()
                         || browser_tracing::enabled() =>
                 {
                     Command::QueuedInput {

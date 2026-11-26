@@ -7716,14 +7716,14 @@ fn FindAvailableImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a Pa
         .as_deref()
         .expect("paint tree node has a fragment");
     let Some(resources) = node.DocumentResources() else {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!("paint-image-profile id={id} resources=none");
         }
         return None;
     };
     let images = &resources.images;
     let Some(found) = images.iter().find(|image| image.id == id) else {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!(
                 "paint-image-profile id={id} missing catalog_len={} catalog_ids={:?}",
                 images.len(),
@@ -7733,7 +7733,7 @@ fn FindAvailableImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a Pa
         return None;
     };
     let available = IsPaintImageAvailable(found);
-    if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() && !available {
+    if browser_tracing::profile_input() && !available {
         eprintln!(
             "paint-image-profile id={id} unavailable size={}x{} scale={} bitmap_bytes={:?} document={}",
             found.width,

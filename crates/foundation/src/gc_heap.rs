@@ -888,7 +888,7 @@ impl HeapState {
         assert_eq!(self.scopes, 0);
         assert!(!self.collecting);
         self.collecting = true;
-        self.profile_collection = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+        self.profile_collection = browser_tracing::profile_input();
         self.profile_mark_edges = 0;
         self.profile_mark_cache_hits = 0;
         let profile = self.profile_collection.then(std::time::Instant::now);

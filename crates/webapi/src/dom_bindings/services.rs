@@ -525,6 +525,18 @@ pub(super) struct DOMServices {
     pub(super) host: DOMBindingsHost,
     pub(super) events: Rc<RefCell<BoundEvents>>,
     next_event_object_id: HostObjectId,
+    pub(super) observer_controllers: ScriptObserverControllers,
+}
+/// Whether the window's script IntersectionObserver / ResizeObserver
+/// registries are non-empty.
+// cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:1618-1623,2246-2250
+//      Blink computes post-layout intersections only when the Document has an
+//      IntersectionObserverController, and gathers resize observations only
+//      when ResizeObserverController::FromIfExists finds the window supplement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScriptObserverControllers {
+    pub intersection: bool,
+    pub resize: bool,
 }
 impl DOMServices {
     pub(super) fn ActiveSyntheticDispatch(&self) -> Option<(HostValue, HostObjectId)> {
@@ -563,6 +575,7 @@ impl DOMServices {
             event_state: Rc::new(RefCell::new(None)),
             events: Default::default(),
             next_event_object_id: 1 << 63,
+            observer_controllers: ScriptObserverControllers::default(),
         }
     }
     pub fn IsEvent(&self, id: HostObjectId) -> bool {
@@ -1237,12 +1250,30 @@ impl DOMJavaScriptBindings {
         Some(Self::value(value))
     }
 
+    /// Registries the window script reported through `__observerControllers`.
+    pub fn ScriptObserverControllers(&self) -> ScriptObserverControllers {
+        self.services.observer_controllers
+    }
+
     pub(super) fn CallDOMService(
         &mut self,
         receiver: HostObjectId,
         member: &str,
         arguments: &[HostValue],
     ) -> Option<HostResult> {
+        if member == "__observerControllers" {
+            let [HostValue::Boolean(intersection), HostValue::Boolean(resize)] = arguments else {
+                return Some(Self::type_error("Illegal invocation"));
+            };
+            if receiver != 0 {
+                return Some(Self::type_error("Illegal invocation"));
+            }
+            self.services.observer_controllers = ScriptObserverControllers {
+                intersection: *intersection,
+                resize: *resize,
+            };
+            return Some(HostResult::default());
+        }
         if let Some(result) = self.CallInputEventService(receiver, member, arguments) {
             return Some(result);
         }

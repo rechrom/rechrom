@@ -1161,6 +1161,16 @@ class IntersectionObserverEntry {
 // Blink IntersectionObserverController separates post-layout computation from
 // queued notifications. Unchanged observations must never post timer tasks.
 const intersectionObservers = new Set(), initialIntersectionObservers = new Set(), pendingIntersectionObservers = new Set();
+// cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:1618-1623,2246-2250
+// The post-lifecycle update runs only while a controller has observers, so
+// the Page learns when either registry becomes empty or non-empty.
+let observerControllersState = 0;
+function syncObserverControllers() {
+  const state = (intersectionObservers.size ? 1 : 0) | (resizeObservers.size ? 2 : 0);
+  if (state === observerControllersState) return;
+  observerControllersState = state;
+  scrollInvoke(window, '__observerControllers', !!(state & 1), !!(state & 2));
+}
 let intersectionInitialScheduled = false, intersectionDeliveryScheduled = false;
 function computeIntersectionObservations(observers) {
   // ComputeIntersectionsContext shares root/target geometry for one lifecycle.
@@ -1207,9 +1217,9 @@ class IntersectionObserver {
     if (this.thresholds.some(value=>!Number.isFinite(value)||value<0||value>1)) throw new RangeError('Invalid threshold');
     this._targets=new Set(); this._states=new Map(); this._records=[];
   }
-  observe(target) { if (!(target instanceof Element)) throw new TypeError('Element required'); this._targets.add(target); intersectionObservers.add(this); scheduleInitialIntersection(this); }
-  unobserve(target) { this._targets.delete(target); this._states.delete(target); if(!this._targets.size)intersectionObservers.delete(this); }
-  disconnect() { this._targets.clear(); this._states.clear(); this._records=[]; intersectionObservers.delete(this); initialIntersectionObservers.delete(this); pendingIntersectionObservers.delete(this); }
+  observe(target) { if (!(target instanceof Element)) throw new TypeError('Element required'); this._targets.add(target); intersectionObservers.add(this); syncObserverControllers(); scheduleInitialIntersection(this); }
+  unobserve(target) { this._targets.delete(target); this._states.delete(target); if(!this._targets.size){intersectionObservers.delete(this);syncObserverControllers();} }
+  disconnect() { this._targets.clear(); this._states.clear(); this._records=[]; intersectionObservers.delete(this); syncObserverControllers(); initialIntersectionObservers.delete(this); pendingIntersectionObservers.delete(this); }
   takeRecords() { return this._records.splice(0); }
   _compute(rect, now) {
       const unexpandedRoot=rect(this.root);
@@ -1332,11 +1342,11 @@ class ResizeObserver {
     const current=this._observations.get(target);
     if(current&&current.box===box)return;
     this._observations.set(target,{box,width:NaN,height:NaN});
-    resizeObservers.add(this);
+    resizeObservers.add(this);syncObserverControllers();
     computeResizeObservations([this]);
   }
-  unobserve(target) { this._observations.delete(target);if(!this._observations.size)resizeObservers.delete(this); }
-  disconnect() { this._observations.clear();this._records.length=0;resizeObservers.delete(this);pendingResizeObservers.delete(this); }
+  unobserve(target) { this._observations.delete(target);if(!this._observations.size){resizeObservers.delete(this);syncObserverControllers();} }
+  disconnect() { this._observations.clear();this._records.length=0;resizeObservers.delete(this);syncObserverControllers();pendingResizeObservers.delete(this); }
   _deliver() { const entries=this._records.splice(0);if(entries.length)this._callback(entries,this); }
 }
 globalThis.ResizeObserverEntry=ResizeObserverEntry;

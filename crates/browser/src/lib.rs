@@ -193,8 +193,7 @@ pub fn CreateBrowserConstraintsWithFontBackendFactory(
     height: u32,
     font_backend_factory: BrowserFontBackendFactory,
 ) -> ConstraintSpace {
-    let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-        .is_some()
+    let started = browser_tracing::profile_input()
         .then(std::time::Instant::now);
     let mut space = ConstraintSpace::default();
     // Blink's SimpleFontData and HarfBuzzFace take metrics and advances from

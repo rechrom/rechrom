@@ -366,7 +366,7 @@ impl Page {
     ) -> io::Result<()> {
         let mut requested_main_frame = false;
         for effect in effects {
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            if browser_tracing::profile_input() {
                 eprintln!("page-compositor-main-effect {effect:?}");
             }
             match effect {

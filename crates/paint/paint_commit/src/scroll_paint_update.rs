@@ -604,7 +604,7 @@ impl RetainedScrollPaintState {
         let physical_unique =
             collect_paint_physical_ranges(tree, &mut physical_ranges, &mut physical_count);
         if !physical_unique || physical_count != fragments.len() {
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            if browser_tracing::profile_input() {
                 eprintln!(
                     "scroll-paint-capture rejected physical_unique={} physical_fragments={} paint_fragments={}",
                     physical_unique,
@@ -647,7 +647,7 @@ fn collect_current_fragments<'a>(
     let link_offset = source.Cursor().ViewOffsetInContainer();
     let key = fragment_identity(f);
     let Some(&index) = retained.fragment_indices.get(&key) else {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!(
                 "scroll-paint-reject stage=missing-fragment node_id={} fragment_instance_id={} client_id={} fragment={}",
                 f.ViewNodeId(),
@@ -679,7 +679,7 @@ fn collect_current_fragments<'a>(
             .iter()
             .any(|&(start, end)| physical >= start && physical < end)
     {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!(
                 "scroll-paint-reject stage=duplicate-fragment node_id={} physical={}",
                 f.ViewNodeId(), physical
@@ -741,7 +741,7 @@ fn collect_current_fragments<'a>(
     let unowned_sticky_change = f.paint.StickyOffset() != old.sticky_offset
         && (f.paint.StickyConstraint().is_none() || f.paint.DisplayItemClientId() == 0);
     if !self_clean && (link_offset != old.offset || f.ViewSize() != old.size || unowned_sticky_change) {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!(
                 "scroll-paint-reject stage=geometry node_id={} own_dirty={} descendants_dirty={} offset_changed={} size_changed={} sticky_changed={}",
                 f.ViewNodeId(),
@@ -893,7 +893,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     retained_scroll_state_initialized: &mut bool,
 ) -> Result<ScrollPropertyUpdate, ScrollPaintInvalidation> {
     use ScrollPaintInvalidation::*;
-    let started = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
+    let started = browser_tracing::profile_input().then(std::time::Instant::now);
     if artifact.caret.is_some_and(|caret| caret.visible) {
         return Err(CaretNeedsPaint);
     }
@@ -904,7 +904,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     // bits read clean, so the live dirty-bit proof below would accept them.
     // Only the ordinary Paint can bring the recording up to that walk.
     if prepaint.PrePaintConsumedSinceRecording() {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!("scroll-paint-reject stage=prepaint-after-recording");
         }
         return Err(FragmentChanged);
@@ -934,7 +934,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         .enumerate()
         .find(|(_, chunk)| !chunk.CanMatchOldChunk())
     {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!("scroll-paint-reject stage=chunk-cache index={} id={:?} cacheable={} just_created={}",
                 index, chunk.id, chunk.is_cacheable, chunk.client_is_just_created);
         }
@@ -966,7 +966,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         &mut collected,
     ) || collected != retained.fragments.len()
     {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!(
                 "scroll-paint-reject stage=fragment-validation collected={} retained={} explicit={} clean_ranges={}",
                 collected,
@@ -1004,7 +1004,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         return Err(PropertyChanged);
     }
     if retained.has_scroll_dependent_background {
-        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+        if browser_tracing::profile_input() {
             eprintln!("scroll-paint-reject stage=scroll-dependent-background");
         }
         browser_tracing::instant("paint_reuse", "ScrollPaintReuseRejected", &[("stage", 4.0)]);
@@ -1069,7 +1069,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         )
         .ok_or(UnsupportedTransform)?;
         if output.is_none_or(|clip| !intersection(rect, clip).is_empty()) {
-            if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            if browser_tracing::profile_input() {
                 eprintln!(
                     "scroll-paint-reject stage=unrecorded-visible rect={rect:?} output={output:?}"
                 );
@@ -1130,7 +1130,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                 continue;
             }
             if !contains(covered, fringe.0, fringe.1) {
-                if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+                if browser_tracing::profile_input() {
                     eprintln!("scroll-paint-reject stage=coverage old_cull={covered:?} old_visible={visible:?} required={:?} world={:?}",
                         fringe.0, world.values);
                 }

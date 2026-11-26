@@ -256,6 +256,8 @@ struct RetainedCSSAnimation {
     last_sample: Vec<CSSDeclaration>,
     compositor_driven: BTreeSet<String>,
     compositor_eligible: BTreeSet<String>,
+    /// Compositor keyframe snapshot of `definition.keyframes`.
+    compositor_curves: Option<Vec<CompositorPropertyCurve>>,
 }
 
 impl Default for AnimationEngine {
@@ -367,7 +369,10 @@ impl AnimationEngine {
                                 ),
                                 (
                                     "compositor_curve_count",
-                                    CompositorCurves(definition).map_or(0, |curves| curves.len())
+                                    current
+                                        .compositor_curves
+                                        .as_ref()
+                                        .map_or(0, |curves| curves.len())
                                         as f64,
                                 ),
                                 ("generation", current.compositor_generation as f64),
@@ -389,6 +394,11 @@ impl AnimationEngine {
             replaced += usize::from(replacing);
             let effect_id = self.next_css_effect_id;
             self.next_css_effect_id = self.next_css_effect_id.wrapping_add(1).max(1u64 << 63);
+            // cpp: third_party/blink/renderer/core/animation/keyframe_effect_model.cc
+            //      KeyframeEffectModelBase::SnapshotAllCompositorKeyframesIfNecessary
+            // The compositor keyframe values are snapshotted once per keyframe
+            // model; a retained animation (equal keyframes) keeps them.
+            let compositor_curves = CompositorCurves(definition);
             self.css_animations.insert(
                 *key,
                 RetainedCSSAnimation {
@@ -399,14 +409,15 @@ impl AnimationEngine {
                     hold_time: 0.0,
                     last_sample: Vec::new(),
                     compositor_driven: BTreeSet::new(),
-                    compositor_eligible: CompositorCurves(definition)
-                        .into_iter()
+                    compositor_eligible: compositor_curves
+                        .iter()
                         .flatten()
                         .map(|curve| match curve {
                             CompositorPropertyCurve::Transform(_) => "transform".to_owned(),
                             CompositorPropertyCurve::Opacity(_) => "opacity".to_owned(),
                         })
                         .collect(),
+                    compositor_curves,
                 },
             );
         }
@@ -461,7 +472,7 @@ impl AnimationEngine {
         self.css_animations
             .values()
             .filter_map(|effect| {
-                let curves = CompositorCurves(&effect.definition)?;
+                let curves = effect.compositor_curves.clone()?;
                 let local_time = if effect.definition.timing.play_state == CSSPlayState::Paused {
                     effect.hold_time
                 } else {

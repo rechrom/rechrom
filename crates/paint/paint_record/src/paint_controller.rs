@@ -73,6 +73,13 @@ impl PaintControllerPersistentData {
         &self.current_subsequences
     }
 
+    /// The new PaintController reads the previous subsequences once and the
+    /// commit replaces them (paint_controller.cc:84-91), so the recording
+    /// moves them out instead of copying the index every frame.
+    pub fn TakeSubsequences(&mut self) -> SubsequencesData {
+        std::mem::take(&mut self.current_subsequences)
+    }
+
     /// Mutable access is confined to the Paint facade so resource-only COW
     /// updates preserve the persistent artifact owner.
     #[doc(hidden)]

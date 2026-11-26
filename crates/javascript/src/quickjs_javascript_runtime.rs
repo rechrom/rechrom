@@ -1148,7 +1148,7 @@ fn create_realm(
     realms: &Rc<RefCell<Vec<JavaScriptRealm>>>,
     shared_hooks: Option<Rc<Hooks>>,
 ) -> JavaScriptRealm {
-    let profiling = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+    let profiling = browser_tracing::profile_input();
     let realm_started = profiling.then(std::time::Instant::now);
     if let Some(start) = realm_started {
         eprintln!(
@@ -1949,8 +1949,7 @@ fn checkpoint(ctx: &mut Context, state: &Rc<RefCell<State>>) {
     }
     let mut trace = browser_tracing::span("javascript", "MicrotaskCheckpoint");
     let boundary = bridge_profile::Measurement::start();
-    let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-        .is_some()
+    let started = browser_tracing::profile_input()
         .then(std::time::Instant::now);
     for e in ctx.run_jobs_errors() {
         let location = ctx.error_creation_location(&e);

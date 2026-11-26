@@ -1158,6 +1158,10 @@ pub struct PrePaintTreeWalk {
     /// that count when Paint last recorded an artifact.
     consuming_walks: u64,
     recorded_consuming_walks: u64,
+    /// PaintLayer::SelfOrDescendantNeedsRepaint folded by a walk whose result
+    /// Paint has not recorded yet.
+    unrecorded_repaint: bool,
+    live_property_keys: HashSet<PaintPropertyKey>,
 }
 
 impl Default for PrePaintTreeWalk {
@@ -1205,6 +1209,8 @@ impl Default for PrePaintTreeWalk {
             resource_memo: Vec::new(),
             consuming_walks: 0,
             recorded_consuming_walks: 0,
+            unrecorded_repaint: false,
+            live_property_keys: HashSet::new(),
         }
     }
 }
@@ -8072,7 +8078,9 @@ impl PrePaintTreeWalk {
         }
         PropagateAutoDarkModeState(&mut tree, false);
         let mut repaint_counts = [0; 3];
-        PropagateSubsequenceRepaintCounting(&mut tree, &mut repaint_counts);
+        let subtree_needs_repaint =
+            PropagateSubsequenceRepaintCounting(&mut tree, &mut repaint_counts);
+        self.unrecorded_repaint |= subtree_needs_repaint || tree.self_or_descendant_needs_repaint;
         browser_tracing::instant(
             "prepaint",
             "PrePaint.Repaint",
@@ -8086,9 +8094,13 @@ impl PrePaintTreeWalk {
         // Every slot of a built or retained object registered its key in
         // this pass; the others belong to objects that no longer need them.
         {
-            let live: HashSet<PaintPropertyKey> = self.property_keys.values().copied().collect();
+            // The key set is rebuilt every walk; keep its table allocated.
+            let mut live = std::mem::take(&mut self.live_property_keys);
+            live.clear();
+            live.extend(self.property_keys.values().copied());
             self.property_node_store
                 .RetainLiveSlots(|key| live.contains(key));
+            self.live_property_keys = live;
             self.intersection_observation_state = self
                 .intersection_observation_state
                 .max(self.property_node_store.intersection_observation_state);
@@ -8420,6 +8432,26 @@ impl PrePaintTreeWalk {
     /// state. See `PrePaintConsumedSinceRecording`.
     pub fn MarkPrePaintRecorded(&mut self) {
         self.recorded_consuming_walks = self.consuming_walks;
+        self.unrecorded_repaint = false;
+    }
+
+    /// LayoutView's PaintLayer::SelfOrDescendantNeedsRepaint() as
+    /// LocalFrameView::PaintTree reads it: the live Layout-owned layer bits,
+    /// plus the client invalidations folded by every walk since the last
+    /// recorded Paint. An entirely clean walk retains the previous tree
+    /// without folding, so its stale node bit is not consulted.
+    // cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:3185-3188
+    pub fn RootNeedsRepaint(&self, root: &PaintTreeNode<'_>) -> bool {
+        !root.is_paint_layer
+            || self.unrecorded_repaint
+            || root
+                .fragment
+                .as_deref()
+                .is_none_or(|fragment| fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint())
+    }
+
+    pub fn HasLocalFrameViews(&self) -> bool {
+        !self.local_frame_views.is_empty() || !self.retained_local_frame_leases.is_empty()
     }
 
     /// Whether a PrePaint walk visited (and therefore cleared the paint

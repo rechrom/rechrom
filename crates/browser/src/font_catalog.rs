@@ -16,7 +16,7 @@ use layout::input::{FontUnicodeRange, FontVariation};
 #[cfg(test)]
 pub fn DemoFonts() -> Vec<FontFace> {
     static FONTS: OnceLock<Vec<FontFace>> = OnceLock::new();
-    let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
+    let profile = browser_tracing::profile_input();
     let started = profile.then(std::time::Instant::now);
     let hit = FONTS.get().is_some();
     let fonts = FONTS.get_or_init(LoadDemoFonts).clone();
@@ -31,8 +31,7 @@ pub fn DemoFonts() -> Vec<FontFace> {
 }
 
 pub(crate) fn ReadFont(path: &str) -> std::io::Result<SharedFontBytes> {
-    let started = std::env::var_os("BROWSER_PROFILE_INPUT")
-        .is_some()
+    let started = browser_tracing::profile_input()
         .then(std::time::Instant::now);
     #[cfg(target_os = "macos")]
     let (result, cache_hit) = if path.starts_with("/System/Library/") {

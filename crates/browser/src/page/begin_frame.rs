@@ -336,8 +336,7 @@ impl Page {
         // opportunity must not add unrelated resource callbacks to input/rAF.
         let completion_scope = self.open_engine.BeginRenderingOpportunity();
         let result = (|| {
-            let profile = std::env::var_os("BROWSER_PROFILE_INPUT")
-                .is_some()
+            let profile = browser_tracing::profile_input()
                 .then(Instant::now);
             // A synchronous CSSOM geometry query may have advanced Layout
             // without running PrePaint/Paint.  That retires the fragment
@@ -393,7 +392,11 @@ impl Page {
                 }
             }
             let initial_done = profile.map(|start| start.elapsed());
-            self.DrainFrameInputs()?;
+            {
+                let _trace = browser_tracing::span("lifecycle", "Page.DrainFrameInputs");
+                self.DrainFrameInputs()?;
+            }
+            let mut scroll_trace = browser_tracing::span("lifecycle", "Page.AnimateScrolls");
             // Physical BeginFrames reach only the external impl runner; the
             // internal presenter drives its scheduler with manual BeginFrames
             // (CommitArtifact, input frames).
@@ -455,23 +458,32 @@ impl Page {
             // CSSOM View scroll steps run in the rendering opportunity before
             // requestAnimationFrame callbacks. Keep them off the ordinary task
             // queue so page loading cannot delay scroll-driven lazy loading.
+            scroll_trace.set("autoscroll", autoscroll_active as u8 as f64);
+            drop(scroll_trace);
             if let Some(scripts) = &mut self.scripts {
                 scripts.DispatchPendingScrollEvents();
             }
             let input_done = profile.map(|start| start.elapsed());
-            self.state
-                .ApplyAnimationMutation(animation::AnimationMutation::BeginFrame {
-                    source_id: args.source_id,
-                    begin_frame_sequence: args.sequence_number,
-                    frame_time: args.frame_time,
-                });
+            {
+                let _trace = browser_tracing::span("lifecycle", "Page.AnimateBeginFrame");
+                self.state
+                    .ApplyAnimationMutation(animation::AnimationMutation::BeginFrame {
+                        source_id: args.source_id,
+                        begin_frame_sequence: args.sequence_number,
+                        frame_time: args.frame_time,
+                    });
+            }
             if let Some(scripts) = &mut self.scripts {
+                let _trace = browser_tracing::span("lifecycle", "Page.RunAnimationFrameCallbacks");
                 scripts.RunAnimationFrameCallbacks(args.frame_time)?;
             }
             let animation_done = profile.map(|start| start.elapsed());
             self.UpdateFrameAndStartVisibleDeferredImages()?;
             let lifecycle_done = profile.map(|start| start.elapsed());
-            self.UpdateCursor();
+            {
+                let _trace = browser_tracing::span("lifecycle", "Page.UpdateCursor");
+                self.UpdateCursor();
+            }
             if let Some(start) = profile {
                 let total = start.elapsed();
                 if total >= std::time::Duration::from_millis(16) {

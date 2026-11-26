@@ -34,7 +34,7 @@ use interaction::scroll::core::frame::event_handler_registry::EventHandlerRegist
 pub use services::{
     CloseWatcherHost, DOMBindingsHost, DOMSelectionHost, DOMWindowViewConverter,
     DOMWindowViewProjector, DocumentFocusState, FrameProperty, FramePropertyGetter,
-    TextControlSelectionHost,
+    ScriptObserverControllers, TextControlSelectionHost,
 };
 mod viewport_scroll;
 pub use viewport_scroll::{ViewportScrollBehavior, ViewportScrollState};

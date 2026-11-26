@@ -37,6 +37,12 @@ pub fn next_id() -> u64 {
 pub fn enabled() -> bool {
     active_recording_id() != 0
 }
+/// The `BROWSER_PROFILE_INPUT` diagnostic switch, read from the process
+/// environment once instead of on every frame.
+pub fn profile_input() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("BROWSER_PROFILE_INPUT").is_some())
+}
 /// A producer may retain this ID to keep asynchronous completions associated
 /// with the recording in which their request was observed.
 pub fn active_recording_id() -> u64 {
