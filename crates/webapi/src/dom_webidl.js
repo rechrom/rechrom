@@ -1659,6 +1659,19 @@ const datasetDescriptor = {get() {
 Object.defineProperty(HTMLElement.prototype, 'dataset', datasetDescriptor);
 Object.defineProperty(SVGElement.prototype, 'dataset', datasetDescriptor);
 const cssName = key => key === 'cssFloat' ? 'float' : key.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
+// css_style_declaration.cc:121-150 CssPropertyInfo: a static map from the
+// script-visible name to its known-exposed property, filled on first use, so
+// AnonymousNamedSetter (:173-243) resolves the property once and calls
+// SetPropertyInternal directly.
+const cssPropertyInfo = new Map();
+const cssPropertyName = (node, key) => {
+  const cached = cssPropertyInfo.get(key);
+  if (cached !== undefined) return cached;
+  const name = cssName(key);
+  if (!invoke(node, 'hasStyle', name)) return null;
+  cssPropertyInfo.set(key, name);
+  return name;
+};
 Object.defineProperty(Element.prototype, 'style', {get() {
   if (!styles.has(this)) { const node = this; const methods = {
     getPropertyValue(name) { return invoke(node, 'getStyle', String(name)); },
@@ -1669,11 +1682,11 @@ Object.defineProperty(Element.prototype, 'style', {get() {
       if (key === 'cssText') return node.getAttribute('style') || '';
       return invoke(node, 'getStyle', cssName(key)); },
     has(target, key) { if (key in target) return true;
-      return typeof key === 'string' && invoke(node, 'hasStyle', cssName(key)); },
-    set(target, key, value) { if (key === 'cssText') node.setAttribute('style', String(value));
-      else if (typeof key === 'string' && invoke(node, 'hasStyle', cssName(key))) {
-        invoke(node, 'setStyle', cssName(key), String(value ?? ''), '');
-      } else target[key] = value;
+      return typeof key === 'string' && cssPropertyName(node, key) !== null; },
+    set(target, key, value) { if (key === 'cssText') { node.setAttribute('style', String(value)); return true; }
+      const name = typeof key === 'string' ? cssPropertyName(node, key) : null;
+      if (name !== null) invoke(node, 'setStyle', name, String(value ?? ''), '');
+      else target[key] = value;
       return true; }
   })); } return styles.get(this);
 }, set(value) { this.setAttribute('style', String(value)); }});

@@ -1451,7 +1451,7 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
         || fragment.paint.StickyOffset().x != 0.0
         || fragment.paint.StickyOffset().y != 0.0
         || fragment.paint.NeedsAnchorPositionScrollAdjustment()
-        || fragment.ViewScrollbars().is_some()
+        || fragment.ViewScrollbarsPaintAsOverlay().is_some()
         || fragment.paint.SourceKind() == NodeKind::kSvgRoot
         || (fragment.paint.PaintLayerClientId() != 0
             && (HasReferenceFilterOrReflection(style) || style.has_backdrop_filters()))
@@ -4727,7 +4727,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
                 .FormControl()
                 .is_some_and(|control| control.auto_focus_ring),
             f.paint.FocusedImageMapArea().is_some(),
-            f.ViewScrollbars().is_some(),
+            f.ViewScrollbarsPaintAsOverlay().is_some(),
             f.paint.Display(),
             f.ViewEstablishesPaintState(),
             f.paint.IsSVGHiddenContainer(),

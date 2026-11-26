@@ -1160,7 +1160,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         let Some(f) = f else {
             continue;
         };
-        if f.ViewScrollbars().is_none() || f.ViewHidden() {
+        if f.ViewScrollbarsPaintAsOverlay().is_none() || f.ViewHidden() {
             continue;
         }
         let geometry = old.controls.as_ref().ok_or(ScrollbarChanged)?;

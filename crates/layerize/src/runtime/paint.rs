@@ -102,8 +102,20 @@ impl PaintInput {
             .iter()
             .map(|node| TransformNode::from_arc(node.clone()))
     }
+    /// LocalFrameView::PushPaintArtifactToCompositor hands the artifact to
+    /// PaintArtifactCompositor::Update directly (local_frame_view.cc:3348);
+    /// Chromium checks the producer's invariants only with DCHECKs. The
+    /// whole-graph walk below is that DCHECK: it runs in debug builds or when
+    /// RECHROM_VALIDATE_PAINT_ARTIFACT is set (read once), not per frame in
+    /// production.
     pub fn new(artifact: Arc<PaintArtifact>) -> Result<Self, PaintInputError> {
-        ValidateArtifact(&artifact)?;
+        static VALIDATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if cfg!(debug_assertions)
+            || *VALIDATE
+                .get_or_init(|| std::env::var_os("RECHROM_VALIDATE_PAINT_ARTIFACT").is_some())
+        {
+            ValidateArtifact(&artifact)?;
+        }
         Ok(Self { artifact })
     }
     pub fn artifact(&self) -> &Arc<PaintArtifact> {

@@ -311,35 +311,41 @@ impl DocumentCSSOMSource {
         if let Some(execution) = owner.active_execution.as_ref() {
             execution.SynchronizeSecureContextMode(secure);
         }
-        let outgoing = if document.SecurityContext().Origin().IsOpaque() {
-            String::from("")
-        } else {
-            StrippedReferrer(document.DocumentURL())
-        };
-        let snapshot = DocumentSnapshot::<Backend> {
-            document: owner.document.clone(),
-            base_url: SourceURL::Value(String::from(document.BaseURL().AsStr())),
-            in_quirks_mode: document.GetCompatibilityMode()
-                == dom::persistent_document::CompatibilityMode::kQuirks,
-            is_html_document: document.DocumentType(document.Root())
-                == dom::persistent_document::DOMDocumentType::kHTML,
-            referrer_policy: policy,
-            execution_context: has_execution.then_some(DocumentExecutionContextSnapshot {
-                outgoing_referrer: outgoing,
-                secure_context_mode: secure,
-                world,
-            }),
-        };
-        let current = Rc::new(CSSParserContext::FromDocument(&snapshot));
+        let in_quirks_mode =
+            document.GetCompatibilityMode() == dom::persistent_document::CompatibilityMode::kQuirks;
         let revision = document.BaseURLRevision();
+        // Document::ElementSheet (document.cc) is created once and recreated
+        // only when the base URL changes; every InlineCSSStyleDeclaration
+        // write reuses its contents' parser context
+        // (inline_css_style_declaration.cc:57-60). Build the document parser
+        // context only when that sheet is (re)created.
         if owner
             .element_sheet
             .as_ref()
             .is_none_or(|(old, _)| *old != revision)
         {
+            let outgoing = if document.SecurityContext().Origin().IsOpaque() {
+                String::from("")
+            } else {
+                StrippedReferrer(document.DocumentURL())
+            };
+            let snapshot = DocumentSnapshot::<Backend> {
+                document: owner.document.clone(),
+                base_url: SourceURL::Value(String::from(document.BaseURL().AsStr())),
+                in_quirks_mode,
+                is_html_document: document.DocumentType(document.Root())
+                    == dom::persistent_document::DOMDocumentType::kHTML,
+                referrer_policy: policy,
+                execution_context: has_execution.then_some(DocumentExecutionContextSnapshot {
+                    outgoing_referrer: outgoing,
+                    secure_context_mode: secure,
+                    world,
+                }),
+            };
+            let current = Rc::new(CSSParserContext::FromDocument(&snapshot));
             owner.element_sheet = Some((
                 revision,
-                StyleSheetContents::<Backend>::new(current.clone(), String::new(), None),
+                StyleSheetContents::<Backend>::new(current, String::new(), None),
             ));
         }
         DocumentCSSOMContext {
@@ -353,7 +359,7 @@ impl DocumentCSSOMSource {
             element_sheet: owner.element_sheet.as_ref().unwrap().1.clone(),
             is_html_element: document.Node(element).Namespace()
                 == dom::persistent_document::DOMNamespace::kHTML,
-            in_quirks_mode: snapshot.in_quirks_mode,
+            in_quirks_mode,
         }
     }
 }

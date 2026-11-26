@@ -681,6 +681,20 @@ pub fn TryApplyDOMMutations(
                 document.Remove(child);
             }
             DOMMutationType::kParseDocument => {}
+            DOMMutationType::kSetAttribute
+                if mutation.qualified_name.is_none()
+                    && mutation.name == "style"
+                    && mutation.namespace_uri.is_empty()
+                    && mutation.inline_style.is_some() =>
+            {
+                // InlineCSSStyleDeclaration::DidMutate: the declaration owner
+                // changed; the attribute is its synchronized projection.
+                document.InlineStyleChanged(
+                    target,
+                    mutation.inline_style.clone().expect("checked above"),
+                    mutation.inline_style_independent,
+                );
+            }
             DOMMutationType::kSetAttribute => {
                 let attribute = DOMAttribute {
                     prefix: mutation.prefix.clone(),

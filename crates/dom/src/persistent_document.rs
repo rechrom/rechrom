@@ -6415,6 +6415,93 @@ impl PersistentDocument {
             Some(name),
         );
     }
+    /// A CSSOM (or editing) write to the element's own inline declaration.
+    /// Source: core/css/abstract_property_set_css_style_declaration.cc:254-293
+    /// (SetPropertyInternal's StyleAttributeMutationScope),
+    /// core/css/inline_css_style_declaration.cc:36-55 (DidMutate) and
+    /// core/dom/element.cc:13195-13203 (Element::InvalidateStyleAttribute).
+    /// The declaration owner itself changes; the content attribute is only
+    /// its projection, written as SetSynchronizedLazyAttribute does
+    /// (element.cc:12375-12383, 13671-13676, 13760-13801): without
+    /// WillModifyAttribute/AttributeChanged, so none of the per-attribute
+    /// ParseAttribute hooks run for a style write.
+    pub(crate) fn InlineStyleChanged(
+        &mut self,
+        element: usize,
+        style: cssom::CSSInlineStyle,
+        independent: bool,
+    ) {
+        if self.arena[element].node_type != DOMNodeType::kElement {
+            invalid_argument("attributes require an element");
+        }
+        let existing = self.arena[element]
+            .attributes
+            .iter()
+            .position(|candidate| {
+                candidate.local_name == "style" && candidate.namespace_uri.is_empty()
+            });
+        let text = style.SourceText().to_owned();
+        // StyleAttributeMutationScope: the custom element callback and the
+        // MutationObserver record both observe the old attribute value.
+        if self.HasCustomElementDefinitions()
+            && self.CustomElementDefinitionForElement(element).is_some()
+        {
+            let old_value =
+                existing.map(|index| self.arena[element].attributes[index].value.clone());
+            self.CustomElementAttributeWillChange(
+                element,
+                "style",
+                "",
+                old_value,
+                Some(text.clone()),
+            );
+        }
+        self.CaptureAttributeMutation(element, "style", "");
+        // Element::InvalidateStyleAttribute: SetNeedsStyleRecalc and
+        // StyleEngine::AttributeChangedForElement(kStyleAttr).
+        self.IncDOMTreeVersion();
+        self.RecordAttributeSelectorKeys(element, "style", "", Some(text.as_str()));
+        let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
+        let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
+        self.BumpCollectionMembershipRevision();
+        self.InvalidateSelectorAttributes(element, "style", existing.is_none());
+        let inline = crate::style_state::StyleChange::InlineStyle(element);
+        let independent = independent
+            && (!self.style_state.changes.contains(&inline)
+                || self
+                    .style_state
+                    .independent_inline_styles
+                    .contains(&element));
+        self.RecordStyleChange(inline);
+        if independent && self.ShouldRecordStyleChange(element) {
+            self.style_state.independent_inline_styles.insert(element);
+        } else {
+            self.style_state.independent_inline_styles.remove(&element);
+        }
+        if sibling_sensitive_before && self.ShouldRecordStyleChange(element) {
+            self.style_state.sibling_sensitive_nodes.insert(element);
+        }
+        // SynchronizeStyleAttributeInternal -> SetSynchronizedLazyAttribute.
+        let value_utf16: Rc<[u16]> = Rc::from(style.SourceTextUTF16());
+        let node = &mut self.arena[element];
+        if let Some(index) = existing {
+            node.attributes[index].value = text;
+            node.attribute_utf16[index].value = value_utf16;
+        } else {
+            let attribute = DOMAttribute {
+                local_name: "style".into(),
+                value: text,
+                ..DOMAttribute::default()
+            };
+            let mut utf16_attribute = DOMAttributeUTF16::FromAttribute(&attribute);
+            utf16_attribute.value = value_utf16;
+            node.attributes.push(attribute);
+            node.attribute_utf16.push(utf16_attribute);
+        }
+        *node.inline_style.get_mut() = Some(style);
+        self.RecordSiblingSensitivity(element, false);
+        self.RecordDescendantSensitivity(element, descendant_sensitive_before);
+    }
     fn SetAttributeWithReasonAndInlineStyleChange(
         &mut self,
         element: usize,
