@@ -114,8 +114,30 @@ impl<'a> StyleResourceBindings<'a> {
         style.paint.svg_markers = self.svg_markers.to_vec();
         style.paint.replaced_image_shader = self.replaced_image_shader.clone();
     }
+
+    /// Whether ApplyTo writes a projected paint value that differs from
+    /// `PaintStyleData::default()`. Every resource graph field defaults to
+    /// empty, so bindings without any graph leave a default projection
+    /// unchanged.
+    fn HasPaintBindings(&self) -> bool {
+        !self.svg_filter_graphs.is_empty()
+            || self.svg_mask_resource.is_some()
+            || self.svg_fill_server.is_some()
+            || self.svg_stroke_server.is_some()
+            || !self.svg_markers.is_empty()
+            || self.replaced_image_shader.is_some()
+    }
 }
 
+// cpp: core/layout/layout_object.cc:2991-2995 (LayoutObject::SetStyle)
+// cpp: core/layout/layout_object.h:3518-3522 (LayoutObject::SetStyleInternal)
+// Blink's LayoutObject retains the StyleEngine's ComputedStyle pointer as is.
+// This envelope only pairs that pointer with the document resource handles
+// Chromium keeps as resource-client edges. `PaintStyle`'s DerefMut
+// copy-on-writes the whole PaintStyleData, so writing values equal to the
+// defaults (an element with no SVG resource graph and no image) would deep
+// copy the shared default projection once per restyled node for no
+// observable change. Keep the shared default instead.
 pub(crate) fn BorrowComputedStyle(
     computed_style: &ComputedStyle,
     resources: &StyleResourceBindings<'_>,
@@ -125,8 +147,14 @@ pub(crate) fn BorrowComputedStyle(
         style: computed_style,
         ..Default::default()
     };
-    resources.ApplyTo(&mut input);
-    input.paint.image_resource_id = image_resource_id;
+    if resources.HasPaintBindings() {
+        resources.ApplyTo(&mut input);
+    } else {
+        input.svg_clip_resources = resources.svg_clip_resources.clone();
+    }
+    if image_resource_id.is_some() {
+        input.paint.image_resource_id = image_resource_id;
+    }
     input
 }
 

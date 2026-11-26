@@ -7,14 +7,8 @@ fn canonical_text_input(
     style: &StyleComputedStyle,
     resources: &crate::internal::layout_input::StyleResourceData,
 ) -> ComputedStyle {
-    let mut input = ComputedStyle {
-        style,
-        ..Default::default()
-    };
     let bindings = crate::style_projection::StyleResourceBindings::FromData(resources);
-    bindings.ApplyTo(&mut input);
-    input.paint.image_resource_id = resources.image_resource_id;
-    input
+    crate::style_projection::BorrowComputedStyle(style, &bindings, resources.image_resource_id)
 }
 
 fn compact_retained_style(
@@ -59,6 +53,49 @@ impl LayoutObjectTreeStorage {
             source_text_style,
             first_line_style,
             existing_key,
+            None,
+        )
+    }
+
+    /// `Create` for a style envelope the caller already owns together with
+    /// its `StyleResourceData::FromLegacyInput` projection. The retained
+    /// input shares that owner instead of copying it, as Blink's
+    /// LayoutObject::SetStyle retains the given ComputedStyle pointer
+    /// (core/layout/layout_object.cc:2991-2995). `style_owner.0` must be a
+    /// canonical envelope (BorrowComputedStyle: no legacy CSS fields).
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn CreateWithStyleOwner(
+        &mut self,
+        parent: *mut LayoutObject,
+        id: u64,
+        kind: NodeKind,
+        style: &ComputedStyle,
+        element: Option<ElementData>,
+        debug_name: String,
+        text: String,
+        explicit_text_style: *const ComputedStyle,
+        existing_key: InputKey,
+        style_owner: (
+            &Arc<ComputedStyle>,
+            &Arc<crate::internal::layout_input::StyleResourceData>,
+        ),
+    ) -> *mut LayoutObject {
+        create_managed_object(
+            self,
+            parent,
+            id,
+            kind,
+            style,
+            element,
+            debug_name,
+            text,
+            explicit_text_style,
+            false,
+            std::ptr::null(),
+            std::ptr::null(),
+            Some(existing_key),
+            Some(style_owner),
         )
     }
 }
@@ -81,6 +118,10 @@ fn create_managed_object(
     source_text_style: *const ComputedStyle,
     first_line_style: *const ComputedStyle,
     existing_key: Option<InputKey>,
+    style_owner: Option<(
+        &Arc<ComputedStyle>,
+        &Arc<crate::internal::layout_input::StyleResourceData>,
+    )>,
 ) -> *mut LayoutObject {
     // CompleteUpdate installs these scopes once for the complete
     // attachment transaction. Compatible NodeInput updates are local and
@@ -191,33 +232,54 @@ fn create_managed_object(
         (!storage.updating).then(|| unsafe { FontResolverScope::new_from_raw(fonts) });
     let _factory_scope =
         (!storage.updating).then(|| LayoutObjectFactoryScope::new(&storage.factories));
-    let effective_style = Arc::new(effective.clone());
+    // cpp: core/layout/layout_object.cc:2991-2995, layout_object.h:3518-3522.
+    // LayoutObject::SetStyle retains the style pointer it is given. When the
+    // caller already owns the envelope (a NodeInput restyle), share that
+    // owner instead of copying it into a second allocation.
+    let owned_style = |candidate: &ComputedStyle| {
+        style_owner
+            .filter(|&(owner, _)| std::ptr::eq(Arc::as_ptr(owner), candidate))
+            .map(|(owner, _)| Arc::clone(owner))
+    };
+    let effective_style = owned_style(effective).unwrap_or_else(|| Arc::new(effective.clone()));
     let source_style = if std::ptr::eq(source, effective) {
         Arc::clone(&effective_style)
     } else {
-        Arc::new(source.clone())
+        owned_style(source).unwrap_or_else(|| Arc::new(source.clone()))
     };
     let input_style = if std::ptr::eq(style, effective) {
         Arc::clone(&effective_style)
     } else if std::ptr::eq(style, source) {
         Arc::clone(&source_style)
     } else {
-        Arc::new(style.clone())
+        owned_style(style).unwrap_or_else(|| Arc::new(style.clone()))
     };
     let projected_image_resource_id = source_style.paint.image_resource_id;
     let resident_image_resource_id = resident_image_facts
         .as_ref()
         .and_then(|facts| facts.metadata.map(|metadata| metadata.id));
-    let mut input_resource_data =
-        crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input_style);
-    let mut source_resource_data =
-        crate::internal::layout_input::StyleResourceData::FromLegacyInput(&source_style);
-    if resident_image_facts.is_some() {
-        input_resource_data.image_resource_id = resident_image_resource_id;
-        source_resource_data.image_resource_id = resident_image_resource_id;
-    }
-    let input_resources = Arc::new(input_resource_data);
-    let source_resources = Arc::new(source_resource_data);
+    // StyleResourceData::FromLegacyInput of `style`, with ImageLoader's
+    // resident image identity. The owner's projection is shared; one envelope
+    // yields one projection.
+    let has_resident_image_facts = resident_image_facts.is_some();
+    let resources_of = |style: &Arc<ComputedStyle>| {
+        let mut resources = style_owner
+            .filter(|&(owner, _)| Arc::ptr_eq(owner, style))
+            .map(|(_, resources)| Arc::clone(resources))
+            .unwrap_or_else(|| {
+                Arc::new(crate::internal::layout_input::StyleResourceData::FromLegacyInput(style))
+            });
+        if has_resident_image_facts && resources.image_resource_id != resident_image_resource_id {
+            Arc::make_mut(&mut resources).image_resource_id = resident_image_resource_id;
+        }
+        resources
+    };
+    let input_resources = resources_of(&input_style);
+    let source_resources = if Arc::ptr_eq(&source_style, &input_style) {
+        Arc::clone(&input_resources)
+    } else {
+        resources_of(&source_style)
+    };
     let mut element = element;
     if let (Some(data), Some(facts)) = (element.as_mut(), resident_image_facts.as_ref()) {
         data.image_resource_is_loaded = facts.metadata.is_some();
@@ -413,20 +475,21 @@ fn create_managed_object(
     // PrepareStyle returns StyleEngine's canonical source pointer
     // when one is present, so this does not translate the projection back
     // into a second style.
+    //
+    // cpp: core/dom/text.cc Text::RecalcTextStyle -> LayoutText::SetStyle.
+    // A LayoutText's style is its explicit text style or the canonical input
+    // inherited from its parent. `effective` is exactly that style and
+    // `effective_style` already owns it, so the text input shares that owner
+    // rather than copying (or re-deriving from the parent) a second one.
+    let bind_effective_text_style = |input: &mut NodeConstructionData| {
+        if !Arc::ptr_eq(&input.style, &effective_style) {
+            input.style = Arc::clone(&effective_style);
+            input.resources = resources_of(&effective_style);
+        }
+    };
     let layout_style = if paint_only {
         if kind == NodeKind::kText {
-            input.style = if !explicit_text_style.is_null() {
-                Arc::new(unsafe { &*explicit_text_style }.clone())
-            } else {
-                let parent_node = unsafe { &*parent }.GetNode();
-                Arc::new(canonical_text_input(
-                    unsafe { &*parent }.StyleRef(),
-                    unsafe { &*parent_node }.InputStyleResources(),
-                ))
-            };
-            input.resources = Arc::new(
-                crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
-            );
+            bind_effective_text_style(&mut input);
             input.computed_style = input.style.style;
         }
         prepare_style(
@@ -442,22 +505,11 @@ fn create_managed_object(
         if parent.is_null() {
             panic!("LayoutText cannot be the layout root");
         }
+        bind_effective_text_style(&mut input);
         if !explicit_text_style.is_null() {
-            input.style = Arc::new(unsafe { &*explicit_text_style }.clone());
-            input.resources = Arc::new(
-                crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
-            );
             input.computed_style = input.style.style;
             prepare_style(&input, unsafe { &*parent }.StyleRef(), parent_kind)
         } else {
-            let parent_node = unsafe { &*parent }.GetNode();
-            input.style = Arc::new(canonical_text_input(
-                unsafe { &*parent }.StyleRef(),
-                unsafe { &*parent_node }.InputStyleResources(),
-            ));
-            input.resources = Arc::new(
-                crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
-            );
             input.computed_style = unsafe { &*parent }.StyleRef();
             unsafe { &*parent }.StyleRef() as *const StyleComputedStyle
         }
@@ -496,22 +548,24 @@ fn create_managed_object(
         if kind == NodeKind::kText {
             panic!("first-line style belongs to the text's containing element");
         }
-        input.first_line_style = Some(Arc::new(unsafe { &*first_line_style }.clone()));
-        input.first_line_resources = input.first_line_style.as_ref().map(|style| {
-            Arc::new(crate::internal::layout_input::StyleResourceData::FromLegacyInput(style))
-        });
-        input.first_line_computed_style = input
+        // The descriptor already owns this first-line envelope and its
+        // resource projection; the input and the first-line PrepareStyle
+        // input share them.
+        let first_line_owner = descriptor
             .first_line_style
-            .as_ref()
-            .map_or(std::ptr::null(), |style| style.style);
+            .clone()
+            .expect("descriptor retains the first-line style");
+        let first_line_resources = descriptor
+            .first_line_resources
+            .clone()
+            .expect("descriptor retains the first-line resources");
+        input.first_line_style = Some(Arc::clone(&first_line_owner));
+        input.first_line_resources = Some(Arc::clone(&first_line_resources));
+        input.first_line_computed_style = first_line_owner.style;
         let mut first_line_input = input.clone();
-        first_line_input.style = Arc::new(unsafe { &*first_line_style }.clone());
-        first_line_input.resources = Arc::new(
-            crate::internal::layout_input::StyleResourceData::FromLegacyInput(
-                &first_line_input.style,
-            ),
-        );
-        first_line_input.computed_style = first_line_input.style.style;
+        first_line_input.computed_style = first_line_owner.style;
+        first_line_input.style = first_line_owner;
+        first_line_input.resources = first_line_resources;
         let mut parent_first_line_style = std::ptr::null();
         if !parent.is_null() {
             let parent_node = unsafe { &*parent }.GetNode();
@@ -524,10 +578,10 @@ fn create_managed_object(
             prepare_style(&first_line_input, parent_first_line_style, parent_kind);
     }
     if kind == NodeKind::kText && !source_text_style.is_null() {
-        input.style = Arc::new(unsafe { &*source_text_style }.clone());
-        input.resources = Arc::new(
-            crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input.style),
-        );
+        // `source` is this source text style; the descriptor owns it and its
+        // resource projection (LayoutText has no resident image identity).
+        input.style = Arc::clone(&descriptor.style);
+        input.resources = Arc::clone(&descriptor.resources);
         input.computed_style = input.style.style;
     }
     let old_font_dirty = previous
@@ -719,21 +773,27 @@ fn create_managed_object(
             .insert(metadata_node, Persistent::from_ptr(metadata_node));
         storage.objects.insert(object, Persistent::from_ptr(object));
     }
-    let mut effective_resources =
-        crate::internal::layout_input::StyleResourceData::FromLegacyInput(&effective_style);
-    if resident_image_facts.is_some() {
-        effective_resources.image_resource_id = resident_image_resource_id;
-    }
     let effective_computed_style = if effective_style.style.is_null() {
         layout_style
     } else {
         effective_style.style
     };
     let mut retained_input = descriptor;
-    retained_input.style = compact_retained_style(
-        retained_input.computed_style,
-        retained_input.resources.as_ref(),
-    );
+    // The retained input keeps only the canonical pointer and its resource
+    // bindings. A caller-owned envelope (BorrowComputedStyle) already is
+    // exactly that compact form unless ImageLoader's resident image identity
+    // replaced the projected one; retain the owner itself then.
+    let source_is_effective = Arc::ptr_eq(&retained_input.style, &effective_style);
+    let owner_is_compact = !retained_input.computed_style.is_null()
+        && style_owner.is_some_and(|(owner, _)| Arc::ptr_eq(owner, &retained_input.style))
+        && retained_input.resources.image_resource_id
+            == retained_input.style.paint.image_resource_id;
+    if !owner_is_compact {
+        retained_input.style = compact_retained_style(
+            retained_input.computed_style,
+            retained_input.resources.as_ref(),
+        );
+    }
     retained_input.first_line_style =
         retained_input
             .first_line_resources
@@ -741,8 +801,20 @@ fn create_managed_object(
             .map(|resources| {
                 compact_retained_style(retained_input.first_line_computed_style, resources.as_ref())
             });
-    let retained_effective_style =
-        compact_retained_style(effective_computed_style, &effective_resources);
+    // When the source and effective envelopes are one owner (every element,
+    // and a LayoutText without a separate source style), the compact
+    // effective style has the same pointer and resource projection as the
+    // retained input style: share it instead of building an equal copy.
+    let retained_effective_style = if source_is_effective && !effective_style.style.is_null() {
+        Arc::clone(&retained_input.style)
+    } else {
+        let mut effective_resources =
+            crate::internal::layout_input::StyleResourceData::FromLegacyInput(&effective_style);
+        if resident_image_facts.is_some() {
+            effective_resources.image_resource_id = resident_image_resource_id;
+        }
+        compact_retained_style(effective_computed_style, &effective_resources)
+    };
     let record = ManagedObject {
         object,
         node: metadata_node,
