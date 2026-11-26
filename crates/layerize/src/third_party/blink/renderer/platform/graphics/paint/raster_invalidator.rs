@@ -21,7 +21,10 @@ struct PaintChunkInfo<M: RasterInvalidationTypes> {
     #[cfg(debug_assertions)]
     id: <M::Chunk as RasterInvalidationChunk<M>>::Id,
     bounds_in_layer: Rect,
-    opaque_backing_rects_in_layer: Vec<Rect>,
+    // Rechrom partial-raster metadata (see GenerateRasterInvalidations). A
+    // moved cached chunk carries the same immutable rects forward, so they are
+    // shared rather than reallocated per frame; `None` when there are none.
+    opaque_backing_rects_in_layer: Option<Arc<[Rect]>>,
     chunk_to_layer_clip: FloatClipRect,
     chunk_to_layer_transform: M::Transform,
 }
@@ -50,7 +53,8 @@ impl<M: RasterInvalidationTypes> PaintChunkInfo<M> {
             #[cfg(debug_assertions)]
             id: chunk.id(),
             bounds_in_layer: clip_rect(mapper.MapVisualRect(chunk.drawable_bounds()), bounds),
-            opaque_backing_rects_in_layer,
+            opaque_backing_rects_in_layer: (!opaque_backing_rects_in_layer.is_empty())
+                .then(|| Arc::from(opaque_backing_rects_in_layer)),
             chunk_to_layer_clip: *mapper.ClipRect(),
             chunk_to_layer_transform: mapper.Transform().clone(),
         };
@@ -310,16 +314,13 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         // Partial raster starts from the previous frame's pixels. Preserve
         // the old opaque backing metadata across cached/moved chunks so a
         // changed descendant in a separate rounded chunk can replay the
-        // smallest enclosing backing with identical antialias coverage.
-        let old_opaque_backings = if offset_changed {
-            Vec::new()
-        } else {
-            self.old_paint_chunks_info_
-                .iter()
-                .flat_map(|info| info.opaque_backing_rects_in_layer.iter().copied())
-                .map(|rect| clip_rect(rect, self.layer_bounds_))
-                .filter(|rect| !rect.IsEmpty())
-                .collect::<Vec<_>>()
+        // smallest enclosing backing with identical antialias coverage. Only
+        // a rounded-clip display-item invalidation consults it, so it is
+        // collected on first use; the old infos' opaque rects are not
+        // modified by this loop, so the lazily collected value is the same.
+        let old_opaque_backings = OldOpaqueBackings {
+            offset_changed,
+            rects: std::cell::OnceCell::new(),
         };
         let mut matched = vec![false; self.old_paint_chunks_info_.len()];
         let mut old_index = 0;
@@ -683,10 +684,33 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         self.layer_bounds_ = Size::default();
     }
 }
+// The previous frame's opaque backing rects in layer space, collected from
+// `old_paint_chunks_info_` on first use within one GenerateRasterInvalidations.
+struct OldOpaqueBackings {
+    offset_changed: bool,
+    rects: std::cell::OnceCell<Vec<Rect>>,
+}
+impl OldOpaqueBackings {
+    fn Get<M: RasterInvalidationTypes>(&self, owner: &RasterInvalidator<M>) -> &[Rect] {
+        self.rects.get_or_init(|| {
+            if self.offset_changed {
+                return Vec::new();
+            }
+            owner
+                .old_paint_chunks_info_
+                .iter()
+                .flat_map(|info| info.opaque_backing_rects_in_layer.iter())
+                .flat_map(|rects| rects.iter().copied())
+                .map(|rect| clip_rect(rect, owner.layer_bounds_))
+                .filter(|rect| !rect.IsEmpty())
+                .collect()
+        })
+    }
+}
 struct RasterInvalidatorSink<'a, M: RasterInvalidationTypes> {
     owner: &'a mut RasterInvalidator<M>,
     callback: &'a mut dyn RasterInvalidationCallback,
-    old_opaque_backings: &'a [Rect],
+    old_opaque_backings: &'a OldOpaqueBackings,
 }
 impl<M: RasterInvalidationTypes> RasterInvalidationSink for RasterInvalidatorSink<'_, M> {
     fn ClipByLayerBounds(&self, rect: Rect) -> Rect {
@@ -694,7 +718,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidationSink for RasterInvalidatorSin
     }
     fn FindRoundedOpaqueBacking(&self, rect: Rect) -> Option<RoundedOpaqueBacking> {
         find_smallest_local_opaque_backing(
-            self.old_opaque_backings,
+            self.old_opaque_backings.Get(&*self.owner),
             rect,
             self.owner.layer_bounds_,
         )

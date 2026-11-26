@@ -56,7 +56,7 @@ impl<'a, M: ChunkGeometryMapper + ?Sized> ChunkToLayerMapper<'a, M> {
         chunk_state: M::PropertyTreeState,
         raster_effect_outset: RasterEffectOutset,
     ) {
-        self.SwitchToChunkWithState(&chunk_state.clone(), raster_effect_outset, &chunk_state);
+        self.SwitchToChunkWithState(&chunk_state, raster_effect_outset, &chunk_state);
     }
     pub fn SwitchToChunkWithState(
         &mut self,

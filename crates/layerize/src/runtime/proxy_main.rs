@@ -264,15 +264,19 @@ where
     MainToImpl<F>: Send,
 {
     fn RunsTasksInCurrentSequence(&self) -> bool {
-        std::thread::current().id() == self.owner
+        // Every ProtectedSequence field access of a main Layer asks this
+        // (LayerTreeHost::IsOwnerThread, layer_tree_host.cc:328-331). Read the
+        // calling thread's id from thread-local storage instead of cloning the
+        // current `Thread` handle on each access.
+        thread_local! {
+            static CURRENT_THREAD: std::thread::ThreadId = std::thread::current().id();
+        }
+        CURRENT_THREAD.with(|current| *current == self.owner)
     }
     fn PostEffect(&self, effect: MainHostEffect) {
         match effect {
             MainHostEffect::NeedsUpdateLayers => self.SetNeedsUpdateLayers(),
             MainHostEffect::NeedsCommit { urgent } => self.SetNeedsCommit(urgent),
-            MainHostEffect::NotifyLatencyInfoSwapPromiseMonitors => {
-                self.Post(MainToImpl::NotifyLatencyInfoSwapPromiseMonitors)
-            }
             // Source: cc/trees/proxy_main.cc SetTargetLocalSurfaceId,
             // NotifyNewLocalSurfaceIdExpectedWhilePaused.
             MainHostEffect::SetTargetLocalSurfaceId(id) => {
