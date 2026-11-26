@@ -95,28 +95,10 @@ pub(super) fn UpdatePrePaintInputs(
             .into_iter()
             .map(|child| refresh(child))
             .sum::<usize>();
-        let cursor_source = cursor.Cursor().GetLayoutObject() as *const LayoutObject;
-        let data = unsafe { cursor.PaintDataMut() };
         // Host notifications delivered after population (resource catalog
         // rebinding, event-handler registry changes) set Chromium dirty bits
-        // on the resident LayoutObjects. Republish this fragment's snapshot
-        // of those bits so PrePaint reads the current lifecycle state, as
-        // PrePaintTreeWalk reads LayoutObject flags directly
-        // (core/paint/pre_paint_tree_walk.cc:418-436).
-        let direct = data.paint.SourceObjectPointer() as *const LayoutObject;
-        let source = if !direct.is_null() {
-            direct
-        } else if data.paint.HasSource() {
-            cursor_source
-        } else {
-            std::ptr::null()
-        };
-        if !source.is_null() {
-            data.pre_paint_invalidation =
-                crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(
-                    source,
-                );
-        }
+        // on the resident LayoutObjects; republish every fragment's view.
+        unsafe { cursor.RefreshPrePaintInvalidation() };
         descendants + 1
     }
     refresh(PaintFragmentCursor::FromHandle(fragments))

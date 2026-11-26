@@ -84,7 +84,11 @@ impl EnginePaintUpdate for LayoutEngine {
         }
         // Chromium updates FragmentData on the live LayoutResult owner. Keep
         // the same result-local sidecar and its stable per-fragment addresses.
-        UpdatePrePaintInputs(fragments, &self.objects_);
+        // PrePaint reads each visited object's dirty bits at its visit
+        // (PaintFragmentCursor::ReadPrePaintInvalidationForVisit,
+        // pre_paint_tree_walk.cc:418-436); nothing is republished here.
+        let _ = fragments;
+        PaintFragmentCursor::AdvancePrePaintInvalidationEpoch();
         trace.set("published", 1.0);
         true
     }
@@ -122,7 +126,9 @@ impl EnginePaintUpdate for LayoutEngine {
             trace.set("rejected", 1.0);
             return false;
         }
-        UpdatePrePaintInputs(fragments, &self.objects_);
+        // No document-wide dirty-bit republish: PrePaint reads each visited
+        // object's bits at its visit (pre_paint_tree_walk.cc:418-436).
+        PaintFragmentCursor::AdvancePrePaintInvalidationEpoch();
         trace.set("updated_sources", self.pending_paint_ids_.len() as f64);
         self.pending_paint_ids_.clear();
         self.pending_inline_ink_ids_.clear();
