@@ -165,6 +165,16 @@ fn CullAdmission(
     (result, should_paint_content, false)
 }
 
+/// BoxFragmentPainter::PaintFragment, skipping its ShouldPaint test when the
+/// walk's own gate already admitted this node with this PaintInfo.
+fn PaintGatedFragment(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>, admitted: bool) {
+    if admitted {
+        BoxFragmentPainter::PaintFragmentAdmitted(node, paint_info);
+    } else {
+        BoxFragmentPainter::PaintFragment(node, paint_info);
+    }
+}
+
 fn HasEscapingChildLayer(parent: &PaintTreeNode<'_>) -> bool {
     for child_owner in &parent.children {
         let child = child_owner.as_ref();
@@ -186,20 +196,48 @@ fn HasEscapingChildLayer(parent: &PaintTreeNode<'_>) -> bool {
     false
 }
 
-fn CollectDirectPaintLayerChildren<'n, 'f>(
+/// Visit the direct child PaintLayers of `root` (PaintLayer::FirstChild() /
+/// NextSibling()) until `visit` returns false. Returns false when stopped.
+/// ShouldCreateSubsequence only asks whether the first child or a second
+/// child exists (paint_layer_painter.cc:250-254), so it stops early instead
+/// of collecting every child layer into a fresh Vec per layer visit.
+fn ForEachDirectPaintLayerChild<'n, 'f>(
     root: &'n PaintTreeNode<'f>,
-    output: &mut Vec<&'n PaintTreeNode<'f>>,
-) {
+    visit: &mut dyn FnMut(&'n PaintTreeNode<'f>) -> bool,
+) -> bool {
     for child in &root.children {
         if child.is_embedded_local_frame_root {
             continue;
         }
         if child.is_paint_layer {
-            output.push(child);
-        } else {
-            CollectDirectPaintLayerChildren(child, output);
+            if !visit(child) {
+                return false;
+            }
+        } else if !ForEachDirectPaintLayerChild(child, visit) {
+            return false;
         }
     }
+    true
+}
+
+/// `paint_layer.FirstChild()->FirstChild() || ...->NextSibling()`:
+/// whether the layer has at least two descendant layers.
+fn HasTwoDescendantPaintLayers(layer: &PaintTreeNode<'_>) -> bool {
+    let mut first = None;
+    let mut has_second = false;
+    ForEachDirectPaintLayerChild(layer, &mut |child| {
+        if first.is_none() {
+            first = Some(child);
+            true
+        } else {
+            has_second = true;
+            false
+        }
+    });
+    if has_second {
+        return true;
+    }
+    first.is_some_and(|first| !ForEachDirectPaintLayerChild(first, &mut |_| false))
 }
 
 /// Source: `paint_layer_painter.cc:221-235,239-284`.
@@ -225,23 +263,13 @@ fn ShouldCreateSubsequence(
         return false;
     }
     if context.borrow().NumNewChunks() > 0
-        && context
+        && !context
             .borrow()
-            .LastChunkProperties()
-            .is_some_and(|properties| !properties.same_nodes(&layer.properties.nodes))
+            .LastChunkPropertiesSameNodes(&layer.properties.nodes)
     {
         return true;
     }
-    let mut children = Vec::new();
-    CollectDirectPaintLayerChildren(layer, &mut children);
-    if children.len() >= 2 {
-        return true;
-    }
-    if children.first().is_some_and(|first| {
-        let mut grandchildren = Vec::new();
-        CollectDirectPaintLayerChildren(first, &mut grandchildren);
-        !grandchildren.is_empty()
-    }) {
+    if HasTwoDescendantPaintLayers(layer) {
         return true;
     }
     if context.borrow().NumNewChunks() > 0 {
@@ -467,8 +495,12 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         {
             self.context.borrow_mut().EnsureChunk();
         }
-        let effect_contains_escaping_child =
-            !self.layer.escapes_ancestor_geometry && HasEscapingChildLayer(self.layer);
+        // Every consumer of this flag iterates `inherited_geometry`, so the
+        // recursive descendant scan is only needed when there is inherited
+        // geometry to re-enter; the root and most layers have none.
+        let effect_contains_escaping_child = !self.inherited_geometry.is_empty()
+            && !self.layer.escapes_ancestor_geometry
+            && HasEscapingChildLayer(self.layer);
         for ancestor in &self.inherited_geometry {
             self.context.borrow_mut().BeginGeometry(ancestor);
             self.context.borrow_mut().BeginEffects(ancestor);
@@ -750,6 +782,9 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         if !is_svg_container && !BoxFragmentPainter::ShouldPaintFragment(node, paint_info) {
             return;
         }
+        // The recording entry below repeats ShouldPaint only when this gate
+        // did not already answer it for the same node and PaintInfo.
+        let admitted = !is_svg_container;
         let _text_paint_timing = paint_record::paint_context::ScopedTextPaintAggregation::new(
             self.context,
             node,
@@ -762,7 +797,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 PaintPhase::kForeground | PaintPhase::kForcedColorsModeBackplate
             )
         {
-            BoxFragmentPainter::PaintFragment(node, paint_info);
+            PaintGatedFragment(node, paint_info, admitted);
         }
         let paint_self_outside_clip = enter_node
             && node.applies_overflow_clip
@@ -785,11 +820,11 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 context.BeginGeometry(node);
                 context.BeginEffects(node);
                 drop(context);
-                BoxFragmentPainter::PaintFragment(node, paint_info);
+                PaintGatedFragment(node, paint_info, admitted);
                 self.context.borrow_mut().BeginEscapableGeometry(node, None);
             } else {
                 self.context.borrow_mut().BeginNode(node);
-                BoxFragmentPainter::PaintFragment(node, paint_info);
+                PaintGatedFragment(node, paint_info, admitted);
             }
         }
 

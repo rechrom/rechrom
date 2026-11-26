@@ -1216,6 +1216,15 @@ impl<'o> PaintContext<'o> {
             .map(|chunk| chunk.properties.clone())
     }
 
+    /// `LastChunkProperties() == properties` (paint_layer_painter.cc:241-248)
+    /// without cloning the last chunk's property-node references. True when
+    /// there is no chunk, matching the caller's `NumNewChunks() > 0` guard.
+    pub fn LastChunkPropertiesSameNodes(&self, properties: &PropertyTreeState) -> bool {
+        self.paint_controller
+            .LastChunk(self.output)
+            .is_none_or(|chunk| chunk.properties.same_nodes(properties))
+    }
+
     pub fn LastChunkBounds(&self) -> Option<PaintRect> {
         self.paint_controller
             .LastChunk(self.output)

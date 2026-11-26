@@ -765,6 +765,20 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         Self::new(node, paint_info.context).Paint(paint_state.GetPaintInfo());
     }
 
+    /// PaintFragment for a node whose ShouldPaintFragment(node, paint_info)
+    /// the caller has just evaluated to true with this same PaintInfo.
+    /// Chromium's BoxFragmentPainter::PaintInternal tests ShouldPaint once
+    /// per paint (box_fragment_painter.cc:615-641); Rechrom's paint_walk
+    /// mirrors that gate before its resident child traversal, so the
+    /// recording entry must not export and test the filtered ink overflow a
+    /// second time. The cull test reads only the node's own cull rect and
+    /// paint offset, so the earlier answer is exact.
+    pub fn PaintFragmentAdmitted(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
+        let paint_state = crate::scoped_paint_state::ScopedPaintState::new(node, paint_info);
+        debug_assert!(Self::ShouldPaintWithState(node, &paint_state));
+        Self::new(node, paint_info.context).Paint(paint_state.GetPaintInfo());
+    }
+
     fn ShouldPaintWithState(
         node: &PaintTreeNode<'_>,
         paint_state: &crate::scoped_paint_state::ScopedPaintState<'_, '_, '_, '_>,
@@ -923,6 +937,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .expect("paint tree node has a fragment");
         let phase = paint_info.phase;
         let is_visible = IsVisibleToPaint(fragment);
+        // Overflow controls and the resizer scroll hit-test data below read
+        // one positioned scrollable-area payload for this paint.
+        let scrollbars = crate::scrollable_area_painter::ScrollbarPaintDataCell::new();
         if phase == PaintPhase::kForcedColorsModeBackplate {
             if fragment.ViewIsInlineFormattingContext() && fragment.paint.InForcedColorsMode() {
                 self.PaintBackplate();
@@ -1188,7 +1205,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 })
             {
                 ScrollableAreaPainter::new(self.node, self.context)
-                    .PaintOverflowControls(paint_info);
+                    .PaintOverflowControlsWithData(paint_info, &scrollbars);
             }
             if !theme_owns_decoration {
                 let paints_contents = fragment.paint.BackgroundPaintLocation().PaintsContents();
@@ -1242,7 +1259,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 );
                 if opaqueness != PaintHitTestOpaqueness::Transparent {
                     ScrollableAreaPainter::new(self.node, self.context)
-                        .RecordResizerScrollHitTestData();
+                        .RecordResizerScrollHitTestDataWithData(&scrollbars);
                 }
             }
         }
@@ -1480,8 +1497,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             TablePainter::new(self.node, self.context).PaintCollapsedBorders(paint_info);
         }
-        let overflow_controls_were_painted_before_contents = fragment
-            .ViewScrollbarsPaintAsOverlay()
+        let scrollbars_paint_as_overlay = fragment.ViewScrollbarsPaintAsOverlay();
+        let overflow_controls_were_painted_before_contents = scrollbars_paint_as_overlay
             .is_some_and(|should_paint_as_overlay| {
                 PaintsOverflowControlsBeforeContents(
                     paint_info.phase,
@@ -1489,7 +1506,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 )
             });
         if fragment.ViewEstablishesPaintState()
-            && fragment.ViewScrollbarsPaintAsOverlay().is_some()
+            && scrollbars_paint_as_overlay.is_some()
             && !overflow_controls_were_painted_before_contents
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);

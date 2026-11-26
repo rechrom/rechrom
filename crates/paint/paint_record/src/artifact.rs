@@ -152,59 +152,87 @@ impl ImageDependencyIndex {
         chunks: &[PaintChunk],
     ) -> Self {
         let mut by_image: HashMap<_, Vec<_>> = HashMap::new();
+        // Chunks partition the display-item list in order, so one forward
+        // cursor finds each record's chunk, and the chunk's effect-chain
+        // reflection-mask images are collected once per chunk rather than
+        // once per record (the per-record linear chunk search made this
+        // commit step quadratic in artifact size).
+        let mut chunk_cursor = 0usize;
+        let mut chunk_ids_for: Option<usize> = None;
+        let mut chunk_ids: Vec<image_resource::ImageId> = Vec::new();
+        let mut ids: Vec<image_resource::ImageId> = Vec::new();
         for (record_index, record) in records.iter().enumerate() {
-            let mut ids = std::collections::HashSet::new();
+            ids.clear();
             let ops: &[DisplayItem] = match &record.record_source {
                 Some(source) => source.Ops(),
                 None => &items[record.record_begin..record.record_end],
             };
             for item in ops {
                 if item.resource_id != 0 {
-                    ids.insert(item.resource_id);
+                    ids.push(item.resource_id);
                 }
                 if let Some(shader) = &item.paint_shader {
-                    VisitShaderImageIds(shader, &mut |id| {
-                        ids.insert(id);
-                    });
+                    VisitShaderImageIds(shader, &mut |id| ids.push(id));
                 }
                 for mask in &item.mask_layers {
                     if mask.resource_id != 0 {
-                        ids.insert(mask.resource_id);
+                        ids.push(mask.resource_id);
                     }
                     if let Some(shader) = &mask.paint_shader {
-                        VisitShaderImageIds(shader, &mut |id| {
-                            ids.insert(id);
-                        });
+                        VisitShaderImageIds(shader, &mut |id| ids.push(id));
                     }
                 }
             }
-            if let Some(chunk) = chunks.iter().find(|chunk| {
-                chunk.begin_index as usize <= record_index
-                    && record_index < chunk.end_index as usize
-            }) {
-                paint_model::property_cell::with_access(|access| {
-                let mut effect = Some(chunk.properties.effect.as_ref());
-                while let Some(node) = effect {
-                    let state = node.state(access);
-                    for filter in [&state.filters, &state.backdrop_filters] {
-                        for layer in filter.reflection_mask_layers() {
-                            if let Some(image) = &layer.image {
-                                if image.id != 0 {
-                                    ids.insert(image.id);
+            while chunks
+                .get(chunk_cursor)
+                .is_some_and(|chunk| chunk.end_index as usize <= record_index)
+            {
+                chunk_cursor += 1;
+            }
+            let chunk_index = chunks
+                .get(chunk_cursor)
+                .filter(|chunk| chunk.begin_index as usize <= record_index)
+                .map(|_| chunk_cursor)
+                // Out-of-order chunk ranges (not produced by PaintChunker)
+                // keep the exact containing-chunk answer.
+                .or_else(|| {
+                    chunks.iter().position(|chunk| {
+                        chunk.begin_index as usize <= record_index
+                            && record_index < chunk.end_index as usize
+                    })
+                });
+            if let Some(chunk_index) = chunk_index {
+                if chunk_ids_for != Some(chunk_index) {
+                    chunk_ids_for = Some(chunk_index);
+                    chunk_ids.clear();
+                    let chunk = &chunks[chunk_index];
+                    paint_model::property_cell::with_access(|access| {
+                        let mut effect = Some(chunk.properties.effect.as_ref());
+                        while let Some(node) = effect {
+                            let state = node.state(access);
+                            for filter in [&state.filters, &state.backdrop_filters] {
+                                for layer in filter.reflection_mask_layers() {
+                                    if let Some(image) = &layer.image {
+                                        if image.id != 0 {
+                                            chunk_ids.push(image.id);
+                                        }
+                                    }
+                                    if let Some(shader) = &layer.paint_shader {
+                                        VisitShaderImageIds(shader, &mut |id| {
+                                            chunk_ids.push(id)
+                                        });
+                                    }
                                 }
                             }
-                            if let Some(shader) = &layer.paint_shader {
-                                VisitShaderImageIds(shader, &mut |id| {
-                                    ids.insert(id);
-                                });
-                            }
+                            effect = node.Parent(access).map(|parent| &**parent);
                         }
-                    }
-                    effect = node.Parent(access).map(|parent| &**parent);
+                    });
                 }
-                });
+                ids.extend_from_slice(&chunk_ids);
             }
-            for image_id in ids {
+            ids.sort_unstable();
+            ids.dedup();
+            for &image_id in &ids {
                 by_image
                     .entry(image_id)
                     .or_default()

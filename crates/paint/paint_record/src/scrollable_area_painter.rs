@@ -18,6 +18,11 @@ use crate::paint_info::PaintInfo;
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::{PaintPhase, PaintRect};
 
+/// One lazily exported overflow-control payload shared by the painters of a
+/// single box paint (see ScrollableAreaPainter::Scrollbars).
+pub type ScrollbarPaintDataCell =
+    std::cell::OnceCell<Option<std::sync::Arc<ScrollbarPaintData>>>;
+
 // Source: core/paint/scrollable_area_painter.cc:233-250.
 fn ShouldPaintOverflowControls(
     node: &PaintTreeNode<'_>,
@@ -168,9 +173,36 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
         Self { node, context }
     }
 
+    /// The scrollable area's positioned overflow-control payload, exported
+    /// at most once per `cell`. Chromium's painters read the same
+    /// PaintLayerScrollableArea directly for every control
+    /// (scrollable_area_painter.cc:97-114,218-305); a box painter that both
+    /// paints the controls and records the resizer hit-test data in one
+    /// PaintObject shares one export instead of repositioning the controls
+    /// and rebuilding the payload for each.
+    fn Scrollbars<'d>(&self, cell: &'d ScrollbarPaintDataCell) -> Option<&'d ScrollbarPaintData> {
+        cell.get_or_init(|| {
+            self.node
+                .fragment
+                .as_deref()
+                .expect("paint tree node has a fragment")
+                .ViewScrollbars()
+        })
+        .as_deref()
+    }
+
     // Source: core/paint/scrollable_area_painter.h:34-37.
     // Source: core/paint/scrollable_area_painter.cc:218-446.
     pub fn PaintOverflowControls(&self, info: &PaintInfo<'c, 'o>) {
+        self.PaintOverflowControlsWithData(info, &ScrollbarPaintDataCell::new());
+    }
+
+    /// PaintOverflowControls reading the payload through `scrollbars`.
+    pub fn PaintOverflowControlsWithData(
+        &self,
+        info: &PaintInfo<'c, 'o>,
+        scrollbars: &ScrollbarPaintDataCell,
+    ) {
         let fragment = self
             .node
             .fragment
@@ -186,7 +218,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
         if !ShouldPaintOverflowControls(self.node, paint_as_overlay, info.phase) {
             return;
         }
-        let Some(data) = fragment.ViewScrollbars() else {
+        let Some(data) = self.Scrollbars(scrollbars) else {
             return;
         };
         let _border_properties = self
@@ -402,7 +434,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        self.PaintResizer(info, &data);
+        self.PaintResizer(info, data);
     }
 
     // Source: core/paint/scrollable_area_painter.cc:43-95,116-216. Custom
@@ -544,12 +576,17 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
     // Source: core/paint/scrollable_area_painter.h:42-45.
     // Source: core/paint/scrollable_area_painter.cc:97-114.
     pub fn RecordResizerScrollHitTestData(&self) {
+        self.RecordResizerScrollHitTestDataWithData(&ScrollbarPaintDataCell::new());
+    }
+
+    /// RecordResizerScrollHitTestData reading the payload through `scrollbars`.
+    pub fn RecordResizerScrollHitTestDataWithData(&self, scrollbars: &ScrollbarPaintDataCell) {
         let fragment = self
             .node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.ViewScrollbars() else {
+        let Some(data) = self.Scrollbars(scrollbars) else {
             return;
         };
         if data.resizer_touch_size.width <= 0.0 || data.resizer_touch_size.height <= 0.0 {
