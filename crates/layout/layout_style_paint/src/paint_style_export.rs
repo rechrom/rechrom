@@ -1445,7 +1445,7 @@ pub fn ExportGeometryProperties(
         .into_iter()
         .any(|id| style.HasWillChangeProperty(id));
         output.will_change_scroll_position = style.HasWillChangeScrollPosition();
-        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()) }
             && (output.will_change_transform
                 || output.will_change_opacity
                 || output.will_change_filter

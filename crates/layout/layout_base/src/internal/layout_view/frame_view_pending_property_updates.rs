@@ -32,6 +32,11 @@ impl FrameViewPendingPropertyUpdates {
                 .is_some()
         })
     }
+    fn Take(set: &PendingSet) -> Vec<Member<LayoutObject>> {
+        set.borrow_mut()
+            .as_mut()
+            .map_or_else(Vec::new, |set| set.drain().map(|(_, object)| object).collect())
+    }
     fn RemoveAll(set: &PendingSet) {
         if let Some(set) = set.borrow().as_ref() {
             for object in set.values() {
@@ -69,6 +74,15 @@ impl LayoutView {
         FrameViewPendingPropertyUpdates::Remove(
             &self.frame_view_pending_property_updates_.opacity,
             object,
+        )
+    }
+    /// LocalFrameView::ExecuteAllPendingUpdates (local_frame_view.cc:
+    /// 5498-5525) iterates each pending set and then clears it. PrePaint
+    /// owns the ObjectPaintProperties these members name, so the Layout side
+    /// hands the members over and clears the set in one step.
+    pub fn TakePendingTransformUpdates(&self) -> Vec<Member<LayoutObject>> {
+        FrameViewPendingPropertyUpdates::Take(
+            &self.frame_view_pending_property_updates_.transform,
         )
     }
     pub fn RemoveAllPendingUpdates(&self) {

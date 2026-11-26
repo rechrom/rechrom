@@ -712,7 +712,7 @@ impl PaintLayer {
     }
 
     // Source: core/paint/paint_layer.cc:378-384 and paint_layer.h:687.
-    fn SetNeedsDescendantDependentFlagsUpdate(&mut self) {
+    pub(crate) fn SetNeedsDescendantDependentFlagsUpdate(&mut self) {
         let mut layer = self as *mut PaintLayer;
         while !layer.is_null() {
             let current = unsafe { &mut *layer };

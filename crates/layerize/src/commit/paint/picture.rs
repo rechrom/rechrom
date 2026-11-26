@@ -68,7 +68,7 @@ pub fn CreateRasterSource<R: PaintSkiaBackend>(
     recording: &RecordingSource<CpuRecordingTypes<R>>,
 ) -> RasterSourceStorage<R> {
     let value = recording.RasterSourceFields();
-    if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+    if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some()) } {
         eprintln!(
             "partial-full-replay-source count={} requires_clear={}",
             value.full_replays_for_partial_raster.len(),

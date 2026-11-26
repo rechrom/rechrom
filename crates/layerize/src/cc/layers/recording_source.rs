@@ -206,7 +206,7 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
         inner: Rect,
         replay_rect: Rect,
     ) {
-        if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+        if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some()) } {
             eprintln!(
                 "partial-full-replay-set outer={:?} inner={:?} replay={:?}",
                 outer, inner, replay_rect

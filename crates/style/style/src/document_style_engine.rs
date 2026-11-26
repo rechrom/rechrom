@@ -343,6 +343,17 @@ fn ConsumeProductionRuleCollection(
     }
 }
 
+/// Inputs of the active-sheet global rule registries, and the @function
+/// registry built from them.
+struct GlobalStyleInputs {
+    sheets: Arc<Vec<(Rc<CSSStyleSheet>, CascadeOrigin)>>,
+    scopes: Arc<Vec<Option<usize>>>,
+    media: MediaValuesCachedData,
+    function_registry: Rc<crate::production_style_sheet::ProductionFunctionRegistry>,
+    /// Whether any active rule carries @scope conditions.
+    has_scope_rules: bool,
+}
+
 /// RuleSet owners supplied to the translated StyleResolver entry. Chromium's
 /// DefaultStyleSheets exposes distinct HTML, HTML-quirks, SVG and MathML UA
 /// RuleSets and the scoped resolver supplies the active author RuleSets. CSSOM
@@ -899,6 +910,16 @@ pub struct DocumentStyleEngine {
     translated_rule_shadow_stats: TranslatedRuleShadowStats,
     sheet_revision: Option<u64>,
     environment: Option<(MediaValuesCachedData, CompatibilityMode)>,
+    /// The active-sheet global rules collected by the last update and the
+    /// inputs they were collected under (StyleEngine::UpdateActiveStyle).
+    global_style_inputs: Option<GlobalStyleInputs>,
+    /// StyleResolver::initial_style_ (style_resolver.cc): rebuilt only when
+    /// the media environment or the color-scheme settings it reads change.
+    initial_style: Option<(
+        MediaValuesCachedData,
+        production_style_builder::ColorSchemeSettings,
+        Persistent<ComputedStyle>,
+    )>,
     matches: HashMap<usize, RetainedRuleSignature>,
     cascade_values: HashMap<usize, HashMap<CSSPropertyID, Rc<Value>>>,
     custom_properties: HashMap<usize, Rc<CustomProperties>>,
@@ -1087,6 +1108,8 @@ impl DocumentStyleEngine {
             translated_rule_shadow_stats: Default::default(),
             sheet_revision: None,
             environment: None,
+            global_style_inputs: None,
+            initial_style: None,
             matches: HashMap::new(),
             cascade_values: HashMap::new(),
             custom_properties: HashMap::new(),
@@ -1139,6 +1162,8 @@ impl DocumentStyleEngine {
         self.text_track_owners = Default::default();
         // CSSGlobalRuleSet::Dispose and the scoped-resolver feature owners.
         self.sheet_dependencies = Default::default();
+        self.global_style_inputs = None;
+        self.initial_style = None;
         self.shared_selector_dependencies = Default::default();
         self.style_selectors = Default::default();
         self.rule_candidate_index = None;
@@ -2041,36 +2066,64 @@ impl DocumentStyleEngine {
             browser_tracing::span("style_invalidation", "StyleEngine.Invalidate");
         let global_invalidation =
             browser_tracing::span("style_invalidation", "StyleEngine.InvalidateGlobalInputs");
-        let font_features_changed = self.SynchronizeFontFeatureValues(
-            document,
-            media,
-            &active_sheets,
-            active_sheet_scopes.as_slice(),
-        );
-        let function_registry = {
-            let rule_sets = active_sheets
-                .iter()
-                .filter_map(|(sheet, _)| {
-                    self.translated_rule_sets
-                        .get(&(sheet.Identity(), sheet.Revision()))
-                        .cloned()
-                })
-                .collect::<Vec<_>>();
-            crate::production_style_sheet::ProductionFunctionRegistry::FromRuleSets(&rule_sets)
-        };
-        let registry_changed = self
-            .property_registry
-            .UpdateDeclaredProperties(&active_sheets, &DocumentMediaValues::new(document, media));
+        // cpp: StyleEngine::UpdateActiveStyle (style_engine.cc) collects the
+        // @font-feature-values, @function and @property rules of the active
+        // sheets only when the active style sheets or the media query results
+        // they were collected under changed (ApplyRuleSetChanges). The retained
+        // active-sheet owners are reused exactly when nothing changed.
+        let global_inputs_current = !document.StyleState().all_dirty
+            && self.global_style_inputs.as_ref().is_some_and(|inputs| {
+                Arc::ptr_eq(&inputs.sheets, &active_sheets)
+                    && Arc::ptr_eq(&inputs.scopes, &active_sheet_scopes)
+                    && inputs.media == *media
+            });
+        let (font_features_changed, function_registry_owner, registry_changed, has_scope_rules) =
+            if global_inputs_current {
+                let inputs = self.global_style_inputs.as_ref().unwrap();
+                (false, inputs.function_registry.clone(), false, inputs.has_scope_rules)
+            } else {
+                let font_features_changed = self.SynchronizeFontFeatureValues(
+                    document,
+                    media,
+                    &active_sheets,
+                    active_sheet_scopes.as_slice(),
+                );
+                let function_registry = Rc::new({
+                    let rule_sets = active_sheets
+                        .iter()
+                        .filter_map(|(sheet, _)| {
+                            self.translated_rule_sets
+                                .get(&(sheet.Identity(), sheet.Revision()))
+                                .cloned()
+                        })
+                        .collect::<Vec<_>>();
+                    crate::production_style_sheet::ProductionFunctionRegistry::FromRuleSets(
+                        &rule_sets,
+                    )
+                });
+                let registry_changed = self.property_registry.UpdateDeclaredProperties(
+                    &active_sheets,
+                    &DocumentMediaValues::new(document, media),
+                );
+                let has_scope_rules = active_sheets.iter().any(|(sheet, _)| {
+                    sheet.rules.iter().any(|rule| !rule.scope_conditions.is_empty())
+                });
+                self.global_style_inputs = Some(GlobalStyleInputs {
+                    sheets: active_sheets.clone(),
+                    scopes: active_sheet_scopes.clone(),
+                    media: media.clone(),
+                    function_registry: function_registry.clone(),
+                    has_scope_rules,
+                });
+                (font_features_changed, function_registry, registry_changed, has_scope_rules)
+            };
+        let function_registry = &*function_registry_owner;
         let environment = (media.clone(), document.GetCompatibilityMode());
         // Scope activation can change when its triggering context changes.
         // Container rules carry their dependency flags on ComputedStyle,
         // including when the previous query result was false.
-        let conservative_scope_invalidation = active_sheets.iter().any(|(sheet, _)| {
-            sheet
-                .rules
-                .iter()
-                .any(|rule| !rule.scope_conditions.is_empty())
-        }) && (!document.StyleState().changes.is_empty()
+        let conservative_scope_invalidation = has_scope_rules
+            && (!document.StyleState().changes.is_empty()
             || !self.invalidated_container_nodes.is_empty());
         let environment_changed = self.environment.as_ref() != Some(&environment);
         let all_dirty = font_features_changed
@@ -2113,7 +2166,11 @@ impl DocumentStyleEngine {
         // Sheet order is local to a TreeScope. Inserting a shadow sheet can
         // shift every later slot in the flattened host projection without
         // changing any of those scopes' sheets.
-        let changed_tree_scopes = self
+        let same_active_sheets = Arc::ptr_eq(&self.active_sheets, &active_sheets)
+            && Arc::ptr_eq(&self.active_sheet_scopes, &active_sheet_scopes);
+        let changed_tree_scopes = if same_active_sheets {
+            HashSet::default()
+        } else { self
             .active_sheet_scopes
             .iter()
             .chain(active_sheet_scopes.iter())
@@ -2135,7 +2192,7 @@ impl DocumentStyleEngine {
                     .map(|(sheet, _)| sheet);
                 !old.eq(new)
             })
-            .collect::<HashSet<_>>();
+            .collect::<HashSet<_>>() };
         let document_sheets_changed = changed_tree_scopes.contains(&document.Root())
             || !ua_unchanged
             || media_rule_sets_changed;
@@ -2337,7 +2394,7 @@ impl DocumentStyleEngine {
                 }
                 let candidates_before = candidates.len();
                 let dirty_before = dirty.len();
-                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) } {
                     let index = match *change {
                         StyleChange::PlaceholderShown(index)
                         | StyleChange::EmptyState(index)
@@ -3455,10 +3512,19 @@ impl DocumentStyleEngine {
         // Build and install each immutable style in traversal order. The
         // translated StyleResolver owns Blink's initial-style lifecycle; this
         // engine only supplies its immutable host environment.
-        let initial_root = crate::resolver::production_style_resolver::InitialStyleForDocument(
-            media,
-            self.color_scheme_settings,
-        );
+        if !self.initial_style.as_ref().is_some_and(|(initial_media, settings, _)| {
+            initial_media == media && *settings == self.color_scheme_settings
+        }) {
+            self.initial_style = Some((
+                media.clone(),
+                self.color_scheme_settings,
+                crate::resolver::production_style_resolver::InitialStyleForDocument(
+                    media,
+                    self.color_scheme_settings,
+                ),
+            ));
+        }
+        let initial_root = self.initial_style.as_ref().unwrap().2.clone();
         let initial_root_ref = unsafe { &*initial_root.Get() };
         // Record only identities needed by the exceptional SVG resource pass.
         // Ordinary styles are installed on their element as soon as recalc for
@@ -3868,7 +3934,7 @@ impl DocumentStyleEngine {
                         collaborators.substitution_context = resolver_substitution;
                         collaborators.image_resolver = Some(&resolver_images);
                         collaborators.property_registry = Some(&self.property_registry);
-                        collaborators.function_registry = Some(&function_registry);
+                        collaborators.function_registry = Some(function_registry);
                         collaborators.font_metrics = self.font_metrics.as_deref();
                         let animation_samples = document.AnimationStyles(document.Node(index).Id());
                         let animation_interpolations = if animation_samples.is_empty() {
@@ -3885,7 +3951,7 @@ impl DocumentStyleEngine {
                             Err(failures) => {
                                 self.translated_rule_shadow_stats
                                     .translated_style_resolver_failures += 1;
-                                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                                if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) } {
                                     eprintln!(
                                         "translated StyleResolver interpolation failure node={index}: {failures:?}"
                                     );
@@ -3911,7 +3977,7 @@ impl DocumentStyleEngine {
                             Err(failures) => {
                                 self.translated_rule_shadow_stats
                                     .translated_style_resolver_failures += 1;
-                                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                                if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) } {
                                     eprintln!(
                                         "translated StyleResolver transition failure node={index}: {failures:?}"
                                     );
@@ -4010,7 +4076,7 @@ impl DocumentStyleEngine {
                                 Err(failures) => {
                                     self.translated_rule_shadow_stats
                                         .translated_style_resolver_failures += 1;
-                                    if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                                    if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) } {
                                         eprintln!(
                                             "translated StyleResolver failure node={index}: {failures:?}"
                                         );
@@ -4357,7 +4423,7 @@ impl DocumentStyleEngine {
                                         collaborators.image_resolver = Some(&resolver_images);
                                         collaborators.property_registry =
                                             Some(&self.property_registry);
-                                        collaborators.function_registry = Some(&function_registry);
+                                        collaborators.function_registry = Some(function_registry);
                                         collaborators.font_metrics = self.font_metrics.as_deref();
                                         collaborators.matched_properties_cache =
                                             Some(self.matched_properties_cache.clone());
@@ -4453,10 +4519,7 @@ impl DocumentStyleEngine {
                                         Err(failures) => {
                                             self.translated_rule_shadow_stats
                                                 .translated_style_resolver_failures += 1;
-                                            if std::env::var_os(
-                                                "RECHROM_DEBUG_STYLE_RESOLVER",
-                                            )
-                                            .is_some()
+                                            if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) }
                                             {
                                                 eprintln!(
                                                     "translated highlight StyleResolver failure node={index} pseudo={pseudo_id:?}: {failures:?}"
@@ -4708,7 +4771,7 @@ impl DocumentStyleEngine {
                                     media,
                                     environment_variables,
                                     &rules,
-                                    Some(&function_registry),
+                                    Some(function_registry),
                                     !none,
                                     match kind {
                                         PseudoStyleKind::Before => before_has_marker,
@@ -4793,7 +4856,7 @@ impl DocumentStyleEngine {
                                     media,
                                     environment_variables,
                                     rules,
-                                    Some(&function_registry),
+                                    Some(function_registry),
                                     !none,
                                     &production_resolver_rule_sets,
                                     &rule_collections,
@@ -7627,7 +7690,7 @@ impl DocumentStyleEngine {
                     .translated_style_resolver_failures += 1;
                 self.translated_rule_shadow_stats
                     .translated_style_cascade_pseudo_failures += 1;
-                if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
+                if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some()) } {
                     eprintln!(
                         "translated pseudo StyleResolver failure node={index} pseudo={kind:?}: {failures:?}"
                     );
