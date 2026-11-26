@@ -291,11 +291,45 @@ impl PartialEq for JsObject {
     }
 }
 impl Eq for JsObject {}
+// Latin-1 code units are exactly the scalar values U+0000..U+00FF.
+fn latin1_to_string(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if text.is_ascii() => text.to_owned(),
+        _ => bytes.iter().map(|&byte| char::from(byte)).collect(),
+    }
+}
 impl JsString {
     pub fn to_utf16(&self) -> Vec<u16> {
         unsafe { JS_CopyString16(self.0.raw) }
     }
+    /// One conversion from the engine's own code units: a well-formed string
+    /// becomes UTF-8 directly; a string with lone surrogates keeps its exact
+    /// UTF-16 code units. Never copies through an intermediate UTF-16 vector
+    /// for flat strings (V8 bindings' NativeValueTraits<IDLString> analogue).
+    pub fn to_host_string(&self) -> Result<String, Vec<u16>> {
+        match unsafe { JS_FlatStringCodeUnits(self.0.raw) } {
+            Some(JSStringCodeUnits::Latin1(bytes)) => Ok(latin1_to_string(bytes)),
+            Some(JSStringCodeUnits::Utf16(units)) => {
+                String::from_utf16(units).map_err(|_| units.to_vec())
+            }
+            None => {
+                let units = self.to_utf16();
+                String::from_utf16(&units).map_err(|_| units)
+            }
+        }
+    }
     pub fn to_string_lossy(&self) -> String {
+        // Well-formed strings convert exactly from their code units. Only a
+        // string with lone surrogates takes the engine's CString projection.
+        match unsafe { JS_FlatStringCodeUnits(self.0.raw) } {
+            Some(JSStringCodeUnits::Latin1(bytes)) => return latin1_to_string(bytes),
+            Some(JSStringCodeUnits::Utf16(units)) => {
+                if let Ok(text) = String::from_utf16(units) {
+                    return text;
+                }
+            }
+            None => {}
+        }
         unsafe {
             let mut len = 0;
             let bytes = JS_ToCStringLen2(self.0.owner.ctx, &mut len, self.0.raw, 0);

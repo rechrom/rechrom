@@ -374,6 +374,14 @@ impl PersistentDocument {
         self.custom_elements.HasPending()
     }
 
+    /// Whether PendingCustomElementReferenceRoots would name any node.
+    pub fn HasPendingCustomElementReferenceRoots(&self) -> bool {
+        self.custom_elements
+            .reactions
+            .values()
+            .any(|queue| !queue.is_empty())
+    }
+
     /// Nodes retained by the source custom-element reaction queues.
     pub fn PendingCustomElementReferenceRoots(&self) -> Vec<u64> {
         self.custom_elements

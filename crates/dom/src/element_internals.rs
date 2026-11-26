@@ -327,6 +327,10 @@ impl PersistentDocument {
             _ => {}
         }
     }
+    /// Whether ElementInternalsAnchorReferences would report any element.
+    pub fn HasElementInternalsAnchorReferences(&self) -> bool {
+        !self.custom_elements.internals.is_empty()
+    }
     pub fn ElementInternalsAnchorReferences(&self) -> Vec<(u64, Option<u64>)> {
         self.custom_elements
             .internals
