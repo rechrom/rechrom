@@ -355,13 +355,11 @@ pub(super) fn update_paint_input(
         let layout_style = PreservePaintOnlyFontBinding(style, previous);
         let image_resource_id = record.input.resources.image_resource_id;
         let new_resources = resources.ToData(image_resource_id);
-        let fields =
-            layout_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
-                previous,
-                unsafe { &*layout_style },
-            );
         let image_resource_binding_changed =
             StyleImageResourceBindingsChanged(previous, unsafe { &*layout_style });
+        // The style difference itself is classified by the SetStyle call
+        // below (ComputedStyle::VisualInvalidationDiff, layout_object.cc:3020);
+        // a property-only change such as transform keeps the cached drawing.
         if natural_size_change_is_paint_only {
             let object = unsafe { &mut *record.object };
             object.SetIntrinsicLogicalWidthsDirty(MarkingBehavior::kMarkContainerChain);
@@ -379,14 +377,12 @@ pub(super) fn update_paint_input(
             unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kStyle,
             );
-        } else if fields != 0
-            || StyleResourceBindingsChangedForStyles(
-                previous,
-                unsafe { &*layout_style },
-                record.input.resources.as_ref(),
-                &new_resources,
-            )
-            || control_paint_state_changed
+        } else if StyleResourceBindingsChangedForStyles(
+            previous,
+            unsafe { &*layout_style },
+            record.input.resources.as_ref(),
+            &new_resources,
+        ) || control_paint_state_changed
         {
             unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kStyle,

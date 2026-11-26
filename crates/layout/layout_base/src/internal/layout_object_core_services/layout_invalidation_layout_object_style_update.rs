@@ -223,6 +223,7 @@ fn same_transform_operation<T: PartialEq>(left: *mut T, right: *mut T) -> bool {
 fn transform_style_difference(
     old_style: &ComputedStyle,
     new_style: &ComputedStyle,
+    field_diff: u64,
 ) -> StyleDifference {
     // ComputedStyle::VisualInvalidationDiff marks every field in the generated
     // kScrollAnchor group as an anchoring suppression trigger.  Layout's
@@ -233,7 +234,6 @@ fn transform_style_difference(
     //
     // Source: core/style/computed_style.cc:899-904;
     //         core/layout/layout_object.cc:3521-3523.
-    let field_diff = ComputedStyleBase::FieldInvalidationDiff(old_style, new_style);
     let transform_property_changed = old_style.Transform() != new_style.Transform();
     let offset_anchor_changed = old_style.OffsetAnchor() != new_style.OffsetAnchor();
     let offset_path_changed = !ValuesEquivalent(old_style.OffsetPath(), new_style.OffsetPath());
@@ -298,6 +298,88 @@ fn transform_style_difference(
     diff
 }
 
+/// Whether SetStyle invalidates this object's DisplayItemClient.
+///
+/// Source: core/layout/layout_object.cc:3076-3078,3109-3120,3150-3160 with
+/// AdjustStyleDifference (2878-2918) and AdjustForCompositableAnimationPaint
+/// (257-275). Chromium invalidates on NeedsNormalPaintInvalidation, on the
+/// simple invalidation AdjustStyleDifference derives from
+/// text_decoration_or_color_changed (taken here without its narrowing
+/// predicate, which only skips work), and on background-color / clip-path
+/// changes without a compositor paint worklet. A transform or opacity change
+/// is property-only.
+///
+/// The PaintLayer::StyleDidChange repaint branches for z-index
+/// (paint_layer.cc:2512-2518) and moving-pixel filters (2429-2433), the
+/// non-isolated blend-mode descendant bookkeeping, and the layout-driven
+/// geometry branches are not separately translated on this retained path;
+/// those differences keep the full object invalidation.
+#[allow(non_snake_case)]
+fn StyleChangeNeedsPaintInvalidation(diff: &StyleDifference) -> bool {
+    diff.NeedsNormalPaintInvalidation()
+        || diff.NeedsSimplePaintInvalidation()
+        || diff.text_decoration_or_color_changed()
+        || diff.background_color_changed()
+        || diff.clip_path_changed()
+        || diff.NeedsFullLayout()
+        || diff.NeedsPositionedLayout()
+        || diff.needs_reshape()
+        || diff.needs_recompute_visual_overflow()
+        || diff.z_index_changed()
+        || diff.filter_changed()
+        || diff.mask_changed()
+        || diff.blend_mode_changed()
+        || diff.border_radius_changed()
+        || diff.border_shape_changed()
+        || diff.needs_box_paint_property_update()
+}
+
+/// The document collaborators of ComputedStyle::VisualInvalidationDiff seen
+/// from a retained LayoutObject: this product installs no LayoutWorklet or
+/// CSSPaintImageGenerator, so a paint() image is unpainted and invalidates
+/// (computed_style.cc DiffNeedsNormalPaintInvalidation), and registered
+/// worklet property lists never reach the equality callbacks.
+struct LayoutObjectVisualInvalidationContext;
+
+impl layout_style::style::visual_invalidation_diff::VisualInvalidationDiffContext
+    for LayoutObjectVisualInvalidationContext
+{
+    fn LayoutWorkletDefinition(
+        &self,
+        _name: &foundation::AtomicString,
+    ) -> layout_style::style::visual_invalidation_diff::LayoutWorkletDefinition<'_> {
+        layout_style::style::visual_invalidation_diff::LayoutWorkletDefinition::FeatureDisabled
+    }
+    fn PaintInvalidationProperties(
+        &self,
+        _image: &layout_style::style::style_image::StyleImage,
+    ) -> layout_style::style::visual_invalidation_diff::PaintInvalidationProperties<'_> {
+        layout_style::style::visual_invalidation_diff::PaintInvalidationProperties::Unpainted
+    }
+    fn NativePropertiesEqual(
+        &self,
+        _properties: &[foundation::CSSPropertyID],
+        _current: &ComputedStyle,
+        _other: &ComputedStyle,
+    ) -> bool {
+        false
+    }
+    fn CustomPropertiesEqual(
+        &self,
+        _properties: &[foundation::AtomicString],
+        _current: &ComputedStyle,
+        _other: &ComputedStyle,
+    ) -> bool {
+        false
+    }
+    fn Potential3DCompositingReasons(
+        &self,
+        style: &ComputedStyle,
+    ) -> foundation::CompositingReasons {
+        style.Potential3DCompositingReasons()
+    }
+}
+
 // Source: core/paint/paint_layer_painter.cc:167-190.
 //
 // PaintLayer::StyleDidChange compares this predicate before and after a style
@@ -335,21 +417,42 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
     }
     let old_style = object.StylePtr();
     let mut difference = StyleDifference::default();
+    let mut visual_difference = StyleDifference::default();
     let mut painted_output_invisible_changed = false;
     if !old_style.is_null() {
         let old_style_ref = unsafe { &*old_style };
         let new_style_ref = unsafe { &*style };
         painted_output_invisible_changed =
             painted_output_invisible(old_style_ref) != painted_output_invisible(new_style_ref);
-        difference = transform_style_difference(old_style_ref, new_style_ref);
-        // Source: core/layout/layout_object.cc:3102-3227. Chromium starts
+        let field_diff = ComputedStyleBase::FieldInvalidationDiff(old_style_ref, new_style_ref);
+        difference = transform_style_difference(old_style_ref, new_style_ref, field_diff);
+        // Source: core/layout/layout_object.cc:3018-3020. Chromium starts
         // SetStyle() with ComputedStyle::VisualInvalidationDiff(). The layout
-        // boundary already classifies geometry separately, but a retained
-        // LayoutObject must still invalidate its DisplayItemClient whenever
-        // the complete projected style changes. Otherwise PaintController is
-        // allowed to move the old drawing from the previous PaintArtifact even
-        // though this fragment now carries a new color/background/effect.
-        if old_style_ref != new_style_ref {
+        // boundary classifies geometry separately (the projected difference
+        // above), so the visual diff decides only this object's paint
+        // invalidation and paint-property update.
+        //
+        // The retained StyleDidChange chain translates the paint-property
+        // consequences of transform and opacity (PaintLayer::StyleDidChange,
+        // paint_layer.cc:2464-2493) but not yet every other branch Chromium
+        // spreads over LayoutBox/LayoutBoxModelObject/PaintLayer. A style
+        // change confined to those two property groups therefore follows
+        // Chromium exactly; every other difference keeps the full object
+        // invalidation, whose PrePaint visit rebuilds the remaining state.
+        const PROPERTY_ONLY_FIELDS: u64 = FieldDifference::kTransformData.bits()
+            | FieldDifference::kTransformProperty.bits()
+            | FieldDifference::kTransformOther.bits()
+            | FieldDifference::kHasTransform.bits()
+            | FieldDifference::kOpacity.bits()
+            | FieldDifference::kScrollAnchor.bits();
+        let property_only = field_diff != 0 && field_diff & !PROPERTY_ONLY_FIELDS == 0;
+        if field_diff != 0 {
+            visual_difference = old_style_ref
+                .VisualInvalidationDiff(new_style_ref, &LayoutObjectVisualInvalidationContext);
+        }
+        if old_style_ref != new_style_ref
+            && (!property_only || StyleChangeNeedsPaintInvalidation(&visual_difference))
+        {
             difference.SetNeedsNormalPaintInvalidation();
         }
     }
@@ -380,6 +483,31 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
             object.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kStyle,
             );
+        }
+    }
+    // Source: core/layout/layout_object.cc:3173-3184 (no PaintLayer) and
+    // core/paint/paint_layer.cc:2486-2493 (PaintLayer::StyleDidChange). A
+    // property-only change rebuilds this object's paint property nodes;
+    // PaintPropertyTreeBuilder requests a repaint itself when nodes are added
+    // or removed, so the cached drawings stay valid.
+    if !object.IsText()
+        && (visual_difference.transform_changed()
+            || visual_difference.opacity_changed()
+            || visual_difference.z_index_changed()
+            || visual_difference.filter_changed()
+            || visual_difference.clip_property_changed()
+            || visual_difference.blend_mode_changed()
+            || visual_difference.mask_changed()
+            || visual_difference.compositing_reasons_changed())
+    {
+        object.SetNeedsPaintPropertyUpdate();
+        if object.HasLayer() {
+            let layer = object.EnclosingLayer();
+            if !layer.is_null() {
+                unsafe { &mut *layer }.MarkAncestorChainForFlagsUpdate(
+                    crate::internal::paint_layer::DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+                );
+            }
         }
     }
     // Source: core/paint/paint_layer.cc:2525-2538. The ancestor layer's
