@@ -496,11 +496,13 @@ pub fn SetInlineCSSDeclaration(
         return None;
     }
     let id = CSSOMPropertyID(name)?;
-    let custom = foundation::AtomicString::from_str(name);
+    // Only a custom property needs its actual AtomicString name.
+    let custom = (id == foundation::CSSPropertyID::kVariable)
+        .then(|| foundation::AtomicString::from_str(name));
     Some(SetInlineCSSPropertyInternal(
         style,
         id,
-        Some(&custom),
+        custom.as_ref(),
         &foundation::String::FromUtf8(value.as_bytes()),
         important,
         standard_mode,
@@ -559,11 +561,13 @@ pub fn SetInlineCSSDeclarationWithContext(
         return None;
     }
     let id = CSSOMPropertyID(name)?;
-    let custom = foundation::AtomicString::from_str(name);
+    // Only a custom property needs its actual AtomicString name.
+    let custom = (id == foundation::CSSPropertyID::kVariable)
+        .then(|| foundation::AtomicString::from_str(name));
     Some(SetInlineCSSPropertyInternal(
         style,
         id,
-        Some(&custom),
+        custom.as_ref(),
         &foundation::String::FromUtf8(value.as_bytes()),
         important,
         context.InlineMode() == crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
@@ -626,13 +630,30 @@ fn SetInlineCSSPropertyInternal(
                 false,
             )
         } else {
-            CSSParserImpl::<Backend>::ParseValue(
-                &mut properties,
-                id,
-                StringView::from(value),
-                important,
-                Some(context),
-            )
+            // MutableCSSPropertyValueSet::ParseAndSetProperty -> CSSParser::
+            // ParseValue (css_parser.cc:179-232): the property's fast-path
+            // parser runs before the full declaration parser.
+            let resolved = crate::css_property_names::ResolveCSSPropertyID(id);
+            let text = StringView::from(value);
+            match crate::parser::css_parser_fast_paths::MaybeParseValue(resolved, &text, mode) {
+                Some(parsed) => properties.SetLonghandProperty(
+                    crate::production_css_value::PropertyValue::new(
+                        &crate::css_property_name::CSSPropertyName::new(resolved),
+                        parsed,
+                        important,
+                        false,
+                        0,
+                        false,
+                    ),
+                ),
+                None => CSSParserImpl::<Backend>::ParseValue(
+                    &mut properties,
+                    id,
+                    text,
+                    important,
+                    Some(context),
+                ),
+            }
         }
     };
     trace.set(

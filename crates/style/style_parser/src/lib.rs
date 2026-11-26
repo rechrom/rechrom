@@ -20,6 +20,7 @@ pub use style_model::css_property_value_set;
 pub use style_model::css_resource_fetch_restriction;
 pub use style_model::{css_selector, css_selector_list};
 pub mod css_parser;
+pub mod css_parser_fast_paths;
 pub mod css_parser_context;
 pub mod css_parser_idioms;
 pub mod css_parser_impl;
