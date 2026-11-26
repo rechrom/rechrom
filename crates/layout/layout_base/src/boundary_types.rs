@@ -490,6 +490,10 @@ pub struct FragmentPaintData<Paint> {
     /// per-publication geometry so PrePaint can raise it without copying the
     /// shared PaintProperties payload.
     pub pre_paint_invalidation: PrePaintInvalidation,
+    /// The paint-input refresh (`PaintFragmentCursor::
+    /// AdvancePrePaintInvalidationEpoch`) whose LayoutObject dirty bits
+    /// `pre_paint_invalidation` holds; 0 before the first visit read.
+    pub pre_paint_invalidation_epoch: u64,
     /// The resident source fragment this slot was last bound to by
     /// LayoutPaintState::Bind (`None` for hand-built fixtures). Chromium
     /// painters read box geometry from the fragment they paint
@@ -531,6 +535,7 @@ impl<Paint> FragmentPaintData<Paint> {
             text_paint_timing_non_whitespace: false,
             resources: None,
             pre_paint_invalidation: PrePaintInvalidation::default(),
+            pre_paint_invalidation_epoch: 0,
             resident_owner: ResidentFragmentOwner::None,
             paint,
         }

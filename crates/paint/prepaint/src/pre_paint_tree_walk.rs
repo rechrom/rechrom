@@ -63,8 +63,15 @@ use paint_property_tree_builder::PaintPropertyTreeBuilder;
 
 /// Read-only source for one PrePaint pass. Topology always comes from source
 /// PhysicalFragment/FragmentItem links.
+///
+/// The second field is the fragment's FragmentData paint sidecar once this
+/// visit resolved it. Chromium's PrePaintTreeWalk reaches each FragmentData
+/// once per visit through FragmentDataIterator (core/paint/
+/// pre_paint_tree_walk.cc WalkLayoutObject) and then reads it directly; it
+/// does not repeat the PhysicalBoxFragment::GetFragmentData lookup for every
+/// field it reads.
 #[derive(Clone, Copy)]
-pub struct PaintFragmentSource<'a>(PaintFragmentCursor<'a>);
+pub struct PaintFragmentSource<'a>(PaintFragmentCursor<'a>, Option<*const FragmentPaintData>);
 
 /// A LocalFrameView's actual resident LayoutView and its lifetime lease.
 /// The embedding supplies the owner fragment, never a copied child tree.
@@ -113,15 +120,30 @@ impl EmbeddedLocalFrameView {
 
 impl<'a> PaintFragmentSource<'a> {
     pub fn FromCursor(cursor: PaintFragmentCursor<'a>) -> Self {
-        Self(cursor)
+        Self(cursor, None)
+    }
+
+    /// This source with its FragmentData sidecar resolved once for the
+    /// visit (FragmentDataIterator). The sidecar address is stable for the
+    /// publication the cursor belongs to.
+    pub(crate) fn Resolved(self) -> Self {
+        if self.1.is_some() {
+            return self;
+        }
+        Self(self.0, Some(self.0.PaintData() as *const FragmentPaintData))
     }
 
     pub fn PaintData(self) -> &'a FragmentPaintData {
-        self.0.PaintData()
+        match self.1 {
+            // The sidecar lives on the owner's FragmentData for the whole
+            // publication this cursor's lease keeps alive.
+            Some(data) => unsafe { &*data },
+            None => self.0.PaintData(),
+        }
     }
 
     pub fn Children(self) -> impl Iterator<Item = Self> + 'a {
-        self.0.Children().into_iter().map(Self)
+        self.0.Children().into_iter().map(|child| Self(child, None))
     }
 
     pub fn Cursor(self) -> PaintFragmentCursor<'a> {
@@ -133,7 +155,10 @@ impl<'a> std::ops::Deref for PaintFragmentSource<'a> {
     type Target = FragmentPaintData;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        match self.1 {
+            Some(data) => unsafe { &*data },
+            None => &self.0,
+        }
     }
 }
 use paint_model::PaintRect;
@@ -1146,6 +1171,11 @@ pub struct PrePaintTreeWalk {
         foundation::intersection_observation_state::IntersectionObservationState,
     pub(crate) client_nodes: HashMap<u64, Vec<*mut PaintTreeNode<'static>>>,
     resident_nodes: Vec<*mut PaintTreeNode<'static>>,
+    /// Visited objects whose paint flags this walk consumed. Chromium clears
+    /// them once per object after WalkLayoutObject handled every fragment of
+    /// it (pre_paint_tree_walk.cc:1584-1585); PrePaint reads the bits at each
+    /// fragment's visit, so they are cleared after the walk.
+    deferred_paint_flag_clears: Vec<*const FragmentPaintData>,
     walk_generation: u64,
     /// This pass's PrePaint revision generation (NodeCache::revision): a
     /// process-unique nonzero value, so a node whose revision equals it
@@ -1204,6 +1234,7 @@ impl Default for PrePaintTreeWalk {
             intersection_observation_state: Default::default(),
             client_nodes: HashMap::default(),
             resident_nodes: Vec::new(),
+            deferred_paint_flag_clears: Vec::new(),
             walk_generation: 0,
             revision_generation: 0,
             resource_memo: Vec::new(),
@@ -6411,6 +6442,11 @@ impl PrePaintTreeWalk {
         let profile = browser_tracing::enabled();
         let checkpoint = || profile.then(std::time::Instant::now);
         let t_start = checkpoint();
+        // FragmentDataIterator: reach this object's FragmentData once.
+        let fragment = fragment.Resolved();
+        // Source: pre_paint_tree_walk.cc:418-436. Read this object's dirty
+        // bits as of this visit.
+        unsafe { fragment.Cursor().ReadPrePaintInvalidationForVisit() };
         // Decision D2: an out-of-flow object takes its effect state from its
         // logical parent before admission, so a retained subtree is compared
         // against, and a rebuilt one parented to, the logical effect.
@@ -7217,7 +7253,7 @@ impl PrePaintTreeWalk {
             // Source: pre_paint_tree_walk.cc:1517-1531,1584-1585. The child
             // walk is blocked, but this object was visited; ClearPaintFlags
             // keeps the descendant bits of a display-locked object.
-            fragment.paint.ClearSourcePaintFlags();
+            self.deferred_paint_flag_clears.push(&*fragment as *const FragmentPaintData);
             return node;
         }
         // Chromium's locked subtree keeps pointers to resident LayoutObjects.
@@ -7299,6 +7335,7 @@ impl PrePaintTreeWalk {
             .chain(embedded_source)
             .enumerate()
         {
+            let child = child.Resolved();
             let previous = if let Some(children) = positional_children.as_mut() {
                 children.next()
             } else {
@@ -7446,12 +7483,11 @@ impl PrePaintTreeWalk {
         cache.physical_children = physical_children;
         cache.contains_local_frames = contains_local_frames;
         self.stats.profile_tail_ns += ProfileNs(t_looped, checkpoint());
-        // Source: pre_paint_tree_walk.cc:1584-1585. Clear the flags this
-        // visit consumed after the children were walked. PrePaint read them
-        // from the slot's snapshot, so a second walk in the same lifecycle
-        // still sees this publication's inputs; LayoutObject bits now mean
-        // "changed since the last PrePaint", as in Chromium.
-        fragment.paint.ClearSourcePaintFlags();
+        // Source: pre_paint_tree_walk.cc:1584-1585. The flags this visit
+        // consumed are cleared after the walk, once every fragment of the
+        // object has read them; LayoutObject bits then mean "changed since
+        // the last PrePaint", as in Chromium.
+        self.deferred_paint_flag_clears.push(&*fragment as *const FragmentPaintData);
         node
     }
 
@@ -8096,6 +8132,8 @@ impl PrePaintTreeWalk {
         self.pending_source_lease = Some(source_lease);
         self.completed_local_frame_prepaint.clear();
         self.paint_invalidator.BeginPass();
+        // The root's dirty bits decide the clean-tree admission below.
+        unsafe { root.Cursor().ReadPrePaintInvalidationForVisit() };
         if source_owner_changed {
             // Sliced inline strips depend on every fragment of the object;
             // resolve them before any node reads them.
@@ -8274,8 +8312,15 @@ impl PrePaintTreeWalk {
             && previous.is_some();
         self.stats.rebind_walk = rebind;
         let force = force && !rebind;
-        self.needs_post_update = force || previous.is_none() || self.logical_tree_changed;
-        if self.logical_tree_changed {
+        // The walk sets needs_post_update itself when it changes topology,
+        // geometry or phase inputs. A retained tree in logical (paint) order
+        // only needs its physical order back for the walk and its logical
+        // order restored afterwards; the other post passes and the client
+        // directory stay current when the walk changed nothing (Chromium
+        // rebuilds no such resident structure per lifecycle update).
+        self.needs_post_update = force || previous.is_none();
+        let restore_logical_tree = self.logical_tree_changed && previous.is_some();
+        if restore_logical_tree {
             if let Some(tree) = &mut previous {
                 RestorePhysicalOwnership(tree);
             }
@@ -8296,9 +8341,15 @@ impl PrePaintTreeWalk {
             previous,
             force,
         );
+        // Source: pre_paint_tree_walk.cc:1584-1585. Clear each visited
+        // object's consumed flags (children before parents, as recorded).
+        for data in std::mem::take(&mut self.deferred_paint_flag_clears) {
+            // Every recorded sidecar is owned by the source lease this walk
+            // holds (pending_source_lease).
+            unsafe { &*data }.paint.ClearSourcePaintFlags();
+        }
         // Source: pre_paint_tree_walk.cc:106-107. Each visited object's flags
-        // were cleared in its UpdateNode; schedule the delayed targets for
-        // the next pass.
+        // were cleared above; schedule the delayed targets for the next pass.
         self.paint_invalidator
             .ProcessPendingDelayedPaintInvalidations();
         self.display_item_fragment_scope = None;
@@ -8314,16 +8365,16 @@ impl PrePaintTreeWalk {
         if scope_changed {
             RefreshInheritedDisplayItemFragments(&mut tree);
         }
+        if self.needs_post_update || restore_logical_tree {
+            ResetLogicalEscapes(&mut tree);
+            let mut trace = browser_tracing::span("prepaint", "PrePaint.RestoreLogicalTree");
+            let (changed, fixups) =
+                RestoreLogicalOutOfFlowParents(&mut tree, &mut self.property_node_store);
+            self.logical_tree_changed = changed;
+            trace.set("logical_effect_fixups", fixups as f64);
+        }
         if self.needs_post_update {
             self.stats.post_walk = true;
-            ResetLogicalEscapes(&mut tree);
-            {
-                let mut trace = browser_tracing::span("prepaint", "PrePaint.RestoreLogicalTree");
-                let (changed, fixups) =
-                    RestoreLogicalOutOfFlowParents(&mut tree, &mut self.property_node_store);
-                self.logical_tree_changed = changed;
-                trace.set("logical_effect_fixups", fixups as f64);
-            }
             let mut svg_resources = HashMap::default();
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.GatherFinalEffects");

@@ -316,6 +316,12 @@ struct FragmentDataSyncCounts {
 /// reaches it. The one way a sidecar can lose its FragmentData earlier is
 /// FragmentDataList::Shrink of a fragmented box; such sidecars are pinned by
 /// every state that reached them (`pinned`).
+thread_local! {
+    /// Serial of the current paint-input refresh on this document thread
+    /// (PaintFragmentCursor::AdvancePrePaintInvalidationEpoch).
+    static PRE_PAINT_INVALIDATION_EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
 pub(crate) struct LayoutPaintState {
     /// The LayoutResult this state publishes, held for lifetime only (see
     /// the note above).
@@ -1517,6 +1523,61 @@ impl<'a> PaintFragmentCursor<'a> {
     pub unsafe fn PaintDataMut(self) -> &'a mut FragmentPaintData {
         let state = self.state.expect("paint cursor has no result state");
         unsafe { &mut *state.Slot(self.source.PaintOwner(), self.display_item_fragment) }
+    }
+
+    /// Source: core/paint/pre_paint_tree_walk.cc:418-436. PrePaintTreeWalk
+    /// reads the LayoutObject's dirty bits when it visits the object; this
+    /// brings the visited fragment's view of them up to date from its source
+    /// object at that visit, instead of a document-wide republish before the
+    /// walk. Bits set by notifications delivered after population (resource
+    /// catalog rebinding, event-handler registry changes) are seen this way.
+    ///
+    /// The bits are read once per paint-input refresh (the epoch advanced by
+    /// `AdvancePrePaintInvalidationEpoch`): a second walk in the same
+    /// lifecycle (the forced walk after a rejected deferred update) keeps
+    /// the values the first walk read, as the republished snapshot did.
+    pub unsafe fn ReadPrePaintInvalidationForVisit(self) {
+        let Some(state) = self.state else {
+            return;
+        };
+        let epoch = PRE_PAINT_INVALIDATION_EPOCH.with(Cell::get);
+        let data =
+            unsafe { &mut *state.Slot(self.source.PaintOwner(), self.display_item_fragment) };
+        if data.pre_paint_invalidation_epoch == epoch {
+            return;
+        }
+        data.pre_paint_invalidation_epoch = epoch;
+        unsafe { self.RefreshPrePaintInvalidation() };
+    }
+
+    /// A paint-input refresh: later PrePaint visits read the LayoutObject
+    /// dirty bits again (ReadPrePaintInvalidationForVisit).
+    pub(crate) fn AdvancePrePaintInvalidationEpoch() {
+        PRE_PAINT_INVALIDATION_EPOCH.with(|epoch| epoch.set(epoch.get() + 1));
+    }
+
+    /// Republish this fragment's view of its LayoutObject's dirty bits.
+    pub(crate) unsafe fn RefreshPrePaintInvalidation(self) {
+        let Some(state) = self.state else {
+            return;
+        };
+        let cursor_source = self.source.GetLayoutObject() as *const LayoutObject;
+        let data =
+            unsafe { &mut *state.Slot(self.source.PaintOwner(), self.display_item_fragment) };
+        let direct = data.paint.SourceObjectPointer() as *const LayoutObject;
+        let source = if !direct.is_null() {
+            direct
+        } else if data.paint.HasSource() {
+            cursor_source
+        } else {
+            std::ptr::null()
+        };
+        if !source.is_null() {
+            data.pre_paint_invalidation =
+                crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(
+                    source,
+                );
+        }
     }
 
     pub(crate) fn PaintDataOption(self) -> Option<&'a FragmentPaintData> {
