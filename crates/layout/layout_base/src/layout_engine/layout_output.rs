@@ -1085,6 +1085,31 @@ impl<'a> PaintFragmentCursor<'a> {
         }
     }
 
+    /// Source: LocalFrameView::ExecuteAllPendingUpdates
+    /// (local_frame_view.cc:5498-5525), called by PrePaintTreeWalk::WalkTree
+    /// after its walk (pre_paint_tree_walk.cc:109). Hands PrePaint the
+    /// DisplayItemClient identities of the LayoutObjects scheduled by
+    /// PaintPropertyTreeBuilder::ScheduleDeferredTransformNodeUpdate and
+    /// clears the frame view's pending set.
+    pub fn TakePendingTransformUpdateClients(self) -> Vec<u64> {
+        use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
+        let Some(object) = (unsafe { self.source.GetLayoutObject().as_ref() }) else {
+            return Vec::new();
+        };
+        let Some(view) = (unsafe { object.View().as_ref() }) else {
+            return Vec::new();
+        };
+        view.TakePendingTransformUpdates()
+            .into_iter()
+            .map(|member| {
+                // The member keeps the LayoutObject alive; a destroyed object
+                // removed itself from the set (LayoutObject::WillBeDestroyed).
+                unsafe { &*(member.Get() as *const LayoutObject as *const DisplayItemClient) }
+                    .Id() as u64
+            })
+            .collect()
+    }
+
     /// Source BoxFragmentPainter/InlineBoxFragmentPainter's aggregation gate.
     /// Anonymous objects deliberately do not establish a new aggregation root.
     pub fn TextPaintTimingAggregator(self) -> Option<(u64, u64)> {

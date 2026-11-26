@@ -397,6 +397,27 @@ fn painted_output_invisible(style: &ComputedStyle) -> bool {
     style.Opacity() < 0.0004
 }
 
+// Source: core/paint/paint_property_tree_builder.cc:4803-4810
+// (PaintPropertyTreeBuilder::ScheduleDeferredTransformNodeUpdate) with the
+// LayoutObject half of CanDoDeferredTransformNodeUpdate (4953-4977). The
+// remaining conditions read ObjectPaintProperties (an existing Transform
+// node, no Effect for a 2D scale transform) and the canvas subtree; PrePaint
+// owns those and checks them when it executes the update, running its
+// ordinary walk for this object when one fails.
+fn ScheduleDeferredTransformNodeUpdate(object: &LayoutObject) -> bool {
+    if object.NeedsPaintPropertyUpdate() || object.DescendantNeedsPaintPropertyUpdate() {
+        return false;
+    }
+    if object.IsSVGChild() || !object.IsBox() || object.IsFragmented() {
+        return false;
+    }
+    let Some(view) = (unsafe { object.View().as_ref() }) else {
+        return false;
+    };
+    view.AddPendingTransformUpdate(object);
+    true
+}
+
 // cpp: layoutng/internal/layout_object_core_services.cc:164-182
 #[inline(never)]
 pub(super) fn LayoutObjectSetStyleWithChanges(
@@ -485,13 +506,34 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
             );
         }
     }
+    // Source: core/paint/paint_layer.cc:2463-2473 (PaintLayer::StyleDidChange).
+    // A change of only the `transform` property schedules the deferred
+    // transform node update instead of a full paint-property update; PrePaint
+    // then rewrites the resident Transform node in place
+    // (LocalFrameView::ExecuteAllPendingUpdates).
+    let mut needs_full_transform_update = visual_difference.transform_changed();
+    let mut deferred_transform_update = false;
+    if needs_full_transform_update
+        && visual_difference.only_transform_property_changed()
+        && object.HasLayer()
+        && ScheduleDeferredTransformNodeUpdate(object)
+    {
+        needs_full_transform_update = false;
+        deferred_transform_update = true;
+    }
+    if deferred_transform_update {
+        let layer = object.EnclosingLayer();
+        if !layer.is_null() {
+            unsafe { &mut *layer }.SetNeedsDescendantDependentFlagsUpdate();
+        }
+    }
     // Source: core/layout/layout_object.cc:3173-3184 (no PaintLayer) and
     // core/paint/paint_layer.cc:2486-2493 (PaintLayer::StyleDidChange). A
     // property-only change rebuilds this object's paint property nodes;
     // PaintPropertyTreeBuilder requests a repaint itself when nodes are added
     // or removed, so the cached drawings stay valid.
     if !object.IsText()
-        && (visual_difference.transform_changed()
+        && (needs_full_transform_update
             || visual_difference.opacity_changed()
             || visual_difference.z_index_changed()
             || visual_difference.filter_changed()

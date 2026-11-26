@@ -4969,6 +4969,65 @@ fn ShiftedTransforms(old_node: &FlatTransforms, old_inherited_len: usize, inheri
     }
 }
 
+/// The deferred transform update (DirectlyUpdateTransformMatrix) of the
+/// object `node`: its own matrix at `index` of the flat lists changes from
+/// `old` to `new`. The object's flat lists and those of its retained
+/// descendants, which all extend that prefix, carry the resident property
+/// node's new value. Lists shared between nodes stay shared.
+fn ReplaceFlatTransformInSubtree(
+    node: &mut PaintTreeNode<'_>,
+    index: usize,
+    old: &TransformMatrix,
+    new: &TransformMatrix,
+) {
+    type Memo = std::collections::HashMap<usize, FlatTransforms>;
+    fn replace(
+        list: &mut FlatTransforms,
+        index: usize,
+        old: &TransformMatrix,
+        new: &TransformMatrix,
+        memo: &mut Memo,
+    ) {
+        if list.get(index) != Some(old) {
+            return;
+        }
+        let key = Arc::as_ptr(list).cast::<TransformMatrix>() as usize;
+        *list = memo
+            .entry(key)
+            .or_insert_with(|| {
+                let mut values = list.to_vec();
+                values[index] = *new;
+                FlatTransforms::from(values)
+            })
+            .clone();
+    }
+    fn visit(
+        node: &mut PaintTreeNode<'_>,
+        index: usize,
+        old: &TransformMatrix,
+        new: &TransformMatrix,
+        memo: &mut Memo,
+        is_owner: bool,
+    ) {
+        replace(&mut node.transforms, index, old, new, memo);
+        if let Some(cache) = node.cache.as_mut() {
+            if is_owner {
+                let local = index - cache.inherited.transforms.len();
+                if let Some(entry) = node.local_transforms.get_mut(local) {
+                    *entry = *new;
+                }
+            } else {
+                replace(&mut cache.inherited.transforms, index, old, new, memo);
+            }
+            replace(&mut cache.children.transforms, index, old, new, memo);
+        }
+        for child in &mut node.children {
+            visit(child, index, old, new, memo, false);
+        }
+    }
+    visit(node, index, old, new, &mut Memo::new(), true);
+}
+
 /// A node retained under the same property-slot structure while an
 /// ancestor's transform value changed (a ScrollTranslation after a
 /// compositor-owned scroll, SameRetainedContextStructure). The resident
@@ -7766,7 +7825,297 @@ update_property!(UpdateEffectProperty, EffectPaintPropertyNode, UpdateEffect);
 update_property!(UpdateScrollProperty, ScrollPaintPropertyNode, UpdateScroll);
 
 impl PrePaintTreeWalk {
+    /// Source: PrePaintTreeWalk::WalkTree (pre_paint_tree_walk.cc:82-136):
+    /// the tree walk, then LocalFrameView::ExecuteAllPendingUpdates for the
+    /// objects whose transform change PaintLayer::StyleDidChange deferred.
     pub fn Walk(
+        &mut self,
+        root: PaintFragmentSource<'_>,
+        source_lease: PaintFragmentLease,
+    ) -> Box<PaintTreeNode<'static>> {
+        let mut tree = self.WalkTree(root, source_lease);
+        let pending = root.Cursor().TakePendingTransformUpdateClients();
+        if pending.is_empty() || self.ExecuteAllPendingUpdates(&mut tree, &pending) {
+            return tree;
+        }
+        // An object Layout scheduled fails a condition only PrePaint can
+        // see (CanDoDeferredTransformNodeUpdate reads ObjectPaintProperties),
+        // so Chromium would have marked it SetNeedsPaintPropertyUpdate.
+        // Rebuild every node from its current style instead.
+        self.retained_tree = Some(tree);
+        self.retained_tree_valid = false;
+        let source_lease = self
+            .pending_source_lease
+            .take()
+            .expect("PrePaint walk keeps its source lease until RetainTree");
+        self.WalkTree(root, source_lease)
+    }
+
+    /// Source: LocalFrameView::ExecuteAllPendingUpdates
+    /// (local_frame_view.cc:5498-5525) with
+    /// PaintPropertyTreeBuilder::DirectlyUpdateTransformMatrix
+    /// (paint_property_tree_builder.cc:4842-4888) for each pending object.
+    ///
+    /// The resident Transform node is updated in place from the current
+    /// style; nothing else of the object's property state depends on the
+    /// `transform` value. Returns false when an object cannot take the
+    /// deferred path (the PrePaint half of CanDoDeferredTransformNodeUpdate,
+    /// 4953-5002), leaving the caller to rebuild it.
+    fn ExecuteAllPendingUpdates(
+        &mut self,
+        tree: &mut PaintTreeNode<'static>,
+        pending: &[u64],
+    ) -> bool {
+        let mut trace = browser_tracing::span("prepaint", "PrePaint.ExecutePendingUpdates");
+        trace.set("transform_updates", pending.len() as f64);
+        // The client directory is current unless this walk changed the
+        // topology (RetainTree rebuilds it after a post-walk pass).
+        let use_directory = !self.stats.post_walk;
+        let mut rejection = 0u8;
+        let mut updated = 0usize;
+        for &client in pending {
+            let mut nodes: Vec<*mut PaintTreeNode<'static>> = Vec::new();
+            if use_directory {
+                if let Some(entries) = self.client_nodes.get(&client) {
+                    nodes.extend(entries.iter().copied().filter(|&pointer| {
+                        // The directory is owned by the retained tree that
+                        // this walk returned; its boxes did not move.
+                        unsafe { &*pointer }
+                            .fragment
+                            .as_deref()
+                            .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
+                    }));
+                }
+            } else {
+                fn find(
+                    node: &mut PaintTreeNode<'static>,
+                    client: u64,
+                    out: &mut Vec<*mut PaintTreeNode<'static>>,
+                ) {
+                    if node
+                        .fragment
+                        .as_deref()
+                        .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
+                    {
+                        out.push(node as *mut _);
+                    }
+                    for child in &mut node.children {
+                        find(child, client, out);
+                    }
+                }
+                find(tree, client, &mut nodes);
+            }
+            match nodes.as_slice() {
+                // A display:none or not-yet-painted object has no
+                // properties to update; its next build reads the style.
+                [] => continue,
+                [pointer] => {
+                    let node = unsafe { &mut **pointer };
+                    match self.DirectlyUpdateTransformMatrix(node) {
+                        Ok(true) => updated += 1,
+                        Ok(false) => {}
+                        Err(code) => {
+                            rejection = code;
+                            break;
+                        }
+                    }
+                }
+                // IsFragmented (CanDoDeferredTransformNodeUpdate 4974-4978).
+                _ => {
+                    rejection = 1;
+                    break;
+                }
+            }
+        }
+        trace.set("updated", updated as f64);
+        trace.set("rejection", rejection as f64);
+        rejection == 0
+    }
+
+    /// PaintPropertyTreeBuilder::DirectlyUpdateTransformMatrix for one
+    /// retained node. Ok(false): this walk already rebuilt the node from the
+    /// current style. Err: a CanDoDeferredTransformNodeUpdate condition (or
+    /// a retained-state precondition of the in-place update) fails.
+    fn DirectlyUpdateTransformMatrix(
+        &mut self,
+        node: &mut PaintTreeNode<'static>,
+    ) -> Result<bool, u8> {
+        let Some(cache) = node.cache.as_ref() else {
+            return Err(2);
+        };
+        if cache.computed_pass == self.walk_generation {
+            return Ok(false);
+        }
+        let fragment = node.fragment.as_deref().ok_or(2u8)?;
+        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
+            return Err(2);
+        }
+        let style = &fragment.paint.style;
+        // SVG children (4959-4962) and canvas-rendered subtrees (4993-5000).
+        if IsSvgLayoutChild(fragment.paint.SourceKind())
+            || fragment.paint.SvgLocalTransform().is_some()
+            || (fragment.paint.CanvasDrawElementEnabled() && fragment.paint.IsInCanvasSubtree())
+        {
+            return Err(3);
+        }
+        let roles = TransformPropertyRoles(fragment, style);
+        let Some(role_index) = roles
+            .iter()
+            .position(|role| *role == PaintPropertyRole::Transform)
+        else {
+            return Err(4);
+        };
+        if !node.applies_transform {
+            return Err(4);
+        }
+        let client = fragment.paint.DisplayItemClientId();
+        let owner = PaintPropertyOwner::Fragment {
+            client,
+            fragment: node.DisplayItemFragment(),
+        };
+        let key = PaintPropertyKey {
+            owner,
+            role: PaintPropertyRole::Transform,
+        };
+        // Cannot directly update properties that were not created (4980-4983).
+        let Some(current) = self.property_node_store.TransformOwnerForKey(key).cloned() else {
+            return Err(4);
+        };
+        let effect_key = PaintPropertyKey {
+            owner,
+            role: PaintPropertyRole::Effect,
+        };
+        // An Effect allocated for a 2D scale transform (4985-4992).
+        if self.property_node_store.EffectOwnerForKey(effect_key).is_some_and(|effect| {
+            paint_model::property_cell::with_access(|access| {
+                effect.state(access).NeedsEffectFor2DScaleTransform()
+            })
+        }) {
+            return Err(5);
+        }
+        // The builder derives the node's backface visibility from whether
+        // the transform has 3D operations; keep the direct update to values
+        // that cannot change it.
+        let (old_matrix, old_backface, is_running_animation_on_compositor) =
+            paint_model::property_cell::with_access(|access| {
+                let state = current.state(access);
+                (
+                    state.matrix,
+                    state.backface_visibility,
+                    current.HasActiveTransformAnimation(access),
+                )
+            });
+        if style.has_3d_transform_operation() || old_backface == PaintBackfaceVisibility::Visible {
+            return Err(6);
+        }
+        // The flat matrix list mirrors the property chain: this object's
+        // own entries follow the inherited ones in builder order
+        // (PaintOffsetTranslation, StickyTranslation, then the individual
+        // transform roles).
+        let has_own = |role| cache.own_keys.iter().any(|(_, key)| key.role == role);
+        let flat_index = cache.inherited.transforms.len()
+            + has_own(PaintPropertyRole::PaintOffsetTranslation) as usize
+            + has_own(PaintPropertyRole::StickyTranslation) as usize
+            + role_index;
+        if node.transforms.get(flat_index) != Some(&old_matrix)
+            || cache.children.transforms.get(flat_index) != Some(&old_matrix)
+        {
+            return Err(7);
+        }
+
+        // ComputedStyle::ApplyTransform with kIncludeTransformOperations,
+        // kExcludeTransformOrigin, kExcludeMotionPath and
+        // kExcludeIndependentTransformProperties, around the reference box,
+        // as UpdateIndividualTransform resolves it in the builder.
+        let reference_rect = ResolveTransformReferenceRect(
+            style.transform_reference_box(),
+            fragment.ViewSize(),
+            fragment.Borders(),
+            fragment.Padding(),
+        );
+        let transform_origin = style.transform_origin();
+        let resolved = TransformPayloadForRole(style, PaintPropertyRole::Transform)
+            .as_ref()
+            .map_or_else(TransformMatrix::default, |transform| {
+                ResolveLocalTransformAroundReferenceBox(
+                    transform,
+                    Offset {
+                        x: node.paint_offset.x + node.paint_snap_offset.x,
+                        y: node.paint_offset.y + node.paint_snap_offset.y,
+                    },
+                    reference_rect,
+                    transform_origin.as_ref(),
+                )
+            });
+        let matrix = MultiplyTransforms(
+            &TranslationTransform(-node.paint_snap_offset.x, -node.paint_snap_offset.y),
+            &resolved,
+        );
+        let animation_state = TransformAnimationState {
+            is_running_animation_on_compositor,
+        };
+        let store = &mut self.property_node_store;
+        let change = paint_model::property_cell::with_writer(|writer| {
+            store.DirectlyUpdateTransform(writer, &current, matrix, [0.0; 3], animation_state)
+        });
+        if change == PaintPropertyChangeType::Unchanged {
+            return Ok(true);
+        }
+        // 4873-4875.
+        self.intersection_observation_state = self
+            .intersection_observation_state
+            .max(foundation::intersection_observation_state::IntersectionObservationState::Desired);
+        // The flat list of this object and of every descendant shares the
+        // prefix ending at this matrix.
+        ReplaceFlatTransformInSubtree(node, flat_index, &old_matrix, &matrix);
+        // CullRectUpdater::PaintPropertiesChanged (cull_rect_updater.cc:
+        // 558-620): a simple-value transform change updates this object's
+        // cull rects. Descendant cull rects are relative to its contents cull
+        // rect, so they stay valid while it does.
+        if change >= PaintPropertyChangeType::ChangedOnlySimpleValues {
+            let cache = node.cache.as_ref().expect("checked above");
+            let inputs = node.cull_decision_inputs;
+            let fragment = node.fragment.as_deref().expect("checked above");
+            let infinite = crate::cull_rect_updater::ShouldUseInfiniteCullRect(
+                fragment,
+                cache.inherited.subtree_should_use_infinite_cull_rect,
+                inputs.has_filter_that_moves_pixels,
+                inputs.has_perspective,
+                inputs.has_active_transform_animation,
+                inputs.has_non_composited_transform,
+                node.previous_paint_result.get(),
+            );
+            if !infinite.use_infinite {
+                let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(
+                    node.DocumentResources().map(|resources| &**resources),
+                );
+                let (self_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
+                    cache.inherited.cull,
+                    Some(node.self_cull_rect),
+                    &self.viewport_properties.nodes,
+                    &cache.inherited.properties.nodes,
+                    &node.properties.nodes,
+                    expansion_ratio,
+                );
+                let (contents_cull, _) = CullRectUpdater::ComputeFragmentContentsCullRect(
+                    self_cull,
+                    Some(node.cull_rect),
+                    &self.viewport_properties.nodes,
+                    &node.properties.nodes,
+                    &node.contents_properties.nodes,
+                    expansion_ratio,
+                );
+                // The cull rect moved beyond its expanded window: repaint
+                // and descendant cull updates belong to the full walk.
+                if self_cull != node.self_cull_rect || contents_cull != node.cull_rect {
+                    return Err(8);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn WalkTree(
         &mut self,
         root: PaintFragmentSource<'_>,
         source_lease: PaintFragmentLease,
