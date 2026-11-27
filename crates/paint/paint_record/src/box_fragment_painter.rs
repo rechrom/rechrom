@@ -1228,7 +1228,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 // answers the common non-scroller case without the live
                 // ScrollWidth/ScrollHeight/client-size export.
                 let scrolls_overflow =
-                    fragment.ViewHasScrollContainer() && fragment.ViewScrollGeometry().2;
+                    fragment.ViewHasScrollContainer() && fragment.ViewScrollsOverflow();
                 if paints_contents || scrolls_overflow {
                     let _contents_properties =
                         crate::scoped_paint_state::ScopedBoxContentsPaintState::new(
