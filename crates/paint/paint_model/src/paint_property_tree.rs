@@ -2907,6 +2907,17 @@ impl PaintPropertyNodeStore {
         self.clips.get(&key).map(Arc::as_ref)
     }
 
+    pub fn ClipOwnerForKey(&self, key: PaintPropertyKey) -> Option<&Arc<ClipPaintPropertyNode>> {
+        self.clips.get(&key)
+    }
+
+    pub fn ScrollOwnerForKey(
+        &self,
+        key: PaintPropertyKey,
+    ) -> Option<&Arc<ScrollPaintPropertyNode>> {
+        self.scrolls.get(&key)
+    }
+
     pub fn EffectForKey(&self, key: PaintPropertyKey) -> Option<&EffectPaintPropertyNode> {
         self.effects.get(&key).map(Arc::as_ref)
     }

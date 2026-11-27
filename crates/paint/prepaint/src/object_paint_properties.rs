@@ -192,6 +192,17 @@ impl PaintPropertySlotNodeRef {
             Self::Clip(_) => PaintPropertyNodeKind::Clip,
         }
     }
+
+    /// Whether both name the same live node (node identity is its pointer).
+    pub fn PtrEq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Transform(a), Self::Transform(b)) => Arc::ptr_eq(a, b),
+            (Self::Scroll(a), Self::Scroll(b)) => Arc::ptr_eq(a, b),
+            (Self::Effect(a), Self::Effect(b)) => Arc::ptr_eq(a, b),
+            (Self::Clip(a), Self::Clip(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 macro_rules! object_paint_properties {
@@ -305,6 +316,17 @@ macro_rules! object_paint_properties {
                     (slot, node) => {
                         panic!("{slot:?} cannot hold a {:?} node", node.Kind())
                     }
+                }
+            }
+
+            /// The node `slot` holds, as a shared reference.
+            pub fn SlotNode(&self, slot: ObjectPaintPropertySlot) -> Option<PaintPropertySlotNodeRef> {
+                match slot {
+                    $($(
+                        ObjectPaintPropertySlot::$slot => {
+                            self.$field.clone().map(PaintPropertySlotNodeRef::$kind)
+                        }
+                    )*)*
                 }
             }
 

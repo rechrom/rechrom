@@ -35,6 +35,10 @@ use crate::box_paint_invalidator::{
 };
 use crate::compositing_reason_finder::CompositingReasonFinder;
 use crate::cull_rect_updater::CullRectUpdater;
+use crate::fragment_data::PrePaintFragmentData;
+use crate::object_paint_properties::{
+    ObjectPaintPropertySlot, PaintPropertyNodeKind, PaintPropertySlotNodeRef,
+};
 use crate::nine_piece_geometry::NinePieceImageGeometry;
 use crate::object_paint_invalidator::ObjectPaintInvalidator;
 use crate::paint_invalidator::{PaintInvalidator, PaintInvalidatorContext};
@@ -1229,6 +1233,14 @@ pub struct PrePaintTreeWalk {
     /// objects the invalidation-only refresh would retain and report the
     /// first rebuilt value that differs (diagnostic).
     invalidation_only_check: bool,
+    /// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: after every walk, assert that
+    /// each retained node's PrePaint FragmentData equals the node
+    /// (FragmentDataMismatch; diagnostic, off by default).
+    fragment_data_check: bool,
+    /// Walk context: whether the UpdateNode visit that just returned built
+    /// its node with PaintPropertyTreeBuilder in this pass (and kept the
+    /// build), read by the parent's child loop right after the visit.
+    last_visit_built: bool,
     pub stats: PrePaintUpdateStats,
     intersection_observation_state:
         foundation::intersection_observation_state::IntersectionObservationState,
@@ -1262,6 +1274,9 @@ pub struct PrePaintTreeWalk {
     /// (object_paint_properties.h Clear*, fragment_data.cc); the walk frees
     /// them at its end unless another object registered the same key.
     released_property_keys: Vec<PaintPropertyKey>,
+    /// The slot nodes of the objects among those that left the tree, for
+    /// clearing from their PrePaint FragmentData when the store drops them.
+    released_slot_nodes: Vec<ReleasedSlotNode>,
     /// The walk cannot account for every released slot (no retained tree,
     /// a forced rebuild, or a retained tree this walk did not produce): the
     /// end of the walk keeps exactly the slots the final tree owns.
@@ -1317,6 +1332,9 @@ impl Default for PrePaintTreeWalk {
             shift_check: std::env::var_os("RECHROM_PREPAINT_SHIFT_CHECK").is_some(),
             invalidation_only_check: std::env::var_os("RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK")
                 .is_some(),
+            fragment_data_check: std::env::var_os("RECHROM_PREPAINT_FRAGMENT_DATA_CHECK")
+                .is_some(),
+            last_visit_built: false,
             stats: PrePaintUpdateStats::default(),
             intersection_observation_state: Default::default(),
             client_nodes: HashMap::default(),
@@ -1329,6 +1347,7 @@ impl Default for PrePaintTreeWalk {
             consuming_walks: 0,
             recorded_consuming_walks: 0,
             released_property_keys: Vec::new(),
+            released_slot_nodes: Vec::new(),
             full_slot_sweep: true,
             slot_sweep_pending: false,
             walked_tree_root: 0,
@@ -4302,6 +4321,18 @@ fn RebindLogicalEffectState(
     }
     node.contents_properties.effect_id = node.properties.effect_id;
     node.contents_properties.nodes.effect = node.properties.nodes.effect.clone();
+    // S2 dual write: the occurrence's LocalBorderBoxProperties name the
+    // logical parent's effect as the node now does (Chromium builds them
+    // from `context.current_effect`, paint_property_tree_builder.cc:
+    // 2955-2981, which already follows the logical parent). Own effect
+    // nodes were updated in place, so the ObjectPaintProperties slots and
+    // the PaintOffset are unchanged.
+    if let Some(slot) = node.source_cursor.and_then(|cursor| cursor.PrePaintSlot()) {
+        // SAFETY: single PrePaint writer after the walk; no live reference.
+        if let Some(data) = unsafe { slot.GetMut::<PrePaintFragmentData>() } {
+            WriteLocalBorderBoxProperties(data, &node.properties.nodes);
+        }
+    }
     if let Some(cache) = node.cache.as_mut() {
         cache.inherited.opacity = parent_opacity;
         cache.inherited.properties.effect_id = parent_effect_id;
@@ -5196,18 +5227,290 @@ fn CleanSubtreeRebindable(node: &PaintTreeNode<'static>, source: PaintFragmentSo
 /// the replacement owner: its sidecar slot and its source cursor are the only
 /// references into a LayoutResult. Geometry, properties and caches are kept,
 /// as Chromium keeps a clean FragmentData across relayout. Returns the nodes.
-fn RebindCleanSubtree(node: &mut PaintTreeNode<'static>, source: PaintFragmentSource<'_>) -> usize {
+///
+/// The occurrence's PrePaint FragmentData follows the LayoutObject's
+/// FragmentData, so the replacement cursor normally reaches the same slot;
+/// a cursor that reaches another sidecar (a superseded handle's private
+/// one) gets the retained values written into it, as Chromium's single
+/// FragmentData would still hold them.
+fn RebindCleanSubtree(
+    node: &mut PaintTreeNode<'static>,
+    source: PaintFragmentSource<'_>,
+    store: &PaintPropertyNodeStore,
+) -> usize {
     node.fragment = Some(ResidentFragment::FromSource(&source));
     node.source_cursor = Some(unsafe {
         std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
             source.Cursor(),
         )
     });
+    WriteRetainedFragmentData(node, Some(store));
+    // SAFETY: the walk is the single PrePaint writer of this occurrence.
+    unsafe {
+        CullRectUpdater::SetFragmentCullRects(source.Cursor(), node.self_cull_rect, node.cull_rect)
+    };
     let mut nodes = 1;
     for (child, child_source) in node.children.iter_mut().zip(OrdinaryPaintSourceChildren(source)) {
-        nodes += RebindCleanSubtree(child, child_source);
+        nodes += RebindCleanSubtree(child, child_source, store);
     }
     nodes
+}
+
+// S2 dual write, WP2c: the PrePaint FragmentData (fragment_data.h:32-38,
+// 104-168) of every occurrence equals its PaintTreeNode after each walk,
+// including the nodes PrePaint keeps without a PaintPropertyTreeBuilder
+// build (offset-only shifts, rebased own states, invalidation-only and
+// self-clean refreshes, rebinding, logical effect fix-ups). Chromium has no
+// such paths: it updates the FragmentData in place when it visits the
+// object (paint_property_tree_builder.cc:4143-4168 UpdateForObjectLocation,
+// 2955-2981 UpdateLocalBorderBoxContext) and keeps it unchanged otherwise.
+// These writers mirror the values BuildNode's WriteFragmentData stores.
+
+/// Chromium's PaintOffset of a node (fragment_data.h:32-38): LOCAL to its
+/// LocalBorderBoxProperties transform, i.e. Rechrom's flat `paint_offset`
+/// carried into property space by `paint_snap_offset`, rounded to
+/// LayoutUnit exactly as PaintPropertyTreeBuilder::BuildNode stores it.
+fn FragmentDataPaintOffset(node: &PaintTreeNode<'_>) -> foundation::PhysicalOffset {
+    foundation::PhysicalOffset::new(
+        foundation::LayoutUnit::FromDoubleRound(node.paint_offset.x + node.paint_snap_offset.x),
+        foundation::LayoutUnit::FromDoubleRound(node.paint_offset.y + node.paint_snap_offset.y),
+    )
+}
+
+fn SameStateNodes(
+    a: &paint_model::paint_property_tree::PropertyTreeState,
+    b: &paint_model::paint_property_tree::PropertyTreeState,
+) -> bool {
+    Arc::ptr_eq(&a.transform, &b.transform)
+        && Arc::ptr_eq(&a.clip, &b.clip)
+        && Arc::ptr_eq(&a.effect, &b.effect)
+}
+
+/// The live node the keyed store holds for `key`, of `slot`'s kind.
+fn StoreSlotNode(
+    store: &PaintPropertyNodeStore,
+    key: PaintPropertyKey,
+    slot: ObjectPaintPropertySlot,
+) -> Option<PaintPropertySlotNodeRef> {
+    Some(match slot.Kind() {
+        PaintPropertyNodeKind::Transform => {
+            PaintPropertySlotNodeRef::Transform(store.TransformOwnerForKey(key)?.clone())
+        }
+        PaintPropertyNodeKind::Clip => {
+            PaintPropertySlotNodeRef::Clip(store.ClipOwnerForKey(key)?.clone())
+        }
+        PaintPropertyNodeKind::Effect => {
+            PaintPropertySlotNodeRef::Effect(store.EffectOwnerForKey(key)?.clone())
+        }
+        PaintPropertyNodeKind::Scroll => {
+            PaintPropertySlotNodeRef::Scroll(store.ScrollOwnerForKey(key)?.clone())
+        }
+    })
+}
+
+/// The ObjectPaintProperties slot of a registered key: fragment-owned keys
+/// only (unowned nodes and the frame-level viewport roles have none), as
+/// PaintPropertyTreeBuilder::OwnPropertySlot maps them.
+fn OwnKeySlot(key: &PaintPropertyKey) -> Option<ObjectPaintPropertySlot> {
+    match key.owner {
+        PaintPropertyOwner::Fragment { .. } => ObjectPaintPropertySlot::FromRole(key.role),
+        _ => None,
+    }
+}
+
+/// The slot nodes the node's last build registered (NodeCache::own_keys),
+/// as the keyed store holds them now: the same `Arc`s BuildNode adopted.
+fn OwnSlotNodes(
+    node: &PaintTreeNode<'_>,
+    store: &PaintPropertyNodeStore,
+) -> Vec<(ObjectPaintPropertySlot, PaintPropertySlotNodeRef)> {
+    let Some(cache) = node.cache.as_ref() else {
+        return Vec::new();
+    };
+    cache
+        .own_keys
+        .iter()
+        .filter_map(|(_, key)| {
+            let slot = OwnKeySlot(key)?;
+            Some((slot, StoreSlotNode(store, *key, slot)?))
+        })
+        .collect()
+}
+
+/// Write the node's values into its occurrence's PrePaint FragmentData:
+/// the local PaintOffset, LocalBorderBoxProperties and, with `store`, the
+/// ObjectPaintProperties slots (InitPaintProperties / the per-slot Update*
+/// and Clear*, paint_property_tree_builder.cc:4495-4516). A node without a
+/// result state (hand-built fixtures) has no slot.
+fn WriteRetainedFragmentData(node: &PaintTreeNode<'_>, store: Option<&PaintPropertyNodeStore>) {
+    let Some(slot) = node.source_cursor.and_then(|cursor| cursor.PrePaintSlot()) else {
+        return;
+    };
+    let own_slot_nodes = store.map(|store| OwnSlotNodes(node, store));
+    // SAFETY: the walk is the occurrence's single PrePaint writer here; no
+    // reference into the slot is live.
+    let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
+    let paint_offset = FragmentDataPaintOffset(node);
+    if data.PaintOffset() != paint_offset {
+        data.SetPaintOffset(paint_offset);
+    }
+    if let Some(own_slot_nodes) = own_slot_nodes {
+        if own_slot_nodes.is_empty() {
+            data.ClearPaintProperties();
+        } else {
+            let properties = data.EnsurePaintProperties();
+            let mut updated = [false; ObjectPaintPropertySlot::ALL.len()];
+            for (own_slot, slot_node) in own_slot_nodes {
+                updated[own_slot as usize] = true;
+                properties.AdoptSlotNode(own_slot, slot_node);
+            }
+            for own_slot in ObjectPaintPropertySlot::ALL {
+                if !updated[*own_slot as usize] {
+                    properties.ClearSlot(*own_slot);
+                }
+            }
+        }
+    }
+    WriteLocalBorderBoxProperties(data, &node.properties.nodes);
+}
+
+/// Source: fragment_data.h:152-155 SetLocalBorderBoxProperties, skipped
+/// when the slot already names the same nodes.
+fn WriteLocalBorderBoxProperties(
+    data: &mut PrePaintFragmentData,
+    state: &paint_model::paint_property_tree::PropertyTreeState,
+) {
+    if !data
+        .LocalBorderBoxPropertiesRef()
+        .is_some_and(|stored| SameStateNodes(stored, state))
+    {
+        data.SetLocalBorderBoxProperties(state.clone());
+    }
+}
+
+/// A slot node the walk released with the node that owned it (an object
+/// that left the tree): the end-of-walk sweep clears it from the
+/// occurrence's ObjectPaintProperties when the store drops its key.
+struct ReleasedSlotNode {
+    cursor: PaintFragmentCursor<'static>,
+    key: PaintPropertyKey,
+    slot: ObjectPaintPropertySlot,
+    node: PaintPropertySlotNodeRef,
+}
+
+/// The keys (and, for the occurrences with a PrePaint slot, the slot nodes)
+/// of every object of a dropped subtree (CollectSubtreeOwnKeys).
+fn CollectReleasedSubtreeSlots(
+    node: &PaintTreeNode<'static>,
+    store: &PaintPropertyNodeStore,
+    keys: &mut Vec<PaintPropertyKey>,
+    slots: &mut Vec<ReleasedSlotNode>,
+) {
+    if let Some(cache) = node.cache.as_ref() {
+        for (_, key) in &cache.own_keys {
+            keys.push(*key);
+            let (Some(cursor), Some(slot)) = (node.source_cursor, OwnKeySlot(key)) else {
+                continue;
+            };
+            if let Some(slot_node) = StoreSlotNode(store, *key, slot) {
+                slots.push(ReleasedSlotNode {
+                    cursor,
+                    key: *key,
+                    slot,
+                    node: slot_node,
+                });
+            }
+        }
+    }
+    for child in &node.children {
+        CollectReleasedSubtreeSlots(child, store, keys, slots);
+    }
+}
+
+/// Source: ObjectPaintProperties::Clear* (object_paint_properties.h:86) and
+/// FragmentData destruction (fragment_data.cc ClearPaintProperties,
+/// FragmentDataList::Shrink), at the point the keyed store dropped the
+/// slot (RetainLiveSlots). Only a slot that still holds the dropped node is
+/// cleared: an occurrence that took the slot over holds its own node.
+fn ClearReleasedSlotNodes(released: Vec<ReleasedSlotNode>, store: &PaintPropertyNodeStore) {
+    for entry in released {
+        if StoreSlotNode(store, entry.key, entry.slot)
+            .is_some_and(|live| live.PtrEq(&entry.node))
+        {
+            continue;
+        }
+        // The walk's source leases keep every retained cursor's result alive
+        // until RetainTree.
+        let Some(slot) = entry.cursor.PrePaintSlot() else {
+            continue;
+        };
+        // SAFETY: single PrePaint writer, after the walk; no live reference.
+        let Some(data) = (unsafe { slot.GetMut::<PrePaintFragmentData>() }) else {
+            continue;
+        };
+        let Some(properties) = data.PaintPropertiesMut() else {
+            continue;
+        };
+        if properties
+            .SlotNode(entry.slot)
+            .is_some_and(|held| held.PtrEq(&entry.node))
+        {
+            properties.ClearSlot(entry.slot);
+            if !properties.HasAnyNode() {
+                data.ClearPaintProperties();
+            }
+        }
+    }
+}
+
+/// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the first value of `node`'s
+/// PrePaint FragmentData that differs from the node (the proof that Paint
+/// can read the slot instead of PaintTreeNode).
+fn FragmentDataMismatch(
+    node: &PaintTreeNode<'_>,
+    store: &PaintPropertyNodeStore,
+) -> Option<&'static str> {
+    let cursor = node.source_cursor?;
+    let slot = cursor.PrePaintSlot()?;
+    let Some(data) = slot.Get::<PrePaintFragmentData>() else {
+        return Some("missing PrePaintFragmentData");
+    };
+    if data.PaintOffset() != FragmentDataPaintOffset(node) {
+        return Some("PaintOffset");
+    }
+    match data.LocalBorderBoxPropertiesRef() {
+        Some(state) if SameStateNodes(state, &node.properties.nodes) => {}
+        Some(_) => return Some("LocalBorderBoxProperties nodes"),
+        None => return Some("LocalBorderBoxProperties unset"),
+    }
+    if node.cache.is_some() {
+        let own = OwnSlotNodes(node, store);
+        for slot in ObjectPaintPropertySlot::ALL {
+            let expected = own.iter().rev().find(|(own_slot, _)| own_slot == slot);
+            let held = data
+                .PaintProperties()
+                .and_then(|properties| properties.SlotNode(*slot));
+            match (expected, held) {
+                (None, None) => {}
+                (Some((_, expected)), Some(held)) if expected.PtrEq(&held) => {}
+                (Some(_), Some(_)) => return Some("ObjectPaintProperties slot node"),
+                (Some(_), None) => return Some("ObjectPaintProperties slot missing"),
+                (None, Some(_)) => return Some("ObjectPaintProperties stale slot"),
+            }
+        }
+    }
+    // Only PaintLayer objects get cull rects (CullRectUpdater::
+    // SetFragmentCullRects); other FragmentData keep the default.
+    if cursor.OwnPaintLayer().is_some() {
+        if data.GetCullRect() != crate::cull_rect_updater::RetainedCullRect(node.self_cull_rect) {
+            return Some("CullRect");
+        }
+        if data.GetContentsCullRect() != crate::cull_rect_updater::RetainedCullRect(node.cull_rect)
+        {
+            return Some("ContentsCullRect");
+        }
+    }
+    None
 }
 
 /// A retained subtree the walk did not descend into keeps the
@@ -5709,6 +6012,10 @@ struct ShiftDelta {
 // new inherited context.
 // Returns whether the new cull rects need a repaint (CullRectUpdater), as
 // the rebuild path decides it; the node's repaint bit is raised already.
+// The moved PaintOffset (paint_offset + paint_snap_offset) and property
+// state reach the occurrence's PrePaint FragmentData at the end of the
+// visit (UpdateNode's WriteRetainedFragmentData), as BuildNode writes them;
+// the verification mode shifts a copy it restores before that point.
 thread_local! {
     /// Trace only: ShiftRetainedNode time by part (refresh layer facts,
     /// property/context update, remainder).
@@ -5809,6 +6116,10 @@ fn ShiftRetainedNode(
 }
 
 /// ShiftRetainedNode for an object with own property nodes (RebaseOwnStates).
+/// Its own slot nodes keep their links and values, so the occurrence's
+/// ObjectPaintProperties keep the same nodes; the visit's tail rewrites the
+/// slots, PaintOffset, LocalBorderBoxProperties and cull rects from the
+/// rebased node.
 fn RebaseRetainedNode(
     node: &mut PaintTreeNode<'static>,
     delta: ShiftDelta,
@@ -5982,6 +6293,10 @@ impl SavedShiftFields {
         }
     }
 
+    /// Restores the shifted copy before the visit writes any FragmentData:
+    /// ShiftRetainedNode never writes the occurrence's PrePaint slot (the
+    /// visit's tail does, from the node that stands), so the slot has
+    /// nothing to restore.
     fn Restore(self, node: &mut PaintTreeNode<'_>) {
         node.absolute_offset = self.absolute_offset;
         node.paint_offset = self.paint_offset;
@@ -7317,8 +7632,12 @@ impl PrePaintTreeWalk {
         if subtree_clean {
             let mut node = previous.unwrap();
             if !source_tree_compatible {
-                self.stats.rebound_nodes += RebindCleanSubtree(&mut node, fragment);
+                self.stats.rebound_nodes +=
+                    RebindCleanSubtree(&mut node, fragment, &self.property_node_store);
             }
+            // The clean subtree keeps its geometry, properties and cull
+            // rects, so its PrePaint FragmentData already holds them (or the
+            // rebind above wrote them into a replacement slot).
             // Same-slot immutable snapshots need the same reference update that
             // Blink gets from retaining a pointer to its mutable property node.
             // CullRect::ChangedEnough keeps the old finite sliding window while
@@ -7339,6 +7658,7 @@ impl PrePaintTreeWalk {
             self.stats.reused_nodes += cache.nodes;
             self.stats.skipped_subtrees += 1;
             self.stats.profile_admission_ns += ProfileNs(t_start, checkpoint());
+            self.last_visit_built = false;
             return node;
         }
         // A replacement LayoutResult republishes every fragment-local sidecar
@@ -7468,6 +7788,11 @@ impl PrePaintTreeWalk {
             };
             self.stats.shift_rejects[reason] += 1;
         }
+        // Whether PaintPropertyTreeBuilder built this node in this visit and
+        // the build stands (walk context; see `last_visit_built`). Every
+        // other branch keeps a retained node whose PrePaint FragmentData the
+        // visit's tail rewrites from its final values.
+        let mut built_this_visit = false;
         let mut node = if let Some(delta) = shift_delta.filter(|_| !shift_check) {
             let t_shift = checkpoint();
             self.stats.shifted_nodes += 1;
@@ -7535,6 +7860,7 @@ impl PrePaintTreeWalk {
             node.cache.as_mut().unwrap().revision = self.revision_generation;
             node
         } else {
+            built_this_visit = true;
             let mut built = PaintPropertyTreeBuilder::new(self)
                 .with_previous_paint_result(old_previous_paint_result)
                 .with_link_offset(fragment.Cursor().ViewOffsetInContainer())
@@ -7704,6 +8030,10 @@ impl PrePaintTreeWalk {
                 let same_geometry = mismatch.is_none();
                 if same_geometry {
                     self.stats.same_geometry_rebuilds += 1;
+                    // The retained finalized properties replace the built
+                    // ones below (and computed_pass reverts), so this node
+                    // counts as retained: the tail rewrites its FragmentData.
+                    built_this_visit = false;
                     // Bit 2 of the recorded phase flags is the previous
                     // focused image-map area (PrePaintPreviousOf).
                     let focused_image_map_phase_changed =
@@ -8042,6 +8372,18 @@ impl PrePaintTreeWalk {
                 fragment.Cursor(),
             )
         });
+        // This visit's final PaintOffset and LocalBorderBoxProperties, also
+        // on the occurrence's FragmentData (paint_property_tree_builder.cc:
+        // 4143-4168 UpdateForObjectLocation ends in SetPaintOffset; 2955-2981
+        // UpdateLocalBorderBoxContext). A kept build already wrote its slots
+        // and these values in BuildNode; every retained node (shifted by
+        // ShiftRetainedNode / RebaseRetainedNode, self-clean, refreshed for
+        // invalidation only, or rebuilt with its retained properties kept)
+        // also rewrites its ObjectPaintProperties slots from the store, as
+        // its cursor may reach a replacement sidecar. The shift verification
+        // (RECHROM_PREPAINT_SHIFT_CHECK) shifts and restores its retained
+        // copy before this point, so SavedShiftFields needs no slot restore.
+        WriteRetainedFragmentData(&node, (!built_this_visit).then_some(&self.property_node_store));
         // Source: pre_paint_tree_walk.cc (WalkChildren). Each child's
         // PrePaintTreeWalkContext is derived from this object's context on
         // the stack; the walk reads the retained child context by reference
@@ -8111,6 +8453,7 @@ impl PrePaintTreeWalk {
             // walk is blocked, but this object was visited; ClearPaintFlags
             // keeps the descendant bits of a display-locked object.
             self.deferred_paint_flag_clears.push(&*fragment as *const FragmentPaintData);
+            self.last_visit_built = built_this_visit;
             return node;
         }
         // Chromium's locked subtree keeps pointers to resident LayoutObjects.
@@ -8193,7 +8536,12 @@ impl PrePaintTreeWalk {
                 } else {
                     // An anonymous retained node cannot be paired again; its
                     // subtree's FragmentData is destroyed here.
-                    CollectSubtreeOwnKeys(&child, &mut |key| self.released_property_keys.push(key));
+                    CollectReleasedSubtreeSlots(
+                        &child,
+                        &self.property_node_store,
+                        &mut self.released_property_keys,
+                        &mut self.released_slot_nodes,
+                    );
                 }
             }
             (None, children_by_instance)
@@ -8287,7 +8635,12 @@ impl PrePaintTreeWalk {
                     force_descendants,
                     invalidation_context,
                 ) {
-                    Ok(retained) => retained,
+                    // A clean child retained with its whole subtree keeps
+                    // every value its PrePaint FragmentData already holds.
+                    Ok(retained) => {
+                        self.last_visit_built = false;
+                        retained
+                    }
                     Err(previous) => {
                         let child_context = self.ContextForChild(&child, base);
                         self.UpdateNode(
@@ -8301,6 +8654,17 @@ impl PrePaintTreeWalk {
                     }
                 },
             };
+            // Walk context of the visit that just returned (no other visit
+            // runs before this read).
+            let child_built_this_visit = std::mem::take(&mut self.last_visit_built);
+            debug_assert_eq!(
+                child_built_this_visit,
+                child_node
+                    .cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.computed_pass == self.walk_generation),
+                "walk-context build flag must match NodeCache::computed_pass"
+            );
             recursion_ns += ProfileNs(t_child, checkpoint());
             self.local_frame_depth -= u32::from(is_local_frame);
             if let Some(previous) = previous_wheel_targets {
@@ -8329,11 +8693,9 @@ impl PrePaintTreeWalk {
             if let Some(svg) = base.svg {
                 // A reused node already contains this leading geometry scope.
                 // A newly built node needs it once, never once per paint pass.
-                if child_node
-                    .cache
-                    .as_ref()
-                    .is_some_and(|cache| cache.computed_pass == self.walk_generation)
-                {
+                // Whether the child was built is walk context of its visit,
+                // not retained NodeCache state.
+                if child_built_this_visit {
                     child_node.local_transforms.insert(0, svg);
                     child_node.applies_transform = true;
                 }
@@ -8364,7 +8726,12 @@ impl PrePaintTreeWalk {
         // Retained children no source child paired with left the tree; their
         // objects' slots go with them.
         for dropped in children_by_instance.values() {
-            CollectSubtreeOwnKeys(dropped, &mut |key| self.released_property_keys.push(key));
+            CollectReleasedSubtreeSlots(
+                dropped,
+                &self.property_node_store,
+                &mut self.released_property_keys,
+                &mut self.released_slot_nodes,
+            );
         }
         let t_looped = checkpoint();
         self.stats.profile_child_loop_ns +=
@@ -8418,6 +8785,7 @@ impl PrePaintTreeWalk {
         // object has read them; LayoutObject bits then mean "changed since
         // the last PrePaint", as in Chromium.
         self.deferred_paint_flag_clears.push(&*fragment as *const FragmentPaintData);
+        self.last_visit_built = built_this_visit;
         node
     }
 
@@ -9194,6 +9562,7 @@ impl PrePaintTreeWalk {
         // clean FragmentData keeps its ObjectPaintProperties.
         self.property_keys.clear();
         self.released_property_keys.clear();
+        self.released_slot_nodes.clear();
         self.own_key_log.clear();
         self.own_change_log.clear();
         self.property_node_store.BeginUpdate();
@@ -9348,6 +9717,7 @@ impl PrePaintTreeWalk {
             self.resource_memo.clear();
             self.next_property_id = self.property_node_store.next_id();
             self.walked_tree_root = &*tree as *const PaintTreeNode<'static> as usize;
+            self.VerifyFragmentData(&tree);
             return tree;
         }
         // Chromium's FragmentData outlives a relayout, so PrePaint visits only
@@ -9597,13 +9967,44 @@ impl PrePaintTreeWalk {
                         .RetainLiveSlots(|key| !released.contains(key));
                 }
             }
+            // The same point clears each dropped node from the
+            // ObjectPaintProperties slot of the occurrence that left the
+            // tree, so no FragmentData keeps a node the store released.
+            ClearReleasedSlotNodes(
+                std::mem::take(&mut self.released_slot_nodes),
+                &self.property_node_store,
+            );
             self.intersection_observation_state = self
                 .intersection_observation_state
                 .max(self.property_node_store.intersection_observation_state);
             self.next_property_id = self.property_node_store.next_id();
         }
+        self.VerifyFragmentData(&tree);
         self.walked_tree_root = tree_root;
         tree
+    }
+
+    /// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK (diagnostic, off by default):
+    /// assert that every node of the walked tree, rebuilt or retained, has
+    /// a PrePaint FragmentData equal to its PaintTreeNode values
+    /// (FragmentDataMismatch). This is the proof that Paint may read the
+    /// FragmentData instead of the node.
+    fn VerifyFragmentData(&self, tree: &PaintTreeNode<'static>) {
+        if !self.fragment_data_check {
+            return;
+        }
+        let _trace = browser_tracing::span("prepaint", "PrePaint.VerifyFragmentData");
+        let mut stack: Vec<&PaintTreeNode<'static>> = vec![tree];
+        while let Some(node) = stack.pop() {
+            stack.extend(node.children.iter().map(|child| &**child));
+            if let Some(mismatch) = FragmentDataMismatch(node, &self.property_node_store) {
+                let name = node.fragment.as_deref().map_or_else(
+                    || Arc::<str>::from("?"),
+                    |fragment| fragment.paint.DisplayItemClientDebugName(),
+                );
+                panic!("RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: {name}: {mismatch}");
+            }
+        }
     }
 
     pub fn RetainTree(&mut self, mut tree: Box<PaintTreeNode<'static>>) {

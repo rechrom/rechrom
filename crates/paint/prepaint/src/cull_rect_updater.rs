@@ -395,7 +395,7 @@ impl CullRectUpdater {
 /// Rechrom's retained cull value (`None` is infinite) as FragmentData's
 /// CullRect.
 #[inline]
-fn RetainedCullRect(rect: Option<PaintRect>) -> CullRect {
+pub(crate) fn RetainedCullRect(rect: Option<PaintRect>) -> CullRect {
     rect.map_or_else(CullRect::Infinite, CullRect::FromRect)
 }
 
