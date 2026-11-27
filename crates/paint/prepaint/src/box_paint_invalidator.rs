@@ -209,9 +209,14 @@ impl BoxPaintInvalidator {
             return reason;
         };
 
-        if MaskUsesContentBox(fragment)
-            && (previous.content_box.offset, previous.content_box.size)
-                != PhysicalContentBoxSignature(fragment)
+        // box_paint_invalidator.cc:130-211 reads the style's MaskLayers() in
+        // place (FillLayer::AnyLayerUsesContentBox).
+        // MaskUsesContentBox projects every mask layer from the style, so
+        // test the content-box geometry first: an unchanged content box (the
+        // usual incremental case) needs no layer list.
+        if (previous.content_box.offset, previous.content_box.size)
+            != PhysicalContentBoxSignature(fragment)
+            && MaskUsesContentBox(fragment)
         {
             return PaintInvalidationReason::kLayout;
         }
@@ -391,13 +396,20 @@ fn ComputeViewBackgroundInvalidation(
                 BackgroundInvalidationType::None
             };
         };
-        let layers = new.style.background_images();
-        if ShouldFullyInvalidateBackgroundLayersOnSizeChange(
-            new.background_fill_layer_count,
-            &layers,
-            old_geometry.size,
-            new.document_element_size,
-        ) {
+        // ShouldFullyInvalidateFillLayersOnSizeChange reads the FillLayers in
+        // place and only for a changed size (box_paint_invalidator.cc:
+        // 253-319). background_images() projects every layer, so build the
+        // list only when a size it is compared for actually changed.
+        let layers_need_full_invalidation = |old_size: Size, new_size: Size| {
+            old_size != new_size
+                && ShouldFullyInvalidateBackgroundLayersOnSizeChange(
+                    new.background_fill_layer_count,
+                    &new.style.background_images(),
+                    old_size,
+                    new_size,
+                )
+        };
+        if layers_need_full_invalidation(old_geometry.size, new.document_element_size) {
             return BackgroundInvalidationType::Full;
         }
         if let (Some(old_overflow), Some(new_overflow)) = (
@@ -406,12 +418,7 @@ fn ComputeViewBackgroundInvalidation(
         ) {
             if old_overflow != new_overflow && new.background_any_local_attachment_image {
                 if old_overflow.offset != new_overflow.offset
-                    || ShouldFullyInvalidateBackgroundLayersOnSizeChange(
-                        new.background_fill_layer_count,
-                        &layers,
-                        old_overflow.size,
-                        new_overflow.size,
-                    )
+                    || layers_need_full_invalidation(old_overflow.size, new_overflow.size)
                 {
                     return BackgroundInvalidationType::Full;
                 }
@@ -551,6 +558,10 @@ fn ShouldFullyInvalidateFillLayersOnSizeChange(
     old_size: Size,
     new_size: Size,
 ) -> bool {
+    // An unchanged size invalidates no layer; skip projecting the layers.
+    if old_size == new_size {
+        return false;
+    }
     let layers = fragment.paint.style.background_images();
     ShouldFullyInvalidateBackgroundLayersOnSizeChange(
         fragment.paint.BackgroundFillLayerCount(),

@@ -7239,9 +7239,9 @@ impl PrePaintTreeWalk {
             self.stats.invalidation_only_nodes += 1;
             let mut node = previous.take().unwrap();
             node.BindSource(fragment);
-            let cache = node.cache.as_mut().unwrap();
-            cache.inherited = inherited.clone();
-            cache.revision = self.revision_generation;
+            // The visit's tail moves this inherited context into the cache;
+            // PrePaintTreeWalkContext is a stack value, never copied twice.
+            node.cache.as_mut().unwrap().revision = self.revision_generation;
             node
         } else {
             let mut built = PaintPropertyTreeBuilder::new(self)
@@ -7543,6 +7543,10 @@ impl PrePaintTreeWalk {
             PreviousFragment(old_fragment),
             previous_display_item_client_id,
         );
+        // The inherited context moves into the cache below; the child
+        // context reads only these two of its values afterwards.
+        let inherited_blocking_wheel_changed = inherited.blocking_wheel_event_handler_changed;
+        let inherited_root = inherited.root;
         {
             // This node is now proven (RetainedSelfChange) or rebuilt
             // against the current document resources. Its usage follows its
@@ -7555,7 +7559,7 @@ impl PrePaintTreeWalk {
                 ),
             };
             let cache = node.cache.as_mut().unwrap();
-            cache.inherited = inherited.clone();
+            cache.inherited = inherited;
             cache.resources = resources;
             cache.resource_usage = usage;
         }
@@ -7704,21 +7708,19 @@ impl PrePaintTreeWalk {
                 fragment.Cursor(),
             )
         });
-        let mut base = node.cache.as_ref().unwrap().children.clone();
-        base.inside_blocking_wheel_event_handler = inside;
-        base.blocking_wheel_event_handler_changed = inherited.blocking_wheel_event_handler_changed;
-        node.cache
-            .as_mut()
-            .unwrap()
-            .children
-            .inside_blocking_wheel_event_handler = inside;
-        node.cache
-            .as_mut()
-            .unwrap()
-            .children
-            .blocking_wheel_event_handler_changed = inherited.blocking_wheel_event_handler_changed;
-        if inherited.root {
-            self.CaptureRootFixedPositionContext(&base, &node);
+        // Source: pre_paint_tree_walk.cc (WalkChildren). Each child's
+        // PrePaintTreeWalkContext is derived from this object's context on
+        // the stack; the walk reads the retained child context by reference
+        // instead of copying it (and its property-node and transform owners)
+        // once more for every visited object.
+        {
+            let children = &mut node.cache.as_mut().unwrap().children;
+            children.inside_blocking_wheel_event_handler = inside;
+            children.blocking_wheel_event_handler_changed = inherited_blocking_wheel_changed;
+        }
+        if inherited_root {
+            let base = &node.cache.as_ref().unwrap().children;
+            self.CaptureRootFixedPositionContext(base, &node);
         }
         // This node's comparisons are complete: record the values the next
         // lifecycle compares against (RetainedSelfChange reads them), also
@@ -7798,9 +7800,12 @@ impl PrePaintTreeWalk {
         // isolation. Reuse the existing piercing `force` channel for the
         // descendants; the current node has already been rebuilt above.
         let force_descendants = force || FilterTaintChanged(was_filter_origin_tainted, &node);
-        let same_children = old_children.len()
-            == OrdinaryPaintSourceChildren(fragment).count()
-                + usize::from(embedded_source.is_some())
+        // One count of the source children serves the pairing check, the
+        // embedded-frame index and the child list's capacity.
+        let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
+        let source_children = ordinary_children + usize::from(embedded_source.is_some());
+        node.children.reserve_exact(source_children);
+        let same_children = old_children.len() == source_children
             && old_children
                 .iter()
                 .zip(OrdinaryPaintSourceChildren(fragment).chain(embedded_source))
@@ -7845,7 +7850,6 @@ impl PrePaintTreeWalk {
         // Likewise the fragmentainer this node is inside (PrePaintTreeWalk's
         // `fragmentainer_idx` context).
         let fragmentainer = self.fragmentainer_scope.unwrap_or(0);
-        let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
         let mut contains_local_frames = embedded_source.is_some();
         let t_loop = checkpoint();
         self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, t_loop);
@@ -7855,6 +7859,9 @@ impl PrePaintTreeWalk {
         } else {
             0
         });
+        // Borrowed for the child loop; the loop changes only this node's
+        // children, fragment and table-cell flag, never its cache.
+        let base: &ChildContext = &node.cache.as_ref().unwrap().children;
         for (index, child) in OrdinaryPaintSourceChildren(fragment)
             .chain(embedded_source)
             .enumerate()
@@ -7874,9 +7881,9 @@ impl PrePaintTreeWalk {
             };
             let is_local_frame = index == ordinary_children && embedded_view.is_some();
             let child_context = if is_local_frame {
-                self.ContextForFrame(&node, &base, embedded_view.as_ref().unwrap())
+                self.ContextForFrame(&node, base, embedded_view.as_ref().unwrap())
             } else {
-                self.ContextForChild(&child, &base)
+                self.ContextForChild(&child, base)
             };
             let frame_fixed_context = is_local_frame.then(|| self.root_fixed_position.take());
             let previous_wheel_targets = is_local_frame.then(|| {
@@ -7972,11 +7979,16 @@ impl PrePaintTreeWalk {
         let t_looped = checkpoint();
         self.stats.profile_child_loop_ns +=
             ProfileNs(t_loop, t_looped).saturating_sub(recursion_ns);
-        let physical_children = node
-            .children
-            .iter_mut()
-            .map(|child| &mut **child as *mut _)
-            .collect();
+        // Refill the retained list in place: a revisited object keeps its
+        // allocation, as its FragmentData keeps its child links.
+        let mut physical_children: Vec<*mut PaintTreeNode<'static>> =
+            std::mem::take(&mut node.cache.as_mut().unwrap().physical_children);
+        physical_children.clear();
+        physical_children.extend(
+            node.children
+                .iter_mut()
+                .map(|child| &mut **child as *mut PaintTreeNode<'static>),
+        );
         let generation = self.revision_generation;
         let mut child_walk_pending = false;
         let mut child_changed = false;
