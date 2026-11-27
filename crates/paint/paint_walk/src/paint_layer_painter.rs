@@ -548,8 +548,9 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         self.context
             .borrow_mut()
             .BeginEscapableGeometry(self.layer, None);
-        // The immutable paint tree has the same descendants in both z-order
-        // phases. Collect/sort once, then consume each group at its original point.
+        // The stacking root's retained z-order lists (rebuilt only when
+        // PrePaint dirtied them) are borrowed once and consumed at each
+        // group's original point.
         let paint_order = if include_descendant_layers
             && (!self.layer.paint_layer_facts_are_authoritative
                 || (self.layer.has_self_painting_layer_descendant
@@ -559,14 +560,11 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         } else {
             None
         };
-        let children = paint_order
+        let negative_count = paint_order
             .as_ref()
-            .map(|order| order.entries.as_slice())
-            .unwrap_or_default();
-        let negative_count = children
-            .partition_point(|child| child.layer.is_stacked && child.layer.stacking_level < 0);
+            .map_or(0, |order| order.NegativeZOrderCount());
         if let Some(order) = &paint_order {
-            result.Include(self.PaintLayerChildren(&children[..negative_count], order));
+            result.Include(self.PaintLayerChildren(0..negative_count, order));
         }
         if should_paint_content {
             let _foreground_properties = crate::paint_context::ScopedPaintChunkProperties::layer(
@@ -595,7 +593,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             .borrow_mut()
             .BeginEscapableGeometry(self.layer, None);
         if let Some(order) = &paint_order {
-            result.Include(self.PaintLayerChildren(&children[negative_count..], order));
+            result.Include(self.PaintLayerChildren(negative_count..order.len(), order));
         }
 
         // Source: paint_layer_painter.cc:507-514. Overlay controls are above
@@ -1032,7 +1030,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         }
     }
 
-    fn EntryEscapesCurrentGeometry(&self, child: &PaintLayerPaintOrderEntry<'n, 'f>) -> bool {
+    fn EntryEscapesCurrentGeometry(&self, child: &PaintLayerPaintOrderEntry<'_, 'n, 'f>) -> bool {
         let escapes_geometry = child.layer.escapes_ancestor_geometry;
         let has_physical_ancestor_below_current =
             child.property_ancestors.iter().any(|candidate| {
@@ -1088,17 +1086,18 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
 
     fn PaintLayerChildren(
         &self,
-        children: &[PaintLayerPaintOrderEntry<'n, 'f>],
+        children: std::ops::Range<usize>,
         paint_order: &PaintLayerPaintOrder<'n, 'f>,
     ) -> PaintResult {
         let mut result = PaintResult::kFullyPainted;
-        for child in children {
-            let escapes_current_geometry = self.EntryEscapesCurrentGeometry(child);
+        for index in children {
+            let child = paint_order.Entry(index);
+            let escapes_current_geometry = self.EntryEscapesCurrentGeometry(&child);
             if escapes_current_geometry {
                 self.SuspendGeometryForEscapingChild();
             }
             let child_painter =
-                PaintLayerPainter::with_inherited_geometry(child.layer, self.context, &child.property_ancestors)
+                PaintLayerPainter::with_inherited_geometry(child.layer, self.context, child.property_ancestors)
                     .WithFlags(self.paint_flags);
             if child.layer.is_stacking_context {
                 result.Include(child_painter.Paint());
@@ -1115,14 +1114,14 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             // Source: core/paint/paint_layer_painter.cc:645-681. A target can
             // carry more than one scroller's controls, in collection order.
             for scroller in paint_order.ControlsAfter(child.layer) {
-                let escapes_current_geometry = self.EntryEscapesCurrentGeometry(scroller);
+                let escapes_current_geometry = self.EntryEscapesCurrentGeometry(&scroller);
                 if escapes_current_geometry {
                     self.SuspendGeometryForEscapingChild();
                 }
                 PaintLayerPainter::with_inherited_geometry(
                     scroller.layer,
                     self.context,
-                    &scroller.property_ancestors,
+                    scroller.property_ancestors,
                 )
                 .WithFlags(self.paint_flags)
                 .PaintOverlayOverflowControls();
