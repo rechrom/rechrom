@@ -1035,7 +1035,15 @@ impl WindowJavaScriptBindings {
                     let id = self.next_timer;
                     self.next_timer += 1;
                     self.animation_callbacks.insert(id, callback);
-                    self.ScheduleAnimationFrame();
+                    // PageAnimator::ScheduleVisualUpdate returns while
+                    // servicing_animations_; ScriptedAnimationController::
+                    // ServiceScriptedAnimations requests the next frame once,
+                    // after its callbacks (ScheduleAnimationIfNeeded). A rAF
+                    // registered by a frame callback posts no frame request
+                    // from inside that callback.
+                    if !self.animation_dispatching {
+                        self.ScheduleAnimationFrame();
+                    }
                     return number(id as f64);
                 }
                 let Some(callback) = args.first().filter(|v| {
@@ -1538,10 +1546,14 @@ impl WindowJavaScriptBindings {
             for error in runtime.TakePendingExceptions(realm) {
                 report_error(&error);
             }
-            let flusher = window.borrow().task_registration_flusher.clone();
-            if let Some(flusher) = flusher {
-                flusher();
-            }
+        }
+        // FrameRequestCallbackCollection::ExecuteFrameCallbacks makes one V8
+        // call per callback; tasks the callbacks registered (image/stylesheet
+        // events, prepared scripts) only run after this rendering step, so
+        // they are queued once for the whole collection, in the same order.
+        let flusher = window.borrow().task_registration_flusher.clone();
+        if let Some(flusher) = flusher {
+            flusher();
         }
         let mut w = window.borrow_mut();
         w.animation_dispatching = false;

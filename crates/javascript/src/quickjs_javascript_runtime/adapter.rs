@@ -161,6 +161,217 @@ unsafe fn traced_object_finalizer(rt: *mut JSRuntime, value: JSValue) {
         }
     }
 }
+/// V8 NamedPropertyHandlerConfiguration callbacks (kOnlyInterceptStrings):
+/// a getter/query answering None/false and a setter answering false are
+/// "not intercepted", and the ordinary operation proceeds.
+pub trait NamedPropertyInterceptor {
+    fn get(&self, ctx: &mut Context, name: &JsString) -> JsResult<Option<Value>>;
+    fn set(&self, ctx: &mut Context, name: &JsString, value: &Value) -> JsResult<bool>;
+    fn query(&self, ctx: &mut Context, name: &JsString) -> JsResult<bool>;
+}
+// One platform object with a named-property interceptor. The holder (the
+// wrapper whose native object answers the callbacks) is a traced internal
+// field, like a V8 embedder field naming the ScriptWrappable's parent.
+struct NamedPropertiesData {
+    interceptor: Rc<dyn NamedPropertyInterceptor>,
+    holder: JSValue,
+}
+static NAMED_PROPERTIES_CLASS: OnceLock<JSClassID> = OnceLock::new();
+fn named_properties_class() -> JSClassID {
+    *NAMED_PROPERTIES_CLASS.get_or_init(|| unsafe {
+        let mut id = 0;
+        JS_NewClassID(&mut id);
+        id
+    })
+}
+static NAMED_PROPERTIES_EXOTIC: JSClassExoticMethods = JSClassExoticMethods {
+    get_own_property: None,
+    get_own_property_names: None,
+    delete_property: None,
+    define_own_property: None,
+    has_property: Some(named_has_property),
+    get_property: Some(named_get_property),
+    set_property: Some(named_set_property),
+    get_prototype: None,
+    set_prototype: None,
+    is_extensible: None,
+    prevent_extensions: None,
+};
+unsafe fn named_properties_mark(rt: *mut JSRuntime, value: JSValueConst, mark: Option<JS_MarkFunc>) {
+    let data = JS_GetOpaque(value, named_properties_class()).cast::<NamedPropertiesData>();
+    if let (Some(data), Some(mark)) = (data.as_ref(), mark) {
+        JS_MarkValue(rt, data.holder, mark);
+    }
+}
+unsafe fn named_properties_finalizer(rt: *mut JSRuntime, value: JSValue) {
+    let data = JS_GetOpaque(value, named_properties_class()).cast::<NamedPropertiesData>();
+    if !data.is_null() {
+        JS_SetOpaque(value, ptr::null_mut());
+        let data = Box::from_raw(data);
+        JS_FreeValueRT(rt, data.holder);
+        drop(data);
+    }
+}
+unsafe fn named_interceptor(obj: JSValueConst) -> Option<Rc<dyn NamedPropertyInterceptor>> {
+    JS_GetOpaque(obj, named_properties_class())
+        .cast::<NamedPropertiesData>()
+        .as_ref()
+        .map(|data| data.interceptor.clone())
+}
+// kOnlyInterceptStrings: symbols are never offered to the callbacks.
+unsafe fn named_key(context: &Context, atom: JSAtom) -> Result<Option<JsString>, ()> {
+    let raw = JS_AtomToValue(context.owner.ctx, atom);
+    if JS_IsException(raw) != 0 {
+        return Err(());
+    }
+    match Value::take(&context.owner, raw) {
+        Value::Str(name) => Ok(Some(name)),
+        _ => Ok(None),
+    }
+}
+unsafe fn throw_value(ctx: *mut JSContext, context: &mut Context, error: Value) {
+    match error.checked(context) {
+        Ok(raw) => JS_Throw(ctx, JS_DupValue(ctx, raw)),
+        Err(other) => JS_Throw(ctx, JS_DupValue(ctx, other.raw())),
+    };
+}
+/// kNonMasking: 1 when the prototype chain already has `atom`, 0 when not,
+/// -1 on exception. Returns the owned prototype (or JS_NULL).
+unsafe fn named_inherited(ctx: *mut JSContext, obj: JSValueConst, atom: JSAtom) -> (i32, JSValue) {
+    let proto = JS_GetPrototype(ctx, obj);
+    if JS_IsException(proto) != 0 {
+        return (-1, JS_NULL);
+    }
+    if JS_VALUE_GET_TAG(proto) != JS_TAG_OBJECT {
+        return (0, proto);
+    }
+    (JS_HasProperty(ctx, proto, atom), proto)
+}
+// QuickJS calls this only after the object's own shape had no `atom`.
+unsafe fn named_get_property(
+    ctx: *mut JSContext,
+    obj: JSValueConst,
+    atom: JSAtom,
+    receiver: JSValueConst,
+) -> JSValue {
+    let (inherited, proto) = named_inherited(ctx, obj, atom);
+    if inherited < 0 {
+        JS_FreeValue(ctx, proto);
+        return JS_EXCEPTION;
+    }
+    if inherited > 0 {
+        let value = JS_GetPropertyInternal(ctx, proto, atom, receiver, 0);
+        JS_FreeValue(ctx, proto);
+        return value;
+    }
+    JS_FreeValue(ctx, proto);
+    let Some(interceptor) = named_interceptor(obj) else {
+        return JS_UNDEFINED;
+    };
+    let mut context = Context::borrowed(ctx);
+    let name = match named_key(&context, atom) {
+        Ok(Some(name)) => name,
+        Ok(None) => return JS_UNDEFINED,
+        Err(()) => return JS_EXCEPTION,
+    };
+    match interceptor.get(&mut context, &name) {
+        Ok(Some(value)) => match value.checked(&mut context) {
+            Ok(raw) => JS_DupValue(ctx, raw),
+            Err(error) => {
+                throw_value(ctx, &mut context, error);
+                JS_EXCEPTION
+            }
+        },
+        Ok(None) => JS_UNDEFINED,
+        Err(error) => {
+            throw_value(ctx, &mut context, error);
+            JS_EXCEPTION
+        }
+    }
+}
+// `val` is borrowed; QuickJS releases it after this returns.
+unsafe fn named_set_property(
+    ctx: *mut JSContext,
+    obj: JSValueConst,
+    atom: JSAtom,
+    val: JSValueConst,
+    receiver: JSValueConst,
+    flags: i32,
+) -> i32 {
+    let (inherited, proto) = named_inherited(ctx, obj, atom);
+    if inherited < 0 {
+        JS_FreeValue(ctx, proto);
+        return -1;
+    }
+    if inherited == 0 {
+        if let Some(interceptor) = named_interceptor(obj) {
+            let mut context = Context::borrowed(ctx);
+            let name = match named_key(&context, atom) {
+                Ok(name) => name,
+                Err(()) => {
+                    JS_FreeValue(ctx, proto);
+                    return -1;
+                }
+            };
+            if let Some(name) = name {
+                let value = Value::take(&context.owner, JS_DupValue(ctx, val));
+                match interceptor.set(&mut context, &name, &value) {
+                    Ok(true) => {
+                        JS_FreeValue(ctx, proto);
+                        return 1;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        throw_value(ctx, &mut context, error);
+                        JS_FreeValue(ctx, proto);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+    // Not intercepted: OrdinarySet continues on the prototype with the
+    // original receiver, which creates the receiver's own data property.
+    if JS_VALUE_GET_TAG(proto) == JS_TAG_OBJECT {
+        let ret = JS_SetPropertyInternal(ctx, proto, atom, JS_DupValue(ctx, val), receiver, flags);
+        JS_FreeValue(ctx, proto);
+        return ret;
+    }
+    JS_FreeValue(ctx, proto);
+    if JS_VALUE_GET_TAG(receiver) != JS_TAG_OBJECT {
+        return 0;
+    }
+    JS_DefinePropertyValue(ctx, receiver, atom, JS_DupValue(ctx, val), JS_PROP_C_W_E)
+}
+// JS_HasProperty hands the whole lookup to this hook: own, then inherited,
+// then the query callback.
+unsafe fn named_has_property(ctx: *mut JSContext, obj: JSValueConst, atom: JSAtom) -> i32 {
+    let own = JS_GetOwnProperty(ctx, ptr::null_mut(), obj, atom);
+    if own != 0 {
+        return own;
+    }
+    let (inherited, proto) = named_inherited(ctx, obj, atom);
+    JS_FreeValue(ctx, proto);
+    if inherited != 0 {
+        return inherited;
+    }
+    let Some(interceptor) = named_interceptor(obj) else {
+        return 0;
+    };
+    let mut context = Context::borrowed(ctx);
+    let name = match named_key(&context, atom) {
+        Ok(Some(name)) => name,
+        Ok(None) => return 0,
+        Err(()) => return -1,
+    };
+    match interceptor.query(&mut context, &name) {
+        Ok(found) => found as i32,
+        Err(error) => {
+            throw_value(ctx, &mut context, error);
+            -1
+        }
+    }
+}
 struct CallbackState {
     owner: Weak<EngineOwner>,
     functions: RefCell<Vec<Weak<Holder>>>,
@@ -739,6 +950,19 @@ impl Context {
                 JS_NewClass(rt, traced_object_class(), &traced_class),
                 0,
                 "traced host class"
+            );
+            let named_class = JSClassDef {
+                class_name: c"BrowserNamedPropertiesObject".as_ptr(),
+                finalizer: Some(named_properties_finalizer),
+                gc_mark: Some(named_properties_mark),
+                call: None,
+                // QuickJS only reads the exotic table; it is never written.
+                exotic: ptr::addr_of!(NAMED_PROPERTIES_EXOTIC).cast_mut(),
+            };
+            assert_eq!(
+                JS_NewClass(rt, named_properties_class(), &named_class),
+                0,
+                "named properties host class"
             );
             let slot = Rc::new(RefCell::new(None));
             let agent = Rc::new(AgentOwner {
@@ -1517,6 +1741,39 @@ impl Context {
     /// An ordinary object with private, GC-traced host edges. The values in
     /// those slots are not JS properties and cannot be observed or overwritten
     /// through reflection. This is the host ownership half of a host wrapper.
+    /// A platform object with a named-property interceptor (V8 instance
+    /// template SetHandler). `holder` is retained and traced by the object.
+    pub(super) fn new_named_properties_object(
+        &mut self,
+        prototype: Option<&JsObject>,
+        holder: &Value,
+        interceptor: Rc<dyn NamedPropertyInterceptor>,
+    ) -> JsResult<JsObject> {
+        let holder = holder.checked(self)?;
+        if let Some(prototype) = prototype {
+            self.validate_value(&Value::Object(prototype.clone()))?;
+        }
+        unsafe {
+            let raw = JS_NewObjectProtoClass(
+                self.owner.ctx,
+                prototype.map_or(JS_NULL, |prototype| prototype.0.raw),
+                named_properties_class(),
+            );
+            if JS_IsException(raw) != 0 {
+                return Err(self.take_exception());
+            }
+            JS_SetOpaque(
+                raw,
+                Box::into_raw(Box::new(NamedPropertiesData {
+                    interceptor,
+                    holder: JS_DupValue(self.owner.ctx, holder),
+                }))
+                .cast(),
+            );
+            self.accept(raw)
+                .map(|value| value.as_object().expect("named properties object").clone())
+        }
+    }
     pub(super) fn new_traced_object(
         &mut self,
         on_release: Option<Box<dyn FnOnce()>>,
@@ -1798,6 +2055,11 @@ impl Context {
         } else {
             Ok(())
         }
+    }
+    /// A Promise/native job or a dynamic import awaiting resumption.
+    pub(super) fn has_pending_jobs(&self) -> bool {
+        unsafe { JS_IsJobPending(self.owner.rt) != 0 }
+            || !self.data().pending_dynamic_imports.borrow().is_empty()
     }
     pub fn run_jobs_errors(&mut self) -> Vec<Value> {
         self.run_jobs_errors_profiled(browser_tracing::profile_input())
