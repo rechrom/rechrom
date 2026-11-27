@@ -4,18 +4,37 @@
 //! `third_party/blink/renderer/core/paint/paint_invalidator.{h,cc}`.
 
 use std::collections::HashSet;
+use std::ptr::NonNull;
 
 use foundation::{IsFullPaintInvalidationReason, PaintInvalidationReason};
-use layout::fragment::PrePaintSourceObject;
-use layout::paint::FragmentPaintData;
+use layout::fragment::{FragmentKind, PrePaintSourceObject, ResidentBoxGeometry as _};
+use layout::paint::{FragmentPaintData, PaintFragmentCursor};
+use layout::views::paint_layer::PaintLayer;
 use layout::input::Display;
 use paint_input_types::layout_input::Offset;
 
 /// Source: `paint_invalidator.h:20-72`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PaintInvalidatorContext {
     subtree_flags: u8,
+    /// `painting_layer` (paint_invalidator.h:65): the PaintLayer that paints
+    /// the visited object, inherited from the parent context and replaced by
+    /// UpdatePaintingLayer. The layer is owned by its LayoutBoxModelObject
+    /// for the whole walk; `None` before the first self-painting layer and
+    /// in hand-built fixtures.
+    painting_layer: Option<NonNull<PaintLayer>>,
 }
+
+/// The context's invalidation state; `painting_layer` is derived from the
+/// visited object (DCHECK_EQ(context.painting_layer, object.PaintingLayer()),
+/// paint_invalidator.cc:230), so retained-context proofs ignore it.
+impl PartialEq for PaintInvalidatorContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.subtree_flags == other.subtree_flags
+    }
+}
+
+impl Eq for PaintInvalidatorContext {}
 
 impl PaintInvalidatorContext {
     const SUBTREE_INVALIDATION_CHECKING: u8 = 1 << 0;
@@ -77,6 +96,58 @@ impl PaintInvalidator {
                 old
             }
         })
+    }
+
+    /// Source: `paint_invalidator.cc:33-53`. InvalidatePaint runs it for every
+    /// visited object outside a no-invalidation subtree, before the
+    /// should-check gate (cc:217-225): the context's painting layer becomes
+    /// this object's self-painting layer, or its PaintingLayer() for inline
+    /// ruby text, and that layer records the float and descendant-outline
+    /// paint phases its painter must visit.
+    ///
+    /// Dual write: PaintLayerPainter still reads the walk's
+    /// `needs_float_phase` / `needs_outline_phase` node flags
+    /// (MarkPaintPhaseNeeds); these PaintLayer bits are recorded alongside.
+    /// Like Chromium they are sticky (paint_layer.h:490-507): only a new
+    /// PaintLayer starts without them.
+    pub(crate) fn UpdatePaintingLayer(
+        cursor: PaintFragmentCursor<'_>,
+        context: &mut PaintInvalidatorContext,
+    ) {
+        if context.HasNoInvalidation() {
+            return;
+        }
+        // A line box is a fragment of its container, not a LayoutObject that
+        // InvalidatePaint visits.
+        if cursor.ViewKind() == FragmentKind::kLine {
+            return;
+        }
+        // cc:35-42.
+        if cursor.SourceHasSelfPaintingLayer() {
+            context.painting_layer = cursor.OwnPaintLayer().map(NonNull::from);
+        } else if cursor.SourceIsInlineRubyText() || context.painting_layer.is_none() {
+            // The second condition covers a walk that starts below the
+            // LayoutView, where Chromium's context would carry the ancestor's
+            // layer (DCHECK_EQ at cc:230).
+            context.painting_layer = cursor.PaintingLayer().map(NonNull::from);
+        }
+        let Some(painting_layer) = context.painting_layer else {
+            return;
+        };
+        // The painting layer is owned by its LayoutBoxModelObject, alive for
+        // the walk; its phase bits are sequence-confined interior state.
+        let painting_layer = unsafe { painting_layer.as_ref() };
+        // cc:44-46.
+        if cursor.SourceIsFloating() {
+            painting_layer.SetNeedsPaintPhaseFloat();
+        }
+        // cc:48-52.
+        if !painting_layer.NeedsPaintPhaseDescendantOutlines()
+            && !cursor.IsLayerObject(painting_layer)
+            && cursor.SourceHasOutline()
+        {
+            painting_layer.SetNeedsPaintPhaseDescendantOutlines();
+        }
     }
 
     /// Prepares the child context and reports whether this object must execute

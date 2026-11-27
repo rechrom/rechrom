@@ -15,7 +15,11 @@ use crate::paint_invalidator::PaintInvalidatorContext;
 pub struct TableCellPaintInvalidator;
 
 impl TableCellPaintInvalidator {
-    /// Source: `table_cell_paint_invalidator.cc:41-42`.
+    /// Source: `table_cell_paint_invalidator.cc:41-42`: `context_.old_paint_offset
+    /// != fragment_data->PaintOffset()` (see ObjectPaintInvalidator::
+    /// ComputePaintInvalidationReason for the offset spaces) or
+    /// `cell_.StitchedSize() != cell_.PreviousSize()`, the LayoutBox previous
+    /// size that PreviousGeometry reads.
     pub fn CellGeometryChanged(
         fragment: &FragmentPaintData,
         previous: Option<&FragmentPaintData>,
