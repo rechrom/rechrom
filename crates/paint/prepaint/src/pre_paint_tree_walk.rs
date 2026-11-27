@@ -5440,8 +5440,11 @@ fn ClearReleasedSlotNodes(released: Vec<ReleasedSlotNode>, store: &PaintProperty
             continue;
         }
         // The walk's source leases keep every retained cursor's result alive
-        // until RetainTree.
-        let Some(slot) = entry.cursor.PrePaintSlot() else {
+        // until RetainTree. A stale box occurrence (its fragment left the
+        // LayoutBox's current results) has no FragmentData to clear: the
+        // object's current FragmentData was rewritten by this walk's
+        // BuildNode, which clears every slot it did not update.
+        let Some(slot) = entry.cursor.PrePaintSlotIfCurrent() else {
             continue;
         };
         // SAFETY: single PrePaint writer, after the walk; no live reference.

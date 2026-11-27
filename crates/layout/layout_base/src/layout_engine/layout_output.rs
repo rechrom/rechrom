@@ -1696,6 +1696,41 @@ impl<'a> PaintFragmentCursor<'a> {
         Some(sidecar.PrePaint())
     }
 
+    /// `PrePaintSlot`, but None when this cursor's box fragment is no longer
+    /// one of its LayoutBox's current physical fragments (a stale occurrence
+    /// from an older layout, e.g. a multicol box that now has fewer
+    /// fragments). Chromium never reaches FragmentData through a stale
+    /// fragment: FragmentDataFromPhysicalFragment (layout_box.cc) is only
+    /// called with a fragment of the current layout results.
+    pub fn PrePaintSlotIfCurrent(self) -> Option<&'a PrePaintSlot> {
+        if let PaintFragmentOwner::Physical(fragment) = self.source.PaintOwner() {
+            let fragment = unsafe { &*fragment };
+            if fragment.IsBox() && !fragment.IsFragmentainerBox() && !fragment.IsLineBox() {
+                let object = fragment.GetLayoutObject();
+                if !object.is_null() {
+                    if unsafe { &*object }.WasDestroyedForTreeUpdate() {
+                        return None;
+                    }
+                    if let Some(box_) = unsafe {
+                        foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object)
+                            .as_ref()
+                    } {
+                        let current = (0..box_.PhysicalFragmentCount()).any(|i| {
+                            std::ptr::eq(
+                                box_.GetPhysicalFragment(i) as *const PhysicalFragment,
+                                fragment as *const PhysicalFragment,
+                            )
+                        });
+                        if !current {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        self.PrePaintSlot()
+    }
+
     /// The PrePaint state PrePaint last wrote for this occurrence, if any
     /// (Chromium reads FragmentData's rare data, null before the first
     /// PrePaintTreeWalk reaches it: core/paint/fragment_data.h:105-110,
