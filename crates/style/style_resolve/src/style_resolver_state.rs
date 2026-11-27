@@ -504,7 +504,9 @@ impl<'a, B: StyleResolverStateBackend> StyleResolverState<'a, B> {
     // cpp: style_resolver_state.cc:198-217
     fn UpdateLengthConversionData(&self) {
         let builder = self.StyleBuilder();
-        let parent = self.ParentStyle();
+        // ParentStyle() is a borrowed `const ComputedStyle*` in Blink; read
+        // the retained parent in place instead of rooting a new handle.
+        let parent = self.ParentStyleRef();
         let root = self.RootElementStyle();
         let containers = self.backend_.NewContainerSizes(self.ContainerUnitContext());
         let anchors = self.backend_.NewAnchorData(
@@ -1002,6 +1004,13 @@ impl<'a, B: StyleResolverStateBackend> StyleResolverState<'a, B> {
     }
     pub fn ParentStyle(&self) -> Option<ComputedStyleHandle> {
         self.parent_style_.borrow().clone()
+    }
+    /// cpp: style_resolver_state.h `const ComputedStyle* ParentStyle() const`.
+    /// Borrow the retained parent for the duration of one property
+    /// application without allocating another Persistent root. Callers must
+    /// not hold it across SetParentStyle.
+    pub fn ParentStyleRef(&self) -> Ref<'_, Option<ComputedStyleHandle>> {
+        self.parent_style_.borrow()
     }
     pub fn LayoutParentStyle(&self) -> Option<ComputedStyleHandle> {
         self.layout_parent_style_.borrow().clone()

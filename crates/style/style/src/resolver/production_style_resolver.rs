@@ -4027,12 +4027,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             // clones the element's current ComputedStyle, variables included,
             // and applies only the inline declarations on top of it. The
             // previous custom-property owner is that cloned variable state;
-            // it is not recomputed from the parent.
-            let previous_custom_properties = self
-                .cascade
-                .incremental_style
-                .as_ref()
-                .map(|old| &*old.custom_properties);
+            // it is not recomputed from the parent, and it is republished
+            // below by sharing the previous owner. The inline declarations
+            // never read it (CanApplyInlineStyleIncrementally rejects
+            // var()/env() values), so it is not lent to the backend either.
             let result = crate::resolver::production_style_cascade::ApplyInlineProperties(
                 ProductionCascadeInputs {
                     document: Some(self.document),
@@ -4050,10 +4048,11 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     active_link_color: self.cascade.active_link_color,
                     is_document_element: false,
                     pseudo_id: self.cascade.pseudo_id,
-                    originating_style: self.cascade.originating_style.clone(),
+                    // The MISU request is never for a pseudo element.
+                    originating_style: None,
                     subject_node: self.cascade.subject_node,
                     container_runtime: self.cascade.container_runtime,
-                    custom_properties: previous_custom_properties,
+                    custom_properties: None,
                     parent_custom_properties: self.cascade.parent_custom_properties,
                     substitution_context: self.cascade.substitution_context,
                     image_resolver: self.cascade.image_resolver,
