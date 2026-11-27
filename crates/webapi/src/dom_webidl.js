@@ -1659,55 +1659,54 @@ const datasetDescriptor = {get() {
 Object.defineProperty(HTMLElement.prototype, 'dataset', datasetDescriptor);
 Object.defineProperty(SVGElement.prototype, 'dataset', datasetDescriptor);
 const cssName = key => key === 'cssFloat' ? 'float' : key.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
-// css_style_declaration.cc:121-150 CssPropertyInfo: a static map from the
-// script-visible name to its known-exposed property, filled on first use, so
-// AnonymousNamedSetter (:173-243) resolves the property once and calls
-// SetPropertyInternal directly.
-const cssPropertyInfo = new Map();
-const cssPropertyName = (node, key) => {
-  const cached = cssPropertyInfo.get(key);
-  if (cached !== undefined) return cached;
-  const name = cssName(key);
-  if (!invoke(node, 'hasStyle', name)) return null;
-  cssPropertyInfo.set(key, name);
-  return name;
-};
+// css_style_declaration.idl CSSStyleDeclaration. Regular members live on
+// CSSStyleDeclaration.prototype; named and indexed properties are the native
+// V8CSSStyleDeclaration interceptor (NamedPropertyGetter/Setter/Query ->
+// CSSStyleDeclaration::AnonymousNamedGetter/AnonymousNamedSetter,
+// css_style_declaration.cc:173-243; CssPropertyInfo resolves the name), so
+// `el.style.left = v` is one native host call with no JavaScript trap.
+const styleOwners = new WeakMap();
+function styleOwner(declaration) {
+  const node = styleOwners.get(declaration);
+  if (node === undefined) throw new TypeError('Illegal invocation');
+  return node;
+}
+function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
+Object.defineProperties(CSSStyleDeclaration.prototype, {
+  cssText: {get() { return styleOwner(this).getAttribute('style') || ''; },
+    set(value) { styleOwner(this).setAttribute('style', String(value)); }, enumerable: true, configurable: true},
+  length: {get() { return invoke(styleOwner(this), '__cssStyleLength'); }, enumerable: true, configurable: true},
+  item: {value(index) { return invoke(styleOwner(this), '__cssStyleItem', Number(index) >>> 0); },
+    writable: true, enumerable: true, configurable: true},
+  getPropertyValue: {value(name) { return invoke(styleOwner(this), 'getStyle', String(name)); },
+    writable: true, enumerable: true, configurable: true},
+  setProperty: {value(name, value, priority = '') {
+    invoke(styleOwner(this), 'setStyle', String(name), String(value ?? ''), String(priority));
+  }, writable: true, enumerable: true, configurable: true},
+  removeProperty: {value(name) {
+    const node = styleOwner(this), property = String(name), old = invoke(node, 'getStyle', property);
+    invoke(node, 'setStyle', property, '');
+    return old;
+  }, writable: true, enumerable: true, configurable: true},
+  // css_style_declaration.idl `attribute [LegacyNullToEmptyString] DOMString
+  // cssFloat`: the 'float' property under a non-keyword name.
+  cssFloat: {get() { return invoke(styleOwner(this), 'getStyle', 'float'); },
+    set(value) { invoke(styleOwner(this), 'setStyle', 'float', value === null ? '' : String(value)); },
+    enumerable: true, configurable: true},
+  [Symbol.toStringTag]: {value: 'CSSStyleDeclaration', configurable: true},
+});
+Object.defineProperty(globalThis, 'CSSStyleDeclaration', {value: CSSStyleDeclaration, writable: true, configurable: true});
+const styleDeclarationPrototype = CSSStyleDeclaration.prototype;
 // ElementCSSInlineStyle::style returns the element's one retained
 // InlineCSSStyleDeclaration (element.cc EnsureElementRareData().
-// EnsureInlineCSSStyleDeclaration); look the wrapper up once per access.
+// EnsureInlineCSSStyleDeclaration): created once, then one lookup per access.
 Object.defineProperty(Element.prototype, 'style', {get() {
   const existing = styles.get(this);
   if (existing !== undefined) return existing;
-  { const node = this; const methods = {
-    getPropertyValue(name) { return invoke(node, 'getStyle', String(name)); },
-    setProperty(name, value, priority = '') { invoke(node, 'setStyle', String(name), String(value ?? ''), String(priority)); },
-    removeProperty(name) { const old = this.getPropertyValue(name); this.setProperty(name, ''); return old; }
-  }; styles.set(this, new Proxy(methods, {
-    get(target, key) { if (key in target || typeof key !== 'string') return target[key];
-      if (key === 'cssText') return node.getAttribute('style') || '';
-      return invoke(node, 'getStyle', cssPropertyInfo.get(key) ?? cssName(key)); },
-    has(target, key) { if (key in target) return true;
-      return typeof key === 'string' && cssPropertyName(node, key) !== null; },
-    // V8CSSStyleDeclaration::NamedPropertySetterCallback ->
-    // CSSStyleDeclaration::AnonymousNamedSetter (css_style_declaration.cc:
-    // 173-243): a known name resolves through the CssPropertyInfo cache and
-    // goes straight to SetPropertyInternal; only a miss consults the table.
-    // A cached name is never 'cssText' ('css-text' is not a property).
-    set(target, key, value) {
-      if (typeof key === 'string') {
-        let name = cssPropertyInfo.get(key);
-        if (name === undefined) {
-          if (key === 'cssText') { node.setAttribute('style', String(value)); return true; }
-          name = cssPropertyName(node, key);
-        }
-        if (name !== null) {
-          invoke(node, 'setStyle', name, typeof value === 'string' ? value : String(value ?? ''));
-          return true;
-        }
-      }
-      target[key] = value;
-      return true; }
-  })); } return styles.get(this);
+  const declaration = invoke(this, '__cssStyleDeclarationCreate', styleDeclarationPrototype);
+  styleOwners.set(declaration, this);
+  styles.set(this, declaration);
+  return declaration;
 }, set(value) { this.setAttribute('style', String(value)); }});
 for (const property of ['name','type','src','href','rel','as','title','alt','nonce','dir','lang','action','method','target','enctype','placeholder','autocomplete'])
   Object.defineProperty(HTMLElement.prototype, property, {get() { return this.getAttribute(property) || ''; }, set(value) { this.setAttribute(property, String(value)); }});

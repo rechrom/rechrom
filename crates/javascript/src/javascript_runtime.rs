@@ -295,6 +295,43 @@ pub struct HostFunctionBinding {
     pub data: Vec<HostValue>,
 }
 
+/// Web IDL conversion the engine applies to a named setter's value before
+/// the host callback, as the generated V8 binding does
+/// (V8CSSStyleDeclaration::NamedPropertySetterCallback converts with
+/// NativeValueTraits<IDLStringLegacyNullToEmptyString>).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HostNamedSetterConversion {
+    /// The original value (primitives and wrappers as ordinary arguments).
+    #[default]
+    Any,
+    /// `[LegacyNullToEmptyString] DOMString`: null becomes "", any other value
+    /// takes ToString. An object is converted only after the query callback
+    /// intercepts its name, so a non-intercepted assignment runs no author
+    /// toString (css_style_declaration.cc AnonymousNamedSetter resolves the
+    /// property before converting).
+    LegacyNullToEmptyString,
+}
+
+/// One platform object with a named property interceptor: V8
+/// ObjectTemplate::SetHandler(NamedPropertyHandlerConfiguration) with
+/// kNonMasking | kOnlyInterceptStrings, as the generated bindings install for
+/// an interface with a named getter/setter and no [LegacyOverrideBuiltIns]
+/// (for example V8CSSStyleDeclaration). Inherited properties shadow named
+/// ones; a callback that answers `handled: false` lets the ordinary
+/// operation proceed. Callbacks are host `kCall`s on `holder` with the
+/// property name (and, for the setter, the converted value) as arguments.
+#[derive(Clone)]
+pub struct HostNamedPropertiesBinding {
+    /// The host wrapper the callbacks receive and the new object retains.
+    pub holder: HostValue,
+    /// The interface prototype object (or null).
+    pub prototype: HostValue,
+    pub getter: String,
+    pub setter: String,
+    pub query: String,
+    pub setter_conversion: HostNamedSetterConversion,
+}
+
 #[derive(Clone)]
 pub enum HostValue {
     Undefined(JavaScriptUndefined),
@@ -832,6 +869,10 @@ pub trait JavaScriptHostRuntime {
         id: [u64; 2],
     ) -> Box<dyn JavaScriptScriptToolInvocationScope>;
     fn CreateHostFunction(&mut self, binding: &HostFunctionBinding) -> HostResult;
+    /// Create one platform object whose named properties are intercepted by
+    /// host callbacks (see HostNamedPropertiesBinding). The result is the new
+    /// object; its identity is owned by the caller's wrapper cache.
+    fn CreateNamedPropertiesObject(&mut self, binding: &HostNamedPropertiesBinding) -> HostResult;
     /// Report an author exception through the realm's existing error channel,
     /// without throwing it from a host algorithm that invokes callbacks.
     fn ReportException(&mut self, value: &HostValue) -> HostResult;

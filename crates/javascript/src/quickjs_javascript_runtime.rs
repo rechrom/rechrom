@@ -880,6 +880,136 @@ impl HostCallable for HostFunction {
     }
 }
 
+/// Generated V8 named-property callbacks of one platform object (for example
+/// V8CSSStyleDeclaration::NamedPropertyGetterCallback/SetterCallback/
+/// QueryCallback): each is one host call on the holder, with no JavaScript
+/// trap in between. The holder namespace is weak; the VM object traces the
+/// holder wrapper itself, so no Rust edge retains the realm.
+struct HostNamedProperties {
+    state: std::rc::Weak<RefCell<State>>,
+    holder: HostObjectId,
+    getter: String,
+    setter: String,
+    query: String,
+    setter_conversion: HostNamedSetterConversion,
+}
+impl HostNamedProperties {
+    fn invoke(
+        &self,
+        ctx: &mut Context,
+        state: &Rc<RefCell<State>>,
+        member: &str,
+        arguments: Vec<HostValue>,
+    ) -> HostResult {
+        let _boundary = bridge_profile::enter(bridge_profile::Phase::Call);
+        let _namespace = host_namespaces::Enter(state);
+        invoke(
+            ctx,
+            state,
+            &HostCall {
+                receiver: self.holder,
+                operation: HostOperation::kCall,
+                member,
+                symbol: HostSymbol::kNone,
+                arguments: &[],
+            },
+            arguments,
+            Some((state.clone(), self.holder)),
+        )
+    }
+    // Named callbacks only see well-formed names; a lone surrogate never
+    // names a host property.
+    fn name(name: &JsString) -> Option<String> {
+        name.to_host_string().ok()
+    }
+    fn query_name(
+        &self,
+        ctx: &mut Context,
+        state: &Rc<RefCell<State>>,
+        name: String,
+    ) -> JsResult<bool> {
+        let answer = self.invoke(ctx, state, &self.query, vec![HostValue::String(name)]);
+        let _host_roots = SynchronizeHostGraph(ctx, state)?;
+        if let Some(thrown) = answer.thrown {
+            return Err(to_js_value(ctx, state, &thrown)?);
+        }
+        if let Some(e) = answer.exception {
+            return Err(error(ctx, e));
+        }
+        Ok(answer.handled && matches!(answer.value, HostValue::Boolean(true)))
+    }
+}
+impl NamedPropertyInterceptor for HostNamedProperties {
+    fn get(&self, ctx: &mut Context, name: &JsString) -> JsResult<Option<Value>> {
+        let (Some(state), Some(name)) = (self.state.upgrade(), Self::name(name)) else {
+            return Ok(None);
+        };
+        let answer = self.invoke(ctx, &state, &self.getter, vec![HostValue::String(name)]);
+        let _host_roots = SynchronizeHostGraph(ctx, &state)?;
+        if let Some(thrown) = answer.thrown {
+            return Err(to_js_value(ctx, &state, &thrown)?);
+        }
+        if let Some(e) = answer.exception {
+            return Err(error(ctx, e));
+        }
+        if !answer.handled {
+            return Ok(None);
+        }
+        to_js_value(ctx, &state, &answer.value).map(Some)
+    }
+    fn set(&self, ctx: &mut Context, name: &JsString, value: &Value) -> JsResult<bool> {
+        let (Some(state), Some(name)) = (self.state.upgrade(), Self::name(name)) else {
+            return Ok(false);
+        };
+        let value = match self.setter_conversion {
+            HostNamedSetterConversion::Any => {
+                let _conversion = bridge_profile::enter(bridge_profile::Phase::Arguments);
+                from_js_argument(value, ctx, &state, false)
+            }
+            HostNamedSetterConversion::LegacyNullToEmptyString => match value {
+                Value::Str(text) => match text.to_host_string() {
+                    Ok(text) => HostValue::String(text),
+                    Err(units) => HostValue::String16(units.into()),
+                },
+                Value::Null => HostValue::String(String::new()),
+                value => {
+                    // Author toString runs only for an intercepted name.
+                    if matches!(value, Value::Object(_))
+                        && !self.query_name(ctx, &state, name.clone())?
+                    {
+                        return Ok(false);
+                    }
+                    let text = ctx.to_js_string(value)?;
+                    match text.to_host_string() {
+                        Ok(text) => HostValue::String(text),
+                        Err(units) => HostValue::String16(units.into()),
+                    }
+                }
+            },
+        };
+        let answer = self.invoke(
+            ctx,
+            &state,
+            &self.setter,
+            vec![HostValue::String(name), value],
+        );
+        let _host_roots = SynchronizeHostGraph(ctx, &state)?;
+        if let Some(thrown) = answer.thrown {
+            return Err(to_js_value(ctx, &state, &thrown)?);
+        }
+        if let Some(e) = answer.exception {
+            return Err(error(ctx, e));
+        }
+        Ok(answer.handled)
+    }
+    fn query(&self, ctx: &mut Context, name: &JsString) -> JsResult<bool> {
+        let (Some(state), Some(name)) = (self.state.upgrade(), Self::name(name)) else {
+            return Ok(false);
+        };
+        self.query_name(ctx, &state, name)
+    }
+}
+
 fn function(
     ctx: &mut Context,
     state: &Rc<RefCell<State>>,
@@ -2025,6 +2155,12 @@ fn checkpoint(ctx: &mut Context, state: &Rc<RefCell<State>>) {
     if hooks.checkpoint_suppression.get() != 0 {
         return;
     }
+    // V8's MicrotasksScope::PerformCheckpoint returns at once for an empty
+    // queue (the common case after each frame callback): no graph sync, no
+    // drain span, no exception bookkeeping.
+    if !ctx.has_pending_jobs() {
+        return;
+    }
     let _host_roots = match SynchronizeHostGraph(ctx, state) {
         Ok(roots) => roots,
         Err(error) => {
@@ -2659,6 +2795,53 @@ impl JavaScriptHostRuntime for HostRuntime<'_> {
         match created {
             Ok(function) => HostResult {
                 value: HostValue::JavaScriptFunction(JavaScriptFunction::new(function)),
+                ..Default::default()
+            },
+            Err(thrown) => HostResult {
+                exception: Some(exception(self.context, &thrown, "")),
+                ..Default::default()
+            },
+        }
+    }
+    fn CreateNamedPropertiesObject(&mut self, binding: &HostNamedPropertiesBinding) -> HostResult {
+        let created = (|| -> JsResult<JsObject> {
+            let _roots = SynchronizeHostGraph(self.context, self.state)?;
+            let holder = to_js_value(self.context, self.state, &binding.holder)?;
+            let origin = holder
+                .as_object()
+                .and_then(|object| host_namespaces::WrapperOrigin(self.state, object));
+            let Some((origin, id)) = origin else {
+                return Err(self
+                    .context
+                    .type_error("Named properties holder must be a platform object"));
+            };
+            let prototype = match to_js_value(self.context, self.state, &binding.prototype)? {
+                Value::Object(prototype) => Some(prototype),
+                Value::Null => None,
+                _ => {
+                    return Err(self
+                        .context
+                        .type_error("Named properties prototype must be an object or null"))
+                }
+            };
+            self.context.new_named_properties_object(
+                prototype.as_ref(),
+                &holder,
+                Rc::new(HostNamedProperties {
+                    state: Rc::downgrade(&origin),
+                    holder: id,
+                    getter: binding.getter.clone(),
+                    setter: binding.setter.clone(),
+                    query: binding.query.clone(),
+                    setter_conversion: binding.setter_conversion,
+                }),
+            )
+        })();
+        match created {
+            Ok(object) => HostResult {
+                value: HostValue::JavaScriptValue(JavaScriptValue::new_traced(Value::Object(
+                    object,
+                ))),
                 ..Default::default()
             },
             Err(thrown) => HostResult {

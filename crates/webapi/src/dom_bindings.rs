@@ -3470,6 +3470,80 @@ impl DOMJavaScriptBindings {
                 }
                 Self::value(HostValue::Object(child))
             }
+            // V8CSSStyleDeclaration's named/indexed property callbacks:
+            // CSSStyleDeclaration::AnonymousNamedGetter/AnonymousNamedSetter
+            // (css_style_declaration.cc:173-243) resolve the script name once
+            // through CssPropertyInfo, then run the property's get/set; an
+            // unknown name is not intercepted. Array-index names are the
+            // indexed getter item() (css_style_declaration.idl).
+            "__cssStyleNamedGet"
+            | "__cssStyleNamedSet"
+            | "__cssStyleNamedQuery"
+            | "__cssStyleLength"
+            | "__cssStyleItem" => {
+                if node.Type() != DOMNodeType::kElement {
+                    return Self::type_error("Illegal invocation");
+                }
+                let key = match arguments.first() {
+                    Some(HostValue::String(key)) => Some(key.as_str()),
+                    _ => None,
+                };
+                let item_index = if member == "__cssStyleItem" {
+                    Some(match arguments.first() {
+                        Some(HostValue::Number(index)) if *index >= 0.0 => *index as usize,
+                        _ => usize::MAX,
+                    })
+                } else if member == "__cssStyleLength" {
+                    None
+                } else {
+                    key.and_then(CSSStyleArrayIndex)
+                };
+                if member == "__cssStyleLength" || item_index.is_some() {
+                    // No indexed setter: an index assignment is ignored.
+                    if member == "__cssStyleNamedSet" {
+                        return HostResult::default();
+                    }
+                    // CSSPropertyValueSet::PropertyCount/PropertyAt over the
+                    // element's declaration (one entry per longhand).
+                    let inline_style = node.InlineStyle();
+                    let declarations = style::ParseCSSDeclarationList(inline_style.SourceText());
+                    if member == "__cssStyleLength" {
+                        return Self::value(HostValue::Number(declarations.len() as f64));
+                    }
+                    let property = declarations
+                        .into_iter()
+                        .nth(item_index.unwrap_or(usize::MAX))
+                        .map(|declaration| declaration.property);
+                    return match (member, property) {
+                        ("__cssStyleItem", property) => {
+                            Self::value(HostValue::String(property.unwrap_or_default()))
+                        }
+                        ("__cssStyleNamedQuery", property) => {
+                            Self::value(HostValue::Boolean(property.is_some()))
+                        }
+                        (_, Some(property)) => Self::value(HostValue::String(property)),
+                        (_, None) => Self::unhandled(),
+                    };
+                }
+                let Some(property) = key.and_then(CssPropertyInfo) else {
+                    return Self::unhandled();
+                };
+                if member == "__cssStyleNamedQuery" {
+                    return Self::value(HostValue::Boolean(true));
+                }
+                let mut forwarded = arguments.to_vec();
+                forwarded[0] = HostValue::String(property);
+                drop(owner);
+                self.call(
+                    receiver,
+                    if member == "__cssStyleNamedGet" {
+                        "getStyle"
+                    } else {
+                        "setStyle"
+                    },
+                    &forwarded,
+                )
+            }
             // cpp: webapi/dom_bindings.cc:899-921
             "getStyle" | "setStyle" | "hasStyle" => {
                 let Some(HostValue::String(property)) = arguments.first() else {
@@ -3552,15 +3626,18 @@ impl DOMJavaScriptBindings {
                     return HostResult::default();
                 };
                 let (mutation_type, value, inline_style_independent, inline_style) = match result {
+                    // DOM retains the declaration itself and serializes the
+                    // style attribute lazily (Element::SynchronizeStyleAttribute
+                    // on read); the CSSOM write path builds no attribute text.
                     style::CSSInlineDeclarationMutation::Changed(style) => (
                         DOMMutationType::kSetAttribute,
-                        style.SourceText().to_owned(),
+                        String::new(),
                         false,
                         Some(style),
                     ),
                     style::CSSInlineDeclarationMutation::ChangedIndependent(style) => (
                         DOMMutationType::kSetAttribute,
-                        style.SourceText().to_owned(),
+                        String::new(),
                         true,
                         Some(style),
                     ),
@@ -4005,6 +4082,39 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         } else {
             (call.receiver, call.member)
         };
+        // ElementCSSInlineStyle::style creates the element's one
+        // InlineCSSStyleDeclaration (element.cc EnsureElementRareData().
+        // EnsureInlineCSSStyleDeclaration); its wrapper is a V8
+        // CSSStyleDeclaration instance whose named properties are intercepted
+        // natively (V8CSSStyleDeclaration NamedPropertyHandlerConfiguration ->
+        // CSSStyleDeclaration::AnonymousNamedGetter/Setter,
+        // css_style_declaration.cc:173-243). Creating the VM object needs the
+        // runtime, so it runs after the bindings borrow is released.
+        if call.operation == HostOperation::kCall && member == "__cssStyleDeclarationCreate" {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            let element = self.node(id).is_some_and(|index| {
+                self.document.borrow().GetDocument().Node(index).Type() == DOMNodeType::kElement
+            });
+            if !element {
+                return Some(Box::new(|_| Self::type_error("Illegal invocation")));
+            }
+            let binding = javascript::javascript_runtime::HostNamedPropertiesBinding {
+                holder: HostValue::Object(HostObjectRef { id }),
+                prototype: arguments.first().cloned().unwrap_or_default(),
+                getter: "__cssStyleNamedGet".into(),
+                setter: "__cssStyleNamedSet".into(),
+                query: "__cssStyleNamedQuery".into(),
+                setter_conversion:
+                    javascript::javascript_runtime::HostNamedSetterConversion::LegacyNullToEmptyString,
+            };
+            return Some(Box::new(move |runtime| {
+                runtime.CreateNamedPropertiesObject(&binding)
+            }));
+        }
         if call.operation == HostOperation::kCall {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
@@ -4332,6 +4442,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     | "insertBefore"
                     | "removeChild"
                     | "setStyle"
+                    | "__cssStyleNamedSet"
                     | "setAttribute"
                     | "setAttributeNS"
                     | "removeAttribute"
@@ -4707,6 +4818,80 @@ fn is_method(node_type: DOMNodeType, member: &str) -> bool {
         return node_type == DOMNodeType::kElement;
     }
     false
+}
+
+/// An ECMAScript array index (CanonicalNumericIndexString below 2^32 - 1):
+/// the V8 indexed interceptor's keys.
+fn CSSStyleArrayIndex(name: &str) -> Option<usize> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty()
+        || !bytes.iter().all(u8::is_ascii_digit)
+        || (bytes.len() > 1 && bytes[0] == b'0')
+    {
+        return None;
+    }
+    name.parse::<u32>()
+        .ok()
+        .filter(|&index| index != u32::MAX)
+        .map(|index| index as usize)
+}
+
+/// css_style_declaration.cc ParseCSSPropertyID: the script-visible camelCase
+/// (or dashed) name to the CSS property name. "webkitFoo"/"WebkitFoo" gain
+/// the vendor dash; a leading upper-case letter otherwise, or a mix of dashes
+/// and upper-case letters ("border-rightColor"), names no property.
+fn ParseCSSPropertyName(name: &str) -> Option<String> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || !name.is_ascii() {
+        return None;
+    }
+    let mut builder = String::with_capacity(bytes.len() + 4);
+    // HasCSSPropertyNamePrefix(name, "webkit"): first letter case-insensitive.
+    if bytes[0].to_ascii_lowercase() == b'w' && bytes.get(1..6) == Some(b"ebkit".as_slice()) {
+        builder.push('-');
+    } else if bytes[0].is_ascii_uppercase() {
+        return None;
+    }
+    let mut has_seen_dash = false;
+    let mut has_seen_upper = bytes[0].is_ascii_uppercase();
+    builder.push(char::from(bytes[0].to_ascii_lowercase()));
+    for &c in &bytes[1..] {
+        if c.is_ascii_uppercase() {
+            has_seen_upper = true;
+            builder.push('-');
+            builder.push(char::from(c.to_ascii_lowercase()));
+        } else {
+            has_seen_dash |= c == b'-';
+            builder.push(char::from(c));
+        }
+    }
+    if has_seen_dash && has_seen_upper {
+        return None;
+    }
+    Some(builder)
+}
+
+/// css_style_declaration.cc CssPropertyInfo: a static map from the script
+/// name to its known property, filled on first use, so a hot
+/// AnonymousNamedGetter/Setter resolves the property with one lookup.
+/// Custom properties ("--x") are not named properties.
+fn CssPropertyInfo(name: &str) -> Option<String> {
+    thread_local! {
+        static PROPERTIES: RefCell<HashMap<String, Option<String>>> =
+            RefCell::new(HashMap::new());
+    }
+    if let Some(cached) = PROPERTIES.with(|map| map.borrow().get(name).cloned()) {
+        return cached;
+    }
+    let property = ParseCSSPropertyName(name).filter(|property| {
+        !property.starts_with("--")
+            && style::css_property_names::FindProperty(property.as_bytes()).is_some()
+    });
+    PROPERTIES.with(|map| {
+        map.borrow_mut()
+            .insert(name.to_owned(), property.clone())
+    });
+    property
 }
 
 // cpp: webapi/dom_bindings.cc:189-197
