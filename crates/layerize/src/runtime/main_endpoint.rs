@@ -30,6 +30,12 @@ pub struct EngineMainEndpoint {
     rendering_paused: AtomicBool,
     // Source: layer_tree_host.h commit_completion_event_.
     commit_completion: Mutex<Option<CompletionEvent>>,
+    // Whether `commit_completion` holds an event: Chromium tests the raw
+    // `commit_completion_event_` pointer before waiting
+    // (layer_tree_host.cc:520-536). Every main Layer protected-field write
+    // and Writable read asks, so the empty case must not take the mutex.
+    // Written only while the mutex is held.
+    commit_completion_present: AtomicBool,
     // The impl side is running FinishCommit through the commit lease. While
     // both halves share one sequence (S1b-2..S1b-6) that code runs on the
     // owner sequence but is impl code, so it is not the owner thread.
@@ -48,6 +54,7 @@ impl EngineMainEndpoint {
             commit_requested: AtomicBool::new(false),
             rendering_paused: AtomicBool::new(false),
             commit_completion: Mutex::new(None),
+            commit_completion_present: AtomicBool::new(false),
             impl_in_commit_lease: AtomicBool::new(false),
             impl_on_owner_sequence,
         }
@@ -84,12 +91,16 @@ impl EngineMainEndpoint {
             "previous commit still holds the protected sequence"
         );
         *current = Some(completion);
+        self.commit_completion_present.store(true, Ordering::Release);
     }
     /// Source: layer_tree_host.cc:526-536 WaitForCommitCompletion. The event
     /// is cloned out so impl-side `InProtectedSequence` queries never wait on
     /// this mutex while the owner blocks.
     pub fn WaitForCommitCompletion(&self) {
         debug_assert!(self.IsOwnerThread());
+        if !self.commit_completion_present.load(Ordering::Acquire) {
+            return;
+        }
         let Some(event) = self.completion().clone() else {
             return;
         };
@@ -104,6 +115,7 @@ impl EngineMainEndpoint {
             .is_some_and(|current| current.SameEvent(&event))
         {
             *current = None;
+            self.commit_completion_present.store(false, Ordering::Release);
         }
     }
     /// Source: layer_tree_host.cc:552-570 (LayerTreeHost::CommitComplete): a
@@ -112,6 +124,7 @@ impl EngineMainEndpoint {
         let mut current = self.completion();
         if current.as_ref().is_some_and(CompletionEvent::IsSignaled) {
             let event = current.take().unwrap();
+            self.commit_completion_present.store(false, Ordering::Release);
             assert!(
                 !event.WasAbandoned(),
                 "the impl half terminated inside the protected sequence"
@@ -133,6 +146,7 @@ impl EngineMainEndpoint {
                 let mut current = self.completion();
                 if current.as_ref().is_some_and(|current| current.SameEvent(&event)) {
                     *current = None;
+                    self.commit_completion_present.store(false, Ordering::Release);
                 }
             }
         }
@@ -162,6 +176,9 @@ impl ProtectedSequenceSynchronizer for EngineMainEndpoint {
     // Source: layer_tree_host.cc:334-336 (in_commit(): a stored completion
     // event that has not been signaled).
     fn InProtectedSequence(&self) -> bool {
+        if !self.commit_completion_present.load(Ordering::Acquire) {
+            return false;
+        }
         self.completion()
             .as_ref()
             .is_some_and(|event| !event.IsSignaled())

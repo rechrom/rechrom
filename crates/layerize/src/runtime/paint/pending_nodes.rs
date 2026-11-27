@@ -88,20 +88,31 @@ impl<R: PaintSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pa
     }
     fn FlattensInheritedTransformSameAsParent(&self) -> bool {
         read(|a| {
-            self.parent_handle().is_none_or(|p| {
-                p.node().FlattensInheritedTransform(a) == self.node().FlattensInheritedTransform(a)
+            let node = self.node();
+            node.Parent(a).is_none_or(|p| {
+                p.FlattensInheritedTransform(a) == node.FlattensInheritedTransform(a)
             })
         })
     }
     fn BackfaceVisibilitySameAsParent(&self) -> bool {
-        read(|a| {
-            let Some(parent) = self.UnaliasedParent() else {
-                return true;
+        // The fields are read under one proof; only the GeometryMapper cache
+        // fallback needs the retained parent handle.
+        let parent = read(|a| {
+            let node = self.node();
+            let Some(parent) = node.Parent(a) else {
+                return Ok(());
             };
-            self.DelegatesToParentForBackface()
-                || self.node().state(a).backface_visibility == parent.node().state(a).backface_visibility
-                || self.IsBackfaceHidden() == parent.IsBackfaceHidden()
-        })
+            if node.DelegatesToParentForBackface(a)
+                || node.state(a).backface_visibility == parent.state(a).backface_visibility
+            {
+                return Ok(());
+            }
+            Err(Self::from_arc(parent.clone()))
+        });
+        match parent {
+            Ok(()) => true,
+            Err(parent) => self.IsBackfaceHidden() == parent.IsBackfaceHidden(),
+        }
     }
     fn HasStickyConstraint(&self) -> bool {
         read(|a| {
@@ -398,7 +409,7 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
     }
     fn FilterOperations(&self) -> Option<Self::Filters> {
         read(|a| {
-            self.HasFilter().then(|| {
+            self.node().Filter(a).is_some().then(|| {
                 self.node().state(a)
                     .filters
                     .canonical()
@@ -409,7 +420,7 @@ impl<R: PaintSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectN
     }
     fn BackdropFilterOperations(&self) -> Option<Self::Filters> {
         read(|a| {
-            self.HasBackdropFilter().then(|| {
+            self.node().BackdropFilter(a).is_some().then(|| {
                 self.node().state(a)
                     .backdrop_filters
                     .canonical()
@@ -488,13 +499,17 @@ impl<R: PaintSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<
         read(|a| self.node().PaintClipRadii(a)).HasRadius()
     }
     fn PaintClipRRect(&self) -> Option<RRectF> {
-        read(|a| self.node().PaintClipRect(a)).map(|_| RRectF {
-            rect: self.PaintClipRectRect(),
+        let (rect, radii) = read(|a| {
+            let node = self.node();
+            (node.PaintClipRect(a), node.PaintClipRadii(a))
+        });
+        rect.map(|r| RRectF {
+            rect: RectF::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32),
             corner_radii: [
-                read(|a| self.node().PaintClipRadii(a)).top_left,
-                read(|a| self.node().PaintClipRadii(a)).top_right,
-                read(|a| self.node().PaintClipRadii(a)).bottom_right,
-                read(|a| self.node().PaintClipRadii(a)).bottom_left,
+                radii.top_left,
+                radii.top_right,
+                radii.bottom_right,
+                radii.bottom_left,
             ]
             .map(|r| Vector2dF::new(r.x as f32, r.y as f32)),
         })
