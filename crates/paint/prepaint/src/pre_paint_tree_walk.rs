@@ -1221,6 +1221,11 @@ pub struct PrePaintTreeWalk {
     /// it (pre_paint_tree_walk.cc:1584-1585); PrePaint reads the bits at each
     /// fragment's visit, so they are cleared after the walk.
     deferred_paint_flag_clears: Vec<*const FragmentPaintData>,
+    /// Emptied child lists of visited objects, kept with their capacity.
+    /// Chromium's walk keeps no per-object child list (it follows the
+    /// LayoutObject / fragment links in place), so the resident child list a
+    /// visit rebuilds reuses one of these buffers instead of allocating.
+    child_buffers: Vec<Vec<Box<PaintTreeNode<'static>>>>,
     walk_generation: u64,
     /// This pass's PrePaint revision generation (NodeCache::revision): a
     /// process-unique nonzero value, so a node whose revision equals it
@@ -1301,6 +1306,7 @@ impl Default for PrePaintTreeWalk {
             client_nodes: HashMap::default(),
             resident_nodes: Vec::new(),
             deferred_paint_flag_clears: Vec::new(),
+            child_buffers: Vec::new(),
             walk_generation: 0,
             revision_generation: 0,
             resource_memo: Vec::new(),
@@ -5222,7 +5228,7 @@ fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
 /// Whether a clean retained subtree pairs one-to-one, by source identity and
 /// child order, with the replacement source subtree. Read-only.
 fn CleanSubtreeRebindable(node: &PaintTreeNode<'static>, source: PaintFragmentSource<'_>) -> bool {
-    if node.fragment.is_none() || !SamePreviousSourceIdentity(node, &source) {
+    if node.fragment.is_none() || !SamePreviousSourceIdentity(node, &source.Resolved()) {
         return false;
     }
     let mut sources = OrdinaryPaintSourceChildren(source);
@@ -7586,7 +7592,7 @@ impl PrePaintTreeWalk {
             // This node is now proven (RetainedSelfChange) or rebuilt
             // against the current document resources. Its usage follows its
             // own inputs, so an unchanged node keeps the recorded one.
-            let resources = fragment.Cursor().DocumentResources().cloned();
+            let resources = fragment.Cursor().DocumentResources();
             let usage = match previous_resource_usage {
                 Some(usage) if self_unchanged => usage,
                 _ => layout::paint::PaintResourceUsage(
@@ -7595,7 +7601,16 @@ impl PrePaintTreeWalk {
             };
             let cache = node.cache.as_mut().unwrap();
             cache.inherited = inherited;
-            cache.resources = resources;
+            // The document's resources are usually the same allocation as
+            // at the last visit; keep that reference instead of replacing it.
+            let same_resources = match (&cache.resources, resources) {
+                (Some(recorded), Some(current)) => Arc::ptr_eq(recorded, current),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same_resources {
+                cache.resources = resources.cloned();
+            }
             cache.resource_usage = usage;
         }
         if let Some(context) =
@@ -7829,7 +7844,7 @@ impl PrePaintTreeWalk {
         let embedded_source = embedded_view
             .as_ref()
             .map(|view| PaintFragmentSource::FromCursor(view.root));
-        let old_children = std::mem::take(&mut node.children);
+        let mut old_children = std::mem::take(&mut node.children);
         // Source: paint_property_tree_builder.cc:2728-2730. A changed filter
         // taint alters descendant Effect state even across paint-property
         // isolation. Reuse the existing piercing `force` channel for the
@@ -7839,12 +7854,21 @@ impl PrePaintTreeWalk {
         // embedded-frame index and the child list's capacity.
         let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
         let source_children = ordinary_children + usize::from(embedded_source.is_some());
-        node.children.reserve_exact(source_children);
+        if source_children != 0 {
+            // An emptied list buffer of an earlier visit: the rebuilt list
+            // allocates only while no buffer is free.
+            if let Some(buffer) = self.child_buffers.pop() {
+                node.children = buffer;
+            }
+            node.children.reserve_exact(source_children);
+        }
         let same_children = old_children.len() == source_children
             && old_children
                 .iter()
                 .zip(OrdinaryPaintSourceChildren(fragment).chain(embedded_source))
-                .all(|(old, source)| SamePreviousSourceIdentity(old, &source));
+                // Reach each child's FragmentData once for the identity
+                // reads below (FragmentDataIterator), not once per read.
+                .all(|(old, source)| SamePreviousSourceIdentity(old, &source.Resolved()));
         if !same_children {
             self.needs_post_update = true;
         }
@@ -7857,11 +7881,11 @@ impl PrePaintTreeWalk {
         // Hand-built trees use id zero and deliberately retain the positional
         // behavior only while their topology is unchanged.
         let (mut positional_children, mut children_by_instance) = if same_children {
-            (Some(old_children.into_iter()), HashMap::default())
+            (Some(old_children.drain(..)), HashMap::default())
         } else {
             let mut children_by_instance = HashMap::default();
             children_by_instance.reserve(old_children.len());
-            for child in old_children {
+            for child in old_children.drain(..) {
                 // The instance id recorded when this child was last visited.
                 let instance_id = RecordOf(&child).fragment_instance_id;
                 if instance_id != 0 {
@@ -8006,6 +8030,12 @@ impl PrePaintTreeWalk {
             node.children.push(child_node);
         }
         self.physical_ancestor_ids.pop();
+        // Every retained child has moved into the rebuilt list or the
+        // instance map; keep the emptied buffer for a later visit.
+        drop(positional_children);
+        if old_children.capacity() != 0 && self.child_buffers.len() < 64 {
+            self.child_buffers.push(old_children);
+        }
         // Retained children no source child paired with left the tree; their
         // objects' slots go with them.
         for dropped in children_by_instance.values() {
@@ -8410,6 +8440,18 @@ impl PrePaintTreeWalk {
         root: PaintFragmentSource<'_>,
         source_lease: PaintFragmentLease,
     ) -> Box<PaintTreeNode<'static>> {
+        // Source: pre_paint_tree_walk.cc:82-136 and
+        // paint_property_tree_builder.cc / paint_invalidator.cc. PrePaint runs
+        // in DocumentLifecycle::kInPrePaint, where no LayoutObject is created
+        // or destroyed; the walk, the builder and the invalidators read each
+        // visited object's LayoutObject and ComputedStyle directly. Open the
+        // same resident-source scope the paint tree walk opens
+        // (LocalFrameView::PaintTree) for the whole pass, so every
+        // PaintProperties / PaintStyle read reaches its bound source without
+        // a per-call heap membership query. The retained previous fragments
+        // the invalidators compare against are read only through their own
+        // fields and their source lease.
+        let _resident_sources = layout::paint::ResidentPaintSourceScope::new();
         let mut tree = self.WalkTree(root, source_lease);
         let pending = root.Cursor().TakePendingTransformUpdateClients();
         if pending.is_empty() || self.ExecuteAllPendingUpdates(&mut tree, &pending) {
