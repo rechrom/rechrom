@@ -4,7 +4,7 @@ use crate::url_record::*;
 use foundation::begin_frame::BeginFrameSource;
 use javascript::javascript_runtime::*;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -141,7 +141,14 @@ pub struct WindowJavaScriptBindings {
     timers: HashMap<u64, Timer>,
     timer_deadlines: BTreeSet<(Instant, u64)>,
     timer_nesting_level: u32,
-    animation_callbacks: BTreeMap<u64, JavaScriptFunction>,
+    // FrameRequestCallbackCollection (core/dom/
+    // frame_request_callback_collection.h at 6c1d401f): frame_callbacks_ in
+    // registration (= id) order, and callbacks_to_invoke_, the list swapped
+    // out for the frame being run. A cancelled entry that is being invoked
+    // keeps its slot without a callback. The two buffers trade places every
+    // frame, so a registration does not reallocate.
+    animation_callbacks: Vec<(u64, Option<JavaScriptFunction>)>,
+    animation_callbacks_to_invoke: Vec<(u64, Option<JavaScriptFunction>)>,
     animation_fallback_due: Option<Instant>,
     animation_dispatching: bool,
     last_animation_frame: Option<Instant>,
@@ -276,7 +283,8 @@ impl WindowJavaScriptBindings {
             timers: HashMap::new(),
             timer_deadlines: BTreeSet::new(),
             timer_nesting_level: 0,
-            animation_callbacks: BTreeMap::new(),
+            animation_callbacks: Vec::new(),
+            animation_callbacks_to_invoke: Vec::new(),
             animation_fallback_due: None,
             animation_dispatching: false,
             last_animation_frame: None,
@@ -368,6 +376,7 @@ impl WindowJavaScriptBindings {
         self.timers.clear();
         self.timer_deadlines.clear();
         self.animation_callbacks.clear();
+        self.animation_callbacks_to_invoke.clear();
         self.animation_fallback_due = None;
         self.begin_frame_source = None;
         self.host_tasks.clear();
@@ -384,6 +393,10 @@ impl WindowJavaScriptBindings {
     }
     pub fn HasPendingAnimationFrames(&self) -> bool {
         !self.animation_callbacks.is_empty()
+            || self
+                .animation_callbacks_to_invoke
+                .iter()
+                .any(|(_, callback)| callback.is_some())
     }
     /// Earliest owner-thread turn which can advance a Window task source.
     /// The embedding event loop supplies `now`; Window never blocks or owns a
@@ -1017,7 +1030,21 @@ impl WindowJavaScriptBindings {
                         if *id > 0.0 {
                             let id = *id as u64;
                             if name == "cancelAnimationFrame" {
-                                self.animation_callbacks.remove(&id);
+                                // FrameRequestCallbackCollection::
+                                // CancelFrameCallback: erase a pending entry;
+                                // an entry of the running frame is only
+                                // marked cancelled. Both lists are id-ordered.
+                                if let Ok(index) = self
+                                    .animation_callbacks
+                                    .binary_search_by_key(&id, |(id, _)| *id)
+                                {
+                                    self.animation_callbacks.remove(index);
+                                } else if let Ok(index) = self
+                                    .animation_callbacks_to_invoke
+                                    .binary_search_by_key(&id, |(id, _)| *id)
+                                {
+                                    self.animation_callbacks_to_invoke[index].1 = None;
+                                }
                                 if !self.HasPendingAnimationFrames() {
                                     self.animation_fallback_due = None;
                                 }
@@ -1029,12 +1056,18 @@ impl WindowJavaScriptBindings {
                     return HostResult::default();
                 }
                 if name == "requestAnimationFrame" {
+                    // LocalDOMWindow::requestAnimationFrame ->
+                    // ScriptedAnimationController::RegisterFrameCallback ->
+                    // FrameRequestCallbackCollection::RegisterFrameCallback:
+                    // append to frame_callbacks_ (a reused buffer).
+                    let _trace =
+                        browser_tracing::span("javascript", "Window.RequestAnimationFrame");
                     let Some(callback) = function_arg(args, 0) else {
                         return error("requestAnimationFrame requires a function");
                     };
                     let id = self.next_timer;
                     self.next_timer += 1;
-                    self.animation_callbacks.insert(id, callback);
+                    self.animation_callbacks.push((id, Some(callback)));
                     // PageAnimator::ScheduleVisualUpdate returns while
                     // servicing_animations_; ScriptedAnimationController::
                     // ServiceScriptedAnimations requests the next frame once,
@@ -1412,6 +1445,26 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
     fn IsGlobalSameObjectAttribute(&self, name: &str) -> bool {
         matches!(name, "performance" | "navigator" | "screen")
     }
+    // Performance.prototype.now (window_webidl.js) is this native function:
+    // V8Performance::NowOperationCallback -> Performance::now()
+    // (third_party/blink/renderer/core/timing/performance.cc at 6c1d401f)
+    // reads the time origin and the monotonic clock and returns a double,
+    // with no host dispatch or wrapper work. The timing owner is fixed for
+    // this Window's lifetime.
+    fn GlobalNativeNumberOperation(
+        &self,
+        name: &str,
+    ) -> Option<(&'static str, Rc<dyn Fn() -> f64>)> {
+        if name != "__performanceNow" {
+            return None;
+        }
+        let timing = self.performance_timing.clone();
+        let now: Rc<dyn Fn() -> f64> = Rc::new(move || {
+            let _trace = browser_tracing::span("javascript", "Performance.now");
+            timing.Now()
+        });
+        Some(("now", now))
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
         self.invoke(call, None)
     }
@@ -1523,7 +1576,7 @@ impl WindowJavaScriptBindings {
         report_error: &mut dyn FnMut(&JavaScriptException),
     ) {
         let _trace = browser_tracing::span("task", "Window.AnimationFrameCallbacks");
-        let (ids, timestamp, tick) = {
+        let (timestamp, tick) = {
             let mut w = window.borrow_mut();
             if w.animation_dispatching
                 || w.last_animation_frame
@@ -1534,8 +1587,17 @@ impl WindowJavaScriptBindings {
             w.animation_dispatching = true;
             w.last_animation_frame = Some(frame_time);
             w.animation_fallback_due = None;
+            // FrameRequestCallbackCollection::ExecuteFrameCallbacks:
+            // swap(callbacks_to_invoke_, frame_callbacks_). The emptied
+            // to-invoke buffer of the previous frame receives the new
+            // registrations; no key list is collected.
+            let w = &mut *w;
+            debug_assert!(w.animation_callbacks_to_invoke.is_empty());
+            std::mem::swap(
+                &mut w.animation_callbacks,
+                &mut w.animation_callbacks_to_invoke,
+            );
             (
-                w.animation_callbacks.keys().copied().collect::<Vec<_>>(),
                 w.performance_timing
                     .MonotonicTimeToDOMHighResTimeStamp(frame_time),
                 w.animation_tick.clone(),
@@ -1544,12 +1606,25 @@ impl WindowJavaScriptBindings {
         if let Some(tick) = tick {
             tick.borrow_mut()(timestamp);
         }
-        for id in ids {
+        let mut index = 0;
+        loop {
             if !realm.IsValid() {
                 break;
             }
             // Release Window's borrow before script/checkpoints reenter it.
-            let callback = window.borrow_mut().animation_callbacks.remove(&id);
+            // A reset Window empties the list; a cancelled entry is None.
+            let entry: Option<Option<JavaScriptFunction>> = {
+                let mut w = window.borrow_mut();
+                let taken = w
+                    .animation_callbacks_to_invoke
+                    .get_mut(index)
+                    .map(|(_, callback)| callback.take());
+                taken
+            };
+            let Some(callback) = entry else {
+                break;
+            };
+            index += 1;
             let Some(callback) = callback else {
                 continue;
             };
@@ -1573,9 +1648,30 @@ impl WindowJavaScriptBindings {
         // they are queued once for the whole collection, in the same order.
         let flusher = window.borrow().task_registration_flusher.clone();
         if let Some(flusher) = flusher {
+            let _flush = browser_tracing::span("task", "Window.FlushTaskRegistrations");
             flusher();
         }
         let mut w = window.borrow_mut();
+        {
+            let w = &mut *w;
+            // A destroyed realm stops the frame early; its unrun callbacks
+            // stay registered ahead of the newer ones, in id order.
+            if w.animation_callbacks_to_invoke
+                .iter()
+                .any(|(_, callback)| callback.is_some())
+            {
+                w.animation_callbacks_to_invoke
+                    .retain(|(_, callback)| callback.is_some());
+                w.animation_callbacks_to_invoke
+                    .append(&mut w.animation_callbacks);
+                std::mem::swap(
+                    &mut w.animation_callbacks,
+                    &mut w.animation_callbacks_to_invoke,
+                );
+            }
+            // Keep the buffer's capacity for the next frame's swap.
+            w.animation_callbacks_to_invoke.clear();
+        }
         w.animation_dispatching = false;
         w.ScheduleAnimationFrame();
     }

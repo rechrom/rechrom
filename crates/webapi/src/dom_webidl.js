@@ -1699,15 +1699,32 @@ Object.defineProperty(globalThis, 'CSSStyleDeclaration', {value: CSSStyleDeclara
 const styleDeclarationPrototype = CSSStyleDeclaration.prototype;
 // ElementCSSInlineStyle::style returns the element's one retained
 // InlineCSSStyleDeclaration (element.cc EnsureElementRareData().
-// EnsureInlineCSSStyleDeclaration): created once, then one lookup per access.
-Object.defineProperty(Element.prototype, 'style', {get() {
-  const existing = styles.get(this);
-  if (existing !== undefined) return existing;
-  const declaration = invoke(this, '__cssStyleDeclarationCreate', styleDeclarationPrototype);
-  styleOwners.set(declaration, this);
-  styles.set(this, declaration);
-  return declaration;
-}, set(value) { this.setAttribute('style', String(value)); }});
+// EnsureInlineCSSStyleDeclaration): created once. element_css_inline_style.idl
+// declares it `[SameObject, PerWorldBindings, PutForwards=cssText]`; the
+// generated getter keeps that one wrapper in a V8 private property of the
+// holder, so a repeated read is one engine property load. A class private
+// field stamped on the holder (the return-override base) is the
+// script-unobservable QuickJS equivalent; a holder that cannot take the
+// field (non-extensible) keeps the declaration in the side table instead.
+function sameObjectHolder(holder) { return holder; }
+class InlineStyleSlot extends sameObjectHolder {
+  #style;
+  constructor(holder, declaration) { super(holder); this.#style = declaration; }
+  static style() {
+    if (typeof this === 'object' && this !== null && #style in this) return this.#style;
+    const existing = styles.get(this);
+    if (existing !== undefined) return existing;
+    const declaration = invoke(this, '__cssStyleDeclarationCreate', styleDeclarationPrototype);
+    styleOwners.set(declaration, this);
+    try { new InlineStyleSlot(this, declaration); } catch {}
+    if (!(#style in this)) styles.set(this, declaration);
+    return declaration;
+  }
+}
+const inlineStyleGetter = InlineStyleSlot.style;
+Object.defineProperty(inlineStyleGetter, 'name', {value: 'get style', configurable: true});
+Object.defineProperty(Element.prototype, 'style', {get: inlineStyleGetter,
+  set(value) { this.setAttribute('style', String(value)); }});
 for (const property of ['name','type','src','href','rel','as','title','alt','nonce','dir','lang','action','method','target','enctype','placeholder','autocomplete'])
   Object.defineProperty(HTMLElement.prototype, property, {get() { return this.getAttribute(property) || ''; }, set(value) { this.setAttribute(property, String(value)); }});
 for (const [property,attribute] of [['acceptCharset','accept-charset']])

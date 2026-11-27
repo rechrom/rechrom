@@ -669,6 +669,23 @@ pub trait JavaScriptHostBindings {
     fn IsGlobalSameObjectAttribute(&self, _name: &str) -> bool {
         false
     }
+    /// A [Global] member that is a native operation reading only native
+    /// state and returning a number, with no arguments, receiver, wrapper or
+    /// script-visible side effect (window_performance.idl
+    /// `DOMHighResTimeStamp now()`). The generated V8 operation callback calls
+    /// its C++ implementation directly (V8Performance::NowOperationCallback ->
+    /// Performance::now, third_party/blink/renderer/core/timing/
+    /// performance.cc at 6c1d401f), so the backend installs the returned
+    /// function (named by the returned IDL operation name, as the function
+    /// object of `now` is) as a plain native function: no host dispatch, namespace
+    /// entry, argument conversion or host-graph synchronization. The closure
+    /// must not reenter script or the host bindings.
+    fn GlobalNativeNumberOperation(
+        &self,
+        _name: &str,
+    ) -> Option<(&'static str, Rc<dyn Fn() -> f64>)> {
+        None
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult;
     // Rust reborrow adapter for a host calling its bound engine while that
     // engine is already executing a host call. Avoids aliasing a runtime or
