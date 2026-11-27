@@ -3577,7 +3577,7 @@ impl DOMJavaScriptBindings {
                     }
                 };
                 drop(owner);
-                (self.emit_mutation.borrow_mut())(&DOMMutation {
+                self.EmitOwnedMutation(DOMMutation {
                     mutation_type,
                     target_node_id: receiver,
                     name: "style".into(),
@@ -4891,6 +4891,21 @@ impl DOMJavaScriptBindings {
         let id = self.next_collection_id.get();
         self.next_collection_id.set(id + 1);
         id
+    }
+    /// Emit a mutation this branch owns. While PrepareInvocation captures
+    /// the scoped call's one mutation, move it into that slot instead of
+    /// lending it to the capturing emitter, which can only clone it.
+    fn EmitOwnedMutation(&self, mutation: DOMMutation) {
+        if Rc::ptr_eq(&self.emit_mutation, &self.capturing_emit_mutation) {
+            let mut captured = self.captured_mutation.borrow_mut();
+            assert!(
+                captured.is_none(),
+                "a DOM host invocation emits one mutation"
+            );
+            *captured = Some(mutation);
+            return;
+        }
+        (self.emit_mutation.borrow_mut())(&mutation);
     }
     // cpp: webapi/dom_bindings.cc:990-1006
     fn collection(&self, root: HostObjectId, kind: &str, query: &str) -> HostObjectRef {

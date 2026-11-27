@@ -1685,13 +1685,27 @@ Object.defineProperty(Element.prototype, 'style', {get() {
   }; styles.set(this, new Proxy(methods, {
     get(target, key) { if (key in target || typeof key !== 'string') return target[key];
       if (key === 'cssText') return node.getAttribute('style') || '';
-      return invoke(node, 'getStyle', cssName(key)); },
+      return invoke(node, 'getStyle', cssPropertyInfo.get(key) ?? cssName(key)); },
     has(target, key) { if (key in target) return true;
       return typeof key === 'string' && cssPropertyName(node, key) !== null; },
-    set(target, key, value) { if (key === 'cssText') { node.setAttribute('style', String(value)); return true; }
-      const name = typeof key === 'string' ? cssPropertyName(node, key) : null;
-      if (name !== null) invoke(node, 'setStyle', name, String(value ?? ''), '');
-      else target[key] = value;
+    // V8CSSStyleDeclaration::NamedPropertySetterCallback ->
+    // CSSStyleDeclaration::AnonymousNamedSetter (css_style_declaration.cc:
+    // 173-243): a known name resolves through the CssPropertyInfo cache and
+    // goes straight to SetPropertyInternal; only a miss consults the table.
+    // A cached name is never 'cssText' ('css-text' is not a property).
+    set(target, key, value) {
+      if (typeof key === 'string') {
+        let name = cssPropertyInfo.get(key);
+        if (name === undefined) {
+          if (key === 'cssText') { node.setAttribute('style', String(value)); return true; }
+          name = cssPropertyName(node, key);
+        }
+        if (name !== null) {
+          invoke(node, 'setStyle', name, typeof value === 'string' ? value : String(value ?? ''));
+          return true;
+        }
+      }
+      target[key] = value;
       return true; }
   })); } return styles.get(this);
 }, set(value) { this.setAttribute('style', String(value)); }});

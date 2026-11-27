@@ -1376,6 +1376,14 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
                 | "structuredClone"
         )
     }
+    // window.idl `[Replaceable] readonly attribute Navigator navigator`,
+    // `Screen screen` and window_performance.idl `Performance performance`:
+    // each getter returns the LocalDOMWindow's one member object
+    // (navigator_, screen_, DOMWindowPerformance::performance_), answered
+    // by invoke() as the fixed NAVIGATOR/SCREEN/PERFORMANCE objects.
+    fn IsGlobalSameObjectAttribute(&self, name: &str) -> bool {
+        matches!(name, "performance" | "navigator" | "screen")
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
         self.invoke(call, None)
     }
