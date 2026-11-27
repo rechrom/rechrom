@@ -817,6 +817,12 @@ impl PaintController {
             let client_id = {
                 let item = &mut output.display_items[item_index];
                 item.MoveRecordFrom(&previous, position);
+                // A moved ScrollbarDisplayItem names the same Scrollbar, whose
+                // NeedsUpdateDisplay its first paint already consumed
+                // (scrollbar_display_item.cc:46-68).
+                if let Some(scrollbar) = item.scrollbar.as_mut() {
+                    scrollbar.needs_update_display = false;
+                }
                 item.SetPaintInvalidationReason(if item.IsCacheable() {
                     foundation::PaintInvalidationReason::kNone
                 } else {

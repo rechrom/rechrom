@@ -32,6 +32,11 @@ pub struct Scrollbar {
     custom_style_update_pending: Cell<bool>,
     custom: Cell<Member<super::super::custom_scrollbar::CustomScrollbar>>,
     frame_rect: Cell<gfx::Rect>,
+    // Source: core/scroll/scrollbar.h needs_update_display_ (initially true):
+    // set by every SetNeedsPaintInvalidation (scrollbar.cc:858-871), consumed
+    // by ScrollbarDisplayItem::Paint / CreateOrReuseLayer
+    // (scrollbar_display_item.cc:46-68,103-106).
+    needs_update_display: Cell<bool>,
 }
 
 impl Scrollbar {
@@ -71,6 +76,7 @@ impl Scrollbar {
             custom_style_update_pending: Cell::new(is_custom_scrollbar),
             custom: Cell::new(Member::default()),
             frame_rect: Cell::new(gfx::Rect::default()),
+            needs_update_display: Cell::new(true),
         }
     }
 
@@ -125,6 +131,9 @@ impl Scrollbar {
             return;
         }
         self.enabled.set(enabled);
+        // scrollbar.cc:744-755: SetNeedsPaintInvalidation, which marks the
+        // display update even for the kNoPart overlay-hide case.
+        self.needs_update_display.set(true);
         self.StyleChanged();
         self.client
             .Invalidate(PaintInvalidationReason::kScrollControl);
@@ -170,6 +179,7 @@ impl Scrollbar {
         }
         // Source: core/scroll/scrollbar.cc:114-123. Nine-patch repaint
         // elision is unavailable, so retain the source's conservative path.
+        self.needs_update_display.set(true);
         self.client
             .Invalidate(PaintInvalidationReason::kScrollControl);
         self.frame_rect.set(*rect);
@@ -221,6 +231,9 @@ impl Scrollbar {
         }
         let old_thumb = self.ThemeGeometryAt(self.current_pos).thumb_position;
         self.current_pos = position;
+        // scrollbar.cc:189-192: SetNeedsPaintInvalidation(parts) marks the
+        // display update whatever parts the theme invalidates.
+        self.needs_update_display.set(true);
         self.client
             .Invalidate(PaintInvalidationReason::kScrollControl);
         if self.PressedPart() == super::super::scrollbar_part::ScrollbarPart::kThumbPart
@@ -247,6 +260,20 @@ impl Scrollbar {
         }
         self.visible_size = visible_size;
         self.total_size = total_size;
+        // scrollbar.cc:207-220: SetNeedsPaintInvalidation(kThumbPart or
+        // kAllParts).
+        self.needs_update_display.set(true);
+    }
+
+    // Source: core/scroll/scrollbar.h NeedsUpdateDisplay /
+    // ClearNeedsUpdateDisplay, reached through ScrollbarLayerDelegate
+    // (scrollbar_layer_delegate.cc:149-155).
+    pub fn NeedsUpdateDisplay(&self) -> bool {
+        self.needs_update_display.get()
+    }
+
+    pub fn ClearNeedsUpdateDisplay(&self) {
+        self.needs_update_display.set(false);
     }
 
     pub fn DisconnectFromScrollableArea(&mut self) {
@@ -518,6 +545,7 @@ impl Scrollbar {
     /// Scrollbar::SetNeedsPaintInvalidation, scrollbar.cc:858-871. The retained
     /// Paint boundary caches the scrollbar's display item as one native client.
     pub fn InvalidatePaintForInput(&self) {
+        self.needs_update_display.set(true);
         self.client
             .Invalidate(PaintInvalidationReason::kScrollControl);
         if let Some(area) = unsafe { self.scrollable_area.Get().as_mut() } {

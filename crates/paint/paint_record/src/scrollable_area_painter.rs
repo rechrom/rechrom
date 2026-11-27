@@ -299,7 +299,13 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     overlay: data.uses_overlay_scrollbars,
                     left_side_vertical: axis.left_side_vertical,
                     minimum_thumb_length: data.minimum_thumb_length,
-                    needs_update_display: axis.needs_update_display.unwrap_or(true),
+                    // Consumed from the live Scrollbar when recorded; a
+                    // detached payload conservatively needs an update.
+                    needs_update_display: fragment
+                        .paint
+                        .TakeScrollbarNeedsUpdateDisplay(axis.display_item_client_id)
+                        .or(axis.needs_update_display)
+                        .unwrap_or(true),
                     hit_test_opaqueness: ScrollbarHitTestOpaqueness(
                         fragment,
                         data.theme_disallows_hit_test,

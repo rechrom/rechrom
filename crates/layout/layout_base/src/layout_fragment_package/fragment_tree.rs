@@ -2660,6 +2660,33 @@ impl PaintProperties {
         matches(client).then(|| unsafe { &*(client as *const DisplayItemClient) })
     }
 
+    /// ScrollbarDisplayItem consumes the live Scrollbar's NeedsUpdateDisplay
+    /// once and clears it (scrollbar_display_item.cc:46-68,103-106;
+    /// scrollbar_layer_delegate.cc:149-155): read and clear the flag of the
+    /// scrollbar whose DisplayItemClient is `id`. None for a payload with no
+    /// live scrollbar.
+    pub fn TakeScrollbarNeedsUpdateDisplay(&self, id: u64) -> Option<bool> {
+        if id == 0 {
+            return None;
+        }
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return None;
+        }
+        let box_model = foundation::DynamicTo::<LayoutBoxModelObject>(object);
+        let area = unsafe { box_model.as_ref()?.GetScrollableArea().as_ref()? };
+        for scrollbar in [area.HorizontalScrollbar(), area.VerticalScrollbar()] {
+            if let Some(scrollbar) = unsafe { scrollbar.as_ref() } {
+                if scrollbar.DisplayItemClient().Id() as u64 == id {
+                    let needs_update_display = scrollbar.NeedsUpdateDisplay();
+                    scrollbar.ClearNeedsUpdateDisplay();
+                    return Some(needs_update_display);
+                }
+            }
+        }
+        None
+    }
+
     /// State of a scroll-owned client record (`id` and its detached mirror).
     pub fn ScrollClientState(
         &self,

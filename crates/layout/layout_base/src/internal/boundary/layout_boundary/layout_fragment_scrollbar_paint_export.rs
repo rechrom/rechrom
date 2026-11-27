@@ -102,11 +102,11 @@ pub(crate) fn ExportScrollbarPaintData(
             display_item_client_id: client.map_or(0, |client| client.Id() as u64),
             display_item_client_invalidation_reason: client
                 .map(|client| client.GetPaintInvalidationReason()),
-            // ScrollbarDisplayItem::NeedsUpdateDisplay is cc::Scrollbar state;
-            // DisplayItemClient validity is a different lifecycle signal.  The
-            // source Scrollbar subset does not export that state yet, so leave
-            // it explicitly unavailable.  Paint's consumer conservatively
-            // treats None as needing an update.
+            // ScrollbarDisplayItem::NeedsUpdateDisplay is live Scrollbar state
+            // that its first paint consumes; Paint reads and clears it when it
+            // records the item (PaintProperties::
+            // TakeScrollbarNeedsUpdateDisplay), so the retained payload does
+            // not freeze it.
             needs_update_display: None,
             display_item_client_is_cacheable: client.is_some_and(|client| client.IsCacheable()),
             display_item_client_is_just_created: client
@@ -142,8 +142,7 @@ pub(crate) fn ExportScrollbarPaintData(
             display_item_client_id: client.map_or(0, |client| client.Id() as u64),
             display_item_client_invalidation_reason: client
                 .map(|client| client.GetPaintInvalidationReason()),
-            // See the horizontal branch above. Do not reconstruct cc scrollbar
-            // update state from DisplayItemClient validity.
+            // See the horizontal branch above.
             needs_update_display: None,
             display_item_client_is_cacheable: client.is_some_and(|client| client.IsCacheable()),
             display_item_client_is_just_created: client
