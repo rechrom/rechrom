@@ -178,6 +178,7 @@ struct CallbackState {
     last_exception_location: RefCell<Option<JSExceptionLocation>>,
     intrinsics: HashMap<&'static str, JSValue>,
     proxy_class: JSClassID,
+    array_buffer_class: JSClassID,
 }
 // A Window Agent owns one heap/job queue and multiple independent Contexts.
 // Values may cross those Contexts by identity; unrelated Agents stay isolated.
@@ -645,6 +646,18 @@ impl Context {
         let Value::Object(object) = value else {
             return None;
         };
+        // V8's Value::IsArrayBuffer is a non-throwing class test. QuickJS's
+        // JS_GetArrayBuffer instead throws (and builds an Error with its
+        // backtrace) for every other object (quickjs.c:56852-56865
+        // js_get_array_buffer), which every callback argument such as a
+        // requestAnimationFrame function reached. Test the class first; that
+        // C function accepts exactly JS_CLASS_ARRAY_BUFFER and the adjacent
+        // JS_CLASS_SHARED_ARRAY_BUFFER of the same JSClassEnum.
+        let class = unsafe { JS_GetClassID(object.0.raw) };
+        let buffer = self.data().array_buffer_class;
+        if class != buffer && class != buffer + 1 {
+            return None;
+        }
         let mut length = 0;
         let data = unsafe { JS_GetArrayBuffer(self.owner.ctx, &mut length, object.0.raw) };
         if data.is_null() {
@@ -772,6 +785,7 @@ impl Context {
             last_exception_location: RefCell::new(None),
             intrinsics: HashMap::new(),
             proxy_class: 0,
+            array_buffer_class: 0,
         }));
         let task_tracker = agent.task_tracker.clone();
         JS_SetContinuationPreservedDataSlot(ctx, task_tracker.Slot());
@@ -840,6 +854,11 @@ impl Context {
             .new_proxy(target, handler)
             .expect("proxy class probe");
         (*callbacks).proxy_class = JS_GetClassID(probe.0.raw);
+        let buffer = context
+            .new_array_buffer_copy(&[])
+            .expect("array buffer class probe");
+        (*callbacks).array_buffer_class = JS_GetClassID(buffer.raw());
+        drop(buffer);
         context
     }
     unsafe fn borrowed(ctx: *mut JSContext) -> Self {
