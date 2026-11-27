@@ -461,6 +461,7 @@ pub(super) fn SynchronizeHostGraph(
 ) -> JsResult<Vec<JsObject>> {
     // Walk the registry in place (no per-call Vec of namespace handles);
     // an empty drain returns an unallocated Vec.
+    let _trace = browser_tracing::span("javascript", "HostGraph.Sync");
     let registry = state.borrow().namespaces.clone();
     let mut roots = Vec::new();
     let mut index = 0;

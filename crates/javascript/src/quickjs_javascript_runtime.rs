@@ -568,6 +568,10 @@ fn invoke(
     mut arguments: Vec<HostValue>,
     receiver_origin: Option<(Rc<RefCell<State>>, HostObjectId)>,
 ) -> HostResult {
+    // Host operation dispatch: receiver/namespace resolution, the host's
+    // PrepareInvocation and its invocation (V8 callback -> Blink method).
+    let mut trace = browser_tracing::span("javascript", "HostCall.Dispatch");
+    trace.set("operation", call.operation as u8 as f64);
     let (mut origin, receiver) = receiver_origin.unwrap_or_else(|| (state.clone(), call.receiver));
     let mut host = host_namespaces::ObjectHost(&origin, receiver);
     let policy = host.borrow().ArgumentPolicy(call.receiver, call.member);
@@ -958,9 +962,13 @@ impl NamedPropertyInterceptor for HostNamedProperties {
         to_js_value(ctx, &state, &answer.value).map(Some)
     }
     fn set(&self, ctx: &mut Context, name: &JsString, value: &Value) -> JsResult<bool> {
+        // V8 NamedPropertySetterCallback: name/value conversion, then the
+        // host setter (AnonymousNamedSetter), then the graph sync after it.
+        let _trace = browser_tracing::span("javascript", "NamedProperty.Set");
         let (Some(state), Some(name)) = (self.state.upgrade(), Self::name(name)) else {
             return Ok(false);
         };
+        let conversion = browser_tracing::span("javascript", "NamedProperty.SetterConversion");
         let value = match self.setter_conversion {
             HostNamedSetterConversion::Any => {
                 let _conversion = bridge_profile::enter(bridge_profile::Phase::Arguments);
@@ -987,6 +995,7 @@ impl NamedPropertyInterceptor for HostNamedProperties {
                 }
             },
         };
+        drop(conversion);
         let answer = self.invoke(
             ctx,
             &state,
@@ -1413,6 +1422,24 @@ fn create_realm(
     host_namespaces::Initialize(&state);
     let names = host.borrow().GlobalNames();
     for name in names {
+        // A native number operation (Performance::now) is one plain native
+        // function, called with no host dispatch or graph synchronization.
+        let native = host.borrow().GlobalNativeNumberOperation(&name);
+        if let Some((operation, native)) = native {
+            let function = context.new_host_function(
+                Rc::new(NativeNumberOperation { callback: native }),
+                Vec::new(),
+                operation,
+                0,
+            );
+            let key = PropKey::from_string(&context.intern(&name));
+            context.define_own(
+                &global,
+                key,
+                Property::data(Value::Object(function), PropFlags::C_W_E),
+            );
+            continue;
+        }
         let answer = host.borrow_mut().Invoke(&HostCall {
             receiver: 0,
             operation: HostOperation::kGet,
@@ -2024,6 +2051,18 @@ impl JavaScriptRuntime for QuickJsJavaScriptRuntime {
             .expect("invalid QuickJS realm")
     }
     fn PerformMicrotaskCheckpoint(&mut self) {
+        // MicrotaskQueue::PerformCheckpoint returns at once for an empty
+        // queue (the common case after each frame callback). Ask each realm
+        // without copying the registry or running any job; checkpoint()
+        // repeats the exact per-realm test below.
+        let pending = self.realms.borrow().iter().any(|realm| {
+            realm
+                .WithImplementation::<QuickJsRealm, _>(|r| r.context.has_pending_jobs())
+                .unwrap_or(true)
+        });
+        if !pending {
+            return;
+        }
         // A microtask can synchronously initialize a newly inserted frame.
         // Keep the registry unborrowed while its existing Agent queue runs.
         let realms = self.realms.borrow().clone();
@@ -2056,6 +2095,9 @@ fn call(
     trace.set("argc", arguments.len() as f64);
     let boundary = bridge_profile::Measurement::start();
     let value = (|| {
+        // V8 InvokeFunction's entry work (graph sync, receiver/argument
+        // conversion) and the script body are attributed separately.
+        let prologue = browser_tracing::span("javascript", "Callback.Prologue");
         let _host_roots = SynchronizeHostGraph(ctx, state)?;
         let function = callback
             .Implementation::<JsObject>()
@@ -2063,11 +2105,23 @@ fn call(
         // Pin the host receiver before argument allocation can collect a
         // just-popped host reaction/event task's former root.
         let receiver = to_js_value(ctx, state, receiver)?;
-        let args = arguments
-            .iter()
-            .map(|v| to_js_value(ctx, state, v))
-            .collect::<JsResult<Vec<_>>>()?;
-        ctx.call(Value::Object(function.clone()), receiver, &args)
+        let mut inline_args: [Value; 2] = [Value::Undefined, Value::Undefined];
+        let heap_args: Vec<Value>;
+        let args: &[Value] = if arguments.len() <= inline_args.len() {
+            for (slot, value) in inline_args.iter_mut().zip(arguments) {
+                *slot = to_js_value(ctx, state, value)?;
+            }
+            &inline_args[..arguments.len()]
+        } else {
+            heap_args = arguments
+                .iter()
+                .map(|v| to_js_value(ctx, state, v))
+                .collect::<JsResult<Vec<_>>>()?;
+            &heap_args
+        };
+        drop(prologue);
+        let _invoke = browser_tracing::span("javascript", "Callback.Invoke");
+        ctx.call(Value::Object(function.clone()), receiver, args)
     })();
     trace.set("failed", u8::from(value.is_err()) as f64);
     bridge_profile::Measurement::finish(boundary, &mut trace);
@@ -2227,6 +2281,27 @@ impl Drop for CheckpointScope {
                 .checked_sub(1)
                 .expect("active microtask scope"),
         );
+    }
+}
+/// JavaScriptHostBindings::GlobalNativeNumberOperation installed as the
+/// operation's function: like a generated V8 operation callback with no
+/// arguments (V8Performance::NowOperationCallback), it calls the native
+/// implementation and converts its double, ignoring the receiver. The
+/// closure touches no wrapper or host-graph state, so there is nothing to
+/// synchronize before or after it.
+struct NativeNumberOperation {
+    callback: Rc<dyn Fn() -> f64>,
+}
+impl HostCallable for NativeNumberOperation {
+    fn call(
+        &self,
+        _: &mut Context,
+        _: &Value,
+        _: &[Value],
+        _: &[Value],
+        _: &Value,
+    ) -> JsResult<Value> {
+        Ok(Value::number((self.callback)()))
     }
 }
 struct NativeFunction {
