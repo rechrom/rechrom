@@ -153,9 +153,8 @@ fn focused_area_records_clipped_image_area_focus_path() {
             Some(image)
         );
         assert!(!page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .any(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath));
@@ -201,7 +200,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
             "focused area must reach LayoutImage fragment"
         );
 
-        let items = &page.CurrentFrame().unwrap().display_items.items;
+        let items = page.CurrentPaintArtifact().unwrap().items.clone();
         let stroke = items
             .iter()
             .find(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath)
@@ -237,12 +236,12 @@ fn focused_area_records_clipped_image_area_focus_path() {
 
         set_attribute(&mut page, "area", "coords", "12,22,32,42");
         let changed = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath)
+            .cloned()
             .expect("changed image-map area path");
         assert_eq!(changed.path[0].point.x, 12.0);
         assert_eq!(changed.path[0].point.y, 22.0);
@@ -252,12 +251,12 @@ fn focused_area_records_clipped_image_area_focus_path() {
         set_attribute(&mut page, "area", "shape", "circle");
         set_attribute(&mut page, "area", "coords", "50,40,10");
         let circle = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath)
+            .cloned()
             .expect("circle image-map area path");
         assert_eq!(circle.path.len(), 6);
         assert_eq!(circle.path[0].point.x, 60.0);
@@ -266,12 +265,12 @@ fn focused_area_records_clipped_image_area_focus_path() {
         set_attribute(&mut page, "area", "shape", "poly");
         set_attribute(&mut page, "area", "coords", "5,6,15,16,25,6");
         let polygon = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath)
+            .cloned()
             .expect("polygon image-map area path");
         assert_eq!(polygon.path.len(), 4);
         assert!(polygon.even_odd);
@@ -280,12 +279,12 @@ fn focused_area_records_clipped_image_area_focus_path() {
 
         set_attribute(&mut page, "area", "shape", "default");
         let default_shape = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath)
+            .cloned()
             .expect("default image-map area path");
         assert_eq!(default_shape.path.len(), 5);
         assert_eq!(default_shape.path[0].point.x, 0.0);
@@ -300,9 +299,8 @@ fn focused_area_records_clipped_image_area_focus_path() {
             "outline: 1px solid rgb(10,20,30)",
         );
         assert!(!page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .any(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath));
@@ -313,15 +311,14 @@ fn focused_area_records_clipped_image_area_focus_path() {
             "outline: 1px auto rgb(10,20,30)",
         );
         assert!(page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .any(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath));
 
         set_attribute(&mut page, "image", "usemap", "#other");
-        let reassociated = &page.CurrentFrame().unwrap().display_items.items;
+        let reassociated = page.CurrentPaintArtifact().unwrap().items.clone();
         assert!(!reassociated
             .iter()
             .any(|item| { item.node_id == image && item.r#type == DisplayItemType::kStrokePath }));
@@ -329,7 +326,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
             item.node_id == second_image && item.r#type == DisplayItemType::kStrokePath
         }));
         set_attribute(&mut page, "image", "usemap", "#map");
-        let restored = &page.CurrentFrame().unwrap().display_items.items;
+        let restored = page.CurrentPaintArtifact().unwrap().items.clone();
         assert!(restored
             .iter()
             .any(|item| { item.node_id == image && item.r#type == DisplayItemType::kStrokePath }));
@@ -342,9 +339,8 @@ fn focused_area_records_clipped_image_area_focus_path() {
         ))
         .unwrap();
         assert!(!page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .any(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath));
@@ -370,9 +366,8 @@ fn focused_area_records_clipped_image_area_focus_path() {
         .unwrap();
         assert!(image_input.focused_image_map_area.is_none());
         assert!(!page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .any(|item| item.node_id == image && item.r#type == DisplayItemType::kStrokePath));

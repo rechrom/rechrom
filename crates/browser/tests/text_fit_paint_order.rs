@@ -74,6 +74,7 @@ fn text_fit_scales_shadows_and_glyphs_but_not_decorations() {
         assert!(!page.IsLoading());
 
         let frame = page.CurrentFrame().unwrap();
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let text_data = text.PaintData();
@@ -97,7 +98,7 @@ fn text_fit_scales_shadows_and_glyphs_but_not_decorations() {
         let scale = text_data.paint.text_fit_scale;
         assert!(scale > 1.0, "expected grow text-fit scale, got {scale}");
 
-        let items = &frame.display_items.items;
+        let items = &frame_artifact.items;
         let node_id = text_data.node_id;
         let concats: Vec<_> = items
             .iter()

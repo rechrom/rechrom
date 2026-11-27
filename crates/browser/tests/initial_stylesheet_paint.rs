@@ -238,7 +238,7 @@ fn parser_continuation_after_first_frame_paints_appended_nested_flex_sibling() {
                 text.expect("nested secondary text"),
             )
         };
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         assert!(
             artifact.items.iter().any(|item| {
                 item.node_id == secondary

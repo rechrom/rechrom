@@ -208,7 +208,7 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
             }
             sticky(PaintFragmentCursor::FromHandle(tree));
             // Validate the sticky basis published in Paint property state.
-            let artifact = &page.CurrentFrame().unwrap().display_items;
+            let artifact = &page.CurrentPaintArtifact().unwrap();
             let mut transforms = std::collections::HashMap::new();
             for chunk in &artifact.chunks {
                 let mut node = Some(chunk.properties.transform.clone());

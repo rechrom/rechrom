@@ -45,7 +45,7 @@ use layout::{editing::DocumentSelection, fragment::FragmentKind, paint::PaintRes
 pub use open::OpenStatus;
 use open::{script_scheduler::ScriptLoadClient, OpenEngine};
 use page_mutation::{PageMutation, ResourceMutation};
-pub use paint::paint_engine::{CaretGeometry, PaintRect as CaretRect};
+pub use paint::paint_engine::{CaretGeometry, PaintArtifact, PaintRect as CaretRect};
 use raster::RasterEngine;
 use renderer::RenderUpdate;
 use renderer_skia::{PixelFormat, RendererSkiaBackend};
@@ -364,12 +364,16 @@ pub struct PageFrame {
     /// Last compositor scroll delta reflected by this committed snapshot.
     pub compositor_scroll_sequence: u64,
     pub fragments: LayoutResultHandle,
-    pub display_items: Arc<paint::paint_engine::PaintArtifact>,
+    // The PaintArtifact is not a frame field: PaintEngine's persistent
+    // PaintController data is its only document-side owner, as Chromium's
+    // PaintControllerPersistentData is (paint_controller.h:85-99). Page reads
+    // it through `Page::CurrentPaintArtifact` (LocalFrameView::GetPaintArtifact,
+    // local_frame_view.cc:4399-4406).
     /// Rechrom-specific certification for its immutable document-image record
     /// catalog. Blink's SVGImage instead sizes its isolated document and asks
     /// the view for a PaintRecord at draw time.
     ///
-    /// Certified once when this immutable artifact enters the frame. Retained
+    /// Certified once when a newly committed artifact enters the frame. Retained
     /// scroll-property updates do not change display items or their catalog.
     pub document_image_records_complete: bool,
 }
@@ -590,7 +594,14 @@ pub trait PageClient {
             .collect::<Vec<_>>()
             .into()
     }
-    fn DidPresentFrame(&mut self, _frame: &PageFrame) {}
+    /// `artifact` is borrowed from PaintEngine's persistent PaintController
+    /// data for the duration of the call; the client does not retain it.
+    fn DidPresentFrame(
+        &mut self,
+        _frame: &PageFrame,
+        _artifact: &paint::paint_engine::PaintArtifact,
+    ) {
+    }
     fn DidFinishLoad(&mut self) {}
     fn DidFail(&mut self, _message: &str) {}
     fn DidFailResource(&mut self, _url: &str, _message: &str) {}
@@ -3036,7 +3047,20 @@ impl PageState {
         ));
     }
 
-    fn PublishPaintResources(&self, frame: &mut PageFrame) {
+    /// LocalFrameView::GetPaintArtifact (local_frame_view.cc:4399-4406): the
+    /// current artifact is read from its one owner, PaintEngine's persistent
+    /// PaintController data (paint_controller.h:96-99). Callers borrow it;
+    /// only the Layerize push shares the `Arc`, as PaintArtifactCompositor
+    /// retains the artifact it was updated with.
+    fn CurrentPaintArtifact(
+        &self,
+    ) -> Option<std::cell::Ref<'_, Arc<paint::paint_engine::PaintArtifact>>> {
+        std::cell::Ref::filter_map(self.paint_engine.borrow(), |paint| paint.GetPaintResult()).ok()
+    }
+
+    /// Resource-only update of the PaintController-owned artifact, in place
+    /// (ImageResourceContent observers invalidate only the sampling records).
+    fn PublishPaintResources(&self) {
         let pending = std::mem::take(&mut *self.pending_paint_mutations.borrow_mut());
         let update = if pending.is_empty() {
             let constraints = self.constraints.borrow();
@@ -3055,10 +3079,9 @@ impl PageState {
         } else {
             paint::paint_engine::PaintResourceUpdate::Mutations(pending)
         };
-        let mut paint = self.paint_engine.borrow_mut();
-        frame.display_items = paint
-            .PublishResourceUpdate(std::mem::take(&mut frame.display_items), update)
-            .unwrap_or_else(|| dom::error::logic_error("paint resource update rejected"));
+        if !self.paint_engine.borrow_mut().PublishResourceUpdate(update) {
+            dom::error::logic_error("paint resource update rejected");
+        }
         self.paint_resources_dirty.set(false);
     }
     fn InvalidateStyle(&self) {
@@ -4081,9 +4104,9 @@ impl PageState {
                 // commit input before Paint mutates its retained snapshot.
                 self.InvalidatePreparedArtifact();
             }
-            // The frame and Engine reference the same committed artifact.
-            // Move the frame's reference back before a property-only update.
-            paint.AdoptPaintResult(std::mem::take(&mut frame.display_items));
+            // PaintEngine's persistent PaintController data is the artifact's
+            // only document-side owner (paint_controller.h:85-99), so a
+            // property-only update mutates it without a Page round-trip.
             let property_update = (scroll_layout
                 == crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry)
                 .then(|| paint.TryUpdateScrollProperties(&layout_output));
@@ -4117,27 +4140,24 @@ impl PageState {
             } else {
                 None
             };
-            let retained_artifact = paint_output.is_none().then(|| {
-                paint
-                    .GetPaintResult()
-                    .expect("paint result available")
-                    .clone()
-            });
             drop(paint);
             if let Some(paint_output) = paint_output {
-                (frame.fragments, frame.display_items) = self
+                // Layout's commit hands back the committed artifact handle;
+                // Page only inspects it here and leaves ownership with
+                // PaintEngine (local_frame_view.cc:3185-3227).
+                let (fragments, artifact) = self
                     .layout_engine
                     .borrow_mut()
                     .CommitPaint(layout_output, paint_output, Some(&self.layout_editing));
+                frame.fragments = fragments;
                 frame.document_image_records_complete =
-                    frame.display_items.HasExactDocumentImageContainerRecords();
-                self.CountPaintUseCounters(&frame.display_items);
+                    artifact.HasExactDocumentImageContainerRecords();
+                self.CountPaintUseCounters(&artifact);
             } else {
                 frame.fragments = self
                     .layout_engine
                     .borrow_mut()
                     .CommitRetainedPaint(layout_output);
-                frame.display_items = retained_artifact.expect("retained Paint artifact");
             }
             // Share the immutable post-scroll output. Every mutation clears
             // measurement first, so callers retaining an older frame are the
@@ -5249,9 +5269,8 @@ impl Page {
             pending_scroll_updates: self.state.scroll_updates.borrow().len(),
             frame_sequence: self.frame.as_ref().map(|f| f.sequence),
             recording_revision: self
-                .frame
-                .as_ref()
-                .map(|f| f.display_items.recording_revision),
+                .CurrentPaintArtifact()
+                .map(|artifact| artifact.recording_revision),
             dom: self
                 .state
                 .document
@@ -5625,23 +5644,24 @@ impl Page {
             || (Vec::new(), false),
             |frames| frames.BlockingWheelListenerTargets(),
         );
+        let artifact = self
+            .CurrentPaintArtifact()
+            .filter(|_| !child_pending && !self.state.blocking_wheel_registry_dirty.get());
         let owner = self.state.document.borrow();
         let mut resolver = self.wheel_event_regions.borrow_mut();
         if child_pending || self.state.blocking_wheel_registry_dirty.get() {
             resolver.Invalidate();
         }
-        resolver.ResolvePlatformWithLocalFrameTargets(
+        let regions = resolver.ResolvePlatformWithLocalFrameTargets(
             frame_sequence,
             self.scripts
                 .as_ref()
                 .map_or_else(Vec::new, |scripts| scripts.BlockingWheelListenerTargets()),
             child_targets,
             owner.GetDocument(),
-            self.frame
-                .as_ref()
-                .filter(|_| !child_pending && !self.state.blocking_wheel_registry_dirty.get())
-                .map(|frame| frame.display_items.as_ref()),
-        )
+            artifact.as_deref().map(|artifact| &**artifact),
+        );
+        regions
     }
 
     // cpp: browser/browser.cc:610-737,1834-1856
@@ -6213,10 +6233,14 @@ impl Page {
                     before_lifecycle(self);
                 }
                 self.UpdateRendering(args)?;
-                if let Some(frame) = self.CurrentFrame() {
+                // LocalFrameView::PushPaintArtifactToCompositor
+                // (local_frame_view.cc:3253,3348-3351) hands
+                // PaintArtifactCompositor::Update the PaintController's
+                // artifact; Layerize retains that same Arc, nothing else does.
+                let artifact = self.CurrentPaintArtifact().map(|artifact| Arc::clone(&artifact));
+                if let Some(artifact) = artifact {
                     let _trace =
                         browser_tracing::span("lifecycle", "Page.PushPaintArtifactToCompositor");
-                    let artifact = frame.display_items.clone();
                     main.UpdateMainCompositorPaintArtifact(&artifact, width, height, scale)?;
                 }
                 Ok(())
@@ -7015,9 +7039,8 @@ impl Page {
         Ok(())
     }
     pub fn Caret(&self) -> Option<CaretGeometry> {
-        self.frame
-            .as_ref()
-            .and_then(|frame| frame.display_items.caret)
+        self.CurrentPaintArtifact()
+            .and_then(|artifact| artifact.caret)
     }
     pub fn TextInputState(&self) -> Option<interaction::adapter::interaction::TextInputState> {
         self.interaction
@@ -7610,6 +7633,18 @@ impl Page {
     }
     pub fn CurrentFrame(&self) -> Option<&PageFrame> {
         self.frame.as_ref()
+    }
+
+    /// LocalFrameView::GetPaintArtifact (local_frame_view.cc:4399-4406): the
+    /// artifact of the committed frame, borrowed from PaintEngine's
+    /// persistent PaintController data, its only document-side owner. None
+    /// before the first frame commits or after a new document is installed.
+    /// Do not hold the borrow across calls that run Paint.
+    pub fn CurrentPaintArtifact(
+        &self,
+    ) -> Option<std::cell::Ref<'_, Arc<paint::paint_engine::PaintArtifact>>> {
+        self.frame.as_ref()?;
+        self.state.CurrentPaintArtifact()
     }
 
     /// Admit or prioritize image requests from current client geometry.
@@ -8245,15 +8280,14 @@ impl Page {
         // run HTMLCanvasPainter once to install its DrawImage record. Clear
         // snapshots are included deliberately so the next draw can remain a
         // resource-only update.
-        let canvas_update_requires_repaint = self.frame.as_ref().is_some_and(|frame| {
+        let canvas_update_requires_repaint = self.CurrentPaintArtifact().is_some_and(|artifact| {
             self.state
                 .constraints
                 .borrow()
                 .canvases
                 .iter()
                 .any(|canvas| {
-                    frame
-                        .display_items
+                    artifact
                         .image_dependencies
                         .dependencies(canvas.resource_id)
                         .is_empty()
@@ -8381,8 +8415,7 @@ impl Page {
             trace.set("frame_retained", 1.0);
             self.state.CommitRetainedPaintLifecycle();
             if self.state.paint_resources_dirty.get() {
-                self.state
-                    .PublishPaintResources(self.frame.as_mut().unwrap());
+                self.state.PublishPaintResources();
                 trace.set("paint_resources_updated", 1.0);
             }
             // Keep the host's presentation/lifecycle contract while reusing
@@ -8406,7 +8439,13 @@ impl Page {
             if let Some(scripts) = &mut self.scripts {
                 scripts.DidPaint();
             }
-            self.state.client.borrow_mut().DidPresentFrame(frame);
+            self.state.client.borrow_mut().DidPresentFrame(
+                frame,
+                &self
+                    .state
+                    .CurrentPaintArtifact()
+                    .expect("committed frame has a PaintController artifact"),
+            );
             trace.set("presented", 1.0);
             self.UpdateCursor();
             return Ok(());
@@ -8524,7 +8563,7 @@ impl Page {
             let frame = self.frame.as_mut().unwrap();
             frame.fragments = fragments;
             if self.state.paint_resources_dirty.get() {
-                self.state.PublishPaintResources(frame);
+                self.state.PublishPaintResources();
                 trace.set("paint_resources_updated", 1.0);
             }
             if let Some(start) = profile {
@@ -8548,7 +8587,13 @@ impl Page {
             if let Some(scripts) = &mut self.scripts {
                 scripts.DidPaint();
             }
-            self.state.client.borrow_mut().DidPresentFrame(frame);
+            self.state.client.borrow_mut().DidPresentFrame(
+                frame,
+                &self
+                    .state
+                    .CurrentPaintArtifact()
+                    .expect("committed frame has a PaintController artifact"),
+            );
             trace.set("presented", 1.0);
             self.UpdateCursor();
             return Ok(());
@@ -8859,7 +8904,7 @@ impl Page {
             .get()
             .unwrap()
             .CommitPaint(child_paint, &paint_output);
-        let (fragments, display_items) = self.state.layout_engine.borrow_mut().CommitPaint(
+        let (fragments, artifact) = self.state.layout_engine.borrow_mut().CommitPaint(
             layout_output,
             paint_output,
             Some(&self.state.layout_editing),
@@ -8905,8 +8950,12 @@ impl Page {
             );
         }
         let use_counter_trace = browser_tracing::span("lifecycle", "Page.CountPaintUseCounters");
-        let document_image_records_complete = display_items.HasExactDocumentImageContainerRecords();
-        self.state.CountPaintUseCounters(&display_items);
+        let document_image_records_complete = artifact.HasExactDocumentImageContainerRecords();
+        self.state.CountPaintUseCounters(&artifact);
+        // Layout's commit returned the committed artifact handle for these
+        // inspections only; PaintEngine keeps the artifact (local_frame_view.cc:
+        // 3185-3227), Page stores no reference to it.
+        drop(artifact);
         drop(use_counter_trace);
         let frame = PageFrame {
             compositor_scroll_sequence: self.processed_compositor_scroll_sequence,
@@ -8917,7 +8966,6 @@ impl Page {
                     f.sequence + 1
                 }),
             fragments,
-            display_items,
             document_image_records_complete,
         };
         // Native geometry remains current after presentation. Bindings borrow
@@ -8946,10 +8994,14 @@ impl Page {
         }
         {
             let _trace = browser_tracing::span("lifecycle", "Page.DidPresentFrame");
+            let artifact = self
+                .state
+                .CurrentPaintArtifact()
+                .expect("committed frame has a PaintController artifact");
             self.state
                 .client
                 .borrow_mut()
-                .DidPresentFrame(self.frame.as_ref().unwrap());
+                .DidPresentFrame(self.frame.as_ref().unwrap(), &artifact);
         }
         // The complete PaintArtifact must enter the Page-domain compositor
         // before its KeyframeModels. This is the package-boundary form of
@@ -9511,11 +9563,14 @@ impl Page {
         format: PixelFormat,
         stride: usize,
     ) -> io::Result<RenderUpdate> {
-        let artifact = &self
-            .CurrentFrame()
-            .ok_or_else(|| io::Error::other("Page has no frame"))?
-            .display_items;
-        self.PaintArtifactInto(artifact, width, height, scale, target, format, stride)
+        // The render path pushes the artifact to Layerize, which retains the
+        // PaintController's Arc (local_frame_view.cc:3348-3351); release the
+        // PaintEngine borrow before rendering.
+        let artifact = self
+            .CurrentPaintArtifact()
+            .map(|artifact| Arc::clone(&artifact))
+            .ok_or_else(|| io::Error::other("Page has no frame"))?;
+        self.PaintArtifactInto(&artifact, width, height, scale, target, format, stride)
     }
 
     /// The host may append transient chrome content to this Page's recording.

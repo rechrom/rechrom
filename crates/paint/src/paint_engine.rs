@@ -226,7 +226,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
         ..Default::default()
     });
     let mut engine = PaintEngine::new();
-    engine.persistent_data.AdoptPaintArtifact(old.clone());
+    engine.persistent_data.CommitNewDisplayItems(old.clone());
     let next_record: Arc<dyn image_resource::DocumentPaintRecord> = Arc::new(2u8);
     let frame = Arc::new(DocumentImageFrame {
         animation_info: image_resource::PaintImageAnimationInfo::confirmed_static(),
@@ -1186,10 +1186,6 @@ pub trait PaintLifecycle {
     /// Layout consumes the opaque client receipt at its own boundary; Page
     /// never receives mutable access to the artifact or the client set.
     fn CommitPaintResult(&mut self) -> PaintOutput;
-    /// Move Page's current frame reference back before updating the artifact.
-    /// This prevents Engine/Page sharing alone from causing a deep copy.
-    #[doc(hidden)]
-    fn AdoptPaintResult(&mut self, artifact: Arc<PaintArtifact>);
 }
 
 impl PaintLifecycle for PaintEngine {
@@ -1406,11 +1402,6 @@ impl PaintLifecycle for PaintEngine {
             layout::paint::PaintClientCommit::FromClientSet(clients),
         )
     }
-
-    #[doc(hidden)]
-    fn AdoptPaintResult(&mut self, artifact: Arc<PaintArtifact>) {
-        self.persistent_data.AdoptPaintArtifact(artifact);
-    }
 }
 
 /// Resource-only updates of the committed artifact: new resource catalogs
@@ -1423,14 +1414,16 @@ pub trait PaintResourceUpdates {
     /// compositor damage only records that sample changed pixels.
     fn UpdatePaintResources(&mut self, resources: Arc<PaintResources>) -> bool;
     fn ApplyMutation(&mut self, mutation: PaintMutation) -> Option<PaintMutationResult>;
-    /// Reconcile resource-only changes with the artifact currently published
-    /// by Page. This keeps Arc COW/adoption and resource revision validation
-    /// inside PaintEngine while older compositor snapshots remain immutable.
-    fn PublishResourceUpdate(
-        &mut self,
-        artifact: Arc<PaintArtifact>,
-        update: PaintResourceUpdate,
-    ) -> Option<Arc<PaintArtifact>>;
+    /// Apply resource-only changes to the artifact this engine's persistent
+    /// PaintController data owns. Chromium's PaintControllerPersistentData
+    /// is the only document-side owner of the current PaintArtifact
+    /// (paint_controller.h:85-99); LocalFrameView reads it there
+    /// (local_frame_view.cc:4399-4406) and the embedder never holds its own
+    /// reference. The update is in place; Arc copy-on-write happens only
+    /// while Layerize still retains the previous artifact (the
+    /// PaintArtifactCompositor's retained reference). Returns false when no
+    /// artifact exists or a resource mutation is rejected.
+    fn PublishResourceUpdate(&mut self, update: PaintResourceUpdate) -> bool;
 }
 
 impl PaintResourceUpdates for PaintEngine {
@@ -1456,23 +1449,13 @@ impl PaintResourceUpdates for PaintEngine {
         artifact.ApplyResourceMutation(mutation)
     }
 
-    fn PublishResourceUpdate(
-        &mut self,
-        artifact: Arc<PaintArtifact>,
-        update: PaintResourceUpdate,
-    ) -> Option<Arc<PaintArtifact>> {
-        self.persistent_data.AdoptPaintArtifact(artifact);
+    fn PublishResourceUpdate(&mut self, update: PaintResourceUpdate) -> bool {
         match update {
-            PaintResourceUpdate::Snapshot(resources) => {
-                self.UpdatePaintResources(resources).then_some(())?;
-            }
-            PaintResourceUpdate::Mutations(mutations) => {
-                for mutation in mutations {
-                    self.ApplyMutation(mutation)?;
-                }
-            }
+            PaintResourceUpdate::Snapshot(resources) => self.UpdatePaintResources(resources),
+            PaintResourceUpdate::Mutations(mutations) => mutations
+                .into_iter()
+                .all(|mutation| self.ApplyMutation(mutation).is_some()),
         }
-        self.persistent_data.GetPaintArtifact().cloned()
     }
 }
 

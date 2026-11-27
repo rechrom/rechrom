@@ -76,14 +76,15 @@ fn generated_ellipsis_paints_glyphs_without_text_decoration() {
         assert!(!page.IsLoading());
 
         let frame = page.CurrentFrame().expect("painted frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let ellipsis = find_ellipsis(PaintFragmentCursor::FromHandle(&frame.fragments))
             .expect("generated ellipsis fragment");
         let fragment_instance_id = ellipsis.FragmentInstanceId();
-        assert!(frame.display_items.items.iter().any(|item| {
+        assert!(frame_artifact.items.iter().any(|item| {
             item.fragment_instance_id == fragment_instance_id
                 && item.r#type == DisplayItemType::kDrawGlyphRun
         }));
-        assert!(!frame.display_items.items.iter().any(|item| {
+        assert!(!frame_artifact.items.iter().any(|item| {
             item.fragment_instance_id == fragment_instance_id && item.is_text_decoration
         }));
     });

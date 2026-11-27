@@ -390,9 +390,8 @@ fn placeholder_pseudo_style_reaches_the_raster_output() {
         let page = editing_fixture();
         let placeholder_text_id = text_control_placeholder_text_id(&page, "hint");
         let item = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| {
@@ -401,6 +400,7 @@ fn placeholder_pseudo_style_reaches_the_raster_output() {
                     && !item.is_shadow
                     && !item.stroke_glyphs
             })
+            .cloned()
             .expect("the visible placeholder must produce a foreground glyph run");
         assert!(
             (item.color.red - 0x59 as f32 / 255.0).abs() < 0.01
@@ -412,7 +412,7 @@ fn placeholder_pseudo_style_reaches_the_raster_output() {
         );
 
         let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(
-            &page.CurrentFrame().unwrap().display_items,
+            &page.CurrentPaintArtifact().unwrap(),
             640,
             480,
             1.0,
@@ -443,8 +443,8 @@ fn flexed_toolbar_text_control_value_reaches_raster() {
         let page = editing_fixture();
         let value_text_id = text_control_value_text_id(&page, "toolbar-input");
         let frame = page.CurrentFrame().unwrap();
-        let item = frame
-            .display_items
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
+        let item = frame_artifact
             .items
             .iter()
             .find(|item| {
@@ -454,7 +454,7 @@ fn flexed_toolbar_text_control_value_reaches_raster() {
                     && !item.stroke_glyphs
             })
             .expect("the toolbar control value must produce a foreground glyph run");
-        let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(&frame.display_items, 640, 480, 1.0);
+        let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(&frame_artifact, 640, 480, 1.0);
         let rect = item.glyph_ink_rect.unwrap_or(item.rect);
         let left = rect.x.floor().max(0.0) as usize;
         let top = rect.y.floor().max(0.0) as usize;
@@ -480,9 +480,8 @@ fn paint_only_placeholder_color_change_rejects_the_cached_glyph_run() {
         let mut page = editing_fixture();
         let placeholder_text_id = text_control_placeholder_text_id(&page, "hint");
         let color = |page: &Page| {
-            page.CurrentFrame()
+            page.CurrentPaintArtifact()
                 .unwrap()
-                .display_items
                 .items
                 .iter()
                 .find(|item| {
@@ -511,7 +510,7 @@ fn paint_only_placeholder_color_change_rejects_the_cached_glyph_run() {
         );
         let red_pixels = |page: &Page| {
             browser::paint_artifact_raster::RasterizePaintArtifactWithScale(
-                &page.CurrentFrame().unwrap().display_items,
+                &page.CurrentPaintArtifact().unwrap(),
                 640,
                 480,
                 1.0,
@@ -566,9 +565,8 @@ fn inherited_paint_only_color_change_repaints_existing_text_child() {
             texts
                 .iter()
                 .map(|text| {
-                    page.CurrentFrame()
+                    page.CurrentPaintArtifact()
                         .unwrap()
-                        .display_items
                         .items
                         .iter()
                         .find(|item| {
@@ -688,9 +686,8 @@ fn hydration_replacement_retires_old_text_fragments_before_late_style() {
                 .collect::<Vec<_>>()
         };
         let glyphs = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .filter(|item| {
@@ -698,6 +695,7 @@ fn hydration_replacement_retires_old_text_fragments_before_late_style() {
                     && !item.is_shadow
                     && !item.stroke_glyphs
             })
+            .cloned()
             .collect::<Vec<_>>();
         assert!(
             old_text
@@ -899,9 +897,8 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         assert_eq!(edit_selection(&page, id).End(), 9);
         let blue_pixels = |page: &Page| {
             let Some((selection_color, selection_rect)) = page
-                .CurrentFrame()
+                .CurrentPaintArtifact()
                 .unwrap()
-                .display_items
                 .items
                 .iter()
                 .find(|item| {
@@ -925,7 +922,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
                 composite_over_white(selection_color.blue),
             ];
             let pixels = browser::paint_artifact_raster::RasterizePaintArtifactWithScale(
-                &page.CurrentFrame().unwrap().display_items,
+                &page.CurrentPaintArtifact().unwrap(),
                 640,
                 480,
                 1.0,

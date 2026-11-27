@@ -52,10 +52,12 @@ impl SubsequencesData {
 /// Retained paint data shared by successive PaintController cycles.
 ///
 /// Source: `paint_controller.h:86-125`; `paint_controller.cc:31-91`.
-/// Chromium stores a GC-owned PaintArtifact here. Rechrom publishes the same
-/// retained value as an immutable `Arc`, so an older compositor snapshot can
-/// remain alive while the next paint cycle reads the current artifact as its
-/// cache source.
+/// Chromium stores a GC-owned PaintArtifact here, and this is its only
+/// document-side owner: LocalFrameView reads it through GetPaintArtifact
+/// (local_frame_view.cc:4399-4406) and hands PaintArtifactCompositor a
+/// reference (local_frame_view.cc:3348-3351). Rechrom keeps the same value
+/// behind an `Arc` so Layerize can retain the previously pushed artifact
+/// while the next paint cycle reads the current one as its cache source.
 #[derive(Default)]
 pub struct PaintControllerPersistentData {
     current_paint_artifact: Option<Arc<PaintRecording>>,
@@ -104,14 +106,6 @@ impl PaintControllerPersistentData {
         self.current_paint_artifact
             .as_ref()
             .expect("committed paint artifact")
-    }
-
-    /// Adopt Page's current immutable reference before a retained update. This
-    /// is the package-boundary equivalent of Chromium retaining its current
-    /// PaintArtifact in PaintControllerPersistentData.
-    #[doc(hidden)]
-    pub fn AdoptPaintArtifact(&mut self, artifact: Arc<PaintRecording>) {
-        self.current_paint_artifact = Some(artifact);
     }
 }
 

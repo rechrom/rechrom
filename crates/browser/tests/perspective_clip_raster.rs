@@ -60,7 +60,7 @@ fn render(perspective: &str, nested: bool) -> Vec<u32> {
         }
     }
     assert!(!page.IsLoading());
-    let artifact = &page.CurrentFrame().unwrap().display_items;
+    let artifact = &page.CurrentPaintArtifact().unwrap();
     let mut pixels = vec![0; 320 * 200];
     page.PaintArtifactInto(
         artifact,

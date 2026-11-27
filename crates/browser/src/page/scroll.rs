@@ -109,12 +109,12 @@ impl Page {
         if self.external_compositor {
             return Ok(());
         }
+        // Share the PaintController-owned artifact with Layerize, which
+        // retains it (local_frame_view.cc:3348-3351).
         let artifact = self
-            .frame
-            .as_ref()
-            .ok_or_else(|| io::Error::other("wheel input requires a committed Page frame"))?
-            .display_items
-            .clone();
+            .CurrentPaintArtifact()
+            .map(|artifact| Arc::clone(&artifact))
+            .ok_or_else(|| io::Error::other("wheel input requires a committed Page frame"))?;
         let constraints = self.state.constraints.borrow();
         let scale = constraints.device_pixel_ratio;
         let physical = |value: f64, name: &str| -> io::Result<u32> {
@@ -261,10 +261,8 @@ impl Page {
         &self,
         element: compositor_values::input_types::ElementId,
     ) -> bool {
-        self.frame
-            .as_ref()
-            .and_then(|frame| frame.display_items.compositor_viewport.as_ref())
-            .is_some_and(|viewport| {
+        self.CurrentPaintArtifact().is_some_and(|artifact| {
+            artifact.compositor_viewport.as_ref().is_some_and(|viewport| {
                 paint::property_cell::with_access(|access| {
                     viewport
                         .visual_scroll_translation
@@ -275,6 +273,7 @@ impl Page {
                         })
                 })
             })
+        })
     }
     fn ApplyCompositorScrollOffset(
         &mut self,
@@ -587,7 +586,10 @@ impl Page {
         // draw advances frame-token/submission state, not the source-frame
         // number owned by the last main-thread commit.
         frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
-        self.state.client.borrow_mut().DidPresentFrame(frame);
+        let Some(artifact) = self.state.CurrentPaintArtifact() else {
+            return;
+        };
+        self.state.client.borrow_mut().DidPresentFrame(frame, &artifact);
     }
 
     /// Apply cc's scroll-and-scale delta batch before the main rendering

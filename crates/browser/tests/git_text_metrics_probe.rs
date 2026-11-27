@@ -175,15 +175,15 @@ fn git_text_metrics_probe() {
     }
 
     let frame = page.CurrentFrame().unwrap();
-    for (chunk_index, chunk) in frame.display_items.chunks.iter().enumerate() {
-        for (semantic_offset, recorded) in frame
-            .display_items
+    let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
+    for (chunk_index, chunk) in frame_artifact.chunks.iter().enumerate() {
+        for (semantic_offset, recorded) in frame_artifact
             .display_items
             .ItemsInRange(chunk.begin_index as usize, chunk.end_index as usize)
             .iter()
             .enumerate()
         {
-            let headline = frame.display_items.items[recorded.record_begin..recorded.record_end]
+            let headline = frame_artifact.items[recorded.record_begin..recorded.record_end]
                 .iter()
                 .any(|op| {
                     op.r#type == paint::paint_engine::DisplayItemType::kDrawGlyphRun
@@ -218,7 +218,7 @@ fn git_text_metrics_probe() {
             }
         }
     }
-    for (item_index, item) in frame.display_items.items.iter().enumerate() {
+    for (item_index, item) in frame_artifact.items.iter().enumerate() {
         if (50..90).contains(&item_index) {
             eprintln!(
                 "RAW_ITEM index={} type={:?} node={} tx={} ty={} rect={:?}",
@@ -231,8 +231,7 @@ fn git_text_metrics_probe() {
             );
         }
     }
-    for (item_index, item) in frame
-        .display_items
+    for (item_index, item) in frame_artifact
         .items
         .iter()
         .enumerate()
@@ -279,8 +278,7 @@ fn git_text_metrics_probe() {
                 );
                 dom_index = dom_node.Parent();
             }
-            let chunk = frame
-                .display_items
+            let chunk = frame_artifact
                 .chunks
                 .iter()
                 .find(|chunk| {

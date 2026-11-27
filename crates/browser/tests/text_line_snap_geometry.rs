@@ -79,8 +79,8 @@ fn fixture(device_pixel_ratio: f64, padding_top: f64) -> Page {
 fn assert_source_line_snap(device_pixel_ratio: f64, padding_top: f64) {
     let page = fixture(device_pixel_ratio, padding_top);
     let frame = page.CurrentFrame().expect("published text frame");
-    let mut glyph_items = frame
-        .display_items
+    let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
+    let mut glyph_items = frame_artifact
         .items
         .iter()
         .filter(|item| !item.glyphs.is_empty());

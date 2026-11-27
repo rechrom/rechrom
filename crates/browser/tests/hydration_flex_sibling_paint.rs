@@ -158,19 +158,20 @@ fn hydration_appended_flex_sibling_and_replaced_inline_text_enter_same_paint_art
         let secondary = id(&page, "secondary");
         let label_text = text_child_id(&page, id(&page, "secondary-label"));
         let frame = page.CurrentFrame().unwrap();
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         assert!(
             find(&frame.fragments, secondary).is_some(),
             "the appended flex item must be owned by the current fragment tree"
         );
         assert!(
-            frame.display_items.items.iter().any(|item| {
+            frame_artifact.items.iter().any(|item| {
                 item.node_id == secondary
                     && item.r#type == paint::paint_engine::DisplayItemType::kDrawRect
             }),
             "the appended flex item background/border must enter the paint artifact"
         );
         assert!(
-            frame.display_items.items.iter().any(|item| {
+            frame_artifact.items.iter().any(|item| {
                 item.node_id == label_text
                     && item.r#type == paint::paint_engine::DisplayItemType::kDrawGlyphRun
                     && !item.is_shadow

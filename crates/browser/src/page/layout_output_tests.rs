@@ -342,7 +342,7 @@ fn style_write_geometry_and_frame_share_source_layout_and_match_fresh_pixels() {
         );
         assert_eq!(measured, held(&page.state));
         let actual = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
-            &page.frame.as_ref().unwrap().display_items,
+            &page.CurrentPaintArtifact().unwrap(),
             320,
             200,
         );
@@ -419,7 +419,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             "paint-only style must export current paint without rerunning layout"
         );
         let actual = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
-            &page.frame.as_ref().unwrap().display_items,
+            &page.CurrentPaintArtifact().unwrap(),
             320,
             200,
         );

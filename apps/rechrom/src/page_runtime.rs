@@ -2487,7 +2487,11 @@ impl PageClient for Client {
             Event::ChildHistoryCommitted { item, load_type },
         );
     }
-    fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
+    fn DidPresentFrame(
+        &mut self,
+        frame: &browser::page::PageFrame,
+        artifact: &browser::page::PaintArtifact,
+    ) {
         browser_tracing::instant(
             "paint",
             "DocumentPaintArtifact",
@@ -2497,9 +2501,9 @@ impl PageClient for Client {
                 ("content_sequence", frame.sequence as f64),
                 (
                     "content_recording_revision",
-                    frame.display_items.recording_revision as f64,
+                    artifact.recording_revision as f64,
                 ),
-                ("display_items", frame.display_items.items.len() as f64),
+                ("display_items", artifact.items.len() as f64),
             ],
         );
     }
@@ -2901,7 +2905,9 @@ fn run_document(
                 if let Some(current) = page.CurrentFrame() {
                     let content = ContentFrameProvenance {
                         sequence: current.sequence,
-                        recording_revision: current.display_items.recording_revision,
+                        recording_revision: page
+                            .CurrentPaintArtifact()
+                            .map_or(0, |artifact| artifact.recording_revision),
                         main_frame_epoch: main_frame_count,
                         compositor_scroll_sequence: current.compositor_scroll_sequence,
                         embedder_revision: applied_embedder_revision,

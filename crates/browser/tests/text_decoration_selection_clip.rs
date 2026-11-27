@@ -119,7 +119,7 @@ fn dispatch_selection(
         page.RunTask().unwrap();
         if page.CurrentFrame().is_some_and(|frame| {
             frame.sequence > initial_sequence
-                && frame.display_items.items.iter().any(|item| {
+                && page.CurrentPaintArtifact().unwrap().items.iter().any(|item| {
                     item.node_id == node_id && item.r#type == DisplayItemType::kClipRect
                 })
         }) {
@@ -139,11 +139,11 @@ fn load_and_select_range(
 ) -> (Page, u64) {
     let mut page = load_page(html);
     let frame = page.CurrentFrame().expect("initial frame");
+    let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
     let initial_sequence = frame.sequence;
     let text = find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
     let node_id = text.PaintData().node_id;
-    let glyph_rect = frame
-        .display_items
+    let glyph_rect = frame_artifact
         .items
         .iter()
         .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawGlyphRun)
@@ -176,9 +176,9 @@ fn load_and_select_range(
 fn load_and_select_across_lines(html: &[u8]) -> (Page, u64) {
     let mut page = load_page(html);
     let frame = page.CurrentFrame().expect("initial frame");
+    let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
     let initial_sequence = frame.sequence;
-    let mut glyph_rects: Vec<_> = frame
-        .display_items
+    let mut glyph_rects: Vec<_> = frame_artifact
         .items
         .iter()
         .filter(|item| {
@@ -247,6 +247,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
         assert!(!page.IsLoading());
 
         let frame = page.CurrentFrame().expect("initial frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let initial_sequence = frame.sequence;
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
@@ -259,8 +260,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
             .size
             .height;
         let exported_selection_decoration = data.paint.SelectionTextDecoration();
-        let glyph_rect = frame
-            .display_items
+        let glyph_rect = frame_artifact
             .items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawGlyphRun)
@@ -312,7 +312,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
             page.RunTask().unwrap();
             if page.CurrentFrame().is_some_and(|frame| {
                 frame.sequence > initial_sequence
-                    && frame.display_items.items.iter().any(|item| {
+                    && page.CurrentPaintArtifact().unwrap().items.iter().any(|item| {
                         item.node_id == node_id && item.r#type == DisplayItemType::kClipOutRect
                     })
             }) {
@@ -321,8 +321,9 @@ fn selection_splits_originating_and_selection_decoration_passes() {
         }
 
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         assert!(frame.sequence > initial_sequence);
-        let items = &frame.display_items.items;
+        let items = &frame_artifact.items;
         let clip_outs: Vec<_> = items
             .iter()
             .enumerate()
@@ -547,7 +548,8 @@ fn selection_text_clip_inflates_for_originating_stroke() {
         let html = br#"<!doctype html><body style="margin:0"><span style="font:24px/32px SelectionDecorationFixture;-webkit-text-stroke:6px blue">stroke</span></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.2, 0.8, false);
         let frame = page.CurrentFrame().expect("selection frame");
-        let items = &frame.display_items.items;
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
+        let items = &frame_artifact.items;
         let background = items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawRect)
@@ -602,6 +604,7 @@ fn full_selection_text_clip_uses_fragment_ink_edges() {
         let html = br#"<!doctype html><body style="margin:0"><span style="font:italic 32px/40px SelectionDecorationFixture">italic</span></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.0, 1.0, false);
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let ink = text
@@ -609,7 +612,7 @@ fn full_selection_text_clip_uses_fragment_ink_edges() {
             .paint
             .ink_overflow
             .expect("native text ink overflow");
-        let items = &frame.display_items.items;
+        let items = &frame_artifact.items;
         let background = items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawRect)
@@ -639,7 +642,8 @@ fn svg_selection_text_proper_does_not_use_canvas_clip() {
         let html = br#"<!doctype html><style>::selection{color:red;background:transparent}</style><body style="margin:0"><svg width="240" height="80"><text x="10" y="45" style="font:32px SelectionDecorationFixture">svgtext</text></svg></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.15, 0.75, false);
         let frame = page.CurrentFrame().expect("selection frame");
-        let items = &frame.display_items.items;
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
+        let items = &frame_artifact.items;
         assert!(items.iter().any(|item| {
             item.node_id == node_id
                 && item.r#type == DisplayItemType::kDrawGlyphRun
@@ -661,6 +665,7 @@ fn text_fit_selection_clip_uses_unscaled_font_block_geometry() {
         let html = br#"<!doctype html><body style="margin:0"><div style="width:160px;white-space:pre;font:20px/40px SelectionDecorationFixture;text-fit:grow consistent">ppp</div></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.2, 0.8, false);
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let item = text.Cursor().InlineItem().expect("native inline text item");
@@ -671,7 +676,7 @@ fn text_fit_selection_clip_uses_unscaled_font_block_geometry() {
         assert!(!primary.is_null());
         let unscaled_ascent = f64::from(unsafe { &*primary }.GetFontMetrics().FloatAscent());
         let ink = item.InkOverflowRect();
-        let items = &frame.display_items.items;
+        let items = &frame_artifact.items;
         let background = items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawRect)
@@ -700,13 +705,13 @@ fn selection_background_expands_to_containing_line_height() {
         let html = br#"<!doctype html><body style="margin:0"><div style="font:32px/60px SelectionDecorationFixture"><span style="font-size:12px;line-height:12px;vertical-align:super">small</span></div></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.1, 0.9, false);
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let data = text.PaintData();
         let line_height = data.ViewTextLineHeight().expect("containing line height");
         assert!(line_height > data.size.height);
-        let background = frame
-            .display_items
+        let background = frame_artifact
             .items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawRect)
@@ -723,22 +728,21 @@ fn vertical_selection_background_expands_to_containing_line_block_size() {
         let html = br#"<!doctype html><body style="margin:0"><div style="writing-mode:vertical-rl;height:90px;font:32px/60px SelectionDecorationFixture"><span style="font-size:12px;line-height:12px">small</span></div></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.1, 0.9, true);
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let data = text.PaintData();
         assert!(60.0 > data.size.width);
         let item = text.Cursor().InlineItem().expect("native text item");
         let ink_block_size = item.InkOverflowRect().Height().ToDouble();
-        let background = frame
-            .display_items
+        let background = frame_artifact
             .items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawRect)
             .expect("selection background")
             .rect;
         assert!(background.width >= 60.0);
-        let glyph_clip = frame
-            .display_items
+        let glyph_clip = frame_artifact
             .items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kClipRect)
@@ -759,6 +763,7 @@ fn selection_extends_across_a_selected_soft_line_break() {
         let html = br#"<!doctype html><body style="margin:0"><div style="width:70px;font:20px/28px SelectionDecorationFixture">alpha beta</div></body>"#;
         let (page, node_id) = load_and_select_across_lines(html);
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let mut texts = Vec::new();
         collect_text(
             PaintFragmentCursor::FromHandle(&frame.fragments),
@@ -776,8 +781,7 @@ fn selection_extends_across_a_selected_soft_line_break() {
             .TextSelectionRangeRect(start, end, true)
             .expect("soft-break selection rect");
         assert!(expanded.width > base.width);
-        let background = frame
-            .display_items
+        let background = frame_artifact
             .items
             .iter()
             .filter(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawRect)
@@ -795,6 +799,7 @@ fn selection_uses_space_width_for_a_selected_hard_line_break() {
         let html = br#"<!doctype html><body style="margin:0;font:20px/28px SelectionDecorationFixture"><span>alpha<br>beta</span></body>"#;
         let (page, _) = load_and_select_across_lines(html);
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let mut texts = Vec::new();
         collect_text(
             PaintFragmentCursor::FromHandle(&frame.fragments),
@@ -814,8 +819,7 @@ fn selection_uses_space_width_for_a_selected_hard_line_break() {
             .TextSelectionRangeRect(start, end, false)
             .expect("hard-break selection rect");
         assert!(rect.width > 0.0);
-        let background = frame
-            .display_items
+        let background = frame_artifact
             .items
             .iter()
             .find(|item| {
@@ -839,7 +843,8 @@ fn transparent_selection_background_does_not_record_draw_rect() {
         let html = br#"<!doctype html><style>::selection{color:red;background-color:transparent}</style><body style="margin:0"><span style="font:24px/32px SelectionDecorationFixture">transparent</span></body>"#;
         let (page, node_id) = load_and_select_range(html, 0.05, 0.45, false);
         let frame = page.CurrentFrame().expect("selection frame");
-        let items = &frame.display_items.items;
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
+        let items = &frame_artifact.items;
         let selected_glyph_count = items
             .iter()
             .find(|item| {
@@ -885,6 +890,7 @@ fn visible_selection_handles_publish_compositor_bounds() {
         let html = br#"<!doctype html><body style="margin:0"><span style="font:24px/32px SelectionDecorationFixture">selection bounds</span></body>"#;
         let mut page = load_page(html);
         let frame = page.CurrentFrame().expect("initial frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let initial_sequence = frame.sequence;
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
@@ -895,8 +901,7 @@ fn visible_selection_handles_publish_compositor_bounds() {
             .expect("selection endpoint rect");
         assert_eq!(endpoint_rect.width, 0.0);
         assert!(endpoint_rect.height > 0.0);
-        let glyph_rect = frame
-            .display_items
+        let glyph_rect = frame_artifact
             .items
             .iter()
             .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawGlyphRun)
@@ -947,7 +952,7 @@ fn visible_selection_handles_publish_compositor_bounds() {
             page.RunTask().unwrap();
             if page.CurrentFrame().is_some_and(|frame| {
                 frame.sequence > initial_sequence
-                    && frame.display_items.chunks.iter().any(|chunk| {
+                    && page.CurrentPaintArtifact().unwrap().chunks.iter().any(|chunk| {
                         chunk
                             .compositor
                             .as_deref()
@@ -972,9 +977,9 @@ fn visible_selection_handles_publish_compositor_bounds() {
             .Document();
         assert!(document_selection.is_some_and(|selection| !selection.Collapsed()));
         let frame = page.CurrentFrame().expect("selection frame");
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         assert!(frame.sequence > initial_sequence);
-        let layer_selections: Vec<_> = frame
-            .display_items
+        let layer_selections: Vec<_> = frame_artifact
             .chunks
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())

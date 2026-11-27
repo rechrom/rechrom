@@ -44,6 +44,7 @@ fn probe_text_baseline() {
         2.0,
     );
     let frame = page.CurrentFrame().unwrap();
+    let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
     {
         let owner = page.Document();
         let document = owner.GetDocument();
@@ -70,7 +71,7 @@ fn probe_text_baseline() {
             }
         }
     }
-    for item in frame.display_items.items.iter() {
+    for item in frame_artifact.items.iter() {
         if !item.glyphs.is_empty() {
             eprintln!(
                 "TEXT_ITEM node={} rect={:?} origin={:?} line_top={} line_height={} size={} baseline={} glyphs={}",
@@ -87,7 +88,7 @@ fn probe_text_baseline() {
     }
     let mut pixels = vec![0_u32; 1280 * 800];
     page.PaintArtifactInto(
-        &frame.display_items,
+        &frame_artifact,
         1280,
         800,
         2.0,

@@ -45,7 +45,7 @@ fn page() -> Page {
 
 fn first_pixel(page: &Page) -> [u8; 4] {
     let pixels = browser::paint_artifact_raster::RasterizePaintArtifactTransparent(
-        &page.CurrentFrame().unwrap().display_items,
+        &page.CurrentPaintArtifact().unwrap(),
         160,
         96,
     );
@@ -86,14 +86,14 @@ fn base_background_is_opaque_by_default_and_embedder_configurable() {
         open(&mut colored);
         assert_eq!(first_pixel(&colored), [191, 64, 128, 255]);
         let colored_base = colored
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| {
                 item.color.red == 0.75 && item.color.green == 0.25 && item.color.blue == 0.5
             })
+            .cloned()
             .expect("custom base background draw");
         assert!(colored_base.source_overwrite);
 
@@ -107,14 +107,14 @@ fn base_background_is_opaque_by_default_and_embedder_configurable() {
         source_over.SetShouldClearDocumentBackground(false);
         open(&mut source_over);
         let source_over_base = source_over
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .find(|item| {
                 item.color.red == 0.75 && item.color.green == 0.25 && item.color.blue == 0.5
             })
+            .cloned()
             .expect("source-over base background draw");
         assert!(!source_over_base.source_overwrite);
     });

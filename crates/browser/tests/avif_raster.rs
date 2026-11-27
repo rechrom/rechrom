@@ -91,9 +91,9 @@ fn render(avif: bool, scale: f64, background: &str) -> Vec<u32> {
     assert_eq!(calls.get(), 1, "one production decoder invocation");
     assert_eq!(requests.get(), 1, "one encoded resource fetch");
     let frame = page.CurrentFrame().unwrap();
+    let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
     assert!(
-        !frame
-            .display_items
+        !frame_artifact
             .resources
             .iter()
             .flat_map(|r| r.images.iter())
@@ -105,7 +105,7 @@ fn render(avif: bool, scale: f64, background: &str) -> Vec<u32> {
     let height = (120.0 * scale) as u32;
     let mut pixels = vec![0; width as usize * height as usize];
     page.PaintArtifactInto(
-        &frame.display_items,
+        &frame_artifact,
         width,
         height,
         scale,

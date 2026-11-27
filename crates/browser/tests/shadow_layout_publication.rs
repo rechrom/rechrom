@@ -535,7 +535,7 @@ fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
         );
         let box_id = id(&page, "box");
         let old_fragments = page.CurrentFrame().unwrap().fragments.clone();
-        let old_artifact = page.CurrentFrame().unwrap().display_items.clone();
+        let old_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let old_items = old_artifact.items.as_ref().clone();
         let old_box_paint = published(&page, "box").paint.clone();
         let old_box_size = published(&page, "box").size;
@@ -566,7 +566,7 @@ fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
                 != old_box_paint.style.background_color
         );
         assert!(
-            page.CurrentFrame().unwrap().display_items.items.as_ref() != &old_items,
+            page.CurrentPaintArtifact().unwrap().items.as_ref() != &old_items,
             "shadow paint mutation reaches the published artifact"
         );
         assert!(

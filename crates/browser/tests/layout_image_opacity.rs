@@ -189,9 +189,8 @@ fn image_background_is_recorded(page: &Page) -> bool {
     let node = image_box(page).GetNode();
     assert!(!node.is_null());
     let node_id = unsafe { &*node }.InputId();
-    page.CurrentFrame()
+    page.CurrentPaintArtifact()
         .unwrap()
-        .display_items
         .items
         .iter()
         .any(|item| {
@@ -307,9 +306,8 @@ fn rounded_box_background_is_skipped_when_opaque_child_obscures_it() {
         assert!(!node.is_null());
         let node_id = unsafe { &*node }.InputId();
         assert!(!page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .items
             .iter()
             .any(|item| {

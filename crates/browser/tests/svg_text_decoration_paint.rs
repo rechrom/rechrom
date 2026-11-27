@@ -81,6 +81,7 @@ fn svg_decoration_uses_declaring_ancestor_and_paint_order() {
         assert!(!page.IsLoading());
 
         let frame = page.CurrentFrame().unwrap();
+        let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         let text = find_svg_text(PaintFragmentCursor::FromHandle(&frame.fragments))
             .expect("SVG inline text fragment");
         let text_data = text.PaintData();
@@ -93,8 +94,7 @@ fn svg_decoration_uses_declaring_ancestor_and_paint_order() {
         assert!(fill.red > 0.99 && fill.green < 0.01 && fill.blue < 0.01);
         assert!(stroke.green > 0.49 && stroke.red < 0.01 && stroke.blue < 0.01);
 
-        let passes: Vec<_> = frame
-            .display_items
+        let passes: Vec<_> = frame_artifact
             .items
             .iter()
             .filter(|item| item.is_text_decoration && !item.is_shadow)
@@ -104,8 +104,7 @@ fn svg_decoration_uses_declaring_ancestor_and_paint_order() {
             passes.len() >= 2,
             "SVG decoration passes: {passes:?}; applied={:?}; ops={:?}",
             text_data.paint.style.applied_text_decorations,
-            frame
-                .display_items
+            frame_artifact
                 .items
                 .iter()
                 .map(|item| (item.r#type, item.is_text_decoration))
