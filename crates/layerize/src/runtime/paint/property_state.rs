@@ -210,7 +210,13 @@ fn clip_chain_in_transform_compositing_boundary<R: PaintSkiaBackend>(
 ) -> bool {
     let mut current = node.clone();
     while current != *ancestor {
-        let local = super::read(|a| super::TransformNode::from_arc(current.node().LocalTransformSpace(a).clone()));
+        let (local, parent) = super::read(|a| {
+            let node = current.node();
+            (
+                super::TransformNode::from_arc(node.LocalTransformSpace(a).clone()),
+                node.Parent(a).map(|parent| ClipNode::from_arc(parent.clone())),
+            )
+        });
         if in_same_transform_compositing_boundary(
             transform,
             &local,
@@ -221,7 +227,7 @@ fn clip_chain_in_transform_compositing_boundary<R: PaintSkiaBackend>(
         {
             return false;
         }
-        let Some(parent) = current.parent_handle() else {
+        let Some(parent) = parent else {
             return false;
         };
         current = parent;
@@ -248,10 +254,13 @@ impl<R: PaintSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
         self.effect_ == other.effect_
     }
     fn EffectUnaliasedParentSameAs(&self, ancestor: &Self) -> bool {
-        ancestor
-            .effect_
-            .parent_handle()
-            .is_some_and(|parent| parent == self.effect_)
+        super::read(|a| {
+            ancestor
+                .effect_
+                .node()
+                .Parent(a)
+                .is_some_and(|parent| std::sync::Arc::ptr_eq(parent, self.effect_.as_arc()))
+        })
     }
     fn EffectIsOpacityOnly(&self) -> bool {
         super::read(|a| self.effect_.node().IsOpacityOnly(a))

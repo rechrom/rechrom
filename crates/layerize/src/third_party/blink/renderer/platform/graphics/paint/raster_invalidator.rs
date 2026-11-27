@@ -88,6 +88,13 @@ pub struct RasterInvalidator<M: RasterInvalidationTypes> {
     layer_bounds_: Size,
     layer_state_: M::PropertyTreeState,
     old_paint_chunks_info_: Vec<PaintChunkInfo<M>>,
+    // Rust allocation reuse for the per-Generate locals of
+    // raster_invalidator.cc:193,356-394 (`matched_old_chunks` and
+    // `new_chunks_info`, which the source swaps into old_paint_chunks_info_):
+    // the previous frame's buffers are kept empty here, so steady-state
+    // frames do not allocate. They never carry values between calls.
+    spare_paint_chunks_info_: Vec<PaintChunkInfo<M>>,
+    matched_old_chunks_: Vec<bool>,
     current_paint_artifact_: Option<Arc<M::Artifact>>,
     old_paint_artifact_: Option<Arc<M::Artifact>>,
     tracking_: Option<M::Tracking>,
@@ -145,6 +152,8 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             layer_bounds_: Size::default(),
             layer_state_: m.RootState(),
             old_paint_chunks_info_: Vec::new(),
+            spare_paint_chunks_info_: Vec::new(),
+            matched_old_chunks_: Vec::new(),
             current_paint_artifact_: None,
             old_paint_artifact_: None,
             tracking_: None,
@@ -322,7 +331,9 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             offset_changed,
             rects: std::cell::OnceCell::new(),
         };
-        let mut matched = vec![false; self.old_paint_chunks_info_.len()];
+        let mut matched = std::mem::take(&mut self.matched_old_chunks_);
+        matched.clear();
+        matched.resize(self.old_paint_chunks_info_.len(), false);
         let mut old_index = 0;
         let translation = 1e-2f32;
         let other = 1e-4f32;
@@ -506,6 +517,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                 callback,
             );
         }
+        self.matched_old_chunks_ = matched;
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:322-333;
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.h:135-139.
@@ -593,7 +605,9 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         self.layer_bounds_ = bounds;
         self.layer_state_ = state.clone();
         self.current_paint_artifact_ = Some(chunks.artifact().clone());
-        let mut new_infos = Vec::with_capacity(chunks.len());
+        let mut new_infos = std::mem::take(&mut self.spare_paint_chunks_info_);
+        debug_assert!(new_infos.is_empty());
+        new_infos.reserve(chunks.len());
         if was_empty || self.layer_bounds_.IsEmpty() {
             Self::PopulatePaintChunksInfo(
                 self.layer_bounds_,
@@ -623,7 +637,9 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                 callback,
             );
         }
-        self.old_paint_chunks_info_ = new_infos;
+        let mut previous = std::mem::replace(&mut self.old_paint_chunks_info_, new_infos);
+        previous.clear();
+        self.spare_paint_chunks_info_ = previous;
         self.old_paint_artifact_ = Some(chunks.artifact().clone());
         self.current_paint_artifact_ = None;
     }
@@ -675,7 +691,9 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
     }
     pub fn ApproximateUnsharedMemoryUsage(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.old_paint_chunks_info_.capacity() * std::mem::size_of::<PaintChunkInfo<M>>()
+            + (self.old_paint_chunks_info_.capacity() + self.spare_paint_chunks_info_.capacity())
+                * std::mem::size_of::<PaintChunkInfo<M>>()
+            + self.matched_old_chunks_.capacity()
     }
     pub fn ClearOldStates(&mut self) {
         self.old_paint_artifact_ = None;

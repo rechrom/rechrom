@@ -185,45 +185,55 @@ macro_rules! node_handle {
             }
             /// Whether this node is `other` or one of its current ancestors.
             pub fn is_ancestor_of(&self, other: &Self) -> bool {
-                let mut current = Some(other.clone());
-                while let Some(node) = current {
-                    if node == *self {
-                        return true;
+                // Source: paint_property_node.h:159-168 walks `const Node*`
+                // parents. One proof covers the walk; parents are borrowed,
+                // never retained per step.
+                let target = Arc::as_ptr(&self.node);
+                read(|a| {
+                    let mut current: Option<&paint_property_tree::$node> = Some(&*other.node);
+                    while let Some(node) = current {
+                        if std::ptr::eq(node, target) {
+                            return true;
+                        }
+                        current = node.Parent(a).map(|parent| &**parent);
                     }
-                    current = node.parent_handle();
-                }
-                false
+                    false
+                })
             }
             /// Lowest common ancestor over current parents, by identity.
+            /// Source: paint_property_node.cc:12-60 (LowestCommonAncestorInternal
+            /// compares depths, then walks both sides up by `const Node*`).
             pub fn lowest_common_ancestor(&self, other: &Self) -> Self {
-                let a = self.clone();
-                let b = other.clone();
-                let depth = |node: &Self| {
-                    let mut depth = 0;
-                    let mut current = node.parent_handle();
-                    while let Some(node) = current {
-                        depth += 1;
-                        current = node.parent_handle();
+                if Arc::ptr_eq(&self.node, &other.node) {
+                    return self.clone();
+                }
+                read(|access| {
+                    let depth = |node: &Arc<paint_property_tree::$node>| {
+                        let mut depth = 0usize;
+                        let mut current = node.Parent(access);
+                        while let Some(node) = current {
+                            depth += 1;
+                            current = node.Parent(access);
+                        }
+                        depth
+                    };
+                    let mut a: &Arc<paint_property_tree::$node> = &self.node;
+                    let mut b: &Arc<paint_property_tree::$node> = &other.node;
+                    let (mut depth_a, mut depth_b) = (depth(a), depth(b));
+                    while depth_a > depth_b {
+                        a = a.Parent(access).expect("source common-root tree");
+                        depth_a -= 1;
                     }
-                    depth
-                };
-                let (mut a, mut b, mut depth_a, mut depth_b) = {
-                    let (da, db) = (depth(&a), depth(&b));
-                    (a, b, da, db)
-                };
-                while depth_a > depth_b {
-                    a = a.parent_handle().expect("source common-root tree");
-                    depth_a -= 1;
-                }
-                while depth_b > depth_a {
-                    b = b.parent_handle().expect("source common-root tree");
-                    depth_b -= 1;
-                }
-                while a != b {
-                    a = a.parent_handle().expect("source nonnull common ancestor");
-                    b = b.parent_handle().expect("source nonnull common ancestor");
-                }
-                a
+                    while depth_b > depth_a {
+                        b = b.Parent(access).expect("source common-root tree");
+                        depth_b -= 1;
+                    }
+                    while !Arc::ptr_eq(a, b) {
+                        a = a.Parent(access).expect("source nonnull common ancestor");
+                        b = b.Parent(access).expect("source nonnull common ancestor");
+                    }
+                    Self::from_arc(Arc::clone(a))
+                })
             }
             pub fn as_arc(&self) -> &Arc<paint_property_tree::$node> {
                 &self.node
@@ -344,8 +354,12 @@ impl<R> PropertyTreeState<R> {
     /// actual persistent Paint node identity, so shared ancestors are visited
     /// once without cloning or rewriting the artifact.
     pub fn clear_changed_to_root(&self, sequence_number: i32) {
+        // PropertyTreeState::ClearChangedToRoot order (transform, clip,
+        // effect) on the live nodes, without assembling a source state.
         paint_model::property_cell::with_access(|a| {
-            self.as_source().ClearChangedToRoot(a, sequence_number)
+            self.transform_.node.ClearChangedToRoot(a, sequence_number);
+            self.clip_.node.ClearChangedToRoot(a, sequence_number);
+            self.effect_.node.ClearChangedToRoot(a, sequence_number);
         });
     }
 }

@@ -21,9 +21,12 @@ use crate::{
     },
 };
 use std::sync::{
-    atomic::{AtomicU8, AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering},
     Arc, RwLock, RwLockReadGuard, Weak,
 };
+
+/// `Layer::layer_tree_host_` value of a detached layer (native nullptr).
+const NO_LAYER_TREE_HOST: u64 = u64::MAX;
 
 // Source: cc/layers/layer.h:63-80. Pushed to LayerImpl, so it is a commit value.
 pub use crate::commit::push_properties::{Invalidation, LayerDebugInfo};
@@ -156,7 +159,11 @@ pub struct Layer<B: MainLayerTypes> {
     owners_: AtomicUsize,
     lifecycle_: AtomicU8,
     parent_: ProtectedSequenceReadable<Option<Weak<dyn LayerObject<B>>>>,
-    layer_tree_host_: RwLock<Option<MainLayerHostId>>,
+    // Source: cc/layers/layer.h `raw_ptr<LayerTreeHost> layer_tree_host_`: a
+    // plain pointer read by every protected-field access (IsOwnerThread,
+    // WaitForProtectedSequenceCompletion). The weak host identity is one
+    // atomic word (NO_LAYER_TREE_HOST = detached), never a lock.
+    layer_tree_host_: AtomicU64,
     layer_tree_inputs_: ProtectedSequenceReadableBox<LayerTreeInputs<B>>,
     debug_info_: ProtectedSequenceWritableBox<LayerDebugInfo<B::NodeId>>,
     inputs_: ProtectedSequenceReadable<Inputs<B>>,
@@ -494,7 +501,7 @@ impl<B: MainLayerTypes> Layer<B> {
             owners_: AtomicUsize::new(1),
             lifecycle_: AtomicU8::new(0),
             parent_: ProtectedSequenceReadable::new(None),
-            layer_tree_host_: RwLock::new(None),
+            layer_tree_host_: AtomicU64::new(NO_LAYER_TREE_HOST),
             layer_tree_inputs_: ProtectedSequenceReadableBox::new(None),
             debug_info_: ProtectedSequenceWritableBox::new(None),
             inputs_: ProtectedSequenceReadable::new(Inputs::default()),
@@ -520,11 +527,12 @@ impl<B: MainLayerTypes> Layer<B> {
         self.layer_id_
     }
     // No host backlink: only the native weak host identity is resident.
+    #[inline]
     pub fn host_id(&self) -> Option<MainLayerHostId> {
-        *self
-            .layer_tree_host_
-            .read()
-            .unwrap_or_else(|error| error.into_inner())
+        match self.layer_tree_host_.load(Ordering::Acquire) {
+            NO_LAYER_TREE_HOST => None,
+            id => Some(MainLayerHostId(id)),
+        }
     }
     fn sync<'a, 'c>(&self, c: &'a LayerContext<'c, B>) -> LayerSynchronization<'a, 'c, B> {
         LayerSynchronization {
@@ -645,10 +653,13 @@ impl<B: MainLayerTypes> Layer<B> {
                 property_tree_indices_invalid = true;
             }
         }
-        *self
-            .layer_tree_host_
-            .write()
-            .unwrap_or_else(|error| error.into_inner()) = host;
+        self.layer_tree_host_.store(
+            host.map_or(NO_LAYER_TREE_HOST, |host| {
+                assert_ne!(host.0, NO_LAYER_TREE_HOST, "reserved detached host id");
+                host.0
+            }),
+            Ordering::Release,
+        );
         if let Some(host) = host {
             *self.changed_properties_.Write(&self.sync(c)) |= Self::kChangedAllProperties;
             c.HostMut(host).AddLayerShouldPushProperties(self);
