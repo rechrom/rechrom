@@ -19,9 +19,8 @@ use crate::paint_engine::{
     RecordedDisplayItemKind,
 };
 use crate::paint_property_tree::PropertyTreeState;
-use crate::pre_paint_tree_walk::{
-    EnclosingRectInPropertySpace, MaskAdjustedOpacity, PaintTreeNode,
-};
+use crate::paint_object::PaintObject;
+use crate::pre_paint_tree_walk::{EnclosingRectInPropertySpace, MaskAdjustedOpacity};
 use crate::PaintRecording;
 use crate::PaintRect;
 use paint_input_types::layout_input::Offset;
@@ -38,7 +37,7 @@ use prepaint::object_paint_properties::ObjectPaintProperties;
 // (fragment_data.h:170-177) and the ObjectPaintProperties slots
 // (scoped_paint_state.cc:42-111, paint_layer_painter.cc:722-729). PrePaint
 // keeps that FragmentData current for every walked node; only hand-built
-// fixtures have none, and they keep the PaintTreeNode's PrePaint copies.
+// fixtures have none, and they keep PaintObject's node-backed PrePaint copies.
 // ---------------------------------------------------------------------------
 
 /// The occurrence's own ObjectPaintProperties (fragment_data.h:104-110), or
@@ -46,59 +45,59 @@ use prepaint::object_paint_properties::ObjectPaintProperties;
 /// without FragmentData; callers needing the fixture fallback test
 /// `FragmentData()` themselves.
 pub(crate) fn OwnPaintProperties<'n>(
-    node: &'n PaintTreeNode<'_>,
+    node: PaintObject<'n, '_>,
 ) -> Option<&'n ObjectPaintProperties> {
     node.FragmentData()?.PaintProperties()
 }
 
 /// Source: fragment_data.h:137-142 `LocalBorderBoxProperties`.
 pub(crate) fn LocalBorderBoxProperties<'n>(
-    node: &'n PaintTreeNode<'_>,
+    node: PaintObject<'n, '_>,
 ) -> &'n PropertyTreeState {
     node.FragmentData()
         .and_then(|data| data.LocalBorderBoxPropertiesRef())
-        .unwrap_or(&node.properties.nodes)
+        .unwrap_or(&node.properties().nodes)
 }
 
 /// Source: fragment_data.h:170-177 `ContentsProperties`.
-pub(crate) fn ContentsProperties(node: &PaintTreeNode<'_>) -> PropertyTreeState {
+pub(crate) fn ContentsProperties(node: PaintObject<'_, '_>) -> PropertyTreeState {
     match node.FragmentData() {
         Some(data) if data.HasLocalBorderBoxProperties() => data.ContentsProperties(),
-        _ => node.contents_properties.nodes.clone(),
+        _ => node.contents_properties().nodes.clone(),
     }
 }
 
 /// Source: fragment_data.cc:111-121 `ContentsClip`.
-pub(crate) fn ContentsClip(node: &PaintTreeNode<'_>) -> Arc<ClipPaintPropertyNode> {
+pub(crate) fn ContentsClip(node: PaintObject<'_, '_>) -> Arc<ClipPaintPropertyNode> {
     match node.FragmentData() {
         Some(data) if data.HasLocalBorderBoxProperties() => data.ContentsClip(),
-        _ => node.contents_properties.nodes.clip.clone(),
+        _ => node.contents_properties().nodes.clip.clone(),
     }
 }
 
 /// Source: fragment_data.cc:67-87 `ContentsTransform`.
 pub(crate) fn ContentsTransform(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
 ) -> Arc<crate::paint_property_tree::TransformPaintPropertyNode> {
     match node.FragmentData() {
         Some(data) if data.HasLocalBorderBoxProperties() => data.ContentsTransform(),
-        _ => node.contents_properties.nodes.transform.clone(),
+        _ => node.contents_properties().nodes.transform.clone(),
     }
 }
 
 /// Source: object_paint_properties.h `PaintOffsetTranslation()`.
 pub(crate) fn PaintOffsetTranslation<'n>(
-    node: &'n PaintTreeNode<'_>,
+    node: PaintObject<'n, '_>,
 ) -> Option<&'n Arc<crate::paint_property_tree::TransformPaintPropertyNode>> {
     match node.FragmentData() {
         Some(data) => data.PaintProperties()?.PaintOffsetTranslation(),
-        None => node.paint_offset_translation.as_ref(),
+        None => node.paint_offset_translation().as_ref(),
     }
 }
 
 /// Source: paint_layer_painter.cc:722-729. The kMask phase paints in the
 /// LocalBorderBoxProperties with the Mask effect and its output clip.
-pub(crate) fn MaskProperties(node: &PaintTreeNode<'_>) -> PropertyTreeState {
+pub(crate) fn MaskProperties(node: PaintObject<'_, '_>) -> PropertyTreeState {
     if let Some(mask) = OwnPaintProperties(node).and_then(ObjectPaintProperties::Mask) {
         let output_clip = paint_model::property_cell::with_access(|access| {
             mask.state(access).output_clip.clone()
@@ -110,7 +109,7 @@ pub(crate) fn MaskProperties(node: &PaintTreeNode<'_>) -> PropertyTreeState {
             effect: mask.clone(),
         };
     }
-    node.mask_properties
+    node.mask_properties()
         .as_ref()
         .expect("Mask paint properties")
         .clone()
@@ -120,15 +119,15 @@ pub(crate) fn MaskProperties(node: &PaintTreeNode<'_>) -> PropertyTreeState {
 /// the flat rect into the node's property space by adding the node's
 /// paint_snap_offset (PropertySpaceRect); the flat stream removes it again.
 fn FlatClipRect(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     clip: &ClipPaintPropertyNode,
     access: &PropertyAccess,
 ) -> (PaintRect, PaintCornerRadii) {
     let mut rect = clip
         .PaintClipRect(access)
         .expect("object clip slots own a finite rect");
-    rect.x -= node.paint_snap_offset.x;
-    rect.y -= node.paint_snap_offset.y;
+    rect.x -= node.paint_snap_offset().x;
+    rect.y -= node.paint_snap_offset().y;
     (rect, clip.PaintClipRadii(access))
 }
 
@@ -160,7 +159,7 @@ pub(crate) struct ObjectReplayScopes {
 }
 
 impl ObjectReplayScopes {
-    pub(crate) fn Of(node: &PaintTreeNode<'_>) -> Self {
+    pub(crate) fn Of(node: PaintObject<'_, '_>) -> Self {
         let Some(data) = node.FragmentData() else {
             return Self::FromPrePaintCopies(node);
         };
@@ -170,8 +169,7 @@ impl ObjectReplayScopes {
         let (opacity, blend) = match properties.Effect() {
             Some(effect) => {
                 let opacity = node
-                    .fragment
-                    .as_deref()
+                    .Fragment()
                     .is_some_and(|fragment| MaskAdjustedOpacity(&fragment.paint.style) != 1.0);
                 let blend = paint_model::property_cell::with_access(|access| {
                     let state = effect.state(access);
@@ -201,30 +199,30 @@ impl ObjectReplayScopes {
     }
 
     /// Hand-built fixtures without FragmentData.
-    fn FromPrePaintCopies(node: &PaintTreeNode<'_>) -> Self {
+    fn FromPrePaintCopies(node: PaintObject<'_, '_>) -> Self {
         Self {
-            clip_path: node.applies_clip_path && node.local_clip_path_children.len() <= 1,
-            overflow_clip: node.applies_overflow_clip && node.local_clip.is_some(),
-            css_clip: node.applies_css_clip,
-            opacity: node.applies_opacity,
-            blend: node.applies_blend,
-            filter: node.applies_filter,
-            backdrop_filter: node.applies_backdrop_filter,
-            mask: node.applies_mask,
+            clip_path: node.applies_clip_path() && node.local_clip_path_children().len() <= 1,
+            overflow_clip: node.applies_overflow_clip() && node.local_clip().is_some(),
+            css_clip: node.applies_css_clip(),
+            opacity: node.applies_opacity(),
+            blend: node.applies_blend(),
+            filter: node.applies_filter(),
+            backdrop_filter: node.applies_backdrop_filter(),
+            mask: node.applies_mask(),
         }
     }
 
     /// Whether the object owns a transform-scope slot (HasOwnTransformScope),
     /// an Effect or a Filter: whether ScopedPaintState may install the
     /// object's own chunk properties.
-    pub(crate) fn OwnsTransformOrEffect(node: &PaintTreeNode<'_>) -> bool {
+    pub(crate) fn OwnsTransformOrEffect(node: PaintObject<'_, '_>) -> bool {
         match node.FragmentData() {
             Some(data) => data.PaintProperties().is_some_and(|properties| {
                 HasOwnTransformScope(properties)
                     || properties.Effect().is_some()
                     || properties.Filter().is_some()
             }),
-            None => node.applies_transform || node.applies_effect,
+            None => node.applies_transform() || node.applies_effect(),
         }
     }
 }
@@ -245,7 +243,7 @@ fn HasOwnTransformScope(properties: &ObjectPaintProperties) -> bool {
 /// Source: object_paint_properties.h: whether the occurrence owns the slot of
 /// `role` (fixtures keep the PrePaint key log).
 pub(crate) fn HasOwnPropertyRole(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     role: crate::paint_property_tree::PaintPropertyRole,
 ) -> bool {
     match node.FragmentData() {
@@ -271,13 +269,13 @@ struct TextPaintAggregation {
 /// guard owns no layout geometry and runs no callback into another engine.
 pub struct ScopedTextPaintAggregation<'c, 'o, 'n, 'f> {
     context: &'c std::cell::RefCell<PaintContext<'o>>,
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     active: bool,
 }
 impl<'c, 'o, 'n, 'f> ScopedTextPaintAggregation<'c, 'o, 'n, 'f> {
     pub fn new(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         foreground: bool,
     ) -> Self {
         let active = foreground && context.borrow_mut().BeginTextPaintAggregation(node);
@@ -302,7 +300,7 @@ pub struct PaintContext<'o> {
     /// Borrowed source text sources exist only for this synchronous Paint
     /// recording. The committed PaintArtifact retains final immutable drawing
     /// payloads, never LayoutResult or FragmentItem pointers.
-    svg_resource_root: Option<&'o PaintTreeNode<'static>>,
+    svg_resource_root: Option<PaintObject<'o, 'static>>,
     /// Multiple paint phases and decorations for one FragmentItem share the
     /// single payload built from ShapeResult during this recording.
     text_runs: HashMap<u64, Arc<Vec<PaintGlyphRun>>>,
@@ -365,10 +363,10 @@ impl<'o> PaintContext<'o> {
         self.last_instance_id
     }
 
-    pub fn BindPaintTimingRoot(&mut self, root: &PaintTreeNode<'_>) {
-        self.paint_timing_root_properties = Some(root.properties.nodes.clone());
+    pub fn BindPaintTimingRoot(&mut self, root: PaintObject<'_, '_>) {
+        self.paint_timing_root_properties = Some(root.properties().nodes.clone());
     }
-    fn BeginTextPaintAggregation(&mut self, node: &PaintTreeNode<'_>) -> bool {
+    fn BeginTextPaintAggregation(&mut self, node: PaintObject<'_, '_>) -> bool {
         use crate::ignore_paint_timing_scope::IgnorePaintTimingScope as Ignore;
         if Ignore::IgnoreDepth() > 1 {
             return false;
@@ -396,7 +394,7 @@ impl<'o> PaintContext<'o> {
             aggregation.rect.union(visual_rect);
         }
     }
-    fn EndTextPaintAggregation(&mut self, node: &PaintTreeNode<'_>) {
+    fn EndTextPaintAggregation(&mut self, node: PaintObject<'_, '_>) {
         use paint_model::geometry_mapper_source::{
             float_clip_rect::FloatClipRect,
             geometry_mapper::GeometryMapper,
@@ -409,7 +407,7 @@ impl<'o> PaintContext<'o> {
         if aggregation.rect.is_empty() {
             return;
         }
-        let style = &node.fragment.as_deref().expect("source Paint fragment").paint.style;
+        let style = &node.Fragment().expect("source Paint fragment").paint.style;
         let color_is_fully_transparent = style.color().alpha <= 0.0;
         let has_text_shadow = style.text_shadow_count() != 0;
         let has_text_stroke = style.text_stroke_width() != 0.0;
@@ -682,16 +680,16 @@ impl<'o> PaintContext<'o> {
     /// Index source FragmentItem cursors without copying their shape or child
     /// topology. The cursor lifetime is deliberately tied to this PaintContext
     /// and therefore cannot escape into the committed artifact.
-    pub fn BindSvgResourceTree(&mut self, root: &'o PaintTreeNode<'static>) {
+    pub fn BindSvgResourceTree(&mut self, root: PaintObject<'o, 'static>) {
         self.svg_resource_root = Some(root);
     }
-    pub fn SvgResourceNode(&self, client: u64) -> Option<&'o PaintTreeNode<'static>> {
+    pub fn SvgResourceNode(&self, client: u64) -> Option<PaintObject<'o, 'static>> {
         self.svg_resource_root?.SvgResourceNode(client)
     }
     /// The text fragment's own source cursor, which its PrePaint node holds.
     /// TextFragmentPainter paints from the InlineCursor it is constructed
     /// with (text_fragment_painter.h); it never searches the fragment tree.
-    pub fn TextSource<'n>(node: &'n PaintTreeNode<'_>) -> Option<PaintFragmentCursor<'n>> {
+    pub fn TextSource<'n>(node: PaintObject<'n, '_>) -> Option<PaintFragmentCursor<'n>> {
         node.SourceCursor().filter(|cursor| {
             matches!(
                 cursor.ViewKind(),
@@ -703,7 +701,7 @@ impl<'o> PaintContext<'o> {
 
     /// Resolve ShapeResult only after a cache miss has committed Paint to
     /// recording this text item. Later phases share the same immutable owner.
-    pub fn TextGlyphRuns(&mut self, node: &PaintTreeNode<'_>) -> Arc<Vec<PaintGlyphRun>> {
+    pub fn TextGlyphRuns(&mut self, node: PaintObject<'_, '_>) -> Arc<Vec<PaintGlyphRun>> {
         let source = Self::TextSource(node);
         let Some(fragment_instance_id) = source.map(|cursor| cursor.FragmentInstanceId()) else {
             return Arc::new(Vec::new());
@@ -727,12 +725,11 @@ impl<'o> PaintContext<'o> {
     // the current PrePaint property state is retained by the new PaintChunk.
     pub fn UseCachedDrawingIfPossible(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) -> bool {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         let id = DisplayItemId {
             client_id: fragment.paint.DisplayItemClientId(),
@@ -831,10 +828,9 @@ impl<'o> PaintContext<'o> {
             .SetSubsequencePaintResult(subsequence_index, result);
     }
 
-    pub fn Append(&mut self, mut item: DisplayItem, node: &PaintTreeNode<'_>) {
+    pub fn Append(&mut self, mut item: DisplayItem, node: PaintObject<'_, '_>) {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         item.fragment_instance_id = self.FragmentInstanceIdFor(fragment);
         // Blink records save/restore/clip inside PaintRecords, not as drawing
@@ -862,7 +858,7 @@ impl<'o> PaintContext<'o> {
         let (visual_rect, visual_rect_is_accurate) = TightenVisualRect(
             item.rect,
             std::slice::from_ref(&item),
-            node.paint_snap_offset,
+            node.paint_snap_offset(),
         );
         let raster_effect_outset = fragment.paint.DisplayItemRasterEffectOutset();
         let rect_known_to_be_opaque =
@@ -915,13 +911,12 @@ impl<'o> PaintContext<'o> {
 
     pub fn BeginDrawingRecorder(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
         visual_rect: PaintRect,
     ) {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         self.output.RecordDebugInfoWith(
             fragment.paint.DisplayItemClientId() as usize,
@@ -936,7 +931,7 @@ impl<'o> PaintContext<'o> {
             },
             DisplayItemClientInfo::from_fragment(fragment),
             visual_rect,
-            node.paint_snap_offset,
+            node.paint_snap_offset(),
         );
         if let Some(recorder) = &mut self.drawing_recorder {
             recorder.8 = fragment.paint.DisplayItemRasterEffectOutset();
@@ -1184,13 +1179,13 @@ impl<'o> PaintContext<'o> {
     // border-box state and ScrollTranslation node from PrePaint.
     pub fn RecordScrollHitTestData(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         rect: PaintRect,
         opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
         scroll_translation: std::sync::Arc<crate::paint_property_tree::TransformPaintPropertyNode>,
         scrolling_contents_cull_rect: PaintRect,
     ) {
-        let fragment = node.fragment.as_deref().expect("scroll hit-test fragment");
+        let fragment = node.Fragment().expect("scroll hit-test fragment");
         let id = DisplayItemId {
             client_id: fragment.paint.DisplayItemClientId(),
             r#type: DisplayItemIdType::kScrollHitTest,
@@ -1225,11 +1220,11 @@ impl<'o> PaintContext<'o> {
     /// event-handler facts retained on the immutable fragment.
     pub fn RecordHitTestData(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         rect: PaintRect,
         opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
     ) {
-        let fragment = node.fragment.as_deref().expect("hit-test fragment");
+        let fragment = node.Fragment().expect("hit-test fragment");
         self.RecordHitTestDataWithClient(
             node,
             fragment.paint.DisplayItemClientId(),
@@ -1241,13 +1236,13 @@ impl<'o> PaintContext<'o> {
 
     pub(crate) fn RecordHitTestDataWithClient(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         client_id: u64,
         client: DisplayItemClientInfo,
         rect: PaintRect,
         opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
     ) {
-        let fragment = node.fragment.as_deref().expect("hit-test fragment");
+        let fragment = node.Fragment().expect("hit-test fragment");
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kHitTest,
@@ -1275,11 +1270,11 @@ impl<'o> PaintContext<'o> {
     /// paint_controller.cc:176-188.
     pub fn RecordRegionCaptureData(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         crop_id: [u64; 2],
         rect: PaintRect,
     ) {
-        let fragment = node.fragment.as_deref().expect("region-capture fragment");
+        let fragment = node.Fragment().expect("region-capture fragment");
         self.RecordRegionCaptureDataWithClient(
             node,
             fragment.paint.DisplayItemClientId(),
@@ -1291,14 +1286,14 @@ impl<'o> PaintContext<'o> {
 
     pub(crate) fn RecordRegionCaptureDataWithClient(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         client_id: u64,
         client: DisplayItemClientInfo,
         crop_id: [u64; 2],
         rect: PaintRect,
     ) {
         debug_assert_ne!(crop_id, [0; 2]);
-        let fragment = node.fragment.as_deref().expect("region-capture fragment");
+        let fragment = node.Fragment().expect("region-capture fragment");
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kRegionCapture,
@@ -1318,11 +1313,11 @@ impl<'o> PaintContext<'o> {
     /// Source: box_painter.cc:30-33 and paint_controller.cc:190-202.
     pub fn RecordTrackedElementData(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         element_paint_rect: PaintRect,
         sub_rects: &[layout::input::TrackedElementSubRect],
     ) {
-        let fragment = node.fragment.as_deref().expect("tracked-element fragment");
+        let fragment = node.Fragment().expect("tracked-element fragment");
         self.RecordTrackedElementDataWithClient(
             node,
             fragment.paint.DisplayItemClientId(),
@@ -1334,7 +1329,7 @@ impl<'o> PaintContext<'o> {
 
     pub(crate) fn RecordTrackedElementDataWithClient(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         client_id: u64,
         client: DisplayItemClientInfo,
         element_paint_rect: PaintRect,
@@ -1381,7 +1376,7 @@ impl<'o> PaintContext<'o> {
                 parent_frame_token: sub_rect.parent_frame_token.map(PaintFrameToken::Local),
             })
             .collect::<Vec<_>>();
-        let fragment = node.fragment.as_deref().expect("tracked-element fragment");
+        let fragment = node.Fragment().expect("tracked-element fragment");
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kTrackedElement,
@@ -1409,14 +1404,13 @@ impl<'o> PaintContext<'o> {
     // the metadata exists only to force touch resizing onto the main thread.
     pub fn RecordResizerScrollHitTestData(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         client_id: u64,
         client: DisplayItemClientInfo,
         rect: PaintRect,
     ) {
         let _fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("resizer scroll hit-test fragment");
         let id = DisplayItemId {
             client_id,
@@ -1478,12 +1472,11 @@ impl<'o> PaintContext<'o> {
     /// and border-box properties (update_chunk_id_and_properties).
     pub(crate) fn replace_chunk_id_and_properties(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) -> PropertyTreeState {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         self.paint_controller.ReplaceCurrentPaintChunkIdAndProperties(
             DisplayItemId {
@@ -1551,12 +1544,11 @@ impl<'o> PaintContext<'o> {
 
     pub fn update_chunk_id_and_properties(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         self.paint_controller
             .UpdateCurrentPaintChunkIdAndPropertiesRef(
@@ -1580,40 +1572,39 @@ impl<'o> PaintContext<'o> {
             .UpdateCurrentPaintChunkIdAndProperties(id, client, properties);
     }
 
-    pub fn BeginNode(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn BeginNode(&mut self, node: PaintObject<'_, '_>) {
         let scopes = ObjectReplayScopes::Of(node);
         self.BeginGeometryWith(node, scopes);
         self.BeginEffectsWith(node, scopes);
         self.BeginEscapableGeometryWith(node, scopes, None);
     }
 
-    pub fn BeginGeometry(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn BeginGeometry(&mut self, node: PaintObject<'_, '_>) {
         self.BeginGeometryWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn BeginGeometryWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn BeginGeometryWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         // Most nodes own none of these PrePaint-resolved scopes; read the
         // node's own flags before any fragment/source query (the conditions
         // below are pure, so testing them first keeps the same result).
         // The transform scope stays on the walk's flat matrices: the leading
         // SVG container matrix of an SVG child has no slot of its own, and a
         // PaintOffsetTranslation slot holds the property-space matrix.
-        if !node.applies_transform
-            && !(node.applies_root_clip && node.root_clip.is_some())
+        if !node.applies_transform()
+            && !(node.applies_root_clip() && node.root_clip().is_some())
             && !scopes.clip_path
         {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.ViewEstablishesPaintState()
             || (!fragment.paint.HasSource() && !fragment.paint.IsTextCombine())
         {
             return;
         }
-        if node.applies_transform {
+        if node.applies_transform() {
             self.Append(
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
@@ -1623,7 +1614,7 @@ impl<'o> PaintContext<'o> {
                 },
                 node,
             );
-            for transform in &node.local_transforms {
+            for transform in node.local_transforms() {
                 let mut item = DisplayItem {
                     r#type: DisplayItemType::kConcat,
                     phase: PaintPhase::kForeground,
@@ -1634,8 +1625,8 @@ impl<'o> PaintContext<'o> {
                 self.Append(item, node);
             }
         }
-        if node.applies_root_clip {
-            if let Some(root_clip) = node.root_clip {
+        if node.applies_root_clip() {
+            if let Some(root_clip) = node.root_clip() {
                 self.Append(
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
@@ -1679,15 +1670,15 @@ impl<'o> PaintContext<'o> {
             };
             // The flat path keeps the builder's authored commands: the
             // ClipPathClip node holds their property-space PaintPath.
-            item.path = node.local_clip_path.clone();
-            item.even_odd = node.clip_path_even_odd;
+            item.path = node.local_clip_path().clone();
+            item.even_odd = node.clip_path_even_odd();
             self.Append(item, node);
         }
     }
 
     pub fn BeginEscapableGeometry(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         clip_override: Option<PaintRect>,
     ) {
         self.BeginEscapableGeometryWith(node, ObjectReplayScopes::Of(node), clip_override);
@@ -1696,18 +1687,18 @@ impl<'o> PaintContext<'o> {
     /// OverflowClip and its preceding InnerBorderRadiusClip, read from the
     /// ObjectPaintProperties slots (fragment_data.cc:111-121 ContentsClip).
     fn OverflowClipScope(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
     ) -> Option<(Option<(PaintRect, PaintCornerRadii)>, PaintRect, PaintCornerRadii)> {
         if node.FragmentData().is_none() {
-            if !node.applies_overflow_clip {
+            if !node.applies_overflow_clip() {
                 return None;
             }
-            let local_clip = node.local_clip?;
+            let local_clip = node.local_clip()?;
             return Some((
-                node.local_inner_border_radius_clip
-                    .map(|inner| (inner, node.local_inner_border_radius_radii)),
+                node.local_inner_border_radius_clip()
+                    .map(|inner| (inner, node.local_inner_border_radius_radii())),
                 local_clip,
-                node.local_clip_radii,
+                node.local_clip_radii(),
             ));
         }
         let properties = OwnPaintProperties(node)?;
@@ -1726,7 +1717,7 @@ impl<'o> PaintContext<'o> {
 
     fn BeginEscapableGeometryWith(
         &mut self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         scopes: ObjectReplayScopes,
         clip_override: Option<PaintRect>,
     ) {
@@ -1734,8 +1725,7 @@ impl<'o> PaintContext<'o> {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -1806,11 +1796,11 @@ impl<'o> PaintContext<'o> {
         );
     }
 
-    pub fn BeginEffects(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn BeginEffects(&mut self, node: PaintObject<'_, '_>) {
         self.BeginEffectsWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn BeginEffectsWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn BeginEffectsWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.backdrop_filter
             && !scopes.blend
             && !scopes.opacity
@@ -1821,8 +1811,7 @@ impl<'o> PaintContext<'o> {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -1934,24 +1923,23 @@ impl<'o> PaintContext<'o> {
         }
     }
 
-    pub fn EndNode(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndNode(&mut self, node: PaintObject<'_, '_>) {
         let scopes = ObjectReplayScopes::Of(node);
         self.EndEscapableGeometryWith(node, scopes);
         self.EndEffectsWith(node, scopes);
         self.EndGeometryWith(node, scopes);
     }
 
-    pub fn EndFilter(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndFilter(&mut self, node: PaintObject<'_, '_>) {
         self.EndFilterWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndFilterWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn EndFilterWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.filter {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -1967,17 +1955,16 @@ impl<'o> PaintContext<'o> {
         );
     }
 
-    pub fn EndMaskClip(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndMaskClip(&mut self, node: PaintObject<'_, '_>) {
         self.EndMaskClipWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndMaskClipWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn EndMaskClipWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.mask {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if fragment.paint.HasSource() && fragment.ViewEstablishesPaintState() {
             // The mask source uses its original ancestor clip, not MaskClip.
@@ -1993,25 +1980,25 @@ impl<'o> PaintContext<'o> {
         }
     }
 
-    pub fn EndEffects(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndEffects(&mut self, node: PaintObject<'_, '_>) {
         self.EndEffectsWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndEffectsWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn EndEffectsWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         self.EndFilterWith(node, scopes);
         self.EndCssClipWith(node, scopes);
         self.EndMaskClipWith(node, scopes);
         self.EndEffectsAfterFilterWith(node, scopes);
     }
 
-    pub fn BeginCssClip(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn BeginCssClip(&mut self, node: PaintObject<'_, '_>) {
         self.BeginCssClipWith(node, ObjectReplayScopes::Of(node));
     }
 
     /// CssClip in the flat replay space (UpdateCssClip).
-    fn CssClipRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
+    fn CssClipRect(node: PaintObject<'_, '_>) -> Option<PaintRect> {
         if node.FragmentData().is_none() {
-            return node.local_css_clip;
+            return node.local_css_clip();
         }
         let css_clip = OwnPaintProperties(node)?.CssClip()?;
         Some(paint_model::property_cell::with_access(|access| {
@@ -2019,13 +2006,12 @@ impl<'o> PaintContext<'o> {
         }))
     }
 
-    fn BeginCssClipWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn BeginCssClipWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.css_clip {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -2053,17 +2039,16 @@ impl<'o> PaintContext<'o> {
         );
     }
 
-    pub fn EndCssClip(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndCssClip(&mut self, node: PaintObject<'_, '_>) {
         self.EndCssClipWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndCssClipWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn EndCssClipWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.css_clip {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -2079,17 +2064,16 @@ impl<'o> PaintContext<'o> {
         );
     }
 
-    pub fn EndEffectsAfterFilter(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndEffectsAfterFilter(&mut self, node: PaintObject<'_, '_>) {
         self.EndEffectsAfterFilterWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndEffectsAfterFilterWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn EndEffectsAfterFilterWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.mask && !scopes.opacity && !scopes.blend && !scopes.backdrop_filter {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -2114,17 +2098,16 @@ impl<'o> PaintContext<'o> {
         }
     }
 
-    pub fn EndGeometry(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndGeometry(&mut self, node: PaintObject<'_, '_>) {
         self.EndGeometryWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndGeometryWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
-        if !scopes.clip_path && !node.applies_root_clip && !node.applies_transform {
+    fn EndGeometryWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
+        if !scopes.clip_path && !node.applies_root_clip() && !node.applies_transform() {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.ViewEstablishesPaintState()
             || (!fragment.paint.HasSource() && !fragment.paint.IsTextCombine())
@@ -2140,25 +2123,24 @@ impl<'o> PaintContext<'o> {
         if scopes.clip_path {
             self.Append(restore.clone(), node);
         }
-        if node.applies_root_clip {
+        if node.applies_root_clip() {
             self.Append(restore.clone(), node);
         }
-        if node.applies_transform {
+        if node.applies_transform() {
             self.Append(restore, node);
         }
     }
 
-    pub fn EndEscapableGeometry(&mut self, node: &PaintTreeNode<'_>) {
+    pub fn EndEscapableGeometry(&mut self, node: PaintObject<'_, '_>) {
         self.EndEscapableGeometryWith(node, ObjectReplayScopes::Of(node));
     }
 
-    fn EndEscapableGeometryWith(&mut self, node: &PaintTreeNode<'_>, scopes: ObjectReplayScopes) {
+    fn EndEscapableGeometryWith(&mut self, node: PaintObject<'_, '_>, scopes: ObjectReplayScopes) {
         if !scopes.overflow_clip {
             return;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
@@ -2196,9 +2178,9 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     pub fn drag_caret(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         caret: crate::paint_engine::CaretPosition,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
     ) -> Self {
-        node.fragment.as_deref().expect("drag caret fragment");
+        node.Fragment().expect("drag caret fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         let mut properties = previous.clone();
@@ -2222,10 +2204,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     pub fn caret(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         caret: crate::paint_engine::CaretPosition,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
     ) -> Self {
         use crate::paint_property_tree::EffectPaintPropertyNode;
-        node.fragment.as_deref().expect("caret fragment");
+        node.Fragment().expect("caret fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         let mut properties = previous.clone();
@@ -2281,10 +2263,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 
     pub fn layer(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) -> Self {
-        let fragment = node.fragment.as_deref().expect("paint layer fragment");
+        let fragment = node.Fragment().expect("paint layer fragment");
         let mut borrowed = context.borrow_mut();
         let previous = if fragment.paint.PaintLayerClientId() != 0 {
             borrowed.replace_chunk_id_and_properties_raw(
@@ -2311,7 +2293,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 
     pub fn mask(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
     ) -> Self {
         Self::mask_with_type(
             context,
@@ -2322,10 +2304,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 
     pub fn mask_with_type(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) -> Self {
-        let fragment = node.fragment.as_deref().expect("mask fragment");
+        let fragment = node.Fragment().expect("mask fragment");
         let properties = MaskProperties(node);
         let mut borrowed = context.borrow_mut();
         let layer_client = fragment.paint.PaintLayerClientId();
@@ -2363,10 +2345,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 
     pub fn contents(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         phase: PaintPhase,
     ) -> Self {
-        let fragment = node.fragment.as_deref().expect("contents fragment");
+        let fragment = node.Fragment().expect("contents fragment");
         let previous = context.borrow_mut().replace_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
@@ -2381,7 +2363,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 
     pub fn properties_only(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
     ) -> Self {
         let mut borrowed = context.borrow_mut();
         // Entering and leaving a scope whose state already has these live
@@ -2404,10 +2386,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     /// state in the paint chunk property tree as well.
     pub fn text_combine_parent(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         phase: PaintPhase,
     ) -> Self {
-        let fragment = node.fragment.as_deref().expect("text combine fragment");
+        let fragment = node.Fragment().expect("text combine fragment");
         let mut properties = LocalBorderBoxProperties(node).clone();
         properties.transform = paint_model::property_cell::with_access(|access| {
             properties.transform.Parent(access).cloned()
@@ -2427,7 +2409,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 
     pub fn new(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) -> Self {
         let previous = context

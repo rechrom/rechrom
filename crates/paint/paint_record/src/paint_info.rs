@@ -25,7 +25,7 @@ pub struct PaintInfo<'c, 'o> {
     svg_resource_root: u64,
     pub svg_resource_painter: Option<
         for<'n, 'f, 'p, 'r> fn(
-            &'n prepaint::pre_paint_tree_walk::PaintTreeNode<'f>,
+            crate::paint_object::PaintObject<'n, 'f>,
             &PaintInfo<'p, 'r>,
         ),
     >,

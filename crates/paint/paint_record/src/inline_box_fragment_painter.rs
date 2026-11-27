@@ -9,7 +9,7 @@ use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_context::PaintContext;
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // Chromium entity: core/paint/inline_box_fragment_painter.h:154-211.
@@ -17,12 +17,12 @@ use crate::PaintRect;
 // the Layout/Paint boundary; this painter keeps foreground decoration phase
 // ownership in paint_record.
 pub struct InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -34,8 +34,7 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
     ) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("inline box paint requires a fragment");
         if !fragment.paint.style.visible() || fragment.ViewHidden() {
             return;
@@ -83,12 +82,12 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
 
 // Chromium entity: core/paint/inline_box_fragment_painter.h:213-267.
 pub struct LineBoxFragmentPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> LineBoxFragmentPainter<'n, 'f, 'c, 'o> {
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -100,8 +99,7 @@ impl<'n, 'f, 'c, 'o> LineBoxFragmentPainter<'n, 'f, 'c, 'o> {
     ) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("line box paint requires a fragment");
         // Chromium BoxFragmentPainter::PaintLineBox publishes element
         // capture metadata before checking whether this is the decorated
@@ -186,8 +184,8 @@ mod tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            let box_painter = BoxFragmentPainter::new(&node, &context);
-            LineBoxFragmentPainter::new(&node, &context).Paint(&paint_info, &box_painter);
+            let box_painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context);
+            LineBoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info, &box_painter);
             context.borrow_mut().Finish();
         }
 

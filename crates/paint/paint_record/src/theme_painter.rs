@@ -14,7 +14,7 @@ use crate::contoured_border_geometry::UniformCornerRadii;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // cpp: paint/theme_painter.cc:12-18
@@ -38,10 +38,9 @@ fn Inset(mut rect: PaintRect, amount: f64) -> PaintRect {
 }
 
 // cpp: paint/theme_painter.cc:28-37
-fn ControlBox(node: &PaintTreeNode<'_>) -> PaintRect {
+fn ControlBox(node: PaintObject<'_, '_>) -> PaintRect {
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("paint tree node has a fragment");
     let paint_offset = FragmentPaintOffset(node);
     let left = (paint_offset.x + 0.5).floor();
@@ -58,7 +57,7 @@ fn ControlBox(node: &PaintTreeNode<'_>) -> PaintRect {
 
 // cpp: paint/theme_painter.cc:39-161
 struct ControlCanvas<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
     phase: PaintPhase,
 }
@@ -66,7 +65,7 @@ struct ControlCanvas<'n, 'f, 'c, 'o> {
 impl<'n, 'f, 'c, 'o> ControlCanvas<'n, 'f, 'c, 'o> {
     // cpp: paint/theme_painter.cc:41-56
     fn new(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
         phase: PaintPhase,
     ) -> Self {
@@ -101,8 +100,7 @@ impl<'n, 'f, 'c, 'o> ControlCanvas<'n, 'f, 'c, 'o> {
 
     fn node_id(&self) -> u64 {
         self.node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment")
             .ViewNodeId()
     }
@@ -257,8 +255,8 @@ fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
 }
 
 // cpp: paint/theme_painter.cc:174-179
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
-    let Some(cull_rect) = node.cull_rect else {
+fn IsVisible(node: PaintObject<'_, '_>, rect: &PaintRect) -> bool {
+    let Some(cull_rect) = node.cull_rect() else {
         return true;
     };
     Intersects(rect, &cull_rect)
@@ -266,13 +264,13 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
 
 // cpp: paint/theme_painter.h:9-21
 pub struct ThemePainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
     // cpp: paint/theme_painter.h:11-12
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -280,8 +278,7 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
     pub fn Paint(&self, paint_info: &PaintInfo<'c, 'o>) -> bool {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let Some(control) = fragment.paint.FormControl() else {
             return false;

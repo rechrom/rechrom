@@ -14,7 +14,7 @@ use paint_model::geometry_mapper::SourceToDestinationRect;
 use paint_model::geometry_mapper::TranslationTransform;
 use paint_model::paint_property_tree::PaintPropertyRole;
 use paint_model::{CullRect, PaintPhase, PaintRect, PaintResult};
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::display_item_id::DisplayItemIdType;
 use crate::paint_context::{
@@ -60,8 +60,8 @@ fn LocalCullRect(local_cull_rect: Option<PaintRect>) -> CullRect {
 
 /// Source: `paint_layer_painter.cc:192-208`.
 #[doc(hidden)]
-pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
-    let fragment = node.fragment.as_deref()?;
+pub fn ContentsVisualRect(node: PaintObject<'_, '_>) -> Option<PaintRect> {
+    let fragment = node.Fragment()?;
     let mut contents = FragmentRect(fragment.paint.PaintLayerContentsVisualRect()?);
     let paint_offset = node.FlatPaintOffset();
     contents.x += paint_offset.x;
@@ -79,16 +79,16 @@ pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
 }
 
 /// Source: `scoped_paint_state.cc:152-164`.
-fn UpdatePreviousPaintResultForContents(node: &PaintTreeNode<'_>) {
+fn UpdatePreviousPaintResultForContents(node: PaintObject<'_, '_>) {
     // The node's own retained result and cull rect are tested before the
     // source LayoutBox/PaintLayer reads; every condition is a pure query.
-    if node.previous_paint_result.get() != PaintResult::kFullyPainted {
+    if node.previous_paint_result().get() != PaintResult::kFullyPainted {
         return;
     }
-    let Some(contents_cull_rect) = node.cull_rect else {
+    let Some(contents_cull_rect) = node.cull_rect() else {
         return;
     };
-    let Some(fragment) = node.fragment.as_deref() else {
+    let Some(fragment) = node.Fragment() else {
         return;
     };
     if !fragment.paint.IsLayoutBox()
@@ -101,7 +101,7 @@ fn UpdatePreviousPaintResultForContents(node: &PaintTreeNode<'_>) {
         return;
     };
     if !contents_cull_rect.contains(contents_visual_rect) {
-        node.previous_paint_result
+        node.previous_paint_result()
             .set(PaintResult::kMayBeClippedByCullRect);
     }
 }
@@ -109,11 +109,11 @@ fn UpdatePreviousPaintResultForContents(node: &PaintTreeNode<'_>) {
 /// Source: `scoped_paint_state.h:18-94` and
 /// `scoped_paint_state.cc:16-48,70-80,93-121`.
 ///
-/// PaintTreeNode is Rechrom's resident FragmentData/ObjectPaintProperties
-/// owner. The scope therefore borrows that node instead of reconstructing an
+/// PaintObject names the painted occurrence's FragmentData and
+/// ObjectPaintProperties. The scope therefore borrows it instead of reconstructing an
 /// object-property decision from style or display values.
 pub struct ScopedPaintState<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     input_paint_info: PaintInfo<'c, 'o>,
     paint_offset: Offset,
     _chunk_properties: Option<ScopedPaintChunkProperties<'c, 'o>>,
@@ -121,10 +121,10 @@ pub struct ScopedPaintState<'n, 'f, 'c, 'o> {
 }
 
 impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
-    pub fn new(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
         let mut adjusted_paint_info = *paint_info;
-        adjusted_paint_info.SetCullRect(LocalCullRect(node.self_cull_rect));
-        let Some(fragment) = node.fragment.as_deref() else {
+        adjusted_paint_info.SetCullRect(LocalCullRect(node.self_cull_rect()));
+        let Some(fragment) = node.Fragment() else {
             return Self {
                 node,
                 input_paint_info: adjusted_paint_info,
@@ -141,7 +141,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         // self-painting layer, and overlay controls are painted in that same
         // layer-owned state.
         let layer_adjusted = paint_info.phase == PaintPhase::kOverlayOverflowControls
-            || (node.is_paint_layer && node.is_self_painting_layer);
+            || (node.is_paint_layer() && node.is_self_painting_layer());
         let svg_child = IsSvgLayoutChild(fragment.paint.SourceKind());
         // Source: scoped_paint_state.cc:56-81. The occurrence's own
         // ObjectPaintProperties::PaintOffsetTranslation slot.
@@ -221,15 +221,15 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
     /// nor a drawing PaintOffsetTranslation, so that the state it builds is
     /// exactly `ForCullTest`. The tests mirror `new`'s branches, cheapest
     /// node facts first.
-    pub(crate) fn InstallsNothing(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>) -> bool {
-        let Some(fragment) = node.fragment.as_deref() else {
+    pub(crate) fn InstallsNothing(node: PaintObject<'_, '_>, paint_info: &PaintInfo<'_, '_>) -> bool {
+        let Some(fragment) = node.Fragment() else {
             return false;
         };
         if paint_info.phase == PaintPhase::kMask {
             return false;
         }
         if paint_info.phase == PaintPhase::kOverlayOverflowControls
-            || (node.is_paint_layer && node.is_self_painting_layer)
+            || (node.is_paint_layer() && node.is_self_painting_layer())
         {
             return true;
         }
@@ -244,17 +244,17 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
 
     /// The state `new` builds when `InstallsNothing` holds: the local cull
     /// rect and the node's paint offset, with no scope.
-    pub(crate) fn ForCullTest(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
+    pub(crate) fn ForCullTest(node: PaintObject<'n, 'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
         Self::unadjusted(node, paint_info, node.FlatPaintOffset())
     }
 
     fn unadjusted(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         paint_info: &PaintInfo<'c, 'o>,
         paint_offset: Offset,
     ) -> Self {
         let mut adjusted_paint_info = *paint_info;
-        adjusted_paint_info.SetCullRect(LocalCullRect(node.self_cull_rect));
+        adjusted_paint_info.SetCullRect(LocalCullRect(node.self_cull_rect()));
         Self {
             node,
             input_paint_info: adjusted_paint_info,
@@ -277,7 +277,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
     }
 
     pub fn FragmentToPaint(&self) -> Option<&FragmentPaintData> {
-        self.node.fragment.as_deref()
+        self.node.Fragment()
     }
 
     pub fn LocalRectIntersectsCullRect(&self, local_rect: PaintRect) -> bool {
@@ -294,8 +294,7 @@ impl Drop for ScopedPaintState<'_, '_, '_, '_> {
         debug_assert!(self.input_paint_info.context.borrow().InDrawingRecorder());
         let node_id = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .map_or(0, |fragment| fragment.ViewNodeId());
         self.input_paint_info.context.borrow_mut().Append(
             DisplayItem {
@@ -323,26 +322,26 @@ pub struct ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
 impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
     pub fn from_state(
         input: &ScopedPaintState<'n, 'f, 'c, 'o>,
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
     ) -> Self {
         Self::with_offset(input.GetPaintInfo(), input.PaintOffset(), node)
     }
 
-    pub fn new(paint_info: &PaintInfo<'c, 'o>, node: &'n PaintTreeNode<'f>) -> Self {
+    pub fn new(paint_info: &PaintInfo<'c, 'o>, node: PaintObject<'n, 'f>) -> Self {
         Self::with_offset(paint_info, node.FlatPaintOffset(), node)
     }
 
     fn with_offset(
         paint_info: &PaintInfo<'c, 'o>,
         paint_offset: Offset,
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
     ) -> Self {
         debug_assert!(!matches!(
             paint_info.phase,
             PaintPhase::kSelfOutlineOnly | PaintPhase::kMask
         ));
         let mut state = ScopedPaintState::unadjusted(node, paint_info, paint_offset);
-        let Some(fragment) = node.fragment.as_deref() else {
+        let Some(fragment) = node.Fragment() else {
             return Self {
                 state,
                 _chunk_properties: None,
@@ -368,7 +367,7 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
         }
         state
             .input_paint_info
-            .SetCullRect(LocalCullRect(node.cull_rect));
+            .SetCullRect(LocalCullRect(node.cull_rect()));
         let chunk_properties = Some(ScopedPaintChunkProperties::contents(
             paint_info.context,
             node,
@@ -405,6 +404,7 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use layout::paint::{FragmentPaintData, ScrollContainerPaintData};
     use paint_input_types::FragmentPaintRect;
     use paint_input_types::layout_input::{Offset, Size};
@@ -443,7 +443,7 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut output));
         {
             let info = PaintInfo::new(&context, PaintPhase::kForeground);
-            let _scope = ScopedBoxContentsPaintState::new(&info, &clipped);
+            let _scope = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::new(&clipped));
         }
         assert_eq!(
             clipped.previous_paint_result.get(),
@@ -453,7 +453,7 @@ mod tests {
         let contained = layer_with_contents(10.0, 20.0);
         {
             let info = PaintInfo::new(&context, PaintPhase::kForeground);
-            let _scope = ScopedBoxContentsPaintState::new(&info, &contained);
+            let _scope = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::new(&contained));
         }
         assert_eq!(
             contained.previous_paint_result.get(),
@@ -480,7 +480,7 @@ mod tests {
         let input = context.borrow().chunk_properties();
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
         {
-            let _state = ScopedPaintState::new(&node, &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
             assert!(Arc::ptr_eq(
                 &context.borrow().chunk_properties().transform,
                 &node.properties.nodes.transform
@@ -491,7 +491,7 @@ mod tests {
         node.is_paint_layer = true;
         node.is_self_painting_layer = true;
         {
-            let _state = ScopedPaintState::new(&node, &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
             assert!(context.borrow().chunk_properties().same_nodes(&input));
         }
 
@@ -499,7 +499,7 @@ mod tests {
         node.is_self_painting_layer = false;
         node.fragment.as_mut().unwrap().paint.source_kind = NodeKind::kSvgShape;
         {
-            let _state = ScopedPaintState::new(&node, &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
             assert!(context.borrow().chunk_properties().same_nodes(&input));
         }
 
@@ -507,7 +507,7 @@ mod tests {
         node.fragment.as_mut().unwrap().paint.is_page_border_box = true;
         node.applies_transform = false;
         {
-            let _state = ScopedPaintState::new(&node, &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
             assert!(Arc::ptr_eq(
                 &context.borrow().chunk_properties().transform,
                 &node.properties.nodes.transform
@@ -537,13 +537,13 @@ mod tests {
         let mut output = crate::PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         context.borrow_mut().BeginDrawingRecorder(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             DisplayItemIdType::kBoxDecorationBackground,
             PaintRect::default(),
         );
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
         {
-            let _state = ScopedPaintState::new(&node, &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
         }
         context.borrow_mut().EndDrawingRecorder();
         drop(context);
@@ -581,7 +581,7 @@ mod tests {
         let mut output = crate::PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
-        let state = ScopedPaintState::new(&node, &info);
+        let state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
         assert_eq!(state.GetPaintInfo().GetCullRect().Rect(), Some(local_cull));
         assert!(state.LocalRectIntersectsCullRect(PaintRect {
             x: 0.0,
@@ -639,7 +639,7 @@ mod tests {
         let mut output = crate::PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
-        let state = ScopedBoxContentsPaintState::new(&info, &node);
+        let state = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::new(&node));
         assert_eq!(state.PaintOffset(), Offset { x: 10.0, y: 16.0 });
         assert!(state.LocalRectIntersectsCullRect(PaintRect {
             width: 1.0,

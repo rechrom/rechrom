@@ -16,7 +16,7 @@ use paint_input_types::layout_input_types::Color;
 use layout::paint::LayoutTheme;
 use paint_input_types::paint_input::SvgPaintComponent;
 use layout::paint::{CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness};
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::box_decoration_data::FragmentPaintOffset;
 use crate::box_fragment_painter::{IsVisible, TextPaintOrigin};
@@ -34,7 +34,7 @@ use crate::PaintRect;
 /// still owns text/glyph ordering; this object owns decoration pass selection,
 /// geometry and display-item recording.
 pub struct TextDecorationPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
     paint_phase: PaintPhase,
     phase: Phase,
@@ -87,7 +87,7 @@ fn EffectiveTextShadows(style: &PaintStyle, text_clip: bool) -> Vec<PaintShadow>
 impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
     // Source: third_party/blink/renderer/core/paint/text_decoration_painter.cc:19-37.
     pub fn new(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
         paint_phase: PaintPhase,
         selection_rect: Option<PaintRect>,
@@ -139,8 +139,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         self.phase = phase;
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         self.clip_rect = self.selection_rect.map(|rect| {
             if fragment.ViewSvgText().is_some() {
@@ -196,8 +195,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
     fn HasAnyLine(&self, line_through: bool) -> bool {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if fragment.ViewTextItemFacts().0 {
             return false;
@@ -230,8 +228,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
     fn Paint(&self, line_through: bool) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let style = &fragment.paint.style;
         let text_clip = self.paint_phase == PaintPhase::kTextClip;
@@ -864,8 +861,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         };
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let mut context = self.context.borrow_mut();
         context.Append(
@@ -900,8 +896,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         }
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         self.context.borrow_mut().Append(
             DisplayItem {
@@ -972,10 +967,9 @@ fn SameDecorationLines(a: &TextDecorationPaint, b: &TextDecorationPaint) -> bool
         && a.grammar_error == b.grammar_error
 }
 
-fn TextPaintSize(node: &PaintTreeNode<'_>) -> Size {
+fn TextPaintSize(node: PaintObject<'_, '_>) -> Size {
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("paint tree node has a fragment");
     if let Some(svg) = fragment.ViewSvgText() {
         return svg.untransformed_size;

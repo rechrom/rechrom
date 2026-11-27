@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use layout::input::NodeKind;
 use paint_input_types::paint_input::PaintFilterType;
 use paint_model::PaintRect;
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::paint_context::PaintContext;
 use crate::svg_model_object_painter::SVGModelObjectPainter;
@@ -19,9 +19,8 @@ use crate::svg_model_object_painter::SVGModelObjectPainter;
 pub struct SVGContainerPainter;
 
 impl SVGContainerPainter {
-    pub fn IsContainer(node: &PaintTreeNode<'_>) -> bool {
-        node.fragment
-            .as_deref()
+    pub fn IsContainer(node: PaintObject<'_, '_>) -> bool {
+        node.Fragment()
             .is_some_and(|fragment| Self::IsContainerKind(fragment.paint.SourceKind()))
     }
 
@@ -33,8 +32,8 @@ impl SVGContainerPainter {
         )
     }
 
-    fn HasReferenceFilter(node: &PaintTreeNode<'_>) -> bool {
-        node.fragment.as_deref().is_some_and(|fragment| {
+    fn HasReferenceFilter(node: PaintObject<'_, '_>) -> bool {
+        node.Fragment().is_some_and(|fragment| {
             fragment
                 .paint
                 .style
@@ -46,11 +45,10 @@ impl SVGContainerPainter {
 
     /// Source: core/paint/svg_container_painter.cc:36-90 and
     /// scoped_svg_paint_state.cc:186-209.
-    pub fn ShouldPaintSubtree(node: &PaintTreeNode<'_>) -> bool {
+    pub fn ShouldPaintSubtree(node: PaintObject<'_, '_>) -> bool {
         debug_assert!(Self::IsContainer(node));
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG container must own a fragment");
         if fragment.paint.SvgViewBoxIsEmpty() {
             return false;
@@ -59,7 +57,7 @@ impl SVGContainerPainter {
         // SvgFilterPaintsForHiddenContent is stable in this Chromium revision:
         // an empty container paints only when its reference filter still needs
         // a property-bearing chunk.
-        if node.children.is_empty() && !Self::HasReferenceFilter(node) {
+        if node.Children().is_empty() && !Self::HasReferenceFilter(node) {
             return false;
         }
 
@@ -72,7 +70,7 @@ impl SVGContainerPainter {
             return true;
         }
         let (Some(cull_rect), Some(visual_rect)) =
-            (node.self_cull_rect, SVGModelObjectPainter::VisualRect(node))
+            (node.self_cull_rect(), SVGModelObjectPainter::VisualRect(node))
         else {
             return true;
         };
@@ -85,18 +83,18 @@ impl SVGContainerPainter {
     }
 
     /// Source: core/paint/svg_container_painter.cc:111-117.
-    pub fn NeedsReferenceFilterChunk(node: &PaintTreeNode<'_>) -> bool {
+    pub fn NeedsReferenceFilterChunk(node: PaintObject<'_, '_>) -> bool {
         Self::IsContainer(node) && Self::HasReferenceFilter(node)
     }
 
     pub fn PaintOutlineAfterEffects<'n, 'f, 'c, 'o>(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
     ) {
         // SVGContainerPainter::Paint only paints an outline if the container
         // has content. This decision is outside ScopedSVGPaintState, after the
         // mask/effect lifetime and while the SVG transform remains active.
-        if !node.children.is_empty() {
+        if !node.Children().is_empty() {
             SVGModelObjectPainter::PaintOutline(node, context);
         }
     }
@@ -109,6 +107,7 @@ fn Intersects(a: PaintRect, b: PaintRect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use crate::paint_engine::DisplayItemType;
     use crate::PaintRecording;
     use layout::paint::FragmentPaintData;
@@ -137,9 +136,9 @@ mod tests {
     #[test]
     fn container_identity_does_not_capture_shapes() {
         let mut node = container();
-        assert!(SVGContainerPainter::IsContainer(&node));
+        assert!(SVGContainerPainter::IsContainer(crate::paint_object::PaintObject::new(&node)));
         node.fragment.as_mut().unwrap().paint.source_kind = NodeKind::kSvgShape;
-        assert!(!SVGContainerPainter::IsContainer(&node));
+        assert!(!SVGContainerPainter::IsContainer(crate::paint_object::PaintObject::new(&node)));
     }
 
     #[test]
@@ -161,7 +160,7 @@ mod tests {
         let mut empty_output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut empty_output));
-            SVGContainerPainter::PaintOutlineAfterEffects(&node, &context);
+            SVGContainerPainter::PaintOutlineAfterEffects(crate::paint_object::PaintObject::new(&node), &context);
             context.borrow_mut().Finish();
         }
         assert!(!empty_output
@@ -173,7 +172,7 @@ mod tests {
         let mut populated_output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut populated_output));
-            SVGContainerPainter::PaintOutlineAfterEffects(&node, &context);
+            SVGContainerPainter::PaintOutlineAfterEffects(crate::paint_object::PaintObject::new(&node), &context);
             context.borrow_mut().Finish();
         }
         assert!(populated_output
@@ -187,11 +186,11 @@ mod tests {
         let mut node = container();
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = true;
         node.children.push(Box::new(PaintTreeNode::default()));
-        assert!(!SVGContainerPainter::ShouldPaintSubtree(&node));
+        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
 
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = false;
         node.children.clear();
-        assert!(!SVGContainerPainter::ShouldPaintSubtree(&node));
+        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
 
         node.fragment
             .as_mut()
@@ -203,8 +202,8 @@ mod tests {
                 r#type: PaintFilterType::kReference,
                 ..PaintFilterOperation::default()
             });
-        assert!(SVGContainerPainter::ShouldPaintSubtree(&node));
-        assert!(SVGContainerPainter::NeedsReferenceFilterChunk(&node));
+        assert!(SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
+        assert!(SVGContainerPainter::NeedsReferenceFilterChunk(crate::paint_object::PaintObject::new(&node)));
     }
 
     #[test]
@@ -224,13 +223,13 @@ mod tests {
                 height: 10.0,
             },
         });
-        assert!(!SVGContainerPainter::ShouldPaintSubtree(&node));
+        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
 
         node.fragment
             .as_mut()
             .unwrap()
             .paint
             .svg_descendant_may_have_transform_related_operations = true;
-        assert!(SVGContainerPainter::ShouldPaintSubtree(&node));
+        assert!(SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
     }
 }

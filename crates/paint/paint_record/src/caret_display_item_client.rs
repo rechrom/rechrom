@@ -10,14 +10,14 @@ use crate::{
     geometry_mapper::MapRectToRoot,
     paint_context::PaintContext,
     paint_engine::{CaretGeometry, DisplayItem, DisplayItemType, PaintPhase},
-    pre_paint_tree_walk::PaintTreeNode,
+    paint_object::PaintObject,
     PaintRect,
 };
 use layout::fragment::FragmentKind;
 use std::cell::RefCell;
 
 #[allow(non_snake_case)]
-pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContext<'_>>) {
+pub(crate) fn PaintCaret(node: PaintObject<'_, '_>, context: &RefCell<PaintContext<'_>>) {
     let Some(caret) = context.borrow().caret else {
         return;
     };
@@ -28,7 +28,7 @@ pub(crate) fn PaintCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContex
 }
 
 #[allow(non_snake_case)]
-pub(crate) fn PaintDragCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintContext<'_>>) {
+pub(crate) fn PaintDragCaret(node: PaintObject<'_, '_>, context: &RefCell<PaintContext<'_>>) {
     let Some(caret) = context.borrow().drag_caret else {
         return;
     };
@@ -40,7 +40,7 @@ pub(crate) fn PaintDragCaret(node: &PaintTreeNode<'_>, context: &RefCell<PaintCo
 
 #[allow(non_snake_case)]
 fn PaintCaretWithState(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     caret: crate::paint_engine::CaretPosition,
     local: layout::editing::LocalCaretRect,
@@ -49,7 +49,7 @@ fn PaintCaretWithState(
     if caret.selection.is_some() && caret.composition.is_none() {
         return;
     }
-    let fragment = node.fragment.as_deref().expect("caret owner");
+    let fragment = node.Fragment().expect("caret owner");
     let matches_painter = caret
         .native
         .map_or(fragment.ViewNodeId() == caret.node_id, |native| {
@@ -97,7 +97,7 @@ fn PaintCaretWithState(
             .max(0.0),
     };
     if let Some(root_rect) = (!drag)
-        .then(|| MapRectToRoot(rect, &node.transforms))
+        .then(|| MapRectToRoot(rect, node.transforms()))
         .flatten()
     {
         context.borrow_mut().SetCaretGeometry(CaretGeometry {

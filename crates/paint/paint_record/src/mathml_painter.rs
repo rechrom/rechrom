@@ -14,7 +14,7 @@ use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType};
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // Paint's retained local cull is applied before emitting backend-neutral ops.
@@ -22,8 +22,8 @@ fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
-    let Some(cull_rect) = node.cull_rect else {
+fn IsVisible(node: PaintObject<'_, '_>, rect: &PaintRect) -> bool {
+    let Some(cull_rect) = node.cull_rect() else {
         return true;
     };
     Intersects(rect, &cull_rect)
@@ -31,13 +31,13 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
 
 // cpp: paint/mathml_painter.h:17-33
 pub struct MathMLPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     // cpp: paint/mathml_painter.h:21-22
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -46,8 +46,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     pub fn Paint(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let Some(math) = fragment.ViewMathML() else {
             return;
@@ -76,8 +75,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     fn PaintBar(&self, info: &PaintInfo<'c, 'o>, mut rect: PaintRect) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if !rect.x.is_finite()
             || !rect.y.is_finite()
@@ -131,8 +129,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     fn PaintFractionBar(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let math = fragment
             .ViewMathML()
@@ -163,8 +160,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     fn LogicalToPhysicalX(&self, logical_offset: f64, inner_width: f64) -> f64 {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if fragment.paint.Direction() == TextDirection::kLtr {
             logical_offset
@@ -178,8 +174,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     fn PaintOperatorGlyphs(&self, info: &PaintInfo<'c, 'o>, baseline_origin: Offset) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let math = fragment
             .ViewMathML()
@@ -230,8 +225,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     fn PaintOperator(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let paint = &fragment.paint;
         let math = fragment
@@ -261,18 +255,16 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     fn PaintRadical(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let math = fragment
             .ViewMathML()
             .expect("radical requires MathML paint data");
         let mut base_width = 0.0;
         let mut base_ascent = 0.0;
-        if let Some(base_node) = self.node.children.first() {
+        if let Some(base_node) = self.node.Children().next() {
             let base = base_node
-                .fragment
-                .as_deref()
+                .Fragment()
                 .expect("radical base has a fragment");
             base_width = base.ViewSize().width;
             base_ascent = base.ViewFirstBaseline().unwrap_or(base.ViewSize().height);

@@ -15,19 +15,19 @@ use crate::foreign_layer_display_item::RecordForeignLayer;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, RasterEffectOutset};
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 use foundation::InterpolationQuality;
 use paint_chunk::DisplayItemClientInfo;
 use paint_model::display_item_id::DisplayItemId;
 
 pub struct HTMLCanvasPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -36,8 +36,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
     pub fn PaintReplaced(&self, paint_info: &PaintInfo<'_, '_>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if fragment.paint.ChildPaintBlockedByDisplayLock() {
             return;
@@ -196,6 +195,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use crate::paint_context::PaintContext;
     use crate::{PaintPhase, PaintRecording};
     use canvas::CanvasPaintResource;
@@ -297,7 +297,7 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        HTMLCanvasPainter::new(&node, &context).PaintReplaced(&paint_info);
+        HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -336,7 +336,7 @@ mod tests {
             PaintFlag::kPrivacyPreserving,
         );
 
-        HTMLCanvasPainter::new(&node, &context).PaintReplaced(&paint_info);
+        HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -355,7 +355,7 @@ mod tests {
             crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IncrementIgnoreDepth();
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            HTMLCanvasPainter::new(&node, &context).PaintReplaced(&paint_info);
+            HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
         }
 
         assert!(!recording.first_contentful_painted);
@@ -372,7 +372,7 @@ mod tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            HTMLCanvasPainter::new(&node, &context).PaintReplaced(&paint_info);
+            HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
         }
 
         assert!(!recording.first_contentful_painted);
@@ -389,7 +389,7 @@ mod tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            HTMLCanvasPainter::new(&node, &context).PaintReplaced(&paint_info);
+            HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
             context.borrow_mut().Finish();
         }
 
@@ -434,7 +434,7 @@ mod tests {
         context.borrow_mut().BindForeignLayers(&layers);
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        HTMLCanvasPainter::new(&node, &context).PaintReplaced(&paint_info);
+        HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
         context.borrow_mut().Finish();
 
         drop(paint_info);

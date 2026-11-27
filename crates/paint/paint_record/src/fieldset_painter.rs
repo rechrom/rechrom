@@ -13,26 +13,25 @@ use crate::display_item_id::DisplayItemIdType;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType};
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // Chromium: core/paint/fieldset_painter.h:19-35.
 pub struct FieldsetPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
     // Chromium: core/paint/fieldset_painter.h:23-24.
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
     // Chromium: core/paint/fieldset_painter.cc:25-71,81-84.
-    pub fn DecorationRect(node: &PaintTreeNode<'_>) -> PaintRect {
+    pub fn DecorationRect(node: PaintObject<'_, '_>) -> PaintRect {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let mut rect = PaintRect {
             x: FragmentPaintOffset(node).x,
@@ -73,8 +72,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
         debug_assert!(decoration_data.ShouldPaint());
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let phase = paint_info.phase;
         let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance(self.node, paint_info);
@@ -175,8 +173,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
     pub fn BeginBorderClip(&self, info: &PaintInfo<'c, 'o>) -> bool {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let Some(data) = fragment.ViewFieldset() else {
             return false;
@@ -230,8 +227,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                 phase: info.phase,
                 node_id: self
                     .node
-                    .fragment
-                    .as_deref()
+                    .Fragment()
                     .expect("paint tree node has a fragment")
                     .ViewNodeId(),
                 ..Default::default()

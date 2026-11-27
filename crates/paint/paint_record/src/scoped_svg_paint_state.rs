@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use layout::input::NodeKind;
 use paint_input_types::layout_input::SvgShapeGeometry;
 use paint_input_types::paint_input::PaintFilterType;
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::display_item_id::DisplayItemIdType;
 use crate::paint_context::{PaintContext, ScopedPaintChunkProperties};
@@ -25,21 +25,20 @@ use crate::PaintPhase;
 pub struct ScopedSVGPaintState;
 
 impl ScopedSVGPaintState {
-    pub fn OwnsPaintScope(node: &PaintTreeNode<'_>) -> bool {
-        if node.is_paint_layer {
+    pub fn OwnsPaintScope(node: PaintObject<'_, '_>) -> bool {
+        if node.is_paint_layer() {
             return false;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         Self::OwnsPaintScopeForKind(node, fragment.paint.SourceKind())
     }
 
     /// `OwnsPaintScope` for a caller that has read the node's source kind
     /// once for its visit (paint_walk's per-phase gate).
-    pub fn OwnsPaintScopeForKind(node: &PaintTreeNode<'_>, kind: NodeKind) -> bool {
-        !node.is_paint_layer
+    pub fn OwnsPaintScopeForKind(node: PaintObject<'_, '_>, kind: NodeKind) -> bool {
+        !node.is_paint_layer()
             && matches!(
             kind,
             NodeKind::kSvgGroup
@@ -53,12 +52,12 @@ impl ScopedSVGPaintState {
         )
     }
 
-    pub fn PaintsPhase(node: &PaintTreeNode<'_>, phase: PaintPhase) -> bool {
+    pub fn PaintsPhase(node: PaintObject<'_, '_>, phase: PaintPhase) -> bool {
         !Self::OwnsPaintScope(node) || phase == PaintPhase::kForeground
     }
 
-    fn HasReferenceFilter(node: &PaintTreeNode<'_>) -> bool {
-        node.fragment.as_deref().is_some_and(|fragment| {
+    fn HasReferenceFilter(node: PaintObject<'_, '_>) -> bool {
+        node.Fragment().is_some_and(|fragment| {
             fragment
                 .paint
                 .style
@@ -72,20 +71,19 @@ impl ScopedSVGPaintState {
     /// svg_shape_painter.cc:43-57. Shape emptiness is disabled rendering and
     /// is rejected before paint-behavior selection; visibility-hidden shapes
     /// retain only their reference-filter component.
-    pub fn ShouldPaint(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>) -> bool {
+    pub fn ShouldPaint(node: PaintObject<'_, '_>, paint_info: &PaintInfo<'_, '_>) -> bool {
         if !Self::OwnsPaintScope(node) {
             return true;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         Self::ShouldPaintForKind(node, fragment.paint.SourceKind(), paint_info)
     }
 
     /// `ShouldPaint` with the node's source kind read once by the caller.
     pub fn ShouldPaintForKind(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         kind: NodeKind,
         paint_info: &PaintInfo<'_, '_>,
     ) -> bool {
@@ -93,8 +91,7 @@ impl ScopedSVGPaintState {
             return true;
         }
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("PrePaint node must own a fragment");
         let Some(shape) = fragment.paint.SvgShape().map(|shape| &**shape) else {
             return false;
@@ -110,19 +107,19 @@ impl ScopedSVGPaintState {
         fragment.paint.style.visible() || Self::NeedsReferenceFilterChunk(node, paint_info)
     }
 
-    pub fn PaintsContent(node: &PaintTreeNode<'_>) -> bool {
-        node.fragment.as_deref().is_none_or(|fragment| {
+    pub fn PaintsContent(node: PaintObject<'_, '_>) -> bool {
+        node.Fragment().is_none_or(|fragment| {
             fragment.paint.SourceKind() != NodeKind::kSvgShape || fragment.paint.style.visible()
         })
     }
 
     pub fn NeedsReferenceFilterChunk(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         paint_info: &PaintInfo<'_, '_>,
     ) -> bool {
         paint_info.phase == PaintPhase::kForeground
             && !paint_info.IsRenderingClipPathAsMaskImage()
-            && node.fragment.as_deref().is_some_and(|fragment| {
+            && node.Fragment().is_some_and(|fragment| {
                 fragment.paint.SourceKind() == NodeKind::kSvgShape
                     && !fragment.paint.style.visible()
                     && Self::HasReferenceFilter(node)
@@ -132,20 +129,20 @@ impl ScopedSVGPaintState {
     /// `NeedsReferenceFilterChunk` with the node's source kind read once by
     /// the caller.
     pub fn NeedsReferenceFilterChunkForKind(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         kind: NodeKind,
         paint_info: &PaintInfo<'_, '_>,
     ) -> bool {
         kind == NodeKind::kSvgShape
             && paint_info.phase == PaintPhase::kForeground
             && !paint_info.IsRenderingClipPathAsMaskImage()
-            && node.fragment.as_deref().is_some_and(|fragment| {
+            && node.Fragment().is_some_and(|fragment| {
                 !fragment.paint.style.visible() && Self::HasReferenceFilter(node)
             })
     }
 
     pub fn FinishEffectsAfterContents<'n, 'f, 'c, 'o>(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
     ) {
         // The mask source is a sibling of the content effect's filter and
@@ -173,6 +170,7 @@ impl ScopedSVGPaintState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use crate::paint_engine::DisplayItemType;
     use crate::PaintRecording;
     use layout::paint::FragmentPaintData;
@@ -221,13 +219,13 @@ mod tests {
             ..PaintRect::default()
         });
 
-        assert!(ScopedSVGPaintState::OwnsPaintScope(&node));
+        assert!(ScopedSVGPaintState::OwnsPaintScope(crate::paint_object::PaintObject::new(&node)));
         assert!(ScopedSVGPaintState::PaintsPhase(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             PaintPhase::kForeground
         ));
         assert!(!ScopedSVGPaintState::PaintsPhase(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             PaintPhase::kOutline
         ));
         assert!(!node.is_paint_layer);
@@ -235,11 +233,11 @@ mod tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            context.borrow_mut().BeginNode(&node);
-            context.borrow_mut().EndEscapableGeometry(&node);
-            ScopedSVGPaintState::FinishEffectsAfterContents(&node, &context);
-            crate::svg_model_object_painter::SVGModelObjectPainter::PaintOutline(&node, &context);
-            context.borrow_mut().EndGeometry(&node);
+            context.borrow_mut().BeginNode(crate::paint_object::PaintObject::new(&node));
+            context.borrow_mut().EndEscapableGeometry(crate::paint_object::PaintObject::new(&node));
+            ScopedSVGPaintState::FinishEffectsAfterContents(crate::paint_object::PaintObject::new(&node), &context);
+            crate::svg_model_object_painter::SVGModelObjectPainter::PaintOutline(crate::paint_object::PaintObject::new(&node), &context);
+            context.borrow_mut().EndGeometry(crate::paint_object::PaintObject::new(&node));
             context.borrow_mut().Finish();
         }
 
@@ -290,7 +288,7 @@ mod tests {
         let mut output = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         let paint_info = crate::paint_info::PaintInfo::new(&context, PaintPhase::kForeground);
-        assert!(!ScopedSVGPaintState::ShouldPaint(&node, &paint_info));
+        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &paint_info));
 
         let shape = std::sync::Arc::make_mut(
             node.fragment
@@ -304,10 +302,10 @@ mod tests {
         shape.geometry = SvgShapeGeometry::kRectangle;
         shape.bounds_width = 10.0;
         shape.bounds_height = 10.0;
-        assert!(ScopedSVGPaintState::ShouldPaint(&node, &paint_info));
-        assert!(!ScopedSVGPaintState::PaintsContent(&node));
+        assert!(ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!ScopedSVGPaintState::PaintsContent(crate::paint_object::PaintObject::new(&node)));
         assert!(ScopedSVGPaintState::NeedsReferenceFilterChunk(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             &paint_info
         ));
 
@@ -317,12 +315,12 @@ mod tests {
             false,
             PaintFlag::kPaintingClipPathAsMask,
         );
-        assert!(!ScopedSVGPaintState::ShouldPaint(&node, &clip_info));
+        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &clip_info));
         assert!(!ScopedSVGPaintState::NeedsReferenceFilterChunk(
-            &node, &clip_info
+            crate::paint_object::PaintObject::new(&node), &clip_info
         ));
 
         node.fragment.as_mut().unwrap().paint.style.filters.clear();
-        assert!(!ScopedSVGPaintState::ShouldPaint(&node, &paint_info));
+        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &paint_info));
     }
 }

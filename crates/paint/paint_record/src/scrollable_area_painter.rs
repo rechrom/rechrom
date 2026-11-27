@@ -19,7 +19,7 @@ use crate::paint_chunker::DisplayItemClientInfo;
 use crate::paint_context::{PaintContext, ScopedPaintChunkProperties};
 use crate::paint_engine::{DisplayItem, DisplayItemType};
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::{PaintPhase, PaintRect};
 
 /// One lazily exported overflow-control payload shared by the painters of a
@@ -29,7 +29,7 @@ pub type ScrollbarPaintDataCell =
 
 // Source: core/paint/scrollable_area_painter.cc:233-250.
 fn ShouldPaintOverflowControls(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     should_paint_as_overlay: bool,
     phase: PaintPhase,
 ) -> bool {
@@ -38,7 +38,7 @@ fn ShouldPaintOverflowControls(
         // a scroller explicitly reparented by PaintLayerStackingNode uses the
         // overlay-controls phase. Ordinary non-self-painting scrollers stay in
         // foreground.
-        if node.is_self_painting_layer || node.needs_reorder_overlay_overflow_controls.get() {
+        if node.is_self_painting_layer() || node.needs_reorder_overlay_overflow_controls().get() {
             phase == PaintPhase::kOverlayOverflowControls
         } else {
             phase == PaintPhase::kForeground
@@ -51,7 +51,7 @@ fn ShouldPaintOverflowControls(
 // Source: core/paint/scrollable_area_painter.cc:105-108. Resizer geometry is
 // pixel-snapped in Layout; only the fragment paint offset is rounded here, as
 // Chromium's current TODO explicitly requires.
-fn AbsoluteRoundedRect(node: &PaintTreeNode<'_>, offset: Offset, size: Size) -> PaintRect {
+fn AbsoluteRoundedRect(node: PaintObject<'_, '_>, offset: Offset, size: Size) -> PaintRect {
     PaintRect {
         x: FragmentPaintOffset(node).x.round() + offset.x,
         y: FragmentPaintOffset(node).y.round() + offset.y,
@@ -63,9 +63,9 @@ fn AbsoluteRoundedRect(node: &PaintTreeNode<'_>, offset: Offset, size: Size) -> 
 // Source: core/paint/scrollable_area_painter.cc PaintOverflowControls: the
 // FragmentData's ObjectPaintProperties::OverflowControlsClip, entered over
 // the box's LocalBorderBoxProperties. `None` when the box has no such clip.
-fn OverflowControlsProperties(node: &PaintTreeNode<'_>) -> Option<PropertyTreeState> {
+fn OverflowControlsProperties(node: PaintObject<'_, '_>) -> Option<PropertyTreeState> {
     let Some(data) = node.FragmentData() else {
-        return node.overflow_controls_properties.clone();
+        return node.overflow_controls_properties().clone();
     };
     let clip = data.PaintProperties()?.OverflowControlsClip()?.clone();
     let mut state = data.LocalBorderBoxProperties();
@@ -76,12 +76,12 @@ fn OverflowControlsProperties(node: &PaintTreeNode<'_>) -> Option<PropertyTreeSt
 // Source: core/paint/scrollable_area_painter.cc PaintScrollbar: the
 // FragmentData's Horizontal/VerticalScrollbarEffect, entered inside the
 // overflow-controls clip scope. `None` when the axis has no effect node.
-fn ScrollbarProperties(node: &PaintTreeNode<'_>, horizontal: bool) -> Option<PropertyTreeState> {
+fn ScrollbarProperties(node: PaintObject<'_, '_>, horizontal: bool) -> Option<PropertyTreeState> {
     let Some(data) = node.FragmentData() else {
         return if horizontal {
-            node.horizontal_scrollbar_properties.clone()
+            node.horizontal_scrollbar_properties().clone()
         } else {
-            node.vertical_scrollbar_properties.clone()
+            node.vertical_scrollbar_properties().clone()
         };
     };
     let properties = data.PaintProperties()?;
@@ -100,10 +100,10 @@ fn ScrollbarProperties(node: &PaintTreeNode<'_>, horizontal: bool) -> Option<Pro
 }
 
 // Source: core/paint/fragment_data.cc:67-87 ContentsTransform.
-fn ContentsTransform(node: &PaintTreeNode<'_>) -> Arc<TransformPaintPropertyNode> {
+fn ContentsTransform(node: PaintObject<'_, '_>) -> Arc<TransformPaintPropertyNode> {
     match node.FragmentData() {
         Some(data) => data.ContentsTransform(),
-        None => node.contents_properties.nodes.transform.clone(),
+        None => node.contents_properties().nodes.transform.clone(),
     }
 }
 
@@ -214,13 +214,13 @@ fn PlatformResizerPaths(
 
 // Source: core/paint/scrollable_area_painter.h:24-64.
 pub struct ScrollableAreaPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
     // Source: core/paint/scrollable_area_painter.h:28-30.
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -234,8 +234,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
     fn Scrollbars<'d>(&self, cell: &'d ScrollbarPaintDataCell) -> Option<&'d ScrollbarPaintData> {
         cell.get_or_init(|| {
             self.node
-                .fragment
-                .as_deref()
+                .Fragment()
                 .expect("paint tree node has a fragment")
                 .ViewScrollbars()
         })
@@ -256,8 +255,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
     ) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         // Source: ScrollableAreaPainter::PaintOverflowControls
         // (scrollable_area_painter.cc). The phase test reads
@@ -362,7 +360,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 // The control rects are built from the flat replay-space
                 // paint offset (FragmentPaintOffset); the visual rect is
                 // enclosed in property space through the same delta.
-                self.node.paint_snap_offset,
+                self.node.paint_snap_offset(),
             );
             self.context.borrow_mut().Append(
                 DisplayItem {
@@ -513,8 +511,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
     fn PaintResizer(&self, info: &PaintInfo<'c, 'o>, data: &ScrollbarPaintData) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if data.resizer_pointer_size.width <= 0.0 || data.resizer_pointer_size.height <= 0.0 {
             return;
@@ -650,8 +647,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
     pub fn RecordResizerScrollHitTestDataWithData(&self, scrollbars: &ScrollbarPaintDataCell) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         // Source: scrollable_area_painter.cc RecordResizerScrollHitTestData
         // returns on !box->CanResize() before reading any control geometry;
@@ -700,6 +696,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use layout::paint::FragmentPaintData;
 
     fn node(is_paint_layer: bool) -> PaintTreeNode<'static> {
@@ -714,31 +711,31 @@ mod tests {
     fn overflow_controls_follow_chromium_paint_phases() {
         let layer = node(true);
         assert!(ShouldPaintOverflowControls(
-            &layer,
+            crate::paint_object::PaintObject::new(&layer),
             false,
             PaintPhase::kSelfBlockBackgroundOnly,
         ));
         assert!(!ShouldPaintOverflowControls(
-            &layer,
+            crate::paint_object::PaintObject::new(&layer),
             false,
             PaintPhase::kOverlayOverflowControls,
         ));
         let mut self_painting_layer = node(true);
         self_painting_layer.is_self_painting_layer = true;
         assert!(ShouldPaintOverflowControls(
-            &self_painting_layer,
+            crate::paint_object::PaintObject::new(&self_painting_layer),
             true,
             PaintPhase::kOverlayOverflowControls,
         ));
 
         let non_self_painting_layer = node(true);
         assert!(ShouldPaintOverflowControls(
-            &non_self_painting_layer,
+            crate::paint_object::PaintObject::new(&non_self_painting_layer),
             true,
             PaintPhase::kForeground,
         ));
         assert!(!ShouldPaintOverflowControls(
-            &non_self_painting_layer,
+            crate::paint_object::PaintObject::new(&non_self_painting_layer),
             true,
             PaintPhase::kOverlayOverflowControls,
         ));
@@ -746,12 +743,12 @@ mod tests {
             .needs_reorder_overlay_overflow_controls
             .set(true);
         assert!(ShouldPaintOverflowControls(
-            &non_self_painting_layer,
+            crate::paint_object::PaintObject::new(&non_self_painting_layer),
             true,
             PaintPhase::kOverlayOverflowControls,
         ));
         assert!(!ShouldPaintOverflowControls(
-            &non_self_painting_layer,
+            crate::paint_object::PaintObject::new(&non_self_painting_layer),
             true,
             PaintPhase::kForeground,
         ));
@@ -763,7 +760,7 @@ mod tests {
         node.paint_offset = Offset { x: 10.6, y: 20.4 };
         assert_eq!(
             AbsoluteRoundedRect(
-                &node,
+                crate::paint_object::PaintObject::new(&node),
                 Offset { x: 70.0, y: 30.0 },
                 Size {
                     width: 30.0,

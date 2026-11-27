@@ -17,12 +17,12 @@ use crate::contoured_border_geometry::{ConicRoundedRectPath, ResolveCornerRadii,
 use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // cpp: paint/box_border_painter.h:25-182
 pub struct BoxBorderPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
     border_rect: PaintRect,
 }
@@ -32,7 +32,7 @@ pub struct BoxBorderPainter<'n, 'f, 'c, 'o> {
 /// recursion reduces to axis-aligned fills and styled center lines.
 // cpp: paint/box_border_painter.cc:570-610,612-843,921-979,2497-2509
 pub(crate) fn DrawBoxSide(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     phase: PaintPhase,
     rect: PaintRect,
@@ -65,8 +65,7 @@ pub(crate) fn DrawBoxSide(
         style
     };
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("box side owner has a fragment");
     let styled_color = |line_style| {
         InvertColorIfNeeded(
@@ -305,7 +304,7 @@ pub(crate) fn DrawBoxSide(
 impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
     // cpp: paint/box_border_painter.h:28-33
     pub fn new(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
         border_rect: PaintRect,
     ) -> Self {
@@ -337,8 +336,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
     ) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let style = &fragment.paint;
         let opaque_mask_color = Color {
@@ -1393,8 +1391,8 @@ fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
-    let Some(self_cull_rect) = node.self_cull_rect else {
+fn IsVisible(node: PaintObject<'_, '_>, rect: &PaintRect) -> bool {
+    let Some(self_cull_rect) = node.self_cull_rect() else {
         return true;
     };
     Intersects(rect, &self_cull_rect)

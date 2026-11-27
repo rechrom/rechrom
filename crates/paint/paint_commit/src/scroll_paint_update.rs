@@ -1245,8 +1245,11 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         node.SetOwnedFragmentForTesting(f);
         let mut controls = PaintRecording::default();
         let context = RefCell::new(paint_context::PaintContext::WithCaret(&mut controls, None));
-        scrollable_area_painter::ScrollableAreaPainter::new(&node, &context)
-            .PaintOverflowControls(&paint_info::PaintInfo::new(&context, geometry.phase));
+        scrollable_area_painter::ScrollableAreaPainter::new(
+            paint_record::paint_object::PaintObject::new(&node),
+            &context,
+        )
+        .PaintOverflowControls(&paint_info::PaintInfo::new(&context, geometry.phase));
         drop(context);
         let access = paint_record::artifact_access();
         for record in controls.display_items.get(&access) {

@@ -881,8 +881,8 @@ fn RecordPaint(
     // its exact computed opacity as the document-global Paint Timing fact used
     // by every nested PaintLayerPainter scope.
     paint_context.SetDocumentElementIsInvisible(fragments.paint.style.opacity() == 0.0);
-    paint_context.BindSvgResourceTree(&paint_tree);
-    paint_context.BindPaintTimingRoot(&paint_tree);
+    paint_context.BindSvgResourceTree(paint_record::paint_object::PaintObject::new(&paint_tree));
+    paint_context.BindPaintTimingRoot(paint_record::paint_object::PaintObject::new(&paint_tree));
     if let Some((rect, shape)) = caret_geometry {
         paint_context.caret_local_rect = Some(rect);
         paint_context.caret_shape = Some(shape);

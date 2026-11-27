@@ -21,7 +21,7 @@ use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
 use crate::paint_shader_resolver::{PrivacyPreservingPaintServer, ResolvePaintShaderForBounds};
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::svg_model_object_painter::{SVGDrawingRecorder, SVGModelObjectPainter, SVGPaintOffset};
 use crate::PaintRect;
 
@@ -375,7 +375,7 @@ fn ResolveShapePaintServer(
 // into this immutable input; recording retains the same fill/stroke order,
 // geometry kind, winding rule and non-scaling-stroke marker.
 fn BuildShapeItems(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     shape: &SvgShapeData,
     style: &ShapePaintStyle,
     origin: Offset,
@@ -417,7 +417,7 @@ fn BuildShapeItems(
             height: bounds.height + 2.0 * outset,
         };
     }
-    if let Some(cull_rect) = node.self_cull_rect {
+    if let Some(cull_rect) = node.self_cull_rect() {
         // Chromium compares the parent-space cull rect with the shape's
         // LocalSVGTransform-mapped visual rect. PrePaint has already applied
         // the inverse property-tree transform when it stores self_cull_rect,
@@ -443,8 +443,7 @@ fn BuildShapeItems(
         Vec::new()
     };
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("paint tree node has a fragment");
     let mut items = Vec::new();
     if include_fill && has_fill {
@@ -571,7 +570,7 @@ fn BuildShapeItems(
 
 fn AppendItems(
     context: &RefCell<PaintContext<'_>>,
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     items: Vec<DisplayItem>,
 ) {
     // svg_shape_painter.cc:217-218,252-253. FillShape and StrokeShape mark
@@ -586,7 +585,7 @@ fn AppendItems(
 
 // Source: svg_shape_painter.cc:256-323. Borrow original resource Paint nodes;
 // their independent property trees were prepared in the ordinary PrePaint pass.
-fn PaintNativeMarkers(node: &PaintTreeNode<'_>, info: &PaintInfo<'_, '_>) -> bool {
+fn PaintNativeMarkers(node: PaintObject<'_, '_>, info: &PaintInfo<'_, '_>) -> bool {
     let Some(cursor) = node.SourceCursor() else {
         return false;
     };
@@ -599,7 +598,7 @@ fn PaintNativeMarkers(node: &PaintTreeNode<'_>, info: &PaintInfo<'_, '_>) -> boo
     let paint = info
         .svg_resource_painter
         .expect("native resource subtree Paint dispatcher");
-    let fragment = node.fragment.as_deref().expect("SVG shape Paint owner");
+    let fragment = node.Fragment().expect("SVG shape Paint owner");
     let shape = fragment
         .paint
         .SvgShape()
@@ -686,7 +685,7 @@ fn PaintNativeMarkers(node: &PaintTreeNode<'_>, info: &PaintInfo<'_, '_>) -> boo
 // resource layout are resolved by Layout; Paint keeps the source transform,
 // overflow clip, context-paint snapshot and nested record boundaries.
 fn PaintMarkers(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     markers: &[SvgMarkerInstance],
     privacy_preserving: bool,
@@ -721,8 +720,7 @@ fn PaintMarkers(
                 continue;
             }
             let node_id = node
-                .fragment
-                .as_deref()
+                .Fragment()
                 .expect("paint tree node has a fragment")
                 .ViewNodeId();
             if !began_marker {
@@ -827,8 +825,7 @@ fn PaintMarkers(
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
                     node_id: node
-                        .fragment
-                        .as_deref()
+                        .Fragment()
                         .expect("paint tree node has a fragment")
                         .ViewNodeId(),
                     svg_marker_resource_id: marker.resource_id,
@@ -842,13 +839,13 @@ fn PaintMarkers(
 
 // Source: core/paint/svg_shape_painter.h:20-41.
 pub struct SVGShapePainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
     // Source: core/paint/svg_shape_painter.h:24-25.
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -857,8 +854,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
     pub fn Paint(&self, paint_info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if paint_info.phase != PaintPhase::kForeground || fragment.paint.SvgShape().is_none() {
             return;
@@ -1008,6 +1004,8 @@ mod tests {
     use paint_input_types::paint_input::SvgPatternCommand;
 
     use super::*;
+
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
     use crate::paint_context::PaintContext;
     use crate::paint_engine::{RasterEffectOutset, RecordedDisplayItem, RecordedDisplayItemKind};
@@ -1068,7 +1066,7 @@ mod tests {
             ..SvgShapeData::default()
         };
         let items = BuildShapeItems(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1103,7 +1101,7 @@ mod tests {
         };
 
         let items = BuildShapeItems(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1141,7 +1139,7 @@ mod tests {
         };
 
         let rejected = BuildShapeItems(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1159,7 +1157,7 @@ mod tests {
         fragment.paint.style.svg_fill_server = Some(server);
         node.SetOwnedFragmentForTesting(&fragment);
         let admitted = BuildShapeItems(
-            &node,
+            crate::paint_object::PaintObject::new(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1243,7 +1241,7 @@ mod tests {
             false,
             PaintFlag::kPaintingClipPathAsMask | PaintFlag::kOmitCompositingInfo,
         );
-        SVGShapePainter::new(&node, &context).Paint(&paint_info);
+        SVGShapePainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
         drop(paint_info);
         drop(context);
 
@@ -1302,7 +1300,7 @@ mod tests {
             let mut recording = PaintRecording::default();
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            SVGShapePainter::new(&node, &context).Paint(&paint_info);
+            SVGShapePainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
             drop(paint_info);
             drop(context);
 
@@ -1437,7 +1435,7 @@ mod tests {
             Some(Arc::new(previous)),
         ));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        SVGShapePainter::new(&node, &context).Paint(&paint_info);
+        SVGShapePainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
         assert_eq!(
             context.borrow().CacheMetrics(),
             PaintReuseMetrics {

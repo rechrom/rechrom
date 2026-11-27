@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use paint_input_types::layout_input::Offset;
 use paint_model::PaintRect;
 use prepaint::object_paint_properties::ObjectPaintPropertySlot;
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::box_fragment_painter::BoxFragmentPainter;
 use crate::display_item_id::DisplayItemIdType;
@@ -19,17 +19,17 @@ use crate::PaintPhase;
 /// Source: fragment_data.h:32-38 `FragmentData::PaintOffset()`, read from
 /// the occurrence's PrePaint FragmentData as Chromium's SVG painters read
 /// `PaintOffset()` / `FirstFragment().PaintOffset()`, in the flat replay
-/// space every paint_record op uses (PaintTreeNode::FlatPaintOffset, the
+/// space every paint_record op uses (PaintObject::FlatPaintOffset, the
 /// same value the box painters record with).
-pub(crate) fn SVGPaintOffset(node: &PaintTreeNode<'_>) -> Offset {
+pub(crate) fn SVGPaintOffset(node: PaintObject<'_, '_>) -> Offset {
     node.FlatPaintOffset()
 }
 
 /// Source: scoped_svg_paint_state.cc:102-139 and svg_mask_painter.cc:239-245:
 /// whether `FirstFragment().PaintProperties()->Mask()` exists. Fixture nodes
 /// without FragmentData keep the node's `applies_mask`.
-pub(crate) fn SVGHasMaskProperty(node: &PaintTreeNode<'_>) -> bool {
-    node.FragmentData().map_or(node.applies_mask, |data| {
+pub(crate) fn SVGHasMaskProperty(node: PaintObject<'_, '_>) -> bool {
+    node.FragmentData().map_or(node.applies_mask(), |data| {
         data.HasPropertySlot(ObjectPaintPropertySlot::Mask)
     })
 }
@@ -42,10 +42,9 @@ pub struct SVGModelObjectPainter;
 
 impl SVGModelObjectPainter {
     /// Source: svg_model_object_painter.cc:15-27.
-    pub fn CanUseCullRect(node: &PaintTreeNode<'_>) -> bool {
+    pub fn CanUseCullRect(node: PaintObject<'_, '_>) -> bool {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG model object must own a fragment");
         let style = &fragment.paint.style;
         let has_transform = style.has_translate()
@@ -62,8 +61,8 @@ impl SVGModelObjectPainter {
     /// Chromium VisualRectInLocalSVGCoordinates projected through the existing
     /// physical-fragment boundary. An absent source overflow remains unknown;
     /// callers must not substitute the frame rect for culling.
-    pub fn VisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
-        let fragment = node.fragment.as_deref()?;
+    pub fn VisualRect(node: PaintObject<'_, '_>) -> Option<PaintRect> {
+        let fragment = node.Fragment()?;
         let paint_offset = SVGPaintOffset(node);
         if let Some(rect) = fragment.paint.SvgVisualRect() {
             return Some(PaintRect {
@@ -123,13 +122,12 @@ impl SVGModelObjectPainter {
     /// object_painter.cc:142-178. SVG children are always mixed when visible
     /// because fill/stroke hit rules cannot prove the whole visual rect opaque.
     pub fn RecordHitTestData(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         context: &RefCell<PaintContext<'_>>,
         paint_info: &PaintInfo<'_, '_>,
     ) {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG hit-test object must own a fragment");
         debug_assert!(fragment.paint.IsSVGChild());
         debug_assert_eq!(paint_info.phase, PaintPhase::kForeground);
@@ -151,10 +149,9 @@ impl SVGModelObjectPainter {
 
     /// Source: svg_model_object_painter.cc:40-53. The DOM Element relation is
     /// resolved by Layout; Paint receives only the optional non-null crop ID.
-    pub fn RecordRegionCaptureData(node: &PaintTreeNode<'_>, context: &RefCell<PaintContext<'_>>) {
+    pub fn RecordRegionCaptureData(node: PaintObject<'_, '_>, context: &RefCell<PaintContext<'_>>) {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG region-capture object must own a fragment");
         let Some(crop_id) = fragment.paint.RegionCaptureCropId() else {
             return;
@@ -169,7 +166,7 @@ impl SVGModelObjectPainter {
 
     /// Source: svg_model_object_painter.cc:55-71.
     pub fn PaintOutline<'n, 'f, 'c, 'o>(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
     ) {
         BoxFragmentPainter::PaintSVGOutline(node, context);
@@ -188,12 +185,11 @@ pub(crate) struct SVGDrawingRecorder<'c, 'o> {
 impl<'c, 'o> SVGDrawingRecorder<'c, 'o> {
     pub(crate) fn new(
         context: &'c RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         item_type: DisplayItemIdType,
     ) -> Self {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG drawing owner must have a fragment");
         if !matches!(
             fragment.paint.SourceKind(),
@@ -222,7 +218,7 @@ impl<'c, 'o> SVGDrawingRecorder<'c, 'o> {
 
     pub(crate) fn for_phase(
         context: &'c RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         phase: PaintPhase,
     ) -> Self {
         Self::new(
@@ -236,6 +232,7 @@ impl<'c, 'o> SVGDrawingRecorder<'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use layout::paint::FragmentPaintData;
     use paint_input_types::paint_input::{PaintFilterOperation, PaintFilterType};
 
@@ -250,7 +247,7 @@ mod tests {
     #[test]
     fn transforms_and_pixel_moving_filters_disable_svg_culling() {
         let mut node = node();
-        assert!(SVGModelObjectPainter::CanUseCullRect(&node));
+        assert!(SVGModelObjectPainter::CanUseCullRect(crate::paint_object::PaintObject::new(&node)));
 
         node.fragment
             .as_mut()
@@ -262,7 +259,7 @@ mod tests {
                 r#type: PaintFilterType::kReference,
                 ..PaintFilterOperation::default()
             });
-        assert!(!SVGModelObjectPainter::CanUseCullRect(&node));
+        assert!(!SVGModelObjectPainter::CanUseCullRect(crate::paint_object::PaintObject::new(&node)));
     }
 
     #[test]
@@ -287,7 +284,7 @@ mod tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            let _recorder = SVGDrawingRecorder::for_phase(&context, &node, PaintPhase::kForeground);
+            let _recorder = SVGDrawingRecorder::for_phase(&context, crate::paint_object::PaintObject::new(&node), PaintPhase::kForeground);
         }
         assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
@@ -319,7 +316,7 @@ mod tests {
         node.SetOwnedFragmentForTesting(&fragment);
 
         assert_eq!(
-            SVGModelObjectPainter::VisualRect(&node),
+            SVGModelObjectPainter::VisualRect(crate::paint_object::PaintObject::new(&node)),
             Some(PaintRect {
                 x: 3.0,
                 y: 10.0,

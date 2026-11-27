@@ -15,7 +15,7 @@ use crate::paint_engine::{
     DisplayItem, DisplayItemType, PaintPhase, ResolveDocumentImageContainerKey,
 };
 use crate::paint_shader_resolver::ResolvePaintShader;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // cpp: paint/nine_piece_image_painter.cc:38-43
@@ -76,7 +76,7 @@ fn ComputeTileParameters(
 
 // Resource lookup is the typed equivalent of StyleImage::GetImage at
 // nine_piece_image_painter.cc:214-227.
-fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
+fn FindImage<'a>(node: PaintObject<'a, '_>, id: u64) -> Option<&'a PaintImage> {
     let Some(resources) = node.DocumentResources() else {
         return None;
     };
@@ -99,8 +99,8 @@ fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
-    let Some(cull_rect) = node.cull_rect else {
+fn IsVisible(node: PaintObject<'_, '_>, rect: &PaintRect) -> bool {
+    let Some(cull_rect) = node.cull_rect() else {
         return true;
     };
     Intersects(rect, &cull_rect)
@@ -125,7 +125,7 @@ fn ScaleTransform(x: f64, y: f64) -> TransformMatrix {
 /// important: each border-image piece is a crop of one generated image, not a
 /// newly resolved gradient whose geometry follows the destination piece.
 fn AppendGradientPiece(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     phase: PaintPhase,
     source: PaintRect,
@@ -140,8 +140,7 @@ fn AppendGradientPiece(
         return;
     }
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("paint tree node has a fragment");
     let scale = ScaleTransform(
         destination.width / source.width,
@@ -195,7 +194,7 @@ fn AppendGradientPiece(
 }
 
 fn AppendGradientTiledPiece(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     phase: PaintPhase,
     info: &NinePieceDrawInfo,
@@ -234,8 +233,7 @@ fn AppendGradientTiledPiece(
         nominal_y
     };
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("paint tree node has a fragment");
     context.borrow_mut().Append(
         DisplayItem {
@@ -303,10 +301,9 @@ fn AppendGradientTiledPiece(
 pub struct NinePieceImagePainter;
 
 impl NinePieceImagePainter {
-    pub fn ReferenceRect(node: &PaintTreeNode<'_>) -> PaintRect {
+    pub fn ReferenceRect(node: PaintObject<'_, '_>) -> PaintRect {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let mut decoration_area = PaintRect {
             x: FragmentPaintOffset(node).x,
@@ -329,7 +326,7 @@ impl NinePieceImagePainter {
         decoration_area
     }
 
-    pub fn Bounds(node: &PaintTreeNode<'_>, image: &NinePieceImagePaint) -> PaintRect {
+    pub fn Bounds(node: PaintObject<'_, '_>, image: &NinePieceImagePaint) -> PaintRect {
         Self::BoundsWithin(Self::ReferenceRect(node), image)
     }
 
@@ -345,13 +342,12 @@ impl NinePieceImagePainter {
     // cpp: paint/nine_piece_image_painter.h:23-30
     // cpp: paint/nine_piece_image_painter.cc:180-244
     pub fn Paint(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         context: &RefCell<PaintContext<'_>>,
         phase: PaintPhase,
     ) -> bool {
         let Some(border_image) = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment")
             .BorderImage(node.DocumentResources().map(|resources| &**resources))
         else {
@@ -361,13 +357,12 @@ impl NinePieceImagePainter {
     }
 
     pub fn PaintMaskBox(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         context: &RefCell<PaintContext<'_>>,
         phase: PaintPhase,
     ) -> bool {
         let Some(mask_box_image) = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment")
             .MaskBoxImage(node.DocumentResources().map(|resources| &**resources))
         else {
@@ -377,14 +372,13 @@ impl NinePieceImagePainter {
     }
 
     pub fn PaintMaskBoxWithin(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         context: &RefCell<PaintContext<'_>>,
         phase: PaintPhase,
         reference_rect: PaintRect,
     ) -> bool {
         let Some(mask_box_image) = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment")
             .MaskBoxImage(node.DocumentResources().map(|resources| &**resources))
         else {
@@ -394,15 +388,14 @@ impl NinePieceImagePainter {
     }
 
     fn PaintImage(
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         context: &RefCell<PaintContext<'_>>,
         phase: PaintPhase,
         border_image: &NinePieceImagePaint,
         reference_rect: Option<PaintRect>,
     ) -> bool {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if !border_image.is_loaded {
             return true;
@@ -485,7 +478,7 @@ impl NinePieceImagePainter {
             effective_zoom,
             area,
             sides_to_include,
-            node.pixel_snap_scale,
+            node.pixel_snap_scale(),
         );
         if sliced_inline_strip {
             let sides = &fragment.BorderSides();

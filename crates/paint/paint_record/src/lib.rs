@@ -60,6 +60,7 @@ pub mod paint_auto_dark_mode;
 pub mod paint_context;
 pub mod paint_controller;
 pub mod paint_info;
+pub mod paint_object;
 pub mod paint_op;
 pub mod paint_under_invalidation_checker;
 pub mod scoped_effectively_invisible;

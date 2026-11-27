@@ -3,7 +3,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
@@ -18,10 +18,10 @@ pub struct SVGMaskPainter;
 
 impl SVGMaskPainter {
     pub fn Paint<'n, 'f, 'c, 'o>(
-        node: &'n PaintTreeNode<'f>,
+        node: PaintObject<'n, 'f>,
         context: &'c RefCell<PaintContext<'o>>,
     ) {
-        if !SVGHasMaskProperty(node) || node.mask_layers.is_empty() {
+        if !SVGHasMaskProperty(node) || node.mask_layers().is_empty() {
             return;
         }
         if DrawingRecorder::UseCachedDrawingIfPossible(context, node, DisplayItemIdType::kSVGMask) {
@@ -36,10 +36,9 @@ impl SVGMaskPainter {
             .ResolvedMaskClipRect()
             .expect("SVG mask must have resolved MaskClip bounds");
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG mask owner must have a fragment");
-        let mut mask_layers = node.mask_layers.clone();
+        let mut mask_layers = node.mask_layers().clone();
         for layer in &mut mask_layers {
             layer.dynamic_range_limit = fragment.paint.style.dynamic_range_limit();
         }
@@ -68,6 +67,7 @@ impl SVGMaskPainter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pre_paint_tree_walk::PaintTreeNode;
     use crate::PaintRecording;
     use layout::paint::FragmentPaintData;
     use paint_model::{DisplayMaskLayer, PaintRect};
@@ -124,7 +124,7 @@ mod tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            SVGMaskPainter::Paint(&node, &context);
+            SVGMaskPainter::Paint(crate::paint_object::PaintObject::new(&node), &context);
             context.borrow_mut().Finish();
         }
         let mask = output

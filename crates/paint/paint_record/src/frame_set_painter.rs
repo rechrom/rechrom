@@ -12,7 +12,7 @@ use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // Chromium: core/paint/frame_set_painter.cc:17-19.
@@ -43,8 +43,8 @@ fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
 }
 
 // Chromium: core/paint/frame_set_painter.cc:21-25.
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
-    let Some(cull_rect) = node.cull_rect else {
+fn IsVisible(node: PaintObject<'_, '_>, rect: &PaintRect) -> bool {
+    let Some(cull_rect) = node.cull_rect() else {
         return true;
     };
     Intersects(rect, &cull_rect)
@@ -57,13 +57,13 @@ fn ShouldPaintBorderAfter(allow_border: &[bool], index: usize) -> bool {
 
 // Chromium entity: core/paint/frame_set_painter.h:23-48.
 pub struct FrameSetPainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
     // Chromium: core/paint/frame_set_painter.h:27-30.
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
@@ -74,8 +74,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
         }
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let color = InvertColorIfNeeded(&fragment.paint.style, color, ElementRole::kBackground);
         self.context.borrow_mut().Append(
@@ -153,12 +152,11 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
     pub fn PaintBorders(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         if info.phase != PaintPhase::kForeground
             || fragment.ViewFrameSet().is_none()
-            || self.node.children.is_empty()
+            || self.node.Children().is_empty()
         {
             return;
         }
@@ -187,7 +185,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
         } else {
             BORDER_FILL_COLOR
         };
-        let mut children_remaining = self.node.children.len();
+        let mut children_remaining = self.node.Children().len();
         if children_remaining == 0 {
             return;
         }

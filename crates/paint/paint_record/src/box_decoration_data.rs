@@ -8,7 +8,7 @@ use layout_style::style::appearance::AppearanceValue;
 use crate::box_fragment_painter::{BackgroundLayerOccludesFollowingLayers, BackgroundRadii};
 use crate::contoured_border_geometry::IncludedBorderEdges;
 use crate::paint_info::PaintInfo;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use paint_input_types::layout_input::Offset;
 use paint_input_types::paint_input::BackgroundBox;
 
@@ -20,10 +20,10 @@ use paint_input_types::paint_input::BackgroundBox;
 /// ScrollableAreaPainter, InlineBoxFragmentPainter, NinePieceImagePainter,
 /// SVG painters), read from the occurrence's PrePaint FragmentData and
 /// expressed in the flat replay space every paint_record op, visual rect and
-/// hit-test rect uses (PaintTreeNode::FlatPaintOffset). Snapping and
-/// enclosing go through PaintTreeNode::PixelSnappedRect / EnclosingRect /
+/// hit-test rect uses (PaintObject::FlatPaintOffset). Snapping and
+/// enclosing go through PaintObject::PixelSnappedRect / EnclosingRect /
 /// PixelSnappedOffset, which round in property space.
-pub(crate) fn FragmentPaintOffset(node: &PaintTreeNode<'_>) -> Offset {
+pub(crate) fn FragmentPaintOffset(node: PaintObject<'_, '_>) -> Offset {
     node.FlatPaintOffset()
 }
 
@@ -48,10 +48,9 @@ pub struct BoxDecorationData {
 }
 
 impl BoxDecorationData {
-    pub fn new(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>) -> Self {
+    pub fn new(node: PaintObject<'_, '_>, paint_info: &PaintInfo<'_, '_>) -> Self {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
         let has_appearance = fragment.paint.FormControl().is_some_and(|control| {
@@ -174,16 +173,15 @@ impl BoxDecorationData {
     // built from, so it is resolved at that read.
     pub fn GetBackgroundBleedAvoidance(
         self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         paint_info: &PaintInfo<'_, '_>,
     ) -> BackgroundBleedAvoidance {
         self.ComputeBleedAvoidance(node, paint_info)
     }
 
-    fn BorderObscuresBackgroundEdge(self, node: &PaintTreeNode<'_>) -> bool {
+    fn BorderObscuresBackgroundEdge(self, node: PaintObject<'_, '_>) -> bool {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
         let border = IncludedBorderEdges(fragment);
@@ -203,21 +201,20 @@ impl BoxDecorationData {
 
     fn ComputeBleedAvoidance(
         self,
-        node: &PaintTreeNode<'_>,
+        node: PaintObject<'_, '_>,
         paint_info: &PaintInfo<'_, '_>,
     ) -> BackgroundBleedAvoidance {
         use BackgroundBleedAvoidance::*;
 
         if !self.bleed_should_paint_background
             || paint_info.IsPaintingBackgroundInContentsSpace()
-            || node.is_root
+            || node.is_root()
         {
             return kBackgroundBleedNone;
         }
 
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
         let border_image =

@@ -3,7 +3,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use layout::input::NodeKind;
 use paint_model::PaintRect;
-use prepaint::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 
 use crate::paint_info::PaintInfo;
 use crate::svg_model_object_painter::SVGPaintOffset;
@@ -16,17 +16,15 @@ use crate::svg_model_object_painter::SVGPaintOffset;
 pub struct SVGRootPainter;
 
 impl SVGRootPainter {
-    pub fn IsRoot(node: &PaintTreeNode<'_>) -> bool {
-        node.fragment
-            .as_deref()
+    pub fn IsRoot(node: PaintObject<'_, '_>) -> bool {
+        node.Fragment()
             .is_some_and(|fragment| fragment.paint.SourceKind() == NodeKind::kSvgRoot)
     }
 
-    pub fn ShouldPaintSubtree(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>) -> bool {
+    pub fn ShouldPaintSubtree(node: PaintObject<'_, '_>, paint_info: &PaintInfo<'_, '_>) -> bool {
         debug_assert!(Self::IsRoot(node));
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("SVG root must own a fragment");
         // svg_root_painter.cc:28-33 PixelSnappedSize(paint_offset): the
         // root's FragmentData PaintOffset with its layout size.
@@ -84,10 +82,10 @@ mod tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        assert!(SVGRootPainter::ShouldPaintSubtree(&node, &paint_info));
+        assert!(SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
 
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = true;
-        assert!(!SVGRootPainter::ShouldPaintSubtree(&node, &paint_info));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = false;
 
         node.fragment
@@ -98,7 +96,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .disabled = true;
-        assert!(!SVGRootPainter::ShouldPaintSubtree(&node, &paint_info));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
         node.fragment
             .as_mut()
             .unwrap()
@@ -110,7 +108,7 @@ mod tests {
 
         let mut blocked = paint_info;
         blocked.SetDescendantPaintingBlocked();
-        assert!(!SVGRootPainter::ShouldPaintSubtree(&node, &blocked));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &blocked));
     }
 
     #[test]
@@ -127,6 +125,6 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        assert!(!SVGRootPainter::ShouldPaintSubtree(&node, &paint_info));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
     }
 }

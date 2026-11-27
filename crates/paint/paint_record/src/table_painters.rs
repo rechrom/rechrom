@@ -21,7 +21,7 @@ use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, ResolveDocumentImageContainerKey};
 use crate::paint_info::PaintInfo;
 use crate::paint_shader_resolver::ResolvePaintShader;
-use crate::pre_paint_tree_walk::PaintTreeNode;
+use crate::paint_object::PaintObject;
 use crate::PaintRect;
 
 // cpp: paint/table_painters.cc:18
@@ -441,15 +441,15 @@ fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
 }
 
 // cpp: paint/table_painters.cc:285-290
-fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
-    let Some(cull_rect) = node.cull_rect else {
+fn IsVisible(node: PaintObject<'_, '_>, rect: &PaintRect) -> bool {
+    let Some(cull_rect) = node.cull_rect() else {
         return true;
     };
     Intersects(rect, &cull_rect)
 }
 
 // cpp: paint/table_painters.cc:292-309
-fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
+fn FindImage<'a>(node: PaintObject<'a, '_>, id: u64) -> Option<&'a PaintImage> {
     let resources = node.DocumentResources()?;
     let found = resources.images.iter().find(|image| image.id == id)?;
     if found.width == 0
@@ -467,7 +467,7 @@ fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage>
 
 // cpp: paint/table_painters.cc:311-431
 fn PaintColumnStyle(
-    table_node: &PaintTreeNode<'_>,
+    table_node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     info: &PaintInfo<'_, '_>,
     column: &TablePaintColumn,
@@ -476,8 +476,7 @@ fn PaintColumnStyle(
 ) {
     let style = &column.style;
     let table_fragment = table_node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("table background requires a fragment");
     let background_images = style.background_images();
     let (background_color, paints_background_images) =
@@ -744,7 +743,7 @@ fn PaintColumnStyle(
 
 // cpp: paint/table_painters.cc:433-497
 fn DrawEdge(
-    node: &PaintTreeNode<'_>,
+    node: PaintObject<'_, '_>,
     context: &RefCell<PaintContext<'_>>,
     info: &PaintInfo<'_, '_>,
     edge: TableCollapsedEdge<'_>,
@@ -758,8 +757,7 @@ fn DrawEdge(
         return;
     }
     let fragment = node
-        .fragment
-        .as_deref()
+        .Fragment()
         .expect("paint tree node has a fragment");
     let horizontal =
         edge.IsInlineAxis() == (fragment.paint.WritingMode() == WritingMode::kHorizontalTb);
@@ -872,22 +870,21 @@ fn DrawEdge(
 
 // cpp: paint/table_painters.h:10-22
 pub struct TablePainter<'n, 'f, 'c, 'o> {
-    node: &'n PaintTreeNode<'f>,
+    node: PaintObject<'n, 'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
     // cpp: paint/table_painters.h:12-13
-    pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
+    pub fn new(node: PaintObject<'n, 'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
     // cpp: paint/table_painters.h:15
     // cpp: paint/table_painters.cc:501-511
-    pub fn DecorationRect(node: &PaintTreeNode<'_>) -> PaintRect {
+    pub fn DecorationRect(node: PaintObject<'_, '_>) -> PaintRect {
         let fragment = node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let Some(data) = fragment.ViewTable() else {
             return PaintRect {
@@ -909,14 +906,12 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
     // cpp: paint/table_painters.cc:513-568
     pub fn PaintColumnBackgrounds(&self, info: &PaintInfo<'c, 'o>) {
         fn collect_cells<'n, 'f>(
-            parent: &'n PaintTreeNode<'f>,
-            cells: &mut Vec<&'n PaintTreeNode<'f>>,
+            parent: PaintObject<'n, 'f>,
+            cells: &mut Vec<PaintObject<'n, 'f>>,
         ) {
-            for child_owner in &parent.children {
-                let child = child_owner.as_ref();
+            for child in parent.Children() {
                 if child
-                    .fragment
-                    .as_deref()
+                    .Fragment()
                     .expect("table child has a fragment")
                     .paint
                     .Display()
@@ -930,8 +925,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
         }
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let Some(data) = fragment.ViewTable() else {
             return;
@@ -974,8 +968,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             );
             positioning.x += columns_rect.x;
             positioning.y += columns_rect.y;
-            for cell in &cells {
-                let cell_fragment = cell.fragment.as_deref().expect("table cell has a fragment");
+            for &cell in &cells {
+                let cell_fragment = cell.Fragment().expect("table cell has a fragment");
                 let Some(cell_column) = cell_fragment.ViewTableCellColumn() else {
                     continue;
                 };
@@ -1007,8 +1001,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
     pub fn PaintCollapsedBorders(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
-            .fragment
-            .as_deref()
+            .Fragment()
             .expect("paint tree node has a fragment");
         let Some(borders_data) = fragment.ViewCollapsedTable() else {
             return;
