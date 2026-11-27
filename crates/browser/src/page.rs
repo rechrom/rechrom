@@ -662,12 +662,21 @@ struct PendingTextOverflowLayoutInvalidation {
 #[derive(Clone, Copy, Default)]
 struct ResourceReferenceDirty(u8);
 
+/// Document-wide resource reference walks a mutation can require. Web fonts
+/// have no category: FontFaceSetDocument/CSSFontSelector demand is admitted by
+/// every resource poll pass (ResourceFetcher::PollPendingFontsWithBudget runs
+/// StartPendingFonts), so no mutation needs a separate font rediscovery.
 impl ResourceReferenceDirty {
     const STYLE_SHEETS: u8 = 1 << 0;
     const IMAGES: u8 = 1 << 1;
-    const FONTS: u8 = 1 << 2;
-    const ALL: Self = Self(Self::STYLE_SHEETS | Self::IMAGES | Self::FONTS);
-    const VIEWPORT: Self = Self(Self::IMAGES | Self::FONTS);
+    const ALL: Self = Self(Self::STYLE_SHEETS | Self::IMAGES);
+    const VIEWPORT: Self = Self(Self::IMAGES);
+    /// Element::InvalidateStyleAttribute (core/dom/element.cc:13195-13203)
+    /// and animation style samples only SetNeedsStyleRecalc on their element.
+    /// They never connect a link/style owner or change an image request;
+    /// images the new style references are admitted through the Document's
+    /// style-image reference revision after that element's recalc.
+    const STYLE_ONLY: Self = Self(0);
 
     fn Contains(self, flag: u8) -> bool {
         self.0 & flag != 0
@@ -1023,6 +1032,8 @@ struct PageState {
     scroll_only: Cell<bool>,
     styles_resolved: Cell<bool>,
     resource_references_dirty: Cell<ResourceReferenceDirty>,
+    // Document::StyleImageReferenceRevision last handed to image discovery.
+    discovered_style_image_revision: Cell<u64>,
     // A stable image resource id published a new immutable content snapshot.
     // This never means DOM, layout geometry or display-item recording changed.
     paint_resources_dirty: Cell<bool>,
@@ -2877,6 +2888,7 @@ impl PageState {
             scroll_only: Cell::new(false),
             styles_resolved: Cell::new(false),
             resource_references_dirty: Cell::new(ResourceReferenceDirty::ALL),
+            discovered_style_image_revision: Cell::new(0),
             paint_resources_dirty: Cell::new(false),
             video_frame_resources: RefCell::new(HashMap::new()),
             pending_paint_mutations: RefCell::new(Vec::new()),
@@ -3076,7 +3088,20 @@ impl PageState {
         // a throwing compound mutation already changed part of the DOM.
         let effect = result?;
         dom::attribute_lifecycle::DrainAttributeLifecycle(&self.document.Handle());
-        self.ApplyDocumentLifecycleEffects(&effect);
+        // InlineCSSStyleDeclaration::DidMutate -> Element::
+        // InvalidateStyleAttribute (inline_css_style_declaration.cc:36-55,
+        // element.cc:13195-13203) only marks the element for a local style
+        // recalc; Document also classifies it as reaching no ParseAttribute
+        // resource hook. The declaration's images are requested by that
+        // element's style resolution, so no document-wide walk is admitted.
+        let resources = if m.mutation_type == DOMMutationType::kSetAttribute
+            && m.inline_style.is_some()
+        {
+            ResourceReferenceDirty::STYLE_ONLY
+        } else {
+            ResourceReferenceDirty::ALL
+        };
+        self.ApplyDocumentLifecycleEffectsWithResources(&effect, resources);
         self.DrainPopupLifecycleWithoutScript();
         // A changed image request cancels its queued event, even if src later
         // changes back to the same URL before the event task runs.
@@ -3168,7 +3193,11 @@ impl PageState {
             .unwrap_or_else(|error| std::panic::panic_any(error));
     }
 
-    fn ApplyDocumentLifecycleEffects(&self, effects: &DocumentEffects) {
+    fn ApplyDocumentLifecycleEffectsWithResources(
+        &self,
+        effects: &DocumentEffects,
+        resources: ResourceReferenceDirty,
+    ) {
         // Blink leaves detailed dirty nodes on Document. The effect only admits
         // the relevant lifecycle engines. Attribute changes keep committed
         // geometry until computed-style diffing proves layout changed.
@@ -3176,13 +3205,19 @@ impl PageState {
             self.InvalidateLayoutOutput();
         }
         if effects.style.is_some() {
-            self.InvalidateStylePreservingGeometry();
+            self.InvalidateStylePreservingGeometryWithResources(resources);
         }
     }
     fn ApplyAnimationOutput(&self, output: animation::AnimationOutput) {
         for mutation in output.document {
             let effects = self.document.ApplyAnimationMutation(mutation);
-            self.ApplyDocumentLifecycleEffects(&effects);
+            // Animation/transition samples are element style changes
+            // (Element::SetNeedsAnimationStyleRecalc); they connect no
+            // stylesheet owner and change no element image request.
+            self.ApplyDocumentLifecycleEffectsWithResources(
+                &effects,
+                ResourceReferenceDirty::STYLE_ONLY,
+            );
         }
         for mutation in output.paint {
             self.paint_engine

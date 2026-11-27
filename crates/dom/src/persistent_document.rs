@@ -135,6 +135,9 @@ use user_action_elements::UserActionElements;
 pub use user_action_elements::UserActionStateUpdate;
 
 static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(1);
+// Process-wide, so a replacement Document never repeats a style-image
+// reference revision its Page already consumed for the previous Document.
+static NEXT_STYLE_IMAGE_REFERENCE_REVISION: AtomicU64 = AtomicU64::new(1);
 
 // A C++ DOMNode* can name a document node in a different Document arena.
 // Arena indices alone cannot carry that identity across Rust documents.
@@ -1422,6 +1425,12 @@ pub struct PersistentDocument {
     // StyleFetchedImage::AddClient/RemoveClient: only resolved CSS consumers
     // need their background/mask resource IDs refreshed on image completion.
     style_image_consumers: HashMap<String, BTreeSet<usize>>,
+    // Blink requests a resolved style's images from that element's own
+    // resolution (ElementStyleResources::LoadPendingImages,
+    // core/css/resolver/element_style_resources.cc). This revision tells the
+    // resource owner that such references appeared, so a style write never
+    // needs a document-wide rediscovery to find them.
+    style_image_reference_revision: u64,
     style_state: crate::style_state::StyleState,
     control_checked_state: HashMap<u64, bool>,
     radio_groups: HashMap<(DOMRadioGroupScope, String), radio_button_group_scope::RadioButtonGroup>,
@@ -1641,6 +1650,7 @@ impl PersistentDocument {
             lazy_loaded_auto_sized_images: BTreeSet::new(),
             scroll_offsets: HashMap::new(),
             style_image_consumers: HashMap::new(),
+            style_image_reference_revision: 0,
             style_state: Default::default(),
             control_checked_state: HashMap::new(),
             radio_groups: HashMap::new(),
@@ -10978,6 +10988,11 @@ impl PersistentDocument {
     pub fn ResolvedStyleHandle(&self, node: usize) -> Option<std::sync::Arc<ResolvedNodeStyle>> {
         self.arena[node].resolved_style.style.clone()
     }
+    /// Changes whenever some element's resolved style starts naming image
+    /// sources the resource owner has not yet been asked to admit.
+    pub fn StyleImageReferenceRevision(&self) -> u64 {
+        self.style_image_reference_revision
+    }
     /// Resolved-style owners with pending image dependencies. The source list
     /// preserves source ComputedStyle field order; callers may place owners in
     /// shadow-including document order without scanning unrelated DOM nodes.
@@ -11128,6 +11143,12 @@ impl PersistentDocument {
             .is_some_and(|old| old.referenced_style_image_sources == new_sources);
         if !same_sources {
             self.RemoveResolvedStyle(node);
+            if !new_sources.is_empty() {
+                // StyleResolverState::LoadPendingResources: this element's new
+                // StyleImage values need a fetch decision.
+                self.style_image_reference_revision =
+                    NEXT_STYLE_IMAGE_REFERENCE_REVISION.fetch_add(1, Ordering::Relaxed);
+            }
             for source in new_sources.iter() {
                 self.style_image_consumers
                     .entry(source.clone())

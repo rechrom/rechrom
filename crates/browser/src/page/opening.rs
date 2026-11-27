@@ -224,22 +224,35 @@ pub(super) fn ResolvePageStylesAndLoadResources(
     // bounded parser pump makes streaming input quadratic and publishes
     // arbitrary intermediate frames.  Keep discovery dirty until Page enters
     // UpdateFrameIfNeeded from BeginFrame.
-    let discovery = rendering_opportunity
+    let mut discovery = rendering_opportunity
         .then(|| {
             state
                 .resource_references_dirty
                 .replace(ResourceReferenceDirty::default())
         })
         .unwrap_or_default();
+    if rendering_opportunity {
+        state.ResolveStyles();
+        // ElementStyleResources::LoadPendingImages
+        // (core/css/resolver/element_style_resources.cc) requests a resolved
+        // style's images from that element's recalc. Style recorded whether
+        // any element (including one recalculated by a synchronous script
+        // query since the last pass) newly references image sources; only
+        // then does a style-only mutation need image admission.
+        let revision = state
+            .document
+            .borrow()
+            .GetDocument()
+            .StyleImageReferenceRevision();
+        if state.discovered_style_image_revision.replace(revision) != revision {
+            discovery.Insert(ResourceReferenceDirty(ResourceReferenceDirty::IMAGES));
+        }
+    }
     let discover = !discovery.IsEmpty();
     trace.set("discover", discover as u8 as f64);
     trace.set("discovery_flags", discovery.0 as f64);
-    if rendering_opportunity {
-        state.ResolveStyles();
-    }
     let style_before_done = elapsed();
     let mut images_discovered_done = style_before_done;
-    let mut fonts_discovered_done = style_before_done;
     if discovery.Contains(ResourceReferenceDirty::STYLE_SHEETS) {
         // Scroll/caret/unchanged hover updates leave all resource references
         // intact. DOM and stylesheet changes still discover resources;
@@ -256,20 +269,17 @@ pub(super) fn ResolvePageStylesAndLoadResources(
         let image_discovery = browser_tracing::span("lifecycle", "Page.DiscoverImages");
         if let Err(error) = resources.QueueReferencedImages() {
             state.MarkResourceReferencesDirty(ResourceReferenceDirty(
-                discovery.0 & (ResourceReferenceDirty::IMAGES | ResourceReferenceDirty::FONTS),
+                ResourceReferenceDirty::IMAGES,
             ));
             return Err(error);
         }
         drop(image_discovery);
         images_discovered_done = elapsed();
     }
-    if discovery.Contains(ResourceReferenceDirty::FONTS) {
-        let font_discovery = browser_tracing::span("lifecycle", "Page.DiscoverFonts");
-        resources.PrepareFontFaces();
-        resources.StartPendingFonts();
-        drop(font_discovery);
-        fonts_discovered_done = elapsed();
-    }
+    // Web font admission (FontFaceSetDocument / CSSFontSelector demand) runs
+    // in PollPendingFontsWithBudget below on every pass; a separate
+    // PrepareFontFaces + StartPendingFonts here only repeated that work.
+    let fonts_discovered_done = images_discovered_done;
     // Raw keepalive fetches share the general resource completion turn without
     // entering image discovery, decoding, events or load-event accounting.
     let raw_resources = resources.PollPendingRawResources();
