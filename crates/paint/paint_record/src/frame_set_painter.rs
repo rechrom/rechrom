@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 use paint_input_types::layout_input_types::Color;
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
@@ -161,6 +162,9 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
+        // Source: frame_set_painter.cc:60-66: the caller's paint offset,
+        // FragmentData::PaintOffset (ScopedPaintState::PaintOffset).
+        let paint_offset = FragmentPaintOffset(self.node);
         // FrameSetPainter::PaintBorders (.cc:66) owns one phase drawing for
         // all row/column borders, including their fill and beveled edge ops.
         let _drawing = DrawingRecorder::new(
@@ -168,8 +172,8 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
             self.node,
             DisplayItemIdType::PaintPhaseToDrawingType(info.phase),
             PaintRect {
-                x: self.node.paint_offset.x,
-                y: self.node.paint_offset.y,
+                x: paint_offset.x,
+                y: paint_offset.y,
                 width: fragment.ViewSize().width,
                 height: fragment.ViewSize().height,
             },
@@ -187,9 +191,9 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
         if children_remaining == 0 {
             return;
         }
-        let mut y = self.node.paint_offset.y;
+        let mut y = paint_offset.y;
         for (row, row_size) in data.row_sizes.iter().enumerate() {
-            let mut x = self.node.paint_offset.x;
+            let mut x = paint_offset.x;
             for (column, column_size) in data.column_sizes.iter().enumerate() {
                 x += *column_size;
                 if ShouldPaintBorderAfter(&data.column_allows_border, column) {
@@ -197,7 +201,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
                         x,
                         y,
                         width: data.border_thickness,
-                        height: fragment.ViewSize().height - (y - self.node.paint_offset.y),
+                        height: fragment.ViewSize().height - (y - paint_offset.y),
                     });
                     self.PaintColumnBorder(info, rect, fill);
                     x += data.border_thickness;
@@ -210,7 +214,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
             y += *row_size;
             if ShouldPaintBorderAfter(&data.row_allows_border, row) {
                 let rect = self.node.PixelSnappedRect(&PaintRect {
-                    x: self.node.paint_offset.x,
+                    x: paint_offset.x,
                     y,
                     width: fragment.ViewSize().width,
                     height: data.border_thickness,

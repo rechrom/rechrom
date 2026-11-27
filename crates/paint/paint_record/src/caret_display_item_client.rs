@@ -2,6 +2,7 @@
 //! after it, under the normal clip/transform/effect state
 //! (BoxFragmentPainter::PaintCaretsIfNeeded).
 use layout::fragment::ResidentBoxGeometry as _;
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_chunker::DisplayItemClientInfo;
@@ -75,24 +76,37 @@ fn PaintCaretWithState(
     {
         color.alpha = 0.5;
     }
+    // The caret paints at the FragmentData PaintOffset (local to the box's
+    // LocalBorderBoxProperties transform).
+    let paint_offset = FragmentPaintOffset(node);
     let rect = PaintRect {
-        x: (node.paint_offset.x + local.offset.x).round(),
-        y: (node.paint_offset.y + local.offset.y).round(),
+        x: (paint_offset.x + local.offset.x).round(),
+        y: (paint_offset.y + local.offset.y).round(),
         width: local.size.width,
         height: local.size.height.round().max(1.0),
     };
     let border = fragment.Borders();
     let padding = fragment.Padding();
     let content = PaintRect {
-        x: node.paint_offset.x + border.left + padding.left,
-        y: node.paint_offset.y + border.top + padding.top,
+        x: paint_offset.x + border.left + padding.left,
+        y: paint_offset.y + border.top + padding.top,
         width: (fragment.ViewSize().width - border.left - border.right - padding.left - padding.right)
             .max(0.0),
         height: (fragment.ViewSize().height - border.top - border.bottom - padding.top - padding.bottom)
             .max(0.0),
     };
     if let Some(root_rect) = (!drag)
-        .then(|| MapRectToRoot(rect, &node.transforms))
+        .then(|| {
+            // The flat transform list maps Rechrom's flat paint space, so
+            // the root geometry keeps the flat paint offset until it maps
+            // through the property tree (GeometryMapper).
+            let flat = PaintRect {
+                x: (node.paint_offset.x + local.offset.x).round(),
+                y: (node.paint_offset.y + local.offset.y).round(),
+                ..rect
+            };
+            MapRectToRoot(flat, &node.transforms)
+        })
         .flatten()
     {
         context.borrow_mut().SetCaretGeometry(CaretGeometry {

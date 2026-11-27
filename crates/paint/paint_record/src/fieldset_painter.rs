@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use layout::paint_input::{BackgroundBleedAvoidance, BleedAvoidanceIsClipping};
 use paint_input_types::paint_input::{BackgroundBox, PaintBlendMode};
 
-use crate::box_decoration_data::BoxDecorationData;
+use crate::box_decoration_data::{BoxDecorationData, FragmentPaintOffset};
 use crate::box_fragment_painter::{BackgroundRadii, BoxFragmentPainter};
 use crate::contoured_border_geometry::UniformCornerRadius;
 use crate::display_item_id::DisplayItemIdType;
@@ -35,8 +35,8 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let mut rect = PaintRect {
-            x: node.paint_offset.x,
-            y: node.paint_offset.y,
+            x: FragmentPaintOffset(node).x,
+            y: FragmentPaintOffset(node).y,
             width: fragment.ViewSize().width,
             height: fragment.ViewSize().height,
         };
@@ -197,8 +197,8 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             self.node,
         );
         let mut legend_cutout = PaintRect {
-            x: self.node.paint_offset.x + data.legend_cutout_offset.x,
-            y: self.node.paint_offset.y + data.legend_cutout_offset.y,
+            x: FragmentPaintOffset(self.node).x + data.legend_cutout_offset.x,
+            y: FragmentPaintOffset(self.node).y + data.legend_cutout_offset.y,
             width: data.legend_cutout_size.width,
             height: data.legend_cutout_size.height,
         };
