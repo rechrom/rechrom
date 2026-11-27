@@ -21,10 +21,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         id: DisplayItemId,
         client: DisplayItemClientInfo,
     ) -> Self {
-        let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_id_and_properties_raw(id, client, properties);
-        Self { context, previous }
+        let previous = context
+            .borrow_mut()
+            .replace_chunk_id_and_properties_raw(id, client, properties);
+        Self { context, previous: Some(previous) }
     }
 
     /// Source: `scoped_paint_chunk_properties.h:31-40,78-85`.
@@ -71,10 +71,12 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 /// item's ID, exactly as required by the source lifetime contract.
 impl Drop for ScopedPaintChunkProperties<'_, '_> {
     fn drop(&mut self) {
-        // The restored state usually equals the current one (the scope
-        // recorded nothing or the same nodes); reference it only on change.
-        self.context
-            .borrow_mut()
-            .update_chunk_properties_ref(&self.previous);
+        // The state moved out on entry goes back by move; an unchanged
+        // current state (same nodes) is kept as is.
+        if let Some(previous) = self.previous.take() {
+            self.context
+                .borrow_mut()
+                .restore_chunk_properties(previous);
+        }
     }
 }

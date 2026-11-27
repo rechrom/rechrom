@@ -2,33 +2,99 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 use layout::input::Position;
+use prepaint::resident_hit_test::{ResidentPaintOrderLists, ResidentPaintOrderView};
 
 use crate::pre_paint_tree_walk::PaintTreeNode;
 
-#[derive(Clone)]
-pub(crate) struct PaintLayerPaintOrderEntry<'n, 'f> {
+/// One z-order list entry borrowed from the retained stacking lists: the
+/// child layer and the property ancestors its painter re-enters.
+#[derive(Clone, Copy)]
+pub(crate) struct PaintLayerPaintOrderEntry<'a, 'n, 'f> {
     pub(crate) layer: &'n PaintTreeNode<'f>,
-    pub(crate) property_ancestors: Vec<&'n PaintTreeNode<'f>>,
+    pub(crate) property_ancestors: &'a [&'n PaintTreeNode<'f>],
 }
 
-/// The immutable equivalent of PaintLayerStackingNode's z-order lists and
-/// layer_to_overlay_overflow_controls_painting_after_ map.
+/// A collected entry while RebuildZOrderLists runs; flattened into the
+/// retained ResidentPaintOrderLists when the rebuild publishes.
+#[derive(Clone)]
+struct CollectedEntry<'n, 'f> {
+    layer: &'n PaintTreeNode<'f>,
+    property_ancestors: Vec<&'n PaintTreeNode<'f>>,
+}
+
+/// Borrowed PaintLayerStackingNode z-order lists and
+/// layer_to_overlay_overflow_controls_painting_after_ map of one stacking
+/// root. The lists are retained on the root's resident PrePaint node and
+/// rebuilt only after PrePaint dirtied them (UpdateZOrderLists,
+/// paint_layer_stacking_node.cc:436-439); painting borrows them, as
+/// PaintLayerPaintOrderIterator borrows the stacking node's vectors
+/// (paint_layer_paint_order_iterator.cc:39-79).
 pub(crate) struct PaintLayerPaintOrder<'n, 'f> {
-    pub(crate) entries: Vec<PaintLayerPaintOrderEntry<'n, 'f>>,
-    controls_after: HashMap<*const PaintTreeNode<'f>, Vec<PaintLayerPaintOrderEntry<'n, 'f>>>,
+    lists: ResidentPaintOrderView<'n>,
+    _nodes: PhantomData<&'n PaintTreeNode<'f>>,
+}
+
+/// # Safety
+/// `pointer` was published by RebuildZOrderLists for a resident node of the
+/// tree whose root is borrowed for `'n`; PrePaint drops the list before any
+/// such node can move or be freed.
+unsafe fn ResidentNode<'n, 'f>(pointer: *const ()) -> &'n PaintTreeNode<'f> {
+    &*pointer.cast::<PaintTreeNode<'f>>()
+}
+
+/// # Safety
+/// As ResidentNode for every pointer. `*const ()` and `&PaintTreeNode` are
+/// both thin, non-null-here pointers with the same layout.
+unsafe fn ResidentNodes<'a, 'n, 'f>(pointers: &'a [*const ()]) -> &'a [&'n PaintTreeNode<'f>] {
+    std::slice::from_raw_parts(
+        pointers.as_ptr().cast::<&'n PaintTreeNode<'f>>(),
+        pointers.len(),
+    )
+}
+
+fn NodePointer(node: &PaintTreeNode<'_>) -> *const () {
+    node as *const PaintTreeNode<'_> as *const ()
 }
 
 impl<'n, 'f> PaintLayerPaintOrder<'n, 'f> {
-    pub(crate) fn ControlsAfter(
-        &self,
+    pub(crate) fn len(&self) -> usize {
+        self.lists.Layers().len()
+    }
+
+    /// NegZOrderList's length: the list is sorted negative z first.
+    pub(crate) fn NegativeZOrderCount(&self) -> usize {
+        self.lists.Layers().partition_point(|layer| {
+            let layer = unsafe { ResidentNode::<'n, 'f>(*layer) };
+            layer.is_stacked && layer.stacking_level < 0
+        })
+    }
+
+    pub(crate) fn Entry(&self, index: usize) -> PaintLayerPaintOrderEntry<'_, 'n, 'f> {
+        PaintLayerPaintOrderEntry {
+            layer: unsafe { ResidentNode(self.lists.Layers()[index]) },
+            property_ancestors: unsafe { ResidentNodes(self.lists.EntryAncestors(index)) },
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn Entries(&self) -> impl Iterator<Item = PaintLayerPaintOrderEntry<'_, 'n, 'f>> + '_ {
+        (0..self.len()).map(move |index| self.Entry(index))
+    }
+
+    pub(crate) fn ControlsAfter<'s>(
+        &'s self,
         layer: &PaintTreeNode<'f>,
-    ) -> &[PaintLayerPaintOrderEntry<'n, 'f>] {
-        self.controls_after
-            .get(&(layer as *const PaintTreeNode<'f>))
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+    ) -> impl ExactSizeIterator<Item = PaintLayerPaintOrderEntry<'s, 'n, 'f>> + 's {
+        self.lists
+            .ControlsAfter(NodePointer(layer))
+            .iter()
+            .map(move |&(scroller, ancestors)| PaintLayerPaintOrderEntry {
+                layer: unsafe { ResidentNode(scroller) },
+                property_ancestors: unsafe { ResidentNodes(self.lists.Ancestors(ancestors)) },
+            })
     }
 
     pub(crate) fn NeedsReorderOverlayOverflowControls(&self, layer: &PaintTreeNode<'f>) -> bool {
@@ -161,7 +227,7 @@ fn OrderLessThan(first: &PaintTreeNode<'_>, second: &PaintTreeNode<'_>) -> bool 
     }
 }
 
-fn SortChildrenByOrder(children: &mut [PaintLayerPaintOrderEntry<'_, '_>]) {
+fn SortChildrenByOrder(children: &mut [CollectedEntry<'_, '_>]) {
     children.sort_by(|first, second| {
         if OrderLessThan(first.layer, second.layer) {
             Ordering::Less
@@ -176,7 +242,7 @@ fn SortChildrenByOrder(children: &mut [PaintLayerPaintOrderEntry<'_, '_>]) {
 fn CollectDirectLayerChildren<'n, 'f>(
     parent: &'n PaintTreeNode<'f>,
     path: &mut Vec<&'n PaintTreeNode<'f>>,
-    children: &mut Vec<PaintLayerPaintOrderEntry<'n, 'f>>,
+    children: &mut Vec<CollectedEntry<'n, 'f>>,
 ) {
     for child_owner in &parent.children {
         let child = child_owner.as_ref();
@@ -184,7 +250,7 @@ fn CollectDirectLayerChildren<'n, 'f>(
             continue;
         }
         if child.is_paint_layer {
-            children.push(PaintLayerPaintOrderEntry {
+            children.push(CollectedEntry {
                 layer: child,
                 property_ancestors: path.clone(),
             });
@@ -197,18 +263,18 @@ fn CollectDirectLayerChildren<'n, 'f>(
 }
 
 struct Collector<'n, 'f> {
-    entries: Vec<PaintLayerPaintOrderEntry<'n, 'f>>,
-    overscroll_area_parents: Vec<PaintLayerPaintOrderEntry<'n, 'f>>,
-    top_or_view_transition_layers: Vec<PaintLayerPaintOrderEntry<'n, 'f>>,
+    entries: Vec<CollectedEntry<'n, 'f>>,
+    overscroll_area_parents: Vec<CollectedEntry<'n, 'f>>,
+    top_or_view_transition_layers: Vec<CollectedEntry<'n, 'f>>,
     collect_top_or_view_transition_layers: bool,
-    controls_after: HashMap<*const PaintTreeNode<'f>, Vec<PaintLayerPaintOrderEntry<'n, 'f>>>,
+    controls_after: HashMap<*const PaintTreeNode<'f>, Vec<CollectedEntry<'n, 'f>>>,
 }
 
 impl<'n, 'f> Collector<'n, 'f> {
     // Source: core/paint/paint_layer_stacking_node.cc:328-401.
     fn CollectLayer(
         &mut self,
-        entry: PaintLayerPaintOrderEntry<'n, 'f>,
+        entry: CollectedEntry<'n, 'f>,
         mut highest_layers: Option<&mut HighestLayers<'n, 'f>>,
     ) {
         let layer = entry.layer;
@@ -288,15 +354,39 @@ impl<'n, 'f> Collector<'n, 'f> {
     }
 }
 
-/// PaintLayerStackingNode::RebuildZOrderLists() projected over the immutable
-/// PrePaint tree, including the overlay-control insertion map.
+/// The z-order lists of `root`, rebuilt only when PrePaint dirtied them:
+/// PaintLayerStackingNode::UpdateZOrderLists (paint_layer_stacking_node.cc:
+/// 436-439), then a borrow of the retained lists as
+/// PaintLayerPaintOrderIterator reads them (paint_layer_paint_order_iterator
+/// .cc:39-79). PrePaint drops the lists before any topology or stacking
+/// change (DirtyZOrderLists, paint_layer_stacking_node.cc:67-83).
 pub(crate) fn CollectPaintLayerChildren<'n, 'f>(
     root: &'n PaintTreeNode<'f>,
 ) -> PaintLayerPaintOrder<'n, 'f> {
+    if !root.HasResidentLayerOrder() {
+        RebuildZOrderLists(root);
+    }
+    PaintLayerPaintOrder {
+        lists: root
+            .ResidentPaintOrder()
+            .expect("RebuildZOrderLists published the lists"),
+        _nodes: PhantomData,
+    }
+}
+
+/// PaintLayerStackingNode::RebuildZOrderLists() projected over the immutable
+/// PrePaint tree, including the overlay-control insertion map
+/// (paint_layer_stacking_node.cc:283-326).
+fn RebuildZOrderLists(root: &PaintTreeNode<'_>) {
     let mut trace = browser_tracing::span("paint_walk", "PaintWalk.CollectLayerChildren");
     let mut children = Vec::new();
-    // Source: paint_layer_stacking_node.cc:289.
-    root.needs_reorder_overlay_overflow_controls.set(false);
+    // Source: paint_layer_stacking_node.cc:289. Only a stacking context owns
+    // a PaintLayerStackingNode (paint_layer_stacking_node.cc:62-65); a
+    // non-stacking root collected for a hit-test query leaves the reorder
+    // bit its enclosing stacking context's retained lists set.
+    if root.is_stacking_context || root.is_root {
+        root.needs_reorder_overlay_overflow_controls.set(false);
+    }
     CollectDirectLayerChildren(root, &mut Vec::new(), &mut children);
     SortChildrenByOrder(&mut children);
 
@@ -354,21 +444,42 @@ pub(crate) fn CollectPaintLayerChildren<'n, 'f>(
                 .map(|entry| entry.layer as *const PaintTreeNode<'_> as *const ()),
         );
     }
+    // The paint walk's form of the same lists: each entry's property
+    // ancestors in one flattened buffer, and the overlay-control map keyed
+    // by the target layer's resident node.
+    let mut lists = ResidentPaintOrderLists::default();
+    for entry in &collector.entries {
+        let ancestors = lists.PushAncestors(
+            entry
+                .property_ancestors
+                .iter()
+                .map(|ancestor| NodePointer(ancestor)),
+        );
+        lists.PushEntry(ancestors);
+    }
+    for (target, scrollers) in &collector.controls_after {
+        for scroller in scrollers {
+            let ancestors = lists.PushAncestors(
+                scroller
+                    .property_ancestors
+                    .iter()
+                    .map(|ancestor| NodePointer(ancestor)),
+            );
+            lists.PushControlsAfter(*target as *const (), NodePointer(scroller.layer), ancestors);
+        }
+    }
     // Every entry was borrowed directly from root's resident child owners.
-    // PrePaint invalidates the cache before exposing a changed topology.
+    // PrePaint drops the lists before exposing a changed topology.
     unsafe {
         root.PublishResidentLayerOrder(
             collector
                 .entries
                 .iter()
-                .map(|entry| entry.layer as *const PaintTreeNode<'_> as *const ())
+                .map(|entry| NodePointer(entry.layer))
                 .collect(),
             canonical_controls,
+            lists,
         );
-    }
-    PaintLayerPaintOrder {
-        entries: collector.entries,
-        controls_after: collector.controls_after,
     }
 }
 
@@ -376,9 +487,8 @@ pub(crate) fn CollectPaintLayerChildren<'n, 'f>(
 /// layer is queried. Use the owning collector, including all source ordering
 /// and overlay-control rules, rather than another hit-test sorting algorithm.
 pub fn EnsureResidentHitTestLayerOrder(root: &PaintTreeNode<'_>) {
-    let missing = !root.HasResidentLayerOrder();
-    if missing {
-        CollectPaintLayerChildren(root);
+    if !root.HasResidentLayerOrder() {
+        RebuildZOrderLists(root);
     }
 }
 
@@ -434,8 +544,7 @@ mod tests {
         root.children.push(second);
         root.children.push(third);
         let order: Vec<_> = CollectPaintLayerChildren(&root)
-            .entries
-            .into_iter()
+            .Entries()
             .map(|entry| entry.layer.fragment.as_deref().unwrap().node_id)
             .collect();
         assert_eq!(order, [1, 3, 2]);
@@ -459,13 +568,12 @@ mod tests {
 
         let order = CollectPaintLayerChildren(&root);
         let target = order
-            .entries
-            .iter()
+            .Entries()
             .find(|entry| entry.layer.fragment.as_deref().unwrap().node_id == 3)
             .unwrap();
         assert_eq!(order.ControlsAfter(target.layer).len(), 1);
         assert_eq!(
-            order.ControlsAfter(target.layer)[0]
+            order.ControlsAfter(target.layer).next().unwrap()
                 .layer
                 .fragment
                 .as_deref()
@@ -474,7 +582,9 @@ mod tests {
             1
         );
         assert!(
-            order.NeedsReorderOverlayOverflowControls(order.ControlsAfter(target.layer)[0].layer)
+            order.NeedsReorderOverlayOverflowControls(
+                order.ControlsAfter(target.layer).next().unwrap().layer
+            )
         );
     }
 
@@ -495,12 +605,10 @@ mod tests {
 
         let order = CollectPaintLayerChildren(&root);
         assert!(order
-            .entries
-            .iter()
-            .all(|entry| order.ControlsAfter(entry.layer).is_empty()));
+            .Entries()
+            .all(|entry| order.ControlsAfter(entry.layer).len() == 0));
         let scroller = order
-            .entries
-            .iter()
+            .Entries()
             .find(|entry| entry.layer.fragment.as_deref().unwrap().node_id == 1)
             .unwrap();
         assert!(!order.NeedsReorderOverlayOverflowControls(scroller.layer));
@@ -522,13 +630,11 @@ mod tests {
 
         let order = CollectPaintLayerChildren(&root);
         let target = order
-            .entries
-            .iter()
+            .Entries()
             .find(|entry| entry.layer.fragment.as_deref().unwrap().node_id == 3)
             .unwrap();
         let scrollers: Vec<_> = order
             .ControlsAfter(target.layer)
-            .iter()
             .map(|entry| entry.layer.fragment.as_deref().unwrap().node_id)
             .collect();
         assert_eq!(scrollers, [2, 1]);
@@ -559,16 +665,15 @@ mod tests {
         root.children.push(top);
         root.children.push(normal);
         let order: Vec<_> = CollectPaintLayerChildren(&root)
-            .entries
-            .iter()
+            .Entries()
             .map(|entry| entry.layer.fragment.as_deref().unwrap().node_id)
             .collect();
         assert_eq!(order, [1, 2]);
 
         root.is_root = false;
+        root.DirtyZOrderLists();
         let order: Vec<_> = CollectPaintLayerChildren(&root)
-            .entries
-            .iter()
+            .Entries()
             .map(|entry| entry.layer.fragment.as_deref().unwrap().node_id)
             .collect();
         assert_eq!(order, [1]);

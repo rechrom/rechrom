@@ -4912,6 +4912,16 @@ fn RestorePhysicalOwnership(root: &mut PaintTreeNode<'static>) {
     order(root);
 }
 
+/// PaintLayerStackingNode::DirtyZOrderLists over the whole retained tree
+/// (paint_layer_stacking_node.cc:67-83): the next paint walk or hit-test
+/// query rebuilds each list it reaches.
+fn ClearResidentLayerOrders(node: &mut PaintTreeNode<'_>) {
+    *node.hit_test_layer_order.get_mut() = None;
+    for child in &mut node.children {
+        ClearResidentLayerOrders(child);
+    }
+}
+
 fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
     // Full PrePaint postwalk includes topology/stacking-style changes. Impl
     // scroll-only property refresh does not clear these source ordering lists.
@@ -7428,6 +7438,16 @@ impl PrePaintTreeWalk {
                     built.needs_float_phase = old.needs_float_phase;
                     built.needs_outline_phase = old.needs_outline_phase;
                     built.needs_overflow_controls_phase = old.needs_overflow_controls_phase;
+                    // GeometryMismatch compared every stacking fact, so the
+                    // PaintLayerStackingNode lists this node owns and the
+                    // overlay-control reorder bit its stacking context set
+                    // stay valid (they are dirtied only through
+                    // DirtyZOrderLists, paint_layer_stacking_node.cc:67-83).
+                    *built.hit_test_layer_order.get_mut() =
+                        old.hit_test_layer_order.get_mut().take();
+                    built
+                        .needs_reorder_overlay_overflow_controls
+                        .set(old.needs_reorder_overlay_overflow_controls.get());
                     let old_cache = old.cache.as_ref().unwrap();
                     let new_cache = built.cache.as_mut().unwrap();
                     // Keep the child context computed from this lifecycle
@@ -7473,6 +7493,9 @@ impl PrePaintTreeWalk {
                         // facts and every Box address they name are unchanged.
                         *built.hit_test_layer_order.get_mut() =
                             old.hit_test_layer_order.get_mut().take();
+                        built
+                            .needs_reorder_overlay_overflow_controls
+                            .set(old.needs_reorder_overlay_overflow_controls.get());
                     } else {
                         self.needs_post_update = true;
                     }
@@ -8974,6 +8997,13 @@ impl PrePaintTreeWalk {
             self.logical_tree_changed = changed;
             self.logical_tree_record = changed.then(|| RecordLogicalTree(&mut tree));
             trace.set("logical_effect_fixups", fixups as f64);
+            if !self.needs_post_update {
+                // A full logical restore may regroup out-of-flow layers
+                // under other stacking roots: dirty every retained z-order
+                // list (DirtyZOrderLists, paint_layer_stacking_node.cc:67-83)
+                // as the post pass below would.
+                ClearResidentLayerOrders(&mut tree);
+            }
         }
         if self.needs_post_update {
             self.stats.post_walk = true;

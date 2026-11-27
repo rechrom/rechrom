@@ -222,6 +222,31 @@ impl PaintController {
         self.paint_chunker.update_properties_ref(properties);
     }
 
+    /// ScopedPaintChunkProperties entry: update the current state and move
+    /// the replaced one out for the scope's restore
+    /// (scoped_paint_chunk_properties.h:21-29,68-75).
+    pub(crate) fn ReplaceCurrentPaintChunkProperties(
+        &mut self,
+        properties: PropertyTreeState,
+    ) -> PropertyTreeState {
+        self.paint_chunker.replace_properties(properties)
+    }
+
+    pub(crate) fn ReplaceCurrentPaintChunkIdAndProperties(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: PropertyTreeState,
+    ) -> PropertyTreeState {
+        self.paint_chunker
+            .replace_id_and_properties(id, client, properties)
+    }
+
+    /// ScopedPaintChunkProperties exit with the state moved out on entry.
+    pub(crate) fn RestoreCurrentPaintChunkProperties(&mut self, previous: PropertyTreeState) {
+        self.paint_chunker.restore_properties(previous);
+    }
+
     /// UpdateCurrentPaintChunkIdAndProperties with a borrowed state.
     pub(crate) fn UpdateCurrentPaintChunkIdAndPropertiesRef(
         &mut self,
@@ -792,6 +817,12 @@ impl PaintController {
             let client_id = {
                 let item = &mut output.display_items[item_index];
                 item.MoveRecordFrom(&previous, position);
+                // A moved ScrollbarDisplayItem names the same Scrollbar, whose
+                // NeedsUpdateDisplay its first paint already consumed
+                // (scrollbar_display_item.cc:46-68).
+                if let Some(scrollbar) = item.scrollbar.as_mut() {
+                    scrollbar.needs_update_display = false;
+                }
                 item.SetPaintInvalidationReason(if item.IsCacheable() {
                     foundation::PaintInvalidationReason::kNone
                 } else {
