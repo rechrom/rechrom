@@ -119,7 +119,7 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
 fn pixels(page: &Page) -> Vec<u32> {
     let mut pixels = vec![0; 320 * 240];
     page.PaintArtifactInto(
-        &page.CurrentFrame().unwrap().display_items,
+        &page.CurrentPaintArtifact().unwrap(),
         320,
         240,
         1.0,
@@ -244,7 +244,7 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
         let mut page = fixture(&circle_markup("hidden", 300, "", "spacing"));
         let original = native(&page, "text") as *const LayoutObject;
         let before = pixels(&page);
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         set_attribute(&mut page, "text", "dy", "60");
         page.RunTask().unwrap();
         assert_eq!(native(&page, "text") as *const LayoutObject, original);

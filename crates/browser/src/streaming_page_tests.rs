@@ -1170,9 +1170,8 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         });
         finish(&mut page);
         let first = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .resources
             .as_ref()
             .unwrap()
@@ -1192,14 +1191,14 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         page.ResizeViewport(321.0, 200.0, 1.0).unwrap();
         page.RunTask().unwrap();
         let second = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .resources
             .as_ref()
-            .unwrap();
+            .unwrap()
+            .clone();
         assert!(
-            !std::sync::Arc::ptr_eq(&first, second),
+            !std::sync::Arc::ptr_eq(&first, &second),
             "new lifecycle exports a new resource catalog"
         );
         let second_record = match &second.images[0].content {
@@ -1210,7 +1209,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         };
         assert!(std::sync::Arc::ptr_eq(&first_record, second_record));
         let current_pixels = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
-            &page.CurrentFrame().unwrap().display_items,
+            &page.CurrentPaintArtifact().unwrap(),
             321,
             200,
         );
@@ -1236,7 +1235,7 @@ fn delayed_image_snapshots_share_pixels_and_match_fresh_page() {
         fresh.Open("https://stream.test/", 4096, 4096).unwrap();
         finish(&mut fresh);
         let fresh_pixels = crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
-            &fresh.CurrentFrame().unwrap().display_items,
+            &fresh.CurrentPaintArtifact().unwrap(),
             321,
             200,
         );

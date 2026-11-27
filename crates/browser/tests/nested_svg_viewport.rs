@@ -206,7 +206,7 @@ fn assert_rect(actual: PaintRect, expected: PaintRect) {
 
 fn assert_draw(page: &Page, name: &str, expected: PaintRect, clipped: bool) {
     let draws = rectangle_draws(
-        &page.CurrentFrame().unwrap().display_items,
+        &page.CurrentPaintArtifact().unwrap(),
         id(page, name),
         clipped,
     );
@@ -340,7 +340,7 @@ fn zero_sized_nested_viewports_do_not_paint_descendants() {
                 r#"<svg width="200" height="120"><svg x="20" y="10" width="{width}" height="{height}" style="overflow:visible"><rect id="shape" width="30" height="15"/></svg><rect id="sibling" x="130" y="80" width="20" height="10"/></svg>"#
             ));
             assert!(rectangle_draws(
-                &page.CurrentFrame().unwrap().display_items,
+                &page.CurrentPaintArtifact().unwrap(),
                 id(&page, "shape"),
                 true
             )
@@ -378,7 +378,7 @@ fn changing_nested_geometry_updates_paint_and_keeps_old_artifacts_immutable() {
             r#"<svg width="240" height="160"><svg id="inner" x="20" y="10" width="80" height="40" viewBox="0 0 40 20"><rect id="shape" width="10" height="5"/></svg></svg>"#,
         );
         let shape = id(&page, "shape");
-        let original = page.CurrentFrame().unwrap().display_items.clone();
+        let original = page.CurrentPaintArtifact().unwrap().clone();
         assert_draw(&page, "shape", rect(20., 10., 20., 10.), true);
         set_attribute(&mut page, "inner", "x", "50");
         set_attribute(&mut page, "inner", "y", "30");
@@ -412,7 +412,7 @@ fn fetched_svg_image_publishes_a_nested_viewport_record() {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><svg x="20" y="10" width="80" height="40" viewBox="0 0 40 20"><rect width="10" height="5" fill="red"/></svg></svg>"#,
             ),
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let draw = artifact
             .items
             .iter()
@@ -513,7 +513,7 @@ fn empty_nested_viewbox_suppresses_paint_until_valid_geometry_returns() {
                 r#"<svg width="200" height="120"><svg id="inner" x="20" y="10" width="80" height="40" viewBox="{view_box}" style="overflow:visible"><rect id="shape" width="10" height="5"/></svg></svg>"#
             ));
             assert!(rectangle_draws(
-                &page.CurrentFrame().unwrap().display_items,
+                &page.CurrentPaintArtifact().unwrap(),
                 id(&page, "shape"),
                 true
             )

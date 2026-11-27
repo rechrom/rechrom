@@ -117,7 +117,7 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
 fn pixels(page: &Page) -> Vec<u32> {
     let mut pixels = vec![0; 320 * 240];
     page.PaintArtifactInto(
-        &page.CurrentFrame().unwrap().display_items,
+        &page.CurrentPaintArtifact().unwrap(),
         320,
         240,
         1.0,
@@ -204,7 +204,7 @@ fn retained_text_path_resolution_changes_keep_identity_and_old_frame() {
         );
         let original = native(&page, "textpath") as *const LayoutObject;
         let hidden_pixels = pixels(&page);
-        let old_frame = page.CurrentFrame().unwrap().display_items.clone();
+        let old_frame = page.CurrentPaintArtifact().unwrap().clone();
         set_attribute(&mut page, "textpath", "href", "#path");
         page.RunTask().unwrap();
         assert_eq!(native(&page, "textpath") as *const LayoutObject, original);

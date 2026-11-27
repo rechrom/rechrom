@@ -181,11 +181,11 @@ fn svg_no_layer_keeps_sibling_paint_order_and_old_frames() {
                 "native no-layer ownership was replaced for {name}"
             );
         }
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         let before = pixels(&page, &old);
         assert_eq!(before[20 * 320 + 20].to_ne_bytes(), [0, 0, 255, 255]);
         set_attribute(&mut page, "back", "transform", "translate(0 0)");
-        let after = pixels(&page, &page.CurrentFrame().unwrap().display_items);
+        let after = pixels(&page, &page.CurrentPaintArtifact().unwrap());
         assert_eq!(after[20 * 320 + 20].to_ne_bytes(), [0, 0, 255, 255]);
         assert_ne!(
             before, after,
@@ -197,7 +197,7 @@ fn svg_no_layer_keeps_sibling_paint_order_and_old_frames() {
             "old artifact remains immutable"
         );
         set_attribute(&mut page, "group", "transform", "translate(10 10)");
-        let moved = pixels(&page, &page.CurrentFrame().unwrap().display_items);
+        let moved = pixels(&page, &page.CurrentPaintArtifact().unwrap());
         assert_eq!(moved[30 * 320 + 30].to_ne_bytes(), [0, 0, 255, 255]);
         assert_eq!(pixels(&page, &old), before);
     });
@@ -208,7 +208,7 @@ fn fetched_svg_keeps_transformed_shapes_in_document_order() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let p = page_fixture(r#"<img id="image" src="fixture.svg">"#, Some(GRAPHIC));
-        let actual = pixels(&p, &p.CurrentFrame().unwrap().display_items);
+        let actual = pixels(&p, &p.CurrentPaintArtifact().unwrap());
         assert_eq!(
             actual[20 * 320 + 20].to_ne_bytes(),
             [0, 0, 255, 255],
@@ -231,7 +231,7 @@ fn svg_mask_is_owned_by_the_svg_paint_scope_without_a_css_layer() {
         assert!(!masked.paint.style.mask_images.is_empty());
         let classification = paint::paint_order::ClassifyFragmentPaintLayer(masked, false, false);
         assert!(!classification.is_paint_layer);
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         assert!(artifact.display_items.iter().any(|item| {
             item.id.client_id == masked.paint.DisplayItemClientId()
                 && item.id.r#type == paint::display_item_id::DisplayItemIdType::kSVGMask
@@ -251,7 +251,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
             r#"<svg width="80" height="80"><rect id="capture" x="10" y="20" width="30" height="40" fill="red"/></svg>"#,
         );
         let node_id = id(&page, "capture");
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         assert!(old.chunks.iter().all(|chunk| chunk
             .compositor
             .as_deref()
@@ -263,9 +263,8 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
         for _ in 0..20 {
             page.RunTask().unwrap();
             if page
-                .CurrentFrame()
+                .CurrentPaintArtifact()
                 .unwrap()
-                .display_items
                 .chunks
                 .iter()
                 .any(|chunk| {
@@ -294,10 +293,8 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
             "crop ID did not cross the DOM-to-fragment boundary"
         );
 
-        let regions = page
-            .CurrentFrame()
-            .unwrap()
-            .display_items
+        let artifact = page.CurrentPaintArtifact().unwrap();
+        let regions = artifact
             .chunks
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())
@@ -331,7 +328,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
             r#"<div id="capture" style="position:absolute;left:10px;top:20px;width:30px;height:40px"></div>"#,
         );
         let node_id = id(&page, "capture");
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         let crop_id = [0x1111, 0x2222];
         let tracked_id = [0x3333, 0x4444];
         assert!(page.SetRegionCaptureCropId(node_id, crop_id));
@@ -355,7 +352,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         ));
         for _ in 0..20 {
             page.RunTask().unwrap();
-            let artifact = &page.CurrentFrame().unwrap().display_items;
+            let artifact = &page.CurrentPaintArtifact().unwrap();
             let has_region = artifact.chunks.iter().any(|chunk| {
                 chunk
                     .compositor
@@ -383,7 +380,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         assert_eq!(fragment_tracking.len(), 1);
         assert_eq!(fragment_tracking[0].feature, 7);
         assert_eq!(fragment_tracking[0].id, tracked_id);
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let regions = artifact
             .chunks
             .iter()
@@ -473,9 +470,8 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         for _ in 0..20 {
             page.RunTask().unwrap();
             if page
-                .CurrentFrame()
+                .CurrentPaintArtifact()
                 .unwrap()
-                .display_items
                 .chunks
                 .iter()
                 .all(|chunk| {
@@ -494,9 +490,8 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
             .TrackedElementSubRects()
             .is_empty());
         assert!(page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .chunks
             .iter()
             .all(|chunk| chunk
@@ -529,9 +524,8 @@ fn tracked_plain_inline_forces_a_fragment_and_publishes_bounds() {
         for _ in 0..20 {
             page.RunTask().unwrap();
             if page
-                .CurrentFrame()
+                .CurrentPaintArtifact()
                 .unwrap()
-                .display_items
                 .chunks
                 .iter()
                 .any(|chunk| {
@@ -549,10 +543,8 @@ fn tracked_plain_inline_forces_a_fragment_and_publishes_bounds() {
         let fragment = fragment(&page, "capture");
         assert!(fragment.paint.box_fragment_is_inline_box);
         assert_eq!(fragment.paint.TrackedElementSubRects().len(), 1);
-        let tracked = page
-            .CurrentFrame()
-            .unwrap()
-            .display_items
+        let artifact = page.CurrentPaintArtifact().unwrap();
+        let tracked = artifact
             .chunks
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())

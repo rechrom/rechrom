@@ -135,9 +135,8 @@ fn fragment(handle: &LayoutResultHandle, id: u64) -> &FragmentPaintData {
         .map(PaintFragmentCursor::PaintData)
         .unwrap()
 }
-fn first_background(frame: &browser::page::PageFrame, id: u64) -> usize {
-    frame
-        .display_items
+fn first_background(artifact: &paint::paint_engine::PaintArtifact, id: u64) -> usize {
+    artifact
         .items
         .iter()
         .position(|item| {
@@ -237,10 +236,10 @@ fn positioned_descendant_background_text_and_outline_cover_later_auto_layer() {
         assert!(owned.paint.paint_layer_is_self_painting);
         assert!(owned.paint.paint_layer_is_stacking_context);
         assert_eq!(owned.paint.paint_layer_stacking_level, 1);
-        let rule = first_background(&frame, back);
-        assert!(rule < first_background(&frame, front));
-        let outline = frame
-            .display_items
+        let artifact = page.CurrentPaintArtifact().unwrap().clone();
+        let rule = first_background(&artifact, back);
+        assert!(rule < first_background(&artifact, front));
+        let outline = artifact
             .items
             .iter()
             .position(|item| {
@@ -248,8 +247,7 @@ fn positioned_descendant_background_text_and_outline_cover_later_auto_layer() {
                     && item.r#type == paint::paint_engine::DisplayItemType::kStrokeRect
             })
             .unwrap();
-        let glyph = frame
-            .display_items
+        let glyph = artifact
             .items
             .iter()
             .position(|item| item.r#type == paint::paint_engine::DisplayItemType::kDrawGlyphRun)
@@ -266,13 +264,8 @@ fn changing_position_z_index_and_auto_recomputes_flags_without_changing_old_fram
         let front = node_id(&page, "front");
         let back = node_id(&page, "back");
         let current = page.CurrentFrame().unwrap();
-        let retained = browser::page::PageFrame {
-            sequence: current.sequence,
-            compositor_scroll_sequence: current.compositor_scroll_sequence,
-            fragments: current.fragments.clone(),
-            display_items: current.display_items.clone(),
-            document_image_records_complete: current.document_image_records_complete,
-        };
+        let retained_fragments = current.fragments.clone();
+        let retained_artifact = page.CurrentPaintArtifact().unwrap().clone();
         for (script, expected) in [
             (
                 "document.getElementById('front').style.zIndex='auto'",
@@ -299,12 +292,12 @@ fn changing_position_z_index_and_auto_recomputes_flags_without_changing_old_fram
             assert_eq!(flags(&page, "front"), expected, "{script}");
         }
         assert_eq!(
-            fragment(&retained.fragments, front)
+            fragment(&retained_fragments, front)
                 .paint
                 .paint_layer_stacking_level,
             1
         );
-        assert!(first_background(&retained, back) < first_background(&retained, front));
+        assert!(first_background(&retained_artifact, back) < first_background(&retained_artifact, front));
     });
 }
 
@@ -367,11 +360,11 @@ fn descendant_z_index_stays_in_its_explicit_stacking_context() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = fixture("#parent{position:relative;z-index:0} #front{position:relative;z-index:10;background:red;width:30px;height:30px} #back{position:relative;z-index:1;background:blue;width:30px;height:30px;margin-top:-30px}", "<div id=parent><div id=front></div></div><div id=back></div>");
-        let frame = page.CurrentFrame().unwrap();
+        let artifact = page.CurrentPaintArtifact().unwrap().clone();
         assert_eq!(flags(&page, "parent"), (true, true, 0));
         assert!(
-            first_background(&frame, node_id(&page, "front"))
-                < first_background(&frame, node_id(&page, "back"))
+            first_background(&artifact, node_id(&page, "front"))
+                < first_background(&artifact, node_id(&page, "back"))
         );
     });
 }

@@ -144,9 +144,8 @@ fn programmatic_scroll_refreshes_macos_painted_thumb_opacity() {
             Some(0.0)
         );
         assert!(page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .display_items
             .iter()
             .filter_map(|item| item.scrollbar.as_ref())
@@ -166,9 +165,8 @@ fn programmatic_scroll_refreshes_macos_painted_thumb_opacity() {
             Some(1.0)
         );
         assert!(page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .display_items
             .iter()
             .filter_map(|item| item.scrollbar.as_ref())

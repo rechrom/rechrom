@@ -99,7 +99,7 @@ fn stroked_svg_is_visible_as_mask_and_image() {
         let (p, requests) = fixture(GRAPHIC);
         let mut pixels = vec![0; 160 * 60];
         p.PaintArtifactInto(
-            &p.CurrentFrame().unwrap().display_items,
+            &p.CurrentPaintArtifact().unwrap(),
             160,
             60,
             1.0,
@@ -148,7 +148,7 @@ fn connected_shadow_pseudo_mask_fetches_and_paints_external_graphic() {
         );
         let mut pixels = vec![0; 160 * 60];
         p.PaintArtifactInto(
-            &p.CurrentFrame().unwrap().display_items,
+            &p.CurrentPaintArtifact().unwrap(),
             160,
             60,
             1.0,
@@ -188,7 +188,7 @@ fn artifact_pixels(
     pixels
 }
 fn pixels(page: &Page) -> Vec<u32> {
-    artifact_pixels(page, &page.CurrentFrame().unwrap().display_items)
+    artifact_pixels(page, &page.CurrentPaintArtifact().unwrap())
 }
 fn empty_fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
     fixture_html(
@@ -221,7 +221,7 @@ fn closed_nested_shadow_masks_match_static_graphic_pixels_and_keep_old_artifact(
         let (control, _) = fixture(GRAPHIC);
         let expected = pixels(&control);
         let (mut p, requests) = empty_fixture();
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let old_pixels = pixels(&p);
         evaluate(
             &mut p,

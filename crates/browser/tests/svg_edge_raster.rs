@@ -88,7 +88,7 @@ const FOUNDATION: &str = r###"<svg xmlns="http://www.w3.org/2000/svg" width="42"
 const COMMONS: &str = r###"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="47" height="47" viewBox="-306 -517 612 822" id="Commons-logo_sister"><defs><clipPath id="aa"><circle r="298" /></clipPath></defs><circle r="100" fill="#900" /><g fill="#069"><g id="ab" clip-path="url(#aa)"><path d="M-11 180v118h22V180" /><path d="m-43 185 43-75 43 75" /></g><g id="ac"><use xlink:href="#ab" transform="rotate(45)" /><use xlink:href="#ab" transform="rotate(90)" /><use xlink:href="#ab" transform="rotate(135)" /></g><use xlink:href="#ac" transform="scale(-1 1)" /><path fill="none" stroke="#069" stroke-width="84" d="M-181.02-181.02a256 256 0 1 0 362.04 0c-70.71-70.71-177.49-34.65-198.7-190.21" /><path d="M-23-515s-36 135-80 185 116-62 170-5-90-180-90-180z" /></g></svg>"###;
 
 fn render(page: &Page, label: &str) -> Vec<u32> {
-    let artifact = &page.CurrentFrame().unwrap().display_items;
+    let artifact = &page.CurrentPaintArtifact().unwrap();
     let mut result = vec![0; 320 * 200];
     page.PaintArtifactInto(
         artifact,
@@ -182,7 +182,7 @@ fn gradient_dither_phase_is_invariant_through_picture_layer_raster() {
                </svg>"##,
             None,
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let direct = browser::paint_artifact_raster::RasterizePaintArtifactTransparent(artifact, 320, 200);
         let mut composited = vec![0_u32; 320 * 200];
         page.PaintArtifactInto(
@@ -263,7 +263,7 @@ fn inline_svg_path_reaches_the_paint_record_and_raster() {
             </svg>"##,
             None,
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         assert!(
             artifact.items.iter().any(|item| {
                 item.r#type == paint::paint_engine::DisplayItemType::kDrawPath
@@ -305,7 +305,7 @@ fn clipped_asset_edges_match_at_device_scales_fractional_placement_and_backgroun
                 let render = |page: &Page| {
                     let mut pixels = vec![0; (width * height) as usize];
                     page.PaintArtifactInto(
-                        &page.CurrentFrame().unwrap().display_items,
+                        &page.CurrentPaintArtifact().unwrap(),
                         width,
                         height,
                         scale,
@@ -327,7 +327,7 @@ fn clipped_asset_edges_match_at_device_scales_fractional_placement_and_backgroun
                     {
                         let name = format!("{name}-dpr{scale}-at{x},{y}-{label}");
                         dump_artifact(
-                            &page.CurrentFrame().unwrap().display_items,
+                            &page.CurrentPaintArtifact().unwrap(),
                             &dir.join(format!("{name}.txt")),
                         );
                         let bytes: Vec<u8> = pixels.iter().flat_map(|p| p.to_ne_bytes()).collect();

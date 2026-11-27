@@ -193,7 +193,7 @@ fn canonical_clip_reference_retains_document_resource() {
             clip.reference_graph.is_some(),
             "canonical reference lost document resource"
         );
-        let actual = pixels(&p, &p.CurrentFrame().unwrap().display_items);
+        let actual = pixels(&p, &p.CurrentPaintArtifact().unwrap());
         assert_eq!(actual[20 * 320 + 20].to_ne_bytes(), [0, 0, 255, 255]);
         assert_eq!(actual[20 * 320 + 40].to_ne_bytes(), [255, 255, 255, 255]);
     });
@@ -210,14 +210,14 @@ fn unreferenced_clip_definition_has_no_ordinary_pixels() {
             native(&p, "geometry").IsSVGChild(),
             "resource descendants retain native layout"
         );
-        let actual = pixels(&p, &p.CurrentFrame().unwrap().display_items);
+        let actual = pixels(&p, &p.CurrentPaintArtifact().unwrap());
         assert_eq!(actual[20 * 320 + 20].to_ne_bytes(), [255, 255, 255, 255]);
         assert_eq!(actual[55 * 320 + 55].to_ne_bytes(), [0, 0, 255, 255]);
     });
 }
 
 fn current_pixels(page: &Page) -> Vec<u32> {
-    pixels(page, &page.CurrentFrame().unwrap().display_items)
+    pixels(page, &page.CurrentPaintArtifact().unwrap())
 }
 fn pixel(values: &[u32], x: usize, y: usize) -> [u8; 4] {
     values[y * 320 + x].to_ne_bytes()
@@ -241,7 +241,7 @@ fn resource_mutations_refresh_unchanged_consumers_and_keep_old_frames() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(CLIPPED);
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let before = pixels(&p, &old);
         let graph = fragment(&p, "target")
             .paint
@@ -333,7 +333,7 @@ fn paint_only_animation_preserves_resource_binding_and_old_artifact() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut p = fixture(CLIPPED);
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let before = pixels(&p, &old);
         let graph = fragment(&p, "target")
             .paint
@@ -1371,7 +1371,7 @@ mod active_filter_inventory {
             let mut page = fixture(
                 r##"<svg width="180" height="100"><defs><filter id="shift" filterUnits="userSpaceOnUse" x="0" y="0" width="180" height="100"><feOffset id="offset" dx="12"/></filter></defs><rect id="filtered" x="16" y="16" width="20" height="20" fill="red" filter="url(#shift)"/></svg>"##,
             );
-            let old = page.CurrentFrame().unwrap().display_items.clone();
+            let old = page.CurrentPaintArtifact().unwrap().clone();
             assert_eq!(pixel(&current_pixels(&page), 32, 20), [255, 0, 0, 255]);
             set_attribute(&mut page, "offset", "dx", "24");
             assert_eq!(pixel(&current_pixels(&page), 54, 20), [255, 0, 0, 255]);

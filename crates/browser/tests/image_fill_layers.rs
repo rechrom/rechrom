@@ -128,20 +128,20 @@ fn tile_id(page: &Page) -> u64 {
         })
         .unwrap()
 }
-fn image_draw(page: &Page) -> &paint::paint_engine::DisplayItem {
+fn image_draw(page: &Page) -> paint::paint_engine::DisplayItem {
     let wanted = tile_id(page);
-    page.CurrentFrame()
+    page.CurrentPaintArtifact()
         .unwrap()
-        .display_items
         .items
         .iter()
         .find(|item| item.node_id == wanted && item.r#type == DisplayItemType::kDrawImageRect)
         .expect("non-repeated SVG draw")
+        .clone()
 }
 fn pixels(page: &Page) -> Vec<u32> {
     let mut pixels = vec![0; 320 * 240];
     page.PaintArtifactInto(
-        &page.CurrentFrame().unwrap().display_items,
+        &page.CurrentPaintArtifact().unwrap(),
         320,
         240,
         1.0,
@@ -224,8 +224,7 @@ fn multilayer_svg_sprite_repeats_background_size_in_paint_geometry() {
         assert_geometry(&page, 40.0, 0.0);
         let key = image_draw(&page)
             .document_image_container_key
-            .as_ref()
-            .unwrap();
+            .expect("document image container key");
         assert_eq!(key.width, 40);
         assert_eq!(key.height, 80);
         assert_tile(&page, 40.0, 0.0);
@@ -240,7 +239,7 @@ fn scaled_single_layer_svg_publishes_the_exact_requested_container() {
             "url(fixture.svg)",
             "background-size:40px 80px;background-position:0 -40px",
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         for (id, key) in artifact.DocumentImageContainerRequirements() {
             let resource = artifact
                 .resources
@@ -331,7 +330,7 @@ fn resized_svg_keeps_old_artifacts_and_reuses_exact_container_variants() {
             "background-size:40px 80px;background-position:0 -40px",
         );
         assert_tile(&page, 40.0, 0.0);
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         let old_pixels = artifact_pixels(&page, &old);
         let old_resources = old.resources.as_ref().unwrap().clone();
         for (size, y) in [(60.0, -20.0), (10.0, 30.0), (40.0, 0.0)] {
@@ -343,7 +342,7 @@ fn resized_svg_keeps_old_artifacts_and_reuses_exact_container_variants() {
                 ),
             );
             assert_geometry(&page, size, y);
-            assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+            assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
             let actual = pixels(&page);
             assert_eq!(actual[45 * 320 + 45].to_ne_bytes(), [0, 0, 255, 255]);
             assert_eq!(
@@ -356,8 +355,7 @@ fn resized_svg_keeps_old_artifacts_and_reuses_exact_container_variants() {
         assert_tile(&page, 40.0, 0.0);
         let key = image_draw(&page)
             .document_image_container_key
-            .as_ref()
-            .unwrap();
+            .expect("document image container key");
         let id = image_draw(&page).resource_id;
         let record = |artifact: &paint::paint_engine::PaintArtifact| {
             let resource = artifact
@@ -371,12 +369,12 @@ fn resized_svg_keeps_old_artifacts_and_reuses_exact_container_variants() {
             let image_resource::PaintImageContent::Document(content) = &resource.content else {
                 panic!()
             };
-            content.exact_record_for(key).unwrap().clone()
+            content.exact_record_for(&key).unwrap().clone()
         };
         assert!(
             Arc::ptr_eq(
                 &record(&old),
-                &record(&page.CurrentFrame().unwrap().display_items)
+                &record(&page.CurrentPaintArtifact().unwrap())
             ),
             "returning to a published container reuses its immutable recording"
         );
@@ -393,7 +391,7 @@ fn one_svg_resource_supports_simultaneous_image_and_background_containers() {
           <div style="position:absolute;left:100px;top:0;width:60px;height:120px;background:url(fixture.svg) no-repeat;background-size:60px 120px"></div>"#,
             Some(SPRITE),
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         assert_fulfilled(artifact);
         let required = artifact.DocumentImageContainerRequirements();
         let ids: std::collections::HashSet<_> = required.iter().map(|(id, _)| *id).collect();
@@ -436,7 +434,7 @@ fn missing_image_records_placeholder_without_treating_canvas_as_image() {
                 })
                 .unwrap()
         };
-        let items = &page.CurrentFrame().unwrap().display_items.items;
+        let items = page.CurrentPaintArtifact().unwrap().items.clone();
         let placeholder = items
             .iter()
             .find(|item| {
@@ -480,7 +478,7 @@ fn svg_container_identity_resolves_host_preference_per_embedding_and_mutation() 
                 PreferredColorScheme::kLight
             });
             page.RunTask().unwrap();
-            assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+            assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
             let actual = pixels(&page);
             let red = [255, 0, 0, 255];
             let blue = [0, 0, 255, 255];
@@ -503,7 +501,7 @@ fn scaled_tiled_svg_background_uses_container_pixels() {
             r#"<div style="width:100px;height:170px;background:url(fixture.svg);background-size:40px 80px"></div>"#,
             Some(SPRITE),
         );
-        assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+        assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
         let actual = pixels(&page);
         for y in [5, 45, 85, 125, 165] {
             let color = if y % 80 < 40 {
@@ -526,10 +524,10 @@ fn svg_reflection_mask_container_is_requested_before_resource_snapshot() {
             r#"<div style="width:40px;height:80px;background:red;-webkit-box-reflect:below 0 url(fixture.svg) 0 fill stretch"></div>"#,
             Some(SPRITE),
         );
-        assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+        assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
         // Reflection's downstream property clip is independently unsupported;
         // this regression covers its resource request and exact publication.
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         for chunk in &artifact.chunks {
             for layer in chunk.properties.effect.filters.reflection_mask_layers() {
                 if let (Some(image), Some(key)) =
@@ -559,7 +557,7 @@ fn svg_container_resize_without_viewbox_preserves_fixed_units_and_resolves_perce
                 r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40"><rect width="10" height="10" fill="red"/><svg x="50%" y="50%" width="50%" height="50%"><rect width="20" height="40" fill="blue"/></svg></svg>"#,
             ),
         );
-        assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+        assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
         let actual = pixels(&page);
         assert_eq!(actual[5 * 320 + 5].to_ne_bytes(), [255, 0, 0, 255]);
         assert_eq!(
@@ -587,11 +585,11 @@ fn initial_host_scheme_agrees_with_later_preference_mutations() {
             ),
             1,
         );
-        assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+        assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
         assert_eq!(pixels(&page)[5 * 320 + 5].to_ne_bytes(), [0, 0, 255, 255]);
         page.SetPreferredColorScheme(PreferredColorScheme::kLight);
         page.RunTask().unwrap();
-        assert_fulfilled(&page.CurrentFrame().unwrap().display_items);
+        assert_fulfilled(&page.CurrentPaintArtifact().unwrap());
         assert_eq!(pixels(&page)[5 * 320 + 5].to_ne_bytes(), [255, 0, 0, 255]);
     });
 }

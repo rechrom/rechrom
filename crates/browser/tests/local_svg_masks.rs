@@ -56,7 +56,7 @@ fn settle(page: &mut Page) {
     assert!(page.CurrentFrame().is_some());
 }
 fn pixels(page: &Page) -> Vec<u32> {
-    artifact_pixels(page, &page.CurrentFrame().unwrap().display_items)
+    artifact_pixels(page, &page.CurrentPaintArtifact().unwrap())
 }
 fn artifact_pixels(
     page: &Page,
@@ -205,7 +205,7 @@ fn mutation_retargets_resource_and_preserves_old_frames() {
     test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(SVG);
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let old_fragment = p.CurrentFrame().unwrap().fragments.clone();
         let old_graph = graph(&p);
         let before = artifact_pixels(&p, &old);
@@ -539,7 +539,7 @@ fn paint_only_mask_update_retains_viewport_and_old_artifact() {
     test_thread::run(|| {
         let _h = foundation::LayoutHeapScope::new();
         let (mut p, _) = fixture(SVG);
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let before = artifact_pixels(&p, &old);
         let target = id(&p, "target");
         p.Apply(page_mutation::PageMutation::AnimationTick(
@@ -646,7 +646,7 @@ fn existing_pattern_mask_reads_canonical_override() {
         let raster_error = |page: &Page| {
             let mut bytes = vec![0; 140 * 80];
             page.PaintArtifactInto(
-                &page.CurrentFrame().unwrap().display_items,
+                &page.CurrentPaintArtifact().unwrap(),
                 140,
                 80,
                 1.,

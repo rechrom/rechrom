@@ -205,7 +205,7 @@ fn hidden_svg_subtrees_never_paint_or_hit_and_stay_hidden_after_mutations() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(HIDDEN);
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         let old_pixels = pixels(&page, &old);
         assert_eq!(old_pixels[10 * 320 + 10].to_ne_bytes(), [0, 0, 255, 255]);
         for x in [40, 80] {
@@ -238,7 +238,7 @@ fn hidden_svg_subtrees_never_paint_or_hit_and_stay_hidden_after_mutations() {
             "opacity:0.5;fill:green;transform:translate(5px,5px)",
         );
         assert_eq!(
-            pixels(&page, &page.CurrentFrame().unwrap().display_items),
+            pixels(&page, &page.CurrentPaintArtifact().unwrap()),
             old_pixels
         );
         assert_eq!(pixels(&page, &old), old_pixels);
@@ -256,8 +256,8 @@ fn fetched_svg_hidden_definitions_match_inline_recording() {
             Some(HIDDEN),
         );
         assert_eq!(
-            pixels(&inline, &inline.CurrentFrame().unwrap().display_items),
-            pixels(&fetched, &fetched.CurrentFrame().unwrap().display_items),
+            pixels(&inline, &inline.CurrentPaintArtifact().unwrap()),
+            pixels(&fetched, &fetched.CurrentPaintArtifact().unwrap()),
         );
     });
 }

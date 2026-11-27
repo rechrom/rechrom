@@ -147,7 +147,7 @@ fn native(page: &Page) -> &LayoutObject {
     panic!("target layout object missing")
 }
 fn pixels(page: &Page) -> Vec<u32> {
-    artifact_pixels(page, &page.CurrentFrame().unwrap().display_items)
+    artifact_pixels(page, &page.CurrentPaintArtifact().unwrap())
 }
 fn artifact_pixels(
     page: &Page,
@@ -192,9 +192,8 @@ fn unavailable_mask_is_hidden_without_a_fake_resource() {
             assert_eq!(image.IsLoaded(), !matches!(outcome, Outcome::Pending));
             assert_eq!(image.ErrorOccurred(), !matches!(outcome, Outcome::Pending));
             assert!(page
-                .CurrentFrame()
+                .CurrentPaintArtifact()
                 .unwrap()
-                .display_items
                 .resources
                 .as_ref()
                 .unwrap()
@@ -209,7 +208,7 @@ fn pending_mask_load_reveals_and_retains_source_object_and_old_artifact() {
         let _heap = foundation::LayoutHeapScope::new();
         let (mut page, outcome) = fixture("url(fixture.svg)", "add", Outcome::Pending, false);
         let object = native(&page) as *const LayoutObject;
-        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let old = page.CurrentPaintArtifact().unwrap().clone();
         let old_pixels = pixels(&page);
         assert_ink(&page, WHITE, WHITE);
         *outcome.borrow_mut() = Outcome::Loaded;
@@ -218,7 +217,7 @@ fn pending_mask_load_reveals_and_retains_source_object_and_old_artifact() {
         assert_ink(&page, RED, WHITE);
         assert_eq!(native(&page) as *const LayoutObject, object);
         assert_eq!(artifact_pixels(&page, &old), old_pixels);
-        let loaded = page.CurrentFrame().unwrap().display_items.clone();
+        let loaded = page.CurrentPaintArtifact().unwrap().clone();
         let loaded_pixels = pixels(&page);
         let owner = page.Document();
         let doc = owner.GetDocument();

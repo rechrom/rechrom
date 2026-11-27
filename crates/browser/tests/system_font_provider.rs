@@ -171,7 +171,11 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
             ) {
                 self.chrome.Apply(effect);
             }
-            fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
+            fn DidPresentFrame(
+                &mut self,
+                frame: &browser::page::PageFrame,
+                _artifact: &paint::paint_engine::PaintArtifact,
+            ) {
                 let mut fonts = vec![];
                 collect(&frame.fragments, &mut fonts);
                 if !fonts.is_empty() {

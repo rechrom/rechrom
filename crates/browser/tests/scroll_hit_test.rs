@@ -271,7 +271,7 @@ fn sticky_constraint_reaches_the_paint_property_scroll_owner() {
             #spacer { width: 900px; height: 1000px; }
         </style><body><div id=scroller><div id=sticky></div><div id=spacer></div></div>"#,
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let sticky = artifact
             .chunks
             .iter()
@@ -419,12 +419,12 @@ fn resizer_records_the_expanded_touch_hit_test_chunk() {
         </style><body><div id=resizable></div>"#,
         );
         let chunk = page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .chunks
             .iter()
             .find(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest)
+            .cloned()
             .expect("resizer touch hit-test chunk");
         let compositor = chunk.compositor.as_deref().expect("compositor metadata");
         let hit_test = compositor
@@ -440,7 +440,7 @@ fn resizer_records_the_expanded_touch_hit_test_chunk() {
         assert_eq!(chunk.bounds.width, 30.0);
         assert_eq!(chunk.bounds.height, 30.0);
 
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let drawing = artifact
             .display_items
             .iter()
@@ -470,9 +470,8 @@ fn transparent_scroll_hit_test_omits_the_resizer_chunk() {
         </style><body><div id=resizable></div>"#,
         );
         assert!(!page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .chunks
             .iter()
             .any(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest));
@@ -490,7 +489,7 @@ fn printing_suppresses_overlay_scrollbars_but_not_the_resizer() {
             1.0,
             true,
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         assert!(!artifact.display_items.iter().any(|item| matches!(
             item.id.r#type,
             DisplayItemIdType::kScrollbarHorizontal | DisplayItemIdType::kScrollbarVertical
@@ -512,7 +511,7 @@ fn resizer_geometry_scales_from_dip() {
         </style><body><div id=resizable></div>"#,
             2.0,
         );
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let touch = artifact
             .chunks
             .iter()

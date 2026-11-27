@@ -126,14 +126,14 @@ impl PageClient for Client {
     fn DidCommit(&mut self, url: &str) {
         self.trace.borrow_mut().push(format!("commit\t{url}"));
     }
-    fn DidPresentFrame(&mut self, frame: &PageFrame) {
+    fn DidPresentFrame(&mut self, frame: &PageFrame, artifact: &paint::paint_engine::PaintArtifact) {
         self.trace
             .borrow_mut()
             .push(format!("frame\t{}", frame.sequence));
         self.frames
             .borrow_mut()
             .push(crate::paint_artifact_raster::RasterizePaintArtifactTransparent(
-                &frame.display_items,
+                artifact,
                 160,
                 96,
             ));
@@ -298,7 +298,7 @@ fn computed_style_background_decorations_reach_paint_artifact() {
         let mut page = create_page(&root, &trace, &frames);
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
-        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let artifact = &page.CurrentPaintArtifact().unwrap();
         let gradient = artifact.items.iter().find(|item| {
             matches!(
                 item.r#type,
@@ -358,7 +358,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
             "#, !dark), "fixture:color-scheme").unwrap();
             assert!(result.Succeeded(), "{:?}", result.exception);
             let rgba = crate::paint_artifact_raster::RasterizePaintArtifact(
-                &page.CurrentFrame().unwrap().display_items,
+                &page.CurrentPaintArtifact().unwrap(),
                 160,
                 96,
             );
@@ -411,7 +411,7 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
             .unwrap();
 
         let rgba =
-            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentPaintArtifact().unwrap(), 160, 96);
         assert_eq!(
             &rgba[(50 * 160 + 80) * 4..(50 * 160 + 80) * 4 + 4],
             &[32, 33, 36, 255]
@@ -451,7 +451,7 @@ fn css_semibold_font_selection_matches_repository_chromium() {
             .unwrap();
 
         let rgba =
-            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentPaintArtifact().unwrap(), 160, 96);
         std::fs::write(root.join("rust.rgba"), &rgba).unwrap();
         let expected =
             include_bytes!("../../../artifacts/qq-chromium-parity/font-fixture/chromium.rgba");
@@ -476,7 +476,7 @@ fn image_mipmap_sampling_matches_repository_chromium() {
             .unwrap();
 
         let rgba =
-            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentPaintArtifact().unwrap(), 160, 96);
         std::fs::write(root.join("rust.rgba"), &rgba).unwrap();
         let expected =
             include_bytes!("../../../artifacts/qq-chromium-parity/image-fixture/chromium.rgba");
@@ -981,9 +981,8 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
             .unwrap();
         assert!(check.Succeeded(), "{:?}", check.exception);
         assert!(page
-            .CurrentFrame()
+            .CurrentPaintArtifact()
             .unwrap()
-            .display_items
             .resources
             .as_ref()
             .unwrap()
@@ -1039,7 +1038,7 @@ fn css_zoom_matches_repository_chromium_geometry_and_pixels() {
             .unwrap();
         assert!(result.Succeeded(), "{:?}", result.exception);
         let rgba =
-            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentFrame().unwrap().display_items, 160, 96);
+            crate::paint_artifact_raster::RasterizePaintArtifact(&page.CurrentPaintArtifact().unwrap(), 160, 96);
         assert_eq!(
             rgba.as_slice(),
             include_bytes!("../../../artifacts/qq-chromium-parity/zoom-fixture/chromium.rgba")
@@ -1743,7 +1742,7 @@ fn ineffective_mutation_reuses_frame_data_and_preserves_presentation() {
             (
                 id,
                 frame.fragments.children.as_ptr(),
-                frame.display_items.items.as_ptr(),
+                page.CurrentPaintArtifact().unwrap().items.as_ptr(),
                 frame.sequence,
             )
         };
@@ -1763,7 +1762,7 @@ fn ineffective_mutation_reuses_frame_data_and_preserves_presentation() {
             "ineffective edit must reuse exported fragments"
         );
         assert_eq!(
-            frame.display_items.items.as_ptr(),
+            page.CurrentPaintArtifact().unwrap().items.as_ptr(),
             display,
             "ineffective edit must reuse display list"
         );
@@ -1879,7 +1878,7 @@ fn profile_qq_loading_stall() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         turns.sort_by(f64::total_cmp);
-        eprintln!("qq-probe-summary first_frame_ms={first:?} turns={} p50_ms={:.3} p95_ms={:.3} max_ms={:.3} over50={} loading={} items={}",turns.len(),turns[turns.len()/2],turns[turns.len()*95/100],turns.last().unwrap(),turns.iter().filter(|&&ms|ms>50.0).count(),page.IsLoading(),page.CurrentFrame().map_or(0,|f|f.display_items.items.len()));
+        eprintln!("qq-probe-summary first_frame_ms={first:?} turns={} p50_ms={:.3} p95_ms={:.3} max_ms={:.3} over50={} loading={} items={}",turns.len(),turns[turns.len()/2],turns[turns.len()*95/100],turns.last().unwrap(),turns.iter().filter(|&&ms|ms>50.0).count(),page.IsLoading(),page.CurrentPaintArtifact().map_or(0,|artifact|artifact.items.len()));
         {
             let owner = page.Document();
             let document = owner.GetDocument();
@@ -1899,12 +1898,12 @@ fn profile_qq_loading_stall() {
                 }
             }
         }
-        if let Some(frame) = page.CurrentFrame() {
+        if let Some(artifact) = page.CurrentPaintArtifact() {
             for (width, height, scale) in [(1216, 704, 1.0), (2432, 1408, 2.0)] {
                 for iteration in 0..5 {
                     let started = std::time::Instant::now();
                     let pixels = crate::paint_artifact_raster::RasterizePaintArtifactWithScale(
-                        &frame.display_items,
+                        &artifact,
                         width,
                         height,
                         scale,
@@ -1913,19 +1912,19 @@ fn profile_qq_loading_stall() {
                     let hash = pixels.iter().fold(0xcbf29ce484222325_u64, |value, &byte| {
                         (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)
                     });
-                    eprintln!("qq-direct-raster-probe iteration={iteration} items={} viewport={width}x{height} scale={scale} ms={elapsed:.3} fnv1a64={hash:016x}",frame.display_items.items.len());
+                    eprintln!("qq-direct-raster-probe iteration={iteration} items={} viewport={width}x{height} scale={scale} ms={elapsed:.3} fnv1a64={hash:016x}",artifact.items.len());
                 }
             }
             for iteration in 0..5 {
                 let started = std::time::Instant::now();
                 let pixels =
-                    crate::paint_artifact_raster::RasterizePaintArtifactTransparent(&frame.display_items, 1216, 704);
+                    crate::paint_artifact_raster::RasterizePaintArtifactTransparent(&artifact, 1216, 704);
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                 let hash = pixels.iter().fold(0xcbf29ce484222325_u64, |value, &byte| {
                     (value ^ u64::from(byte)).wrapping_mul(0x100000001b3)
                 });
-                eprintln!("qq-raster-probe iteration={iteration} items={} viewport=1216x704 scale=1 ms={elapsed:.3} fnv1a64={hash:016x}",frame.display_items.items.len());
+                eprintln!("qq-raster-probe iteration={iteration} items={} viewport=1216x704 scale=1 ms={elapsed:.3} fnv1a64={hash:016x}",artifact.items.len());
             }
-        }
+        };
     });
 }

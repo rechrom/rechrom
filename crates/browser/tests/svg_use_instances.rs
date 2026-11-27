@@ -151,14 +151,14 @@ fn local_use_has_real_shadow_instance_and_inherited_pixels() {
             doc.Node(host).Children().is_empty(),
             "instances are not author DOM children"
         );
-        let actual = pixels(&p, &p.CurrentFrame().unwrap().display_items);
+        let actual = pixels(&p, &p.CurrentPaintArtifact().unwrap());
         assert_eq!(actual[20 * 320 + 15].to_ne_bytes(), [0, 0, 255, 255]);
         assert_eq!(actual[5 * 320 + 5].to_ne_bytes(), [255, 255, 255, 255]);
     });
 }
 
 fn current_pixels(p: &Page) -> Vec<u32> {
-    pixels(p, &p.CurrentFrame().unwrap().display_items)
+    pixels(p, &p.CurrentPaintArtifact().unwrap())
 }
 fn pixel(p: &Page, x: usize, y: usize) -> [u8; 4] {
     current_pixels(p)[y * 320 + x].to_ne_bytes()
@@ -188,7 +188,7 @@ fn source_geometry_href_id_replacement_refresh_without_mutating_old_frames() {
         let mut p = fixture(
             r##"<svg width="120" height="80"><defs id="definitions"><rect id="geometry" width="20" height="20"/><rect id="other" width="40" height="10"/></defs><use id="instance" href="#geometry" x="10" y="15" fill="blue"/></svg>"##,
         );
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let before = pixels(&p, &old);
         assert_eq!(pixel(&p, 15, 30), [0, 0, 255, 255]);
         let first = instance_root(&p, "instance");
@@ -424,7 +424,7 @@ fn duplicate_id_tree_order_and_host_detachment_clear_live_instances() {
         );
         assert_eq!(pixel(&p, 15, 15), [0, 0, 255, 255]);
         assert_eq!(pixel(&p, 25, 15), [255, 255, 255, 255]);
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let before = pixels(&p, &old);
         replace_children(
             &mut p,
@@ -563,7 +563,7 @@ fn source_subtree_and_nested_href_changes_refresh_retained_consumers() {
         let mut p = fixture(
             r##"<svg width="140" height="80"><defs><rect id="a" width="10" height="10"/><rect id="b" width="20" height="20"/><g id="group"><use id="nested" href="#a"/></g></defs><use id="instance" href="#group" x="10" y="10" fill="blue"/></svg>"##,
         );
-        let old = p.CurrentFrame().unwrap().display_items.clone();
+        let old = p.CurrentPaintArtifact().unwrap().clone();
         let before = pixels(&p, &old);
         assert_eq!(pixel(&p, 25, 15), [255, 255, 255, 255]);
         set_attribute(&mut p, "nested", "href", "#b");

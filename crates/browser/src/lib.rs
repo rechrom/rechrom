@@ -354,8 +354,8 @@ pub fn BuildSourceDisplayListUrl(
         std::rc::Rc::new(RefCell::new(page::NullPageClient::default())),
     )?;
     page.RunTask()?;
-    page.CurrentFrame()
-        .map(|frame| (*frame.display_items).clone())
+    page.CurrentPaintArtifact()
+        .map(|artifact| (**artifact).clone())
         .ok_or_else(|| io::Error::other("page has no frame"))
 }
 
