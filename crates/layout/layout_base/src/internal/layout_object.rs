@@ -743,13 +743,6 @@ unsafe extern "Rust" {
         object: *mut LayoutObject,
         inherit: bool,
     );
-    fn LayoutObjectAddLayersProvider(object: *mut LayoutObject, parent_layer: *mut PaintLayer);
-    fn LayoutObjectFindNextLayerProvider(
-        object: *mut LayoutObject,
-        parent_layer: *mut PaintLayer,
-        start_point: *mut LayoutObject,
-        check_parent: bool,
-    ) -> *mut PaintLayer;
     fn LayoutObjectIsMenuListProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectVisibleToHitTestRequestProvider(
         object: *const LayoutObject,

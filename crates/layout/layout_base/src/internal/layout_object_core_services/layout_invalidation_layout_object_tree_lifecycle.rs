@@ -41,8 +41,33 @@ impl LayoutObject {
 #[inline(never)]
 pub(super) fn LayoutObjectInsertedIntoTreeBase(object: &mut LayoutObject) {
     object.CheckIsNotDestroyed();
-    debug_assert!(!object.HasInlineFragments());
     let parent = object.Parent();
+    if !parent.is_null() {
+        // Source: core/layout/layout_object.cc:4136-4153. Keep our layer
+        // hierarchy updated. Optimize for the common case where we don't have
+        // any children and don't have a layer attached to ourselves.
+        let mut layer = std::ptr::null_mut();
+        if !object.SlowFirstChild().is_null() || object.HasLayer() {
+            layer = unsafe { &*parent }.EnclosingLayer();
+            object.AddLayers(layer);
+        }
+
+        // If |this| is visible but this object was not, tell the layer it has
+        // some visible content that needs to be drawn and layer visibility
+        // optimization can't be used.
+        if unsafe { &*parent }.StyleRef().Visibility() != foundation::EVisibility::kVisible
+            && object.StyleRef().Visibility() == foundation::EVisibility::kVisible
+            && !object.HasLayer()
+        {
+            if layer.is_null() {
+                layer = unsafe { &*parent }.EnclosingLayer();
+            }
+            if !layer.is_null() {
+                unsafe { &mut *layer }.DirtyVisibleContentStatus();
+            }
+        }
+    }
+    debug_assert!(!object.HasInlineFragments());
     if !parent.is_null() && unsafe { &*parent }.ChildrenInline() {
         unsafe { &mut *parent }.DirtyLinesFromChangedChild(object);
     }
@@ -59,6 +84,31 @@ pub(super) fn LayoutObjectInsertedIntoTreeBase(object: &mut LayoutObject) {
 pub(super) fn LayoutObjectWillBeRemovedFromTreeBase(object: &mut LayoutObject) {
     object.CheckIsNotDestroyed();
     let parent = object.Parent();
+    if !parent.is_null() {
+        // Source: core/layout/layout_object.cc:4203-4218. If we remove a
+        // visible child from an invisible parent, we don't know the layer
+        // visibility any more.
+        let mut layer = std::ptr::null_mut();
+        if unsafe { &*parent }.StyleRef().Visibility() != foundation::EVisibility::kVisible
+            && object.StyleRef().Visibility() == foundation::EVisibility::kVisible
+            && !object.HasLayer()
+        {
+            layer = unsafe { &*parent }.EnclosingLayer();
+            if !layer.is_null() {
+                unsafe { &mut *layer }.DirtyVisibleContentStatus();
+            }
+        }
+
+        // Keep our layer hierarchy updated. This runs before
+        // LayoutObjectChildList::RemoveChildNode unlinks the object, so the
+        // derived layer links still name `layer` as the parent.
+        if !object.SlowFirstChild().is_null() || object.HasLayer() {
+            if layer.is_null() {
+                layer = unsafe { &*parent }.EnclosingLayer();
+            }
+            object.RemoveLayers(layer);
+        }
+    }
     if !parent.is_null() && unsafe { &*parent }.ChildrenInline() {
         unsafe { &mut *parent }.DirtyLinesFromChangedChild(object);
     }
