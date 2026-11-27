@@ -470,8 +470,24 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                         .as_ref()
                         .expect("source old artifact")
                         .clone();
-                    if !Arc::ptr_eq(chunks.artifact(), &old_artifact)
-                        && (!new.is_moved_from_cached_subsequence() || resource_changed)
+                    // Source: raster_invalidator.cc:293-301 runs the display
+                    // item comparison only for a different PaintArtifact
+                    // object: an artifact Paint did not re-record stays the
+                    // same object, so the invalidation reasons recorded with
+                    // its last repaint are never replayed. Paint's commit
+                    // republishes an unchanged recording under a new Arc (it
+                    // stamps commit-time lookup values on its owner) while
+                    // keeping the recording identity, which is therefore the
+                    // same-artifact proof here. A resource change still
+                    // compares the display items, as before.
+                    let same_artifact = Arc::ptr_eq(chunks.artifact(), &old_artifact);
+                    let recording_revision = chunks.artifact().RecordingRevision();
+                    let same_recording = same_artifact
+                        || (recording_revision != 0
+                            && recording_revision == old_artifact.RecordingRevision());
+                    if !same_artifact
+                        && (resource_changed
+                            || (!same_recording && !new.is_moved_from_cached_subsequence()))
                     {
                         let old_chunk_index =
                             self.old_paint_chunks_info_[matched_index].index_in_paint_artifact;
