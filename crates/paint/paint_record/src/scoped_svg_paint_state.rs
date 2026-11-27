@@ -12,6 +12,7 @@ use crate::display_item_id::DisplayItemIdType;
 use crate::paint_context::{PaintContext, ScopedPaintChunkProperties};
 use crate::paint_info::PaintInfo;
 use crate::svg_mask_painter::SVGMaskPainter;
+use crate::svg_model_object_painter::SVGHasMaskProperty;
 use crate::PaintPhase;
 
 /// The ordinary SVG-child effect lifetime of Blink's ScopedSVGPaintState.
@@ -157,7 +158,7 @@ impl ScopedSVGPaintState {
             context.EndCssClip(node);
             context.EndMaskClip(node);
         }
-        if node.applies_mask {
+        if SVGHasMaskProperty(node) {
             let _mask_properties = ScopedPaintChunkProperties::mask_with_type(
                 context,
                 node,

@@ -6,6 +6,7 @@ use paint_model::PaintRect;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
 use crate::paint_info::PaintInfo;
+use crate::svg_model_object_painter::SVGPaintOffset;
 
 /// SVG-root-specific admission around the shared retained child walk.
 ///
@@ -27,9 +28,12 @@ impl SVGRootPainter {
             .fragment
             .as_deref()
             .expect("SVG root must own a fragment");
+        // svg_root_painter.cc:28-33 PixelSnappedSize(paint_offset): the
+        // root's FragmentData PaintOffset with its layout size.
+        let paint_offset = SVGPaintOffset(node);
         let snapped_viewport = node.PixelSnappedRect(&PaintRect {
-            x: node.paint_offset.x,
-            y: node.paint_offset.y,
+            x: paint_offset.x,
+            y: paint_offset.y,
             width: fragment.ViewSize().width,
             height: fragment.ViewSize().height,
         });

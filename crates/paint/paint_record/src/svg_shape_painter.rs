@@ -22,7 +22,7 @@ use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
 use crate::paint_shader_resolver::{PrivacyPreservingPaintServer, ResolvePaintShaderForBounds};
 use crate::pre_paint_tree_walk::PaintTreeNode;
-use crate::svg_model_object_painter::{SVGDrawingRecorder, SVGModelObjectPainter};
+use crate::svg_model_object_painter::{SVGDrawingRecorder, SVGModelObjectPainter, SVGPaintOffset};
 use crate::PaintRect;
 
 // Resolved snapshot consumed by the translated SVGObjectPainter/StrokeData
@@ -941,7 +941,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
                     self.node,
                     shape,
                     &clip_style,
-                    self.node.paint_offset,
+                    SVGPaintOffset(self.node),
                     &[],
                     0,
                     true,
@@ -959,7 +959,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
                             self.node,
                             shape,
                             &shape_style,
-                            self.node.paint_offset,
+                            SVGPaintOffset(self.node),
                             &[],
                             0,
                             true,
@@ -974,7 +974,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
                             self.node,
                             shape,
                             &shape_style,
-                            self.node.paint_offset,
+                            SVGPaintOffset(self.node),
                             &[],
                             0,
                             false,

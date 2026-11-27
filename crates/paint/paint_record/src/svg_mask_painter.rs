@@ -10,6 +10,7 @@ use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_auto_dark_mode::ApplyMaskLayerImageAutoDarkMode;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
+use crate::svg_model_object_painter::SVGHasMaskProperty;
 
 /// Source: core/paint/svg_mask_painter.h:24-44 and
 /// core/paint/svg_mask_painter.cc:239-271.
@@ -20,7 +21,7 @@ impl SVGMaskPainter {
         node: &'n PaintTreeNode<'f>,
         context: &'c RefCell<PaintContext<'o>>,
     ) {
-        if !node.applies_mask || node.mask_layers.is_empty() {
+        if !SVGHasMaskProperty(node) || node.mask_layers.is_empty() {
             return;
         }
         if DrawingRecorder::UseCachedDrawingIfPossible(context, node, DisplayItemIdType::kSVGMask) {
