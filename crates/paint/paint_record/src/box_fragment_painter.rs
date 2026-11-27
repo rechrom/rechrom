@@ -946,10 +946,16 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
+        // One read per PaintObject of the resident fragment's type facts
+        // (PhysicalFragment::Type/IsInlineBox, LayoutObject node kind), as
+        // BoxFragmentPainter reads them from its fragment member.
+        let kind = fragment.ViewKind();
+        let source_kind = fragment.paint.SourceKind();
+        let is_inline_box = fragment.ViewIsInlineBox();
         if phase == PaintPhase::kMask {
             if is_visible
                 && matches!(
-                    fragment.ViewKind(),
+                    kind,
                     FragmentKind::kText | FragmentKind::kGeneratedText
                 )
             {
@@ -965,7 +971,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             phase,
             PaintPhase::kSelectionDragImage | PaintPhase::kTextClip
         ) && matches!(
-            fragment.ViewKind(),
+            kind,
             FragmentKind::kText | FragmentKind::kGeneratedText
         ) {
             if is_visible {
@@ -973,16 +979,16 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        if fragment.paint.SourceKind() == NodeKind::kFrameSet {
+        if source_kind == NodeKind::kFrameSet {
             return;
         }
         if phase == PaintPhase::kForeground
-            && fragment.ViewKind() == FragmentKind::kBox
-            && fragment.ViewIsInlineBox()
+            && kind == FragmentKind::kBox
+            && is_inline_box
         {
             InlineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
         }
-        if phase == PaintPhase::kForeground && fragment.ViewKind() == FragmentKind::kLine {
+        if phase == PaintPhase::kForeground && kind == FragmentKind::kLine {
             LineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
         }
         // SVGContainerPainter paints content/effects/outline, never CSS box
@@ -991,11 +997,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
             && is_visible
             && !matches!(
-                fragment.paint.SourceKind(),
+                source_kind,
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
             )
-            && fragment.ViewKind() == FragmentKind::kBox
-            && !fragment.ViewIsInlineBox()
+            && kind == FragmentKind::kBox
+            && !is_inline_box
             && fragment.ViewEstablishesPaintState()
         {
             // ViewPainter queries the current chunk before recording the root
@@ -1257,7 +1263,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // border box; the payload points at the real contents ScrollTranslation.
         if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
             && is_visible
-            && fragment.ViewKind() == FragmentKind::kBox
+            && kind == FragmentKind::kBox
             && ShouldRecordHitTestData(fragment.paint.Display())
             && fragment.ViewHasScrollContainer()
             && ShouldRecordScrollHitTestDataForPaint(
@@ -1285,14 +1291,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let _contents_properties = (matches!(
             phase,
             PaintPhase::kForeground | PaintPhase::kSelectionDragImage
-        ) && fragment.ViewKind() == FragmentKind::kBox)
+        ) && kind == FragmentKind::kBox)
             .then(|| {
                 crate::scoped_paint_state::ScopedBoxContentsPaintState::new(paint_info, self.node)
             });
         if phase == PaintPhase::kForeground
             && is_visible
             && matches!(
-                fragment.ViewKind(),
+                kind,
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
@@ -1308,7 +1314,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             phase,
             PaintPhase::kForeground | PaintPhase::kSelectionDragImage
         ) && is_visible
-            && fragment.paint.SourceKind() == NodeKind::kReplaced
+            && source_kind == NodeKind::kReplaced
             && fragment.ViewEstablishesPaintState()
             && (phase != PaintPhase::kSelectionDragImage
                 || fragment.paint.ReplacedSelectionState() != SelectionState::kNone)
@@ -1346,7 +1352,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if PaintsSelfOutlineBeforeChildren(phase)
             && is_visible
             && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
-            && fragment.ViewKind() == FragmentKind::kBox
+            && kind == FragmentKind::kBox
             && fragment.ViewEstablishesPaintState()
         {
             self.PaintOutline(phase);
@@ -4175,70 +4181,17 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let style = &fragment.paint.style;
-        // text_fragment_painter.cc:852-869. The native caret carries the
-        // original DOM anchor/OffsetMapping boundary, independently of its
-        // painter block or bidi-adjusted cursor. Layout matches ::first-letter
-        // through the associated text owner and resolves the text style.
-        let block_caret_text = if !fragment.paint.IsPrinting()
-            && !paint_info.IsRenderingResourceSubtree()
-            && phase != PaintPhase::kTextClip
-            && foundation::RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled()
-        {
-            let context = self.context.borrow();
-            context
-                .caret
-                .zip(PaintContext::TextSource(self.node))
-                .and_then(|(caret, cursor)| {
-                    let (offset, color) = caret.BlockCaretTextPaint(cursor)?;
-                    let local = cursor.TextRangeRect(offset, offset + 1)?;
-                    Some((local, color))
-                })
-        } else {
-            None
-        };
-        let svg_fill_context = crate::svg_context_paints::ResolveFor(style, false, paint_info);
-        let svg_stroke_context = crate::svg_context_paints::ResolveFor(style, true, paint_info);
-        let svg_fill = svg_fill_context
-            .as_ref()
-            .map_or(style.svg_fill(), |paint| paint.color);
-        let svg_stroke = svg_stroke_context
-            .as_ref()
-            .map_or(style.svg_stroke(), |paint| paint.color);
-        let svg_fill_server = svg_fill_context
-            .as_ref()
-            .map_or(style.svg_fill_server.as_ref(), |paint| {
-                paint.server.as_ref()
-            });
-        let svg_stroke_server = svg_stroke_context
-            .as_ref()
-            .map_or(style.svg_stroke_server.as_ref(), |paint| {
-                paint.server.as_ref()
-            });
         let selection_style = &fragment.paint.LazySelectionPaintStyle();
         let text_clip = phase == PaintPhase::kTextClip;
-        let force_white_background = ShouldForceWhiteBackgroundForPrintEconomy(fragment);
-        let text_fill_color = if force_white_background {
-            TextColorForWhiteBackground(style.text_fill_color())
-        } else {
-            style.text_fill_color()
-        };
-        let text_stroke_color = if force_white_background {
-            TextColorForWhiteBackground(style.text_stroke_color())
-        } else {
-            style.text_stroke_color()
-        };
-        let mask_color = Color {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 1.0,
-        };
         let svg = fragment.ViewSvgText();
         if svg.as_ref().is_some_and(|svg| svg.hidden) {
             return;
         }
+        // Read the resident item facts once per text paint; each read walks
+        // the live FragmentItem (FragmentItem::IsEllipsis, TextFitScale, ...).
+        let text_item_facts = fragment.ViewTextItemFacts();
         if PaintContext::TextSource(self.node).is_none()
-            && fragment.ViewTextItemFacts().2.is_none()
+            && text_item_facts.2.is_none()
         {
             return;
         }
@@ -4248,8 +4201,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // moved by the physical fragment offset, then enclosed to pixels.
         let in_drawing = self.context.borrow().InDrawingRecorder();
         let drawing_type = DisplayItemIdType::PaintPhaseToDrawingType(phase);
+        // One read of the item's visual rect serves both the drawing bounds
+        // and the cull test below.
+        let item_visual_rect = FragmentVisualRect(self.node);
         let visual_rect = (!in_drawing).then(|| {
-            let mut visual_rect = FragmentVisualRect(self.node);
+            let mut visual_rect = item_visual_rect;
             // SkGlyphRunPainter's analytic/LCD coverage may touch the source
             // pixel immediately outside the geometric glyph bounds. Blink's
             // cc raster backing does not clip that coverage at a tight content
@@ -4298,13 +4254,18 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 .is_some_and(|fragment_end| range.1 > fragment_end);
             range_rect(range, selects_soft_line_break).map(|rect| (range, rect))
         });
-        let document_selection = (!text_clip
-            && fragment.paint.TextControlHost().is_none()
-            && !fragment.paint.style.user_select_none())
+        // The document selection is usually absent: test it before reading
+        // the item's control host and user-select from the live source.
+        let document_selection = (!text_clip)
         .then(|| self.context.borrow().document_selection)
         .flatten()
         .and_then(|selection| {
             if selection.Collapsed() {
+                return None;
+            }
+            if fragment.paint.TextControlHost().is_some()
+                || fragment.paint.style.user_select_none()
+            {
                 return None;
             }
             let (start, end) = selection.Ordered();
@@ -4327,7 +4288,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         .and_then(|(range, selects_soft_line_break)| {
             range_rect(range, selects_soft_line_break).map(|rect| (range, rect))
         });
-        let selection = if !text_clip && fragment.ViewTextItemFacts().2.is_none() {
+        let selection = if !text_clip && text_item_facts.2.is_none() {
             control_selection.or(document_selection)
         } else {
             None
@@ -4339,11 +4300,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // document selection endpoints. Keep the bounds candidate independent
         // so its metadata survives cached drawing reuse as in Chromium.
         let selection_for_bounds = (phase == PaintPhase::kForeground
-            && !fragment.paint.IsPrinting()
+            && self.context.borrow().selection_handles_visible
             && !text_clip
-            && fragment.ViewTextItemFacts().2.is_none()
-            && !fragment.ViewTextItemFacts().0
-            && self.context.borrow().selection_handles_visible)
+            && text_item_facts.2.is_none()
+            && !text_item_facts.0
+            && !fragment.paint.IsPrinting())
             .then(|| {
                 let fragment_start = fragment.ViewTextStart()?;
                 let fragment_end = fragment.ViewTextEnd()?;
@@ -4416,7 +4377,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // Chromium: box_fragment_painter.cc:2016-2022. A selected <br> has no
         // ink overflow but still owns selection paint; every other text item
         // is culled by its source fragment visual rect.
-        let item_visual_rect = FragmentVisualRect(self.node);
         let local_ink_overflow = PaintRect {
             x: item_visual_rect.x - self.node.paint_offset.x,
             y: item_visual_rect.y - self.node.paint_offset.y,
@@ -4504,6 +4464,67 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if cached {
             return;
         }
+        // TextFragmentPainter::Paint resolves the text paint style (TextPainter
+        // / TextPaintStyle), SVG paints and the block caret only after its
+        // DrawingRecorder cache check (text_fragment_painter.cc:480-493)
+        // declined reuse; a cached item reads none of them.
+        //
+        // text_fragment_painter.cc:852-869. The native caret carries the
+        // original DOM anchor/OffsetMapping boundary, independently of its
+        // painter block or bidi-adjusted cursor. Layout matches ::first-letter
+        // through the associated text owner and resolves the text style.
+        let block_caret_text = if !fragment.paint.IsPrinting()
+            && !paint_info.IsRenderingResourceSubtree()
+            && phase != PaintPhase::kTextClip
+            && foundation::RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled()
+        {
+            let context = self.context.borrow();
+            context
+                .caret
+                .zip(PaintContext::TextSource(self.node))
+                .and_then(|(caret, cursor)| {
+                    let (offset, color) = caret.BlockCaretTextPaint(cursor)?;
+                    let local = cursor.TextRangeRect(offset, offset + 1)?;
+                    Some((local, color))
+                })
+        } else {
+            None
+        };
+        let svg_fill_context = crate::svg_context_paints::ResolveFor(style, false, paint_info);
+        let svg_stroke_context = crate::svg_context_paints::ResolveFor(style, true, paint_info);
+        let svg_fill = svg_fill_context
+            .as_ref()
+            .map_or(style.svg_fill(), |paint| paint.color);
+        let svg_stroke = svg_stroke_context
+            .as_ref()
+            .map_or(style.svg_stroke(), |paint| paint.color);
+        let svg_fill_server = svg_fill_context
+            .as_ref()
+            .map_or(style.svg_fill_server.as_ref(), |paint| {
+                paint.server.as_ref()
+            });
+        let svg_stroke_server = svg_stroke_context
+            .as_ref()
+            .map_or(style.svg_stroke_server.as_ref(), |paint| {
+                paint.server.as_ref()
+            });
+        let force_white_background = ShouldForceWhiteBackgroundForPrintEconomy(fragment);
+        let text_fill_color = if force_white_background {
+            TextColorForWhiteBackground(style.text_fill_color())
+        } else {
+            style.text_fill_color()
+        };
+        let text_stroke_color = if force_white_background {
+            TextColorForWhiteBackground(style.text_stroke_color())
+        } else {
+            style.text_stroke_color()
+        };
+        let mask_color = Color {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+        };
         let glyph_runs = self.context.borrow_mut().TextGlyphRuns(self.node);
         let _drawing = visual_rect.map(|visual_rect| {
             if let Some((id, client)) = selection_client {
@@ -4516,7 +4537,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // background the scaled font's space width (inline_cursor.cc:529-537).
         // Do not manufacture glyphs or decorations for it; retain the real
         // selection background before leaving the text-proper path.
-        if glyph_runs.is_empty() && fragment.ViewTextItemFacts().2.is_none() {
+        if glyph_runs.is_empty() && text_item_facts.2.is_none() {
             if let Some(rect) = selection_rect {
                 append_selection_background(rect);
             }
@@ -4542,7 +4563,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             concat.transform = RootSpaceTextTransform(self.node);
             self.context.borrow_mut().Append(concat, self.node);
         }
-        if let Some(symbol) = fragment.ViewTextItemFacts().2 {
+        if let Some(symbol) = text_item_facts.2 {
             if glyph_runs.is_empty() {
                 panic!("symbol list marker has no shaped run");
             }
@@ -4551,7 +4572,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let bullet_width = (two_thirds_ascent + 1) / 2;
             let marker_top = 3 * (ascent - two_thirds_ascent) / 2;
             let unsnapped_x = self.node.paint_offset.x
-                + if fragment.ViewTextItemFacts().3 {
+                + if text_item_facts.3 {
                     0.0
                 } else {
                     1.0
@@ -4601,7 +4622,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        let apply_text_fit = svg.is_none() && fragment.ViewTextItemFacts().1 != 1.0;
+        let apply_text_fit = svg.is_none() && text_item_facts.1 != 1.0;
         let mut text_fit_origin = TextPaintOrigin(self.node);
         if let Some(run) = glyph_runs.first() {
             // text_fragment_painter.cc:531-542 constructs text_origin at the
@@ -4614,7 +4635,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.ViewTextItemFacts().1,
+                text_item_facts.1,
                 text_fit_origin,
                 true,
             );
@@ -4635,7 +4656,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let color = InvertColorIfNeeded(
                     style,
                     color,
-                    if fragment.ViewTextItemFacts().2.is_some() {
+                    if text_item_facts.2.is_some() {
                         ElementRole::kListSymbol
                     } else {
                         ElementRole::kForeground
@@ -4657,7 +4678,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
                 let rect = PaintRect {
                     x: self.node.paint_offset.x
-                        + fragment.ViewTextItemFacts().4
+                        + text_item_facts.4
                         + shadow_offset.x,
                     y: self.node.paint_offset.y + shadow_offset.y,
                     width: fragment.ViewSize().width,
@@ -4744,7 +4765,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     && (fragment.ViewSelfInkOverflow().is_some()
                         || fragment.ViewTextGlyphInk().is_some())
                     && !fragment.paint.IsTextCombine()
-                    && fragment.ViewTextItemFacts().4 == 0.0
+                    && text_item_facts.4 == 0.0
                     && input_run.writing_mode == WritingMode::kHorizontalTb
                     && !is_shadow
                     && !stroke_glyphs
@@ -4811,7 +4832,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
             }
             let rect = PaintRect {
-                x: self.node.paint_offset.x + fragment.ViewTextItemFacts().4,
+                x: self.node.paint_offset.x + text_item_facts.4,
                 y: self.node.paint_offset.y,
                 width: fragment.ViewSize().width,
                 height: fragment.ViewSize().height,
@@ -5039,7 +5060,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.ViewTextItemFacts().1,
+                text_item_facts.1,
                 text_fit_origin,
                 false,
             );
@@ -5054,7 +5075,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     true,
                 );
@@ -5099,7 +5120,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     false,
                 );
@@ -5120,7 +5141,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.ViewTextItemFacts().1,
+                text_item_facts.1,
                 text_fit_origin,
                 true,
             );
@@ -5149,7 +5170,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     false,
                 );
@@ -5169,7 +5190,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     true,
                 );
@@ -5253,7 +5274,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     false,
                 );
@@ -5264,7 +5285,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     true,
                 );
@@ -5275,7 +5296,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.ViewTextItemFacts().1,
+                text_item_facts.1,
                 text_fit_origin,
                 false,
             );
@@ -5355,7 +5376,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     true,
                 );
@@ -5368,7 +5389,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.ViewTextItemFacts().1,
+                    text_item_facts.1,
                     text_fit_origin,
                     false,
                 );
@@ -6680,13 +6701,19 @@ fn UsesCompositedFixedBackground(node: &PaintTreeNode<'_>) -> bool {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
+    // PrePaint built the fixed-background properties only for a box that can
+    // composite them; test the node's own facts before the live style reads.
+    if node.fixed_background_acts_as_scroll || node.fixed_background_properties.is_none() {
+        return false;
+    }
+    if !fragment.paint.CanCompositeBackgroundAttachmentFixed()
+        || fragment.paint.BackgroundTransfersToView()
+        || !fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
+    {
+        return false;
+    }
     let background_images = fragment.paint.style.background_images();
-    fragment.paint.CanCompositeBackgroundAttachmentFixed()
-        && !fragment.paint.BackgroundTransfersToView()
-        && !node.fixed_background_acts_as_scroll
-        && node.fixed_background_properties.is_some()
-        && fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
-        && background_images.len() == 1
+    background_images.len() == 1
         && background_images[0].attachment == BackgroundAttachment::kFixed
         && (background_images[0].shader.is_some() || background_images[0].resource_id != 0)
 }
