@@ -71,8 +71,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 /// item's ID, exactly as required by the source lifetime contract.
 impl Drop for ScopedPaintChunkProperties<'_, '_> {
     fn drop(&mut self) {
+        // The restored state usually equals the current one (the scope
+        // recorded nothing or the same nodes); reference it only on change.
         self.context
             .borrow_mut()
-            .update_chunk_properties(self.previous.clone());
+            .update_chunk_properties_ref(&self.previous);
     }
 }

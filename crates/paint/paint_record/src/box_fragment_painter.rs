@@ -2533,6 +2533,16 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             id,
             client,
         );
+        // Source: view_painter.cc:60-70. The root backdrop is a cached
+        // DrawingDisplayItem of the LayoutView client, recorded only when the
+        // client was invalidated.
+        if self
+            .context
+            .borrow_mut()
+            .UseCachedDrawingWithClient(id, client, None)
+        {
+            return;
+        }
         let _drawing = DrawingRecorder::with_client(self.context, self.node, id, client, rect);
         let color = InvertColorIfNeeded(
             &fragment.paint.style,
@@ -3040,16 +3050,25 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && ShouldSkipPaintUnderInvalidationChecking(fragment);
         let cache_skipper =
             skip_under_invalidation_cache.then(|| DisplayItemCacheSkipper::new(self.context));
+        let background_id = DisplayItemId {
+            client_id: scroll.scrolling_background_client_id,
+            r#type: DisplayItemIdType::PaintPhaseToClipType(PaintPhase::kSelfBlockBackgroundOnly),
+            fragment: self.node.DisplayItemFragment(),
+        };
+        // Source: box_fragment_painter.cc PaintBoxDecorationBackgroundWithRect
+        // and view_painter.cc:265-279: the scrolling-background client's
+        // DrawingDisplayItem is reused while that client is valid. Hit-test
+        // and region-capture data below are recorded either way.
+        let cached = cache_skipper.is_none()
+            && self
+                .context
+                .borrow_mut()
+                .UseCachedDrawingWithClient(background_id, client, None);
+        if !cached {
         let _drawing = DrawingRecorder::with_client(
             self.context,
             self.node,
-            DisplayItemId {
-                client_id: scroll.scrolling_background_client_id,
-                r#type: DisplayItemIdType::PaintPhaseToClipType(
-                    PaintPhase::kSelfBlockBackgroundOnly,
-                ),
-                fragment: self.node.DisplayItemFragment(),
-            },
+            background_id,
             client,
             visual_rect,
         );
@@ -3153,6 +3172,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             );
         }
         drop(_drawing);
+        }
         drop(cache_skipper);
         let snapped_border_rect = self.node.PixelSnappedRect(&border_rect);
         if !paint_info.ShouldSkipBackground()
@@ -3234,13 +3254,22 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 .borrow_mut()
                 .BeginEscapableGeometry(self.node, None);
         }
-        let _drawing = DrawingRecorder::with_client(
-            self.context,
-            self.node,
-            CanvasBackgroundDisplayItemId(self.node, item_type, 0),
-            crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
-            rect,
-        );
+        let id = CanvasBackgroundDisplayItemId(self.node, item_type, 0);
+        let client = crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment);
+        // Source: view_painter.cc:265-279 (PaintRootElementGroup). A valid
+        // LayoutView client reuses its previous document background record;
+        // the flat clip scope around it is still entered and left.
+        if self
+            .context
+            .borrow_mut()
+            .UseCachedDrawingWithClient(id, client, None)
+        {
+            if !fixed {
+                self.context.borrow_mut().EndEscapableGeometry(self.node);
+            }
+            return;
+        }
+        let _drawing = DrawingRecorder::with_client(self.context, self.node, id, client, rect);
         let isolates_layers = background_images
             .iter()
             .any(|layer| layer.blend_mode != PaintBlendMode::kNormal);

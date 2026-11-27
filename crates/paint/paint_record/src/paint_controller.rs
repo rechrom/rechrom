@@ -217,6 +217,22 @@ impl PaintController {
         self.paint_chunker.update_properties(properties);
     }
 
+    /// UpdateCurrentPaintChunkProperties with a borrowed state.
+    pub(crate) fn UpdateCurrentPaintChunkPropertiesRef(&mut self, properties: &PropertyTreeState) {
+        self.paint_chunker.update_properties_ref(properties);
+    }
+
+    /// UpdateCurrentPaintChunkIdAndProperties with a borrowed state.
+    pub(crate) fn UpdateCurrentPaintChunkIdAndPropertiesRef(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: &PropertyTreeState,
+    ) {
+        self.paint_chunker
+            .update_id_and_properties_ref(id, client, properties);
+    }
+
     /// Source: `paint_controller.cc:614-625`.
     pub(crate) fn UpdateCurrentPaintChunkIdAndProperties(
         &mut self,
@@ -753,6 +769,9 @@ impl PaintController {
         // whole artifact to write them. Each item keeps its PaintRecord
         // allocation (MoveRecordFrom); no op is copied.
         let previous = Arc::clone(self.previous.as_ref().unwrap());
+        // PaintController::RecordDebugInfo is gated on PaintDebugInfoEnabled
+        // (paint_controller.cc:609-611); moved items look up no names otherwise.
+        let debug_info_enabled = output.DebugInfoEnabled();
         for chunk_index in start_chunk_index..end_chunk_index {
             self.paint_chunker
                 .AppendByMoving(&mut output.chunks, previous.chunks[chunk_index].clone());
@@ -780,6 +799,9 @@ impl PaintController {
                 });
                 item.id.client_id
             };
+            if !debug_info_enabled {
+                continue;
+            }
             if let Some(name) = previous.client_debug_names.get(&(client_id as usize)) {
                 output.RecordDebugInfo(
                     client_id as usize,

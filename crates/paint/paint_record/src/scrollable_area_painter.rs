@@ -399,27 +399,37 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             // corner remains transparent behind overlay scrollbars.
             && !data.uses_overlay_scrollbars
         {
+            let corner_id = DisplayItemId {
+                client_id: data.corner_client_id,
+                r#type: DisplayItemIdType::kScrollCorner,
+                fragment: self.node.DisplayItemFragment(),
+            };
+            let corner_client = {
+                let state = fragment.paint.ScrollClientState(
+                    data.corner_client_id,
+                    data.corner_client_invalidation_reason,
+                    data.corner_client_is_cacheable,
+                    data.corner_client_is_just_created.get(),
+                );
+                DisplayItemClientInfo {
+                    is_cacheable: state.is_cacheable,
+                    invalidation_reason: state.invalidation_reason,
+                    is_just_created: state.is_just_created,
+                }
+            };
+            // Source: scrollbar_theme.cc ScrollbarTheme::PaintScrollCorner
+            // returns after DrawingRecorder::UseCachedDrawingIfPossible for
+            // a valid corner client (kScrollCorner).
+            if !self
+                .context
+                .borrow_mut()
+                .UseCachedDrawingWithClient(corner_id, corner_client, None)
+            {
             let _corner_recorder = DrawingRecorder::with_client(
                 self.context,
                 self.node,
-                DisplayItemId {
-                    client_id: data.corner_client_id,
-                    r#type: DisplayItemIdType::kScrollCorner,
-                    fragment: self.node.DisplayItemFragment(),
-                },
-                {
-                    let state = fragment.paint.ScrollClientState(
-                        data.corner_client_id,
-                        data.corner_client_invalidation_reason,
-                        data.corner_client_is_cacheable,
-                        data.corner_client_is_just_created.get(),
-                    );
-                    DisplayItemClientInfo {
-                        is_cacheable: state.is_cacheable,
-                        invalidation_reason: state.invalidation_reason,
-                        is_just_created: state.is_just_created,
-                    }
-                },
+                corner_id,
+                corner_client,
                 corner_rect,
             );
             self.context.borrow_mut().Append(
@@ -433,6 +443,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 },
                 self.node,
             );
+            }
         }
         self.PaintResizer(info, data);
     }

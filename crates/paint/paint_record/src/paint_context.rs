@@ -26,37 +26,44 @@ use crate::PaintRecording;
 use crate::PaintRect;
 use paint_input_types::layout_input::Offset;
 
+/// The aggregation scope's thread-local timing facts. The aggregator's style
+/// and property state are read from the borrowed node only when a text paint
+/// was actually reported into the scope (TextPaintTimingDetector records an
+/// aggregator once, text_paint_timing_detector.cc RecordAggregatedText), so
+/// an aggregation that paints nothing (every cached frame) costs no style
+/// projection or property-node references.
 struct TextPaintAggregation {
     node_id: u64,
     identity: u64,
     rect: PaintRect,
-    properties: PropertyTreeState,
-    color_is_fully_transparent: bool,
-    has_text_shadow: bool,
-    has_text_stroke: bool,
     ignore_depth: i32,
     document_element_is_invisible: bool,
 }
 /// Matches ScopedPaintTimingDetectorBlockPaintHook's stack lifetime. This
 /// guard owns no layout geometry and runs no callback into another engine.
-pub struct ScopedTextPaintAggregation<'c, 'o> {
+pub struct ScopedTextPaintAggregation<'c, 'o, 'n, 'f> {
     context: &'c std::cell::RefCell<PaintContext<'o>>,
+    node: &'n PaintTreeNode<'f>,
     active: bool,
 }
-impl<'c, 'o> ScopedTextPaintAggregation<'c, 'o> {
+impl<'c, 'o, 'n, 'f> ScopedTextPaintAggregation<'c, 'o, 'n, 'f> {
     pub fn new(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
-        node: &PaintTreeNode<'_>,
+        node: &'n PaintTreeNode<'f>,
         foreground: bool,
     ) -> Self {
         let active = foreground && context.borrow_mut().BeginTextPaintAggregation(node);
-        Self { context, active }
+        Self {
+            context,
+            node,
+            active,
+        }
     }
 }
-impl Drop for ScopedTextPaintAggregation<'_, '_> {
+impl Drop for ScopedTextPaintAggregation<'_, '_, '_, '_> {
     fn drop(&mut self) {
         if self.active {
-            self.context.borrow_mut().EndTextPaintAggregation();
+            self.context.borrow_mut().EndTextPaintAggregation(self.node);
         }
     }
 }
@@ -106,8 +113,9 @@ pub struct PaintContext<'o> {
     /// Resident compositor-owned layers keyed by their source DOM/Layout
     /// node.  Paint retains only the type-erased strong owner, matching
     /// Blink's LayoutObject -> cc::Layer hand-off without introducing a
-    /// compositor dependency below paint_record.
-    foreign_layers: HashMap<u64, Arc<dyn crate::ForeignLayer>>,
+    /// compositor dependency below paint_record. The PaintEngine's owner map
+    /// is borrowed for this recording rather than copied every frame.
+    foreign_layers: Option<&'o HashMap<u64, Arc<dyn crate::ForeignLayer>>>,
     text_paint_aggregations: Vec<TextPaintAggregation>,
     paint_timing_root_properties: Option<PropertyTreeState>,
 }
@@ -127,16 +135,10 @@ impl<'o> PaintContext<'o> {
         else {
             return false;
         };
-        let fragment = node.fragment.as_deref().expect("source Paint fragment");
-        let style = &fragment.paint.style;
         self.text_paint_aggregations.push(TextPaintAggregation {
             node_id,
             identity,
             rect: PaintRect::default(),
-            properties: node.properties.nodes.clone(),
-            color_is_fully_transparent: style.color().alpha <= 0.0,
-            has_text_shadow: style.text_shadow_count() != 0,
-            has_text_stroke: style.text_stroke_width() != 0.0,
             ignore_depth: Ignore::IgnoreDepth(),
             document_element_is_invisible: Ignore::IsDocumentElementInvisible(),
         });
@@ -150,7 +152,7 @@ impl<'o> PaintContext<'o> {
             aggregation.rect.union(visual_rect);
         }
     }
-    fn EndTextPaintAggregation(&mut self) {
+    fn EndTextPaintAggregation(&mut self, node: &PaintTreeNode<'_>) {
         use paint_model::geometry_mapper_source::{
             float_clip_rect::FloatClipRect,
             geometry_mapper::GeometryMapper,
@@ -163,6 +165,10 @@ impl<'o> PaintContext<'o> {
         if aggregation.rect.is_empty() {
             return;
         }
+        let style = &node.fragment.as_deref().expect("source Paint fragment").paint.style;
+        let color_is_fully_transparent = style.color().alpha <= 0.0;
+        let has_text_shadow = style.text_shadow_count() != 0;
+        let has_text_stroke = style.text_stroke_width() != 0.0;
         let root = self
             .paint_timing_root_properties
             .as_ref()
@@ -180,7 +186,7 @@ impl<'o> PaintContext<'o> {
         };
         GeometryMapper::<NativeGeometryMapperContext>::LocalToAncestorVisualRect(
             &context,
-            &NativeGeometryState::from_state(&aggregation.properties),
+            &NativeGeometryState::from_state(&node.properties.nodes),
             &NativeGeometryState::from_state(root),
             &mut mapped,
             foundation::OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
@@ -199,9 +205,9 @@ impl<'o> PaintContext<'o> {
                     width: mapped.width() as f64,
                     height: mapped.height() as f64,
                 },
-                color_is_fully_transparent: aggregation.color_is_fully_transparent,
-                has_text_shadow: aggregation.has_text_shadow,
-                has_text_stroke: aggregation.has_text_stroke,
+                color_is_fully_transparent: color_is_fully_transparent,
+                has_text_shadow: has_text_shadow,
+                has_text_stroke: has_text_stroke,
                 ignore_depth: aggregation.ignore_depth,
                 document_element_is_invisible: aggregation.document_element_is_invisible,
             });
@@ -293,7 +299,7 @@ impl<'o> PaintContext<'o> {
                 foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
             skipping_cache_count: 0,
             document_element_is_invisible: false,
-            foreign_layers: HashMap::default(),
+            foreign_layers: None,
             text_paint_aggregations: Vec::new(),
             paint_timing_root_properties: None,
         }
@@ -349,18 +355,18 @@ impl<'o> PaintContext<'o> {
                 foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
             skipping_cache_count: 0,
             document_element_is_invisible: false,
-            foreign_layers: HashMap::default(),
+            foreign_layers: None,
             text_paint_aggregations: Vec::new(),
             paint_timing_root_properties: None,
         }
     }
 
-    pub fn BindForeignLayers(&mut self, layers: &HashMap<u64, Arc<dyn crate::ForeignLayer>>) {
-        self.foreign_layers = layers.clone();
+    pub fn BindForeignLayers(&mut self, layers: &'o HashMap<u64, Arc<dyn crate::ForeignLayer>>) {
+        self.foreign_layers = Some(layers);
     }
 
     pub fn ForeignLayerForNode(&self, node_id: u64) -> Option<Arc<dyn crate::ForeignLayer>> {
-        self.foreign_layers.get(&node_id).cloned()
+        self.foreign_layers.and_then(|layers| layers.get(&node_id).cloned())
     }
 
     pub fn PaintUnderInvalidationCheckingEnabled(&self) -> bool {
@@ -1197,6 +1203,13 @@ impl<'o> PaintContext<'o> {
             .UpdateCurrentPaintChunkProperties(properties);
     }
 
+    /// update_chunk_properties for a borrowed state; the live nodes are
+    /// referenced only when the current chunk state changes.
+    pub fn update_chunk_properties_ref(&mut self, properties: &PropertyTreeState) {
+        self.paint_controller
+            .UpdateCurrentPaintChunkPropertiesRef(properties);
+    }
+
     pub fn SetCurrentEffectivelyInvisible(&mut self, invisible: bool) {
         self.paint_controller
             .SetCurrentEffectivelyInvisible(invisible);
@@ -1246,15 +1259,25 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         self.paint_controller
-            .UpdateCurrentPaintChunkIdAndProperties(
+            .UpdateCurrentPaintChunkIdAndPropertiesRef(
                 DisplayItemId {
                     client_id: fragment.paint.DisplayItemClientId(),
                     r#type: item_type,
                     fragment: node.DisplayItemFragment(),
                 },
                 DisplayItemClientInfo::from_fragment(fragment),
-                node.properties.nodes.clone(),
+                &node.properties.nodes,
             );
+    }
+
+    pub(crate) fn update_chunk_id_and_properties_raw_ref(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: &PropertyTreeState,
+    ) {
+        self.paint_controller
+            .UpdateCurrentPaintChunkIdAndPropertiesRef(id, client, properties);
     }
 
     pub(crate) fn update_chunk_id_and_properties_raw(
@@ -1899,7 +1922,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         if fragment.paint.PaintLayerClientId() != 0 {
-            borrowed.update_chunk_id_and_properties_raw(
+            borrowed.update_chunk_id_and_properties_raw_ref(
                 DisplayItemId {
                     client_id: fragment.paint.PaintLayerClientId(),
                     r#type: item_type,
@@ -1913,10 +1936,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                         is_just_created: state.is_just_created,
                     }
                 },
-                node.properties.nodes.clone(),
+                &node.properties.nodes,
             );
         } else {
-            borrowed.update_chunk_properties(node.properties.nodes.clone());
+            borrowed.update_chunk_properties_ref(&node.properties.nodes);
         }
         Self { context, previous }
     }
@@ -1986,14 +2009,14 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let fragment = node.fragment.as_deref().expect("contents fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_id_and_properties_raw(
+        borrowed.update_chunk_id_and_properties_raw_ref(
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToClipType(phase),
                 fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo::from_fragment(fragment),
-            node.contents_properties.nodes.clone(),
+            &node.contents_properties.nodes,
         );
         Self { context, previous }
     }
@@ -2004,7 +2027,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     ) -> Self {
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_properties(node.properties.nodes.clone());
+        borrowed.update_chunk_properties_ref(&node.properties.nodes);
         Self { context, previous }
     }
 
