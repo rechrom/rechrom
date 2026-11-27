@@ -419,7 +419,7 @@ impl<'d> PersistentSelectorBackend<'d> {
                 atom.clone()
             });
         }
-        for a in self.document.Node(index).Attributes() {
+        for a in self.document.Node(index).AttributesWithoutUpdate() {
             let name = QualifiedName::new(
                 AtomicString::from_str(&a.prefix),
                 AtomicString::from_str(&a.local_name),
@@ -561,7 +561,7 @@ impl<'d> PersistentSelectorBackend<'d> {
             };
             hashes.push(atom.Hash().wrapping_mul(kClassSalt));
         }
-        for attribute in self.document.Node(index).Attributes() {
+        for attribute in self.document.Node(index).AttributesWithoutUpdate() {
             let name = AtomicString::from_str(&attribute.local_name).ToAsciiLower();
             if !matches!(name.Utf8().as_str(), "id" | "class" | "style") {
                 hashes.push(name.Hash().wrapping_mul(kAttributeSalt));
@@ -598,7 +598,7 @@ impl<'d> PersistentSelectorBackend<'d> {
                 );
             }
         }
-        for a in self.document.Node(index).Attributes() {
+        for a in self.document.Node(index).AttributesWithoutUpdate() {
             hashes.insert(
                 AtomicString::from_str(&a.local_name)
                     .ToAsciiLower()
@@ -890,12 +890,21 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn ActivationProximity(&self, activation: &Self::StyleScopeActivation) -> u32 {
         activation.proximity
     }
-    fn SynchronizeAttribute(&self, e: &Self::Element, name: &AtomicString) { // PersistentDocument::SetAttribute commits attribute values synchronously.
+    // Element::SynchronizeAttribute(const AtomicString&) (core/dom/element.cc
+    // at 6c1d401fcca5e1b0030563a90c2f2bba168e0c15): a CSSOM write leaves only
+    // the style attribute lazily dirty; [style] matching projects it before
+    // AttributesWithoutUpdate is read. Every other attribute is committed
+    // synchronously by PersistentDocument::SetAttribute.
+    fn SynchronizeAttribute(&self, e: &Self::Element, name: &AtomicString) {
+        let node = self.document.Node(*e);
+        if node.StyleAttributeIsDirty() && name.Utf8().eq_ignore_ascii_case("style") {
+            node.SynchronizeAttribute("style");
+        }
     }
     fn CouldHaveAttribute(&self, e: &Self::Element, name: &QualifiedName) -> bool {
         let html_element = self.IsHTMLElement(e);
         let html_document = self.IsInHTMLDocument(e);
-        self.document.Node(*e).Attributes().iter().any(|attribute| {
+        self.document.Node(*e).AttributesWithoutUpdate().iter().any(|attribute| {
             AttributeNameMatches(attribute, name, false)
                 || (!html_element && html_document && AttributeNameMatches(attribute, name, true))
         })
@@ -910,7 +919,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.document.IsInHTMLDocument(*e)
     }
     fn AttributesWithoutUpdate(&self, e: &Self::Element) -> &[Self::Attribute] {
-        self.document.Node(*e).Attributes()
+        self.document.Node(*e).AttributesWithoutUpdate()
     }
     fn AttributeMatchesName(&self, a: &Self::Attribute, name: &QualifiedName) -> bool {
         AttributeNameMatches(a, name, false)

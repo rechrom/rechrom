@@ -2718,7 +2718,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         names.PushMap(map)
     }
     fn InlineStyle(&self, e: &Self::Element) -> Option<Rc<Self::CSSPropertyValueSet>> {
-        self.document.Node(e.index).FindAttribute("style")?;
+        self.document.Node(e.index).FindAttributeWithoutUpdate("style")?;
         // cpp: CSSParserImpl::ParseInlineStyleDeclarationForElement
         // (css_parser_impl.cc:370-387). The source uses standard mode only for
         // HTML elements outside quirks mode; every other element uses quirks.
@@ -2737,7 +2737,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     ) -> Option<Rc<Self::CSSPropertyValueSet>> {
         let node = self.document.Node(element.index);
         let has_html_presentation_attribute = node.Namespace() == DOMNamespace::kHTML
-            && node.Attributes().iter().any(|attribute| {
+            && node.AttributesWithoutUpdate().iter().any(|attribute| {
                 attribute.namespace_uri.is_empty()
                     && Self::HTMLPresentationAttributeApplies(node.Name(), &attribute.local_name)
             });
@@ -2760,7 +2760,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         // cascade origin; canonical ComputedStyle owns the resulting display.
         if node.Namespace() == DOMNamespace::kHTML {
             for attribute in node
-                .Attributes()
+                .AttributesWithoutUpdate()
                 .iter()
                 .filter(|attribute| attribute.namespace_uri.is_empty())
             {
