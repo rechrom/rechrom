@@ -1020,10 +1020,17 @@ struct NodeCache {
     /// above name the live slot nodes, so an old/new state comparison alone
     /// cannot see a value change.
     own_change: PaintPropertyChangeType,
+    /// This object's ObjectPaintProperties slots. A slot lives while the
+    /// object that owns it does (ObjectPaintProperties::Clear* /
+    /// FragmentData destruction), so no per-subtree key list is kept.
     own_keys: Vec<(u64, PaintPropertyKey)>,
-    subtree_keys: Vec<(u64, PaintPropertyKey)>,
     nodes: usize,
     computed_pass: u64,
+    /// The walk (PrePaintTreeWalk::walk_generation) that last visited this
+    /// object itself: built, shifted, refreshed or reused it in UpdateNode
+    /// rather than skipping it inside a clean subtree. The post-walk state
+    /// propagation follows the visited (dirty) path only.
+    visited_pass: u64,
     // Physical links survive logical OOF ownership moves. Boxes stay owned by
     // retained_tree; topology changes must use the ordinary ownership update.
     physical_children: Vec<*mut PaintTreeNode<'static>>,
@@ -1216,7 +1223,24 @@ pub struct PrePaintTreeWalk {
     /// PaintLayer::SelfOrDescendantNeedsRepaint folded by a walk whose result
     /// Paint has not recorded yet.
     unrecorded_repaint: bool,
-    live_property_keys: HashSet<PaintPropertyKey>,
+    /// Slots this walk released: an object rebuilt without a slot it had,
+    /// or an object whose node left the tree. Chromium destroys them with
+    /// the ObjectPaintProperties entry or the FragmentData
+    /// (object_paint_properties.h Clear*, fragment_data.cc); the walk frees
+    /// them at its end unless another object registered the same key.
+    released_property_keys: Vec<PaintPropertyKey>,
+    /// The walk cannot account for every released slot (no retained tree,
+    /// a forced rebuild, or a retained tree this walk did not produce): the
+    /// end of the walk keeps exactly the slots the final tree owns.
+    full_slot_sweep: bool,
+    slot_sweep_pending: bool,
+    /// The root of the tree the last walk returned (as an address), so
+    /// RetainTree can tell a tree the walk did not produce.
+    walked_tree_root: usize,
+    /// The ownership moves of the current logical (paint-order) tree, while
+    /// it differs from the physical tree. Valid for `root` until a walk
+    /// changes the topology.
+    logical_tree_record: Option<LogicalTreeRecord>,
 }
 
 impl Default for PrePaintTreeWalk {
@@ -1270,7 +1294,11 @@ impl Default for PrePaintTreeWalk {
             consuming_walks: 0,
             recorded_consuming_walks: 0,
             unrecorded_repaint: false,
-            live_property_keys: HashSet::new(),
+            released_property_keys: Vec::new(),
+            full_slot_sweep: true,
+            slot_sweep_pending: false,
+            walked_tree_root: 0,
+            logical_tree_record: None,
         }
     }
 }
@@ -4303,6 +4331,11 @@ fn RestoreLogicalSiblingOrder(parent: &mut PaintTreeNode<'_>) -> bool {
     for child in &mut parent.children {
         changed |= RestoreLogicalSiblingOrder(child);
     }
+    SortLogicalSiblings(parent) || changed
+}
+
+/// One child list of RestoreLogicalSiblingOrder: whether it was reordered.
+fn SortLogicalSiblings(parent: &mut PaintTreeNode<'_>) -> bool {
     // Physical children usually already follow logical order. Preserve their
     // Box owners and anonymous slots without allocating/rebuilding three Vecs.
     let mut previous = 0;
@@ -4318,7 +4351,7 @@ fn RestoreLogicalSiblingOrder(parent: &mut PaintTreeNode<'_>) -> bool {
         true
     });
     if already_ordered {
-        return changed;
+        return false;
     }
     let mut ordered_slots = Vec::new();
     let mut ordered_children = Vec::new();
@@ -4389,6 +4422,180 @@ fn RestoreLogicalOutOfFlowParents(
     (RestoreLogicalSiblingOrder(root) || reparented, fixups)
 }
 
+/// One out-of-flow subtree RestoreLogicalOutOfFlowParents moved from its
+/// physical parent to its logical parent occurrence.
+struct LogicalMove {
+    node: *mut PaintTreeNode<'static>,
+    physical_parent: *mut PaintTreeNode<'static>,
+    logical_parent: *mut PaintTreeNode<'static>,
+    physical_ancestors: Vec<*const PaintTreeNode<'static>>,
+}
+
+/// The difference between a logical (paint-order) tree and its physical
+/// tree: the moved out-of-flow subtrees and every node whose child list is
+/// not in physical order. Box addresses are stable while the topology is,
+/// and a walk that changes the topology runs the complete post-update pass,
+/// which records the tree again.
+struct LogicalTreeRecord {
+    root: usize,
+    moves: Vec<LogicalMove>,
+    reordered: Vec<*mut PaintTreeNode<'static>>,
+}
+
+/// Records the moves of the logical tree RestoreLogicalOutOfFlowParents
+/// produced.
+fn RecordLogicalTree(root: &mut PaintTreeNode<'static>) -> LogicalTreeRecord {
+    fn visit(node: &mut PaintTreeNode<'static>, record: &mut LogicalTreeRecord) {
+        let pointer = node as *mut PaintTreeNode<'static>;
+        let mut reordered = false;
+        let mut last_physical_index = None;
+        for child in node.children.iter_mut() {
+            if child.escapes_ancestor_geometry {
+                reordered = true;
+                let physical_parent = *child
+                    .physical_ancestors
+                    .last()
+                    .expect("escaped node retains its physical parent")
+                    as *mut PaintTreeNode<'static>;
+                record.moves.push(LogicalMove {
+                    node: &mut **child as *mut PaintTreeNode<'static>,
+                    physical_parent,
+                    logical_parent: pointer,
+                    physical_ancestors: child.physical_ancestors.clone(),
+                });
+            } else {
+                if last_physical_index.is_some_and(|last| child.physical_index < last) {
+                    reordered = true;
+                }
+                last_physical_index = Some(child.physical_index);
+            }
+        }
+        if reordered {
+            record.reordered.push(pointer);
+        }
+        for child in node.children.iter_mut() {
+            visit(child, record);
+        }
+    }
+    let mut record = LogicalTreeRecord {
+        root: root as *const PaintTreeNode<'static> as usize,
+        moves: Vec::new(),
+        reordered: Vec::new(),
+    };
+    visit(root, &mut record);
+    record
+}
+
+/// RestorePhysicalOwnership for a tree `record` describes: puts each moved
+/// subtree back under its physical parent and the touched child lists back
+/// in physical order. Returns false, changing nothing, when the tree does
+/// not match the record.
+///
+/// Pointer validity:
+/// Every pointer of `record` names a node owned by the tree it recorded,
+/// which must be alive and not otherwise borrowed.
+fn RestorePhysicalFromRecord(record: &LogicalTreeRecord) -> bool {
+    let matches = record.moves.iter().all(|entry| {
+        unsafe { &*entry.logical_parent }
+            .children
+            .iter()
+            .any(|child| std::ptr::eq(&**child, entry.node))
+    });
+    if !matches {
+        return false;
+    }
+    for entry in &record.moves {
+        let logical_parent = unsafe { &mut *entry.logical_parent };
+        let index = logical_parent
+            .children
+            .iter()
+            .position(|child| std::ptr::eq(&**child, entry.node))
+            .expect("checked above");
+        let mut child = logical_parent.children.remove(index);
+        child.escapes_ancestor_geometry = false;
+        child.physical_ancestors.clear();
+        unsafe { &mut *entry.physical_parent }.children.push(child);
+    }
+    for &parent in record
+        .reordered
+        .iter()
+        .chain(record.moves.iter().map(|entry| &entry.physical_parent))
+    {
+        unsafe { &mut *parent }
+            .children
+            .sort_by_key(|child| child.physical_index);
+    }
+    true
+}
+
+/// RestoreLogicalOutOfFlowParents for a walk that kept the topology: redoes
+/// the recorded moves and sibling orders, with the D2 fix-up for a moved
+/// subtree the builder could not parent logically. Returns the fix-ups, or
+/// None, changing nothing, when the tree does not match the record.
+///
+/// Pointer validity:
+/// As RestorePhysicalFromRecord.
+fn ReplayLogicalTree(
+    record: &LogicalTreeRecord,
+    store: &mut PaintPropertyNodeStore,
+) -> Option<usize> {
+    let matches = record.moves.iter().all(|entry| {
+        unsafe { &*entry.physical_parent }
+            .children
+            .iter()
+            .any(|child| std::ptr::eq(&**child, entry.node))
+    });
+    if !matches {
+        return None;
+    }
+    let mut fixups = 0;
+    for entry in &record.moves {
+        let physical_parent = unsafe { &mut *entry.physical_parent };
+        let index = physical_parent
+            .children
+            .iter()
+            .position(|child| std::ptr::eq(&**child, entry.node))
+            .expect("checked above");
+        let mut node = physical_parent.children.remove(index);
+        node.escapes_ancestor_geometry = true;
+        node.physical_ancestors = entry.physical_ancestors.clone();
+        let logical_parent = unsafe { &mut *entry.logical_parent };
+        let built_logically = node.cache.as_ref().is_some_and(|cache| {
+            Arc::ptr_eq(
+                &cache.inherited.properties.nodes.effect,
+                &logical_parent.properties.nodes.effect,
+            ) && cache.inherited.opacity == logical_parent.opacity
+        });
+        if !built_logically {
+            fixups += 1;
+            RebindLogicalEffectState(
+                &mut node,
+                logical_parent.opacity,
+                logical_parent.properties.effect_id,
+                logical_parent.properties.nodes.effect.clone(),
+                store,
+            );
+        }
+        InsertInLogicalTreeOrder(logical_parent, node);
+    }
+    for &parent in &record.reordered {
+        SortLogicalSiblings(unsafe { &mut *parent });
+    }
+    Some(fixups)
+}
+
+/// The ObjectPaintProperties slots of every object of a subtree.
+fn CollectSubtreeOwnKeys(node: &PaintTreeNode<'_>, out: &mut impl FnMut(PaintPropertyKey)) {
+    if let Some(cache) = node.cache.as_ref() {
+        for (_, key) in &cache.own_keys {
+            out(*key);
+        }
+    }
+    for child in &node.children {
+        CollectSubtreeOwnKeys(child, out);
+    }
+}
+
 type InlineOutlineKey = (u64, u64);
 
 fn GatherInlineOutlineGroups<'a>(
@@ -4441,7 +4648,46 @@ fn AppendSelfOutlineRects(node: &PaintTreeNode<'_>, rects: &mut Vec<PaintRect>) 
 /// ordinary retained children observe the same state without depending on walk
 /// call-stack shape. Image auto-dark admission intentionally ignores this flag.
 fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bool) {
+    PropagateAutoDarkModeStateFrom(node, inherited_paused, None);
+}
+
+/// PropagateAutoDarkModeState after a walk that rebound no retained
+/// payload: an object `walk` did not visit kept its size, offset and style
+/// payload, so while the state it holds equals the inherited one its whole
+/// subtree holds the same state as after the last propagation. Only the
+/// visited (dirty) path and subtrees whose inherited state changed are
+/// updated, as Chromium derives the state while painting the SVG root.
+fn UpdateAutoDarkModeStateOnVisitedPath(node: &mut PaintTreeNode<'_>, inherited_paused: bool, walk: u64) {
+    PropagateAutoDarkModeStateFrom(node, inherited_paused, Some(walk));
+}
+
+fn PropagateAutoDarkModeStateFrom(
+    node: &mut PaintTreeNode<'_>,
+    inherited_paused: bool,
+    visited_walk: Option<u64>,
+) {
     const MAX_IMAGE_LENGTH: f64 = 64.0;
+    if let Some(walk) = visited_walk {
+        let visited = node
+            .cache
+            .as_ref()
+            .is_none_or(|cache| cache.visited_pass == walk);
+        let paint = &node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment")
+            .paint;
+        let current = paint.style.auto_dark_mode_paused() == inherited_paused
+            && !(paint.style.Source().is_none()
+                && paint.selection_style.auto_dark_mode_paused() != inherited_paused)
+            && !paint
+                .svg_text_decoration_style
+                .as_ref()
+                .is_some_and(|style| style.auto_dark_mode_paused() != inherited_paused);
+        if !visited && current {
+            return;
+        }
+    }
     let child_paused = {
         let fragment = node
             .fragment
@@ -4495,7 +4741,7 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
         }
     }
     for child in &mut node.children {
-        PropagateAutoDarkModeState(child, child_paused);
+        PropagateAutoDarkModeStateFrom(child, child_paused, visited_walk);
     }
 }
 
@@ -6806,8 +7052,6 @@ impl PrePaintTreeWalk {
             }
             node.cache.as_mut().unwrap().inherited = retained_inherited;
             let cache = node.cache.as_ref().unwrap();
-            self.property_keys
-                .extend(cache.subtree_keys.iter().copied());
             self.stats.reused_nodes += cache.nodes;
             self.stats.skipped_subtrees += 1;
             self.stats.profile_admission_ns += ProfileNs(t_start, checkpoint());
@@ -6938,6 +7182,7 @@ impl PrePaintTreeWalk {
             self.stats.shifted_nodes += 1;
             let mut node = previous.take().unwrap();
             node.BindSource(fragment);
+            let layer_facts_before = LayerFacts(&node);
             if ShiftRetainedNode(
                 &mut node,
                 delta,
@@ -6960,7 +7205,15 @@ impl PrePaintTreeWalk {
                     .pre_paint_invalidation
                     .should_check_for_paint_invalidation = true;
             }
-            self.needs_post_update = true;
+            // UpdateForObjectLocation moves the object only: its slots,
+            // client directory, phase structure, logical position and
+            // stacking facts are the admitted ones (self_unchanged), so the
+            // post-update results stand, as for LocalGeometryChange. Prepared
+            // inline-outline rects are in paint space, and the refreshed live
+            // PaintLayer facts can change the stacking lists.
+            if self.inline_outline_groups || LayerFacts(&node) != layer_facts_before {
+                self.needs_post_update = true;
+            }
             // Shifted geometry is a new PrePaint state of this node.
             node.cache.as_mut().unwrap().revision = self.revision_generation;
             self.stats.shift_branch_ns += ProfileNs(t_shift, checkpoint());
@@ -7224,6 +7477,15 @@ impl PrePaintTreeWalk {
                         self.needs_post_update = true;
                     }
                 }
+                // ObjectPaintProperties::Clear*: a slot this object no longer
+                // owns is released with its role.
+                if let (Some(old_cache), Some(new_cache)) = (old.cache.as_ref(), built.cache.as_ref()) {
+                    for (_, key) in &old_cache.own_keys {
+                        if !new_cache.own_keys.iter().any(|(_, kept)| kept == key) {
+                            self.released_property_keys.push(*key);
+                        }
+                    }
+                }
                 built.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
                 built.children = std::mem::take(&mut old.children);
                 built.physical_index = old.physical_index;
@@ -7455,8 +7717,6 @@ impl PrePaintTreeWalk {
             .unwrap()
             .children
             .blocking_wheel_event_handler_changed = inherited.blocking_wheel_event_handler_changed;
-        let own_keys = node.cache.as_ref().unwrap().own_keys.clone();
-        self.property_keys.extend(own_keys.iter().copied());
         if inherited.root {
             self.CaptureRootFixedPositionContext(&base, &node);
         }
@@ -7487,7 +7747,6 @@ impl PrePaintTreeWalk {
             child_pre_paint_blocked_by_display_lock,
             self.source_result_changed,
         ) {
-            let mut keys = own_keys;
             let mut nodes = 1;
             let mut subtree_resource_usage = node.cache.as_ref().unwrap().resource_usage;
             for child in &node.children {
@@ -7495,11 +7754,9 @@ impl PrePaintTreeWalk {
                     .cache
                     .as_ref()
                     .expect("resident child has builder state");
-                keys.extend(child_cache.subtree_keys.iter().copied());
                 nodes += child_cache.nodes;
                 subtree_resource_usage |= child_cache.subtree_resource_usage;
             }
-            self.property_keys.extend(keys.iter().copied());
             self.stats.reused_nodes += nodes.saturating_sub(1);
             self.stats.skipped_subtrees += usize::from(nodes > 1);
             let physical_children = node
@@ -7510,9 +7767,9 @@ impl PrePaintTreeWalk {
             let cache = node.cache.as_mut().unwrap();
             cache.subtree_revision = 0;
             cache.subtree_resource_usage = subtree_resource_usage;
-            cache.subtree_keys = keys;
             cache.nodes = nodes;
             cache.physical_children = physical_children;
+            cache.visited_pass = self.walk_generation;
             self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, checkpoint());
             // Source: pre_paint_tree_walk.cc:1517-1531,1584-1585. The child
             // walk is blocked, but this object was visited; ClearPaintFlags
@@ -7573,11 +7830,14 @@ impl PrePaintTreeWalk {
                         replaced.is_none(),
                         "FragmentTree contains duplicate fragment_instance_id values"
                     );
+                } else {
+                    // An anonymous retained node cannot be paired again; its
+                    // subtree's FragmentData is destroyed here.
+                    CollectSubtreeOwnKeys(&child, &mut |key| self.released_property_keys.push(key));
                 }
             }
             (None, children_by_instance)
         };
-        let mut keys = own_keys;
         let mut nodes = 1;
         // This node's ScopedDisplayItemFragment, set by the caller before
         // this visit; no child has been visited yet.
@@ -7700,11 +7960,15 @@ impl PrePaintTreeWalk {
                 RefreshInheritedDisplayItemFragments(&mut child_node);
             }
             let cache = child_node.cache.as_ref().unwrap();
-            keys.extend(cache.subtree_keys.iter().copied());
             nodes += cache.nodes;
             node.children.push(child_node);
         }
         self.physical_ancestor_ids.pop();
+        // Retained children no source child paired with left the tree; their
+        // objects' slots go with them.
+        for dropped in children_by_instance.values() {
+            CollectSubtreeOwnKeys(dropped, &mut |key| self.released_property_keys.push(key));
+        }
         let t_looped = checkpoint();
         self.stats.profile_child_loop_ns +=
             ProfileNs(t_loop, t_looped).saturating_sub(recursion_ns);
@@ -7742,10 +8006,10 @@ impl PrePaintTreeWalk {
             generation
         };
         cache.subtree_resource_usage = subtree_resource_usage;
-        cache.subtree_keys = keys;
         cache.nodes = nodes;
         cache.physical_children = physical_children;
         cache.contains_local_frames = contains_local_frames;
+        cache.visited_pass = self.walk_generation;
         self.stats.profile_tail_ns += ProfileNs(t_looped, checkpoint());
         // Source: pre_paint_tree_walk.cc:1584-1585. The flags this visit
         // consumed are cleared after the walk, once every fragment of the
@@ -8439,9 +8703,12 @@ impl PrePaintTreeWalk {
         self.revision_generation =
             PRE_PAINT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         self.resource_memo.clear();
-        // Every slot this pass builds or retains registers its key again; the
-        // builders update the resident slot nodes in place.
+        // The slots registered by this pass's builds (RegisterProperty); the
+        // builders update the resident slot nodes in place. Retained objects
+        // keep their slots without registering them again, as Chromium's
+        // clean FragmentData keeps its ObjectPaintProperties.
         self.property_keys.clear();
+        self.released_property_keys.clear();
         self.own_key_log.clear();
         self.own_change_log.clear();
         self.property_node_store.BeginUpdate();
@@ -8452,6 +8719,10 @@ impl PrePaintTreeWalk {
             role: PaintPropertyRole::ViewportClip,
         };
         if environment_changed || (viewport.is_some() && self.viewport_properties.clip_id == 0) {
+            if viewport.is_none() {
+                // The frame view no longer has a viewport clip.
+                self.released_property_keys.push(viewport_clip_key);
+            }
             self.viewport = viewport;
             // Blink updates the viewport-owned clip node in place. Its value
             // changes as the window resizes, but the property slot remains the
@@ -8578,10 +8849,9 @@ impl PrePaintTreeWalk {
             self.stats.skipped_subtrees = 1;
             self.stats.self_unchanged_nodes = 1;
             self.stats.subtree_unchanged_nodes = 1;
-            self.property_keys
-                .extend(cache.subtree_keys.iter().copied());
             self.resource_memo.clear();
             self.next_property_id = self.property_node_store.next_id();
+            self.walked_tree_root = &*tree as *const PaintTreeNode<'static> as usize;
             return tree;
         }
         // Chromium's FragmentData outlives a relayout, so PrePaint visits only
@@ -8603,10 +8873,25 @@ impl PrePaintTreeWalk {
         // directory stay current when the walk changed nothing (Chromium
         // rebuilds no such resident structure per lifecycle update).
         self.needs_post_update = force || previous.is_none();
+        // A forced or first walk rebuilds every object, so the slots it
+        // registers are the live ones; otherwise slots are released where
+        // the walk drops or rebuilds their owner.
+        self.full_slot_sweep =
+            force || previous.is_none() || std::mem::take(&mut self.slot_sweep_pending);
         let restore_logical_tree = self.logical_tree_changed && previous.is_some();
         if restore_logical_tree {
             if let Some(tree) = &mut previous {
-                RestorePhysicalOwnership(tree);
+                // Undo exactly the recorded out-of-flow moves (and the
+                // reordered child lists); a tree without a matching record
+                // takes the complete restore.
+                let root = &**tree as *const PaintTreeNode<'static> as usize;
+                let restored = self.logical_tree_record.as_ref().is_some_and(|record| {
+                    record.root == root && RestorePhysicalFromRecord(record)
+                });
+                if !restored {
+                    self.logical_tree_record = None;
+                    RestorePhysicalOwnership(tree);
+                }
             }
         }
         // LayoutView's own scope (its layer fragment index); a publication
@@ -8649,12 +8934,35 @@ impl PrePaintTreeWalk {
         if scope_changed {
             RefreshInheritedDisplayItemFragments(&mut tree);
         }
-        if self.needs_post_update || restore_logical_tree {
+        // Without a topology or structure change the logical parents, the
+        // escaping out-of-flow subtrees and the sibling orders are the ones
+        // recorded: redo those moves only (Chromium's walk keeps no second
+        // tree order, so it has nothing to rebuild here).
+        let tree_root = &*tree as *const PaintTreeNode<'static> as usize;
+        let mut logical_tree_replayed = false;
+        if restore_logical_tree && !self.needs_post_update {
+            if let Some(record) = self
+                .logical_tree_record
+                .as_ref()
+                .filter(|record| record.root == tree_root)
+            {
+                let mut trace = browser_tracing::span("prepaint", "PrePaint.ReplayLogicalTree");
+                if let Some(fixups) =
+                    ReplayLogicalTree(record, &mut self.property_node_store)
+                {
+                    logical_tree_replayed = true;
+                    trace.set("moves", record.moves.len() as f64);
+                    trace.set("logical_effect_fixups", fixups as f64);
+                }
+            }
+        }
+        if (self.needs_post_update || restore_logical_tree) && !logical_tree_replayed {
             ResetLogicalEscapes(&mut tree);
             let mut trace = browser_tracing::span("prepaint", "PrePaint.RestoreLogicalTree");
             let (changed, fixups) =
                 RestoreLogicalOutOfFlowParents(&mut tree, &mut self.property_node_store);
             self.logical_tree_changed = changed;
+            self.logical_tree_record = changed.then(|| RecordLogicalTree(&mut tree));
             trace.set("logical_effect_fixups", fixups as f64);
         }
         if self.needs_post_update {
@@ -8736,7 +9044,13 @@ impl PrePaintTreeWalk {
             );
             admission.set("post_update", self.needs_post_update as u8 as f64);
         }
-        PropagateAutoDarkModeState(&mut tree, false);
+        // A rebound or rebuilt subtree reads fresh style payloads; a clean
+        // retained subtree keeps the state its last propagation stored.
+        if self.needs_post_update || self.source_owner_changed || self.stats.rebound_nodes > 0 {
+            PropagateAutoDarkModeState(&mut tree, false);
+        } else {
+            UpdateAutoDarkModeStateOnVisitedPath(&mut tree, false, self.walk_generation);
+        }
         let mut repaint_counts = [0; 3];
         let subtree_needs_repaint =
             PropagateSubsequenceRepaintCounting(&mut tree, &mut repaint_counts);
@@ -8751,21 +9065,40 @@ impl PrePaintTreeWalk {
                 ("cull_change_repaints", self.stats.cull_change_repaints as f64),
             ],
         );
-        // Every slot of a built or retained object registered its key in
-        // this pass; the others belong to objects that no longer need them.
+        // Source: ObjectPaintProperties::Clear* and FragmentData destruction.
+        // A slot dies with the object (or the role) that owned it, which
+        // only the visited objects can have lost; a clean pass frees none.
         {
-            // The key set is rebuilt every walk; keep its table allocated.
-            let mut live = std::mem::take(&mut self.live_property_keys);
-            live.clear();
-            live.extend(self.property_keys.values().copied());
-            self.property_node_store
-                .RetainLiveSlots(|key| live.contains(key));
-            self.live_property_keys = live;
+            if self.full_slot_sweep {
+                let mut live: HashSet<PaintPropertyKey> =
+                    self.property_keys.values().copied().collect();
+                CollectSubtreeOwnKeys(&tree, &mut |key| {
+                    live.insert(key);
+                });
+                self.property_node_store
+                    .RetainLiveSlots(|key| live.contains(key));
+                self.released_property_keys.clear();
+            } else if !self.released_property_keys.is_empty() {
+                // A key registered again in this pass belongs to an object
+                // that took the slot over (a moved or re-created node).
+                let registered: HashSet<PaintPropertyKey> =
+                    self.property_keys.values().copied().collect();
+                let released: HashSet<PaintPropertyKey> = self
+                    .released_property_keys
+                    .drain(..)
+                    .filter(|key| !registered.contains(key))
+                    .collect();
+                if !released.is_empty() {
+                    self.property_node_store
+                        .RetainLiveSlots(|key| !released.contains(key));
+                }
+            }
             self.intersection_observation_state = self
                 .intersection_observation_state
                 .max(self.property_node_store.intersection_observation_state);
             self.next_property_id = self.property_node_store.next_id();
         }
+        self.walked_tree_root = tree_root;
         tree
     }
 
@@ -8813,6 +9146,12 @@ impl PrePaintTreeWalk {
             }
             collect(&mut tree, &mut self.client_nodes, &mut self.resident_nodes);
             self.client_nodes.retain(|_, nodes| !nodes.is_empty());
+        }
+        if &*tree as *const PaintTreeNode<'static> as usize != self.walked_tree_root {
+            // Not the tree the last walk returned: neither its slot releases
+            // nor its logical moves are known.
+            self.slot_sweep_pending = true;
+            self.logical_tree_record = None;
         }
         self.retained_tree = Some(tree);
         if let Some(lease) = self.pending_source_lease.take() {
