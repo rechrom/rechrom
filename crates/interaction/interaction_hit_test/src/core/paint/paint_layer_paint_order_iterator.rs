@@ -335,3 +335,70 @@ impl<'a, C: HitTestableCanvas> PaintLayerPaintOrderIteratorBase<'a>
         Self::Next(self)
     }
 }
+
+// The canonical owners: Layout's PaintLayer and the PaintLayerStackingNode it
+// owns (paint_layer.h:706-708,809; paint_layer_stacking_node.h:108-124). The
+// iterator reads their links and lists in place, so hit testing and Paint
+// share one z-order owner.
+use ::layout::views::paint_layer::{
+    PaintLayer as NativePaintLayer, PaintLayerStackingNode as NativePaintLayerStackingNode,
+    PaintLayers as NativePaintLayers,
+};
+
+// Source: paint_layer.h:189-193,877-894; layout_object.h IsStacked().
+impl PaintLayer for NativePaintLayer {
+    fn FirstChild(&self) -> Option<&dyn PaintLayer> {
+        unsafe { NativePaintLayer::FirstChild(self).as_ref() }.map(|layer| layer as &dyn PaintLayer)
+    }
+    fn LastChild(&self) -> Option<&dyn PaintLayer> {
+        unsafe { NativePaintLayer::LastChild(self).as_ref() }.map(|layer| layer as &dyn PaintLayer)
+    }
+    fn NextSibling(&self) -> Option<&dyn PaintLayer> {
+        unsafe { NativePaintLayer::NextSibling(self).as_ref() }
+            .map(|layer| layer as &dyn PaintLayer)
+    }
+    fn PreviousSibling(&self) -> Option<&dyn PaintLayer> {
+        unsafe { NativePaintLayer::PreviousSibling(self).as_ref() }
+            .map(|layer| layer as &dyn PaintLayer)
+    }
+    fn IsStacked(&self) -> bool {
+        self.GetLayoutObject().IsStacked()
+    }
+    fn StackingNode(&self) -> Option<&dyn PaintLayerStackingNode> {
+        NativePaintLayer::StackingNode(self).map(|node| node as &dyn PaintLayerStackingNode)
+    }
+    #[cfg(debug_assertions)]
+    fn SetLayerListMutationAllowed(&self, allowed: bool) -> bool {
+        NativePaintLayer::SetLayerListMutationAllowed(self, allowed)
+    }
+}
+
+// Source: paint_layer_stacking_node.h:108-124.
+impl PaintLayerStackingNode for NativePaintLayerStackingNode {
+    fn NegZOrderList(&self) -> &dyn PaintLayerList {
+        NativePaintLayerStackingNode::NegZOrderList(self)
+    }
+    fn PosZOrderList(&self) -> &dyn PaintLayerList {
+        NativePaintLayerStackingNode::PosZOrderList(self)
+    }
+    fn LayersPaintingOverlayOverflowControlsAfter(
+        &self,
+        layer: &dyn PaintLayer,
+    ) -> Option<&dyn PaintLayerList> {
+        // Every `dyn PaintLayer` handed out here is a NativePaintLayer (the
+        // only implementation), so its data pointer is the map key.
+        let layer = layer as *const dyn PaintLayer as *const NativePaintLayer;
+        NativePaintLayerStackingNode::LayersPaintingOverlayOverflowControlsAfter(self, layer)
+            .map(|layers| layers as &dyn PaintLayerList)
+    }
+}
+
+// The stacking node's HeapVector<Member<PaintLayer>> itself, borrowed.
+impl PaintLayerList for NativePaintLayers {
+    fn len(&self) -> usize {
+        self.size() as usize
+    }
+    fn at(&self, index: usize) -> &dyn PaintLayer {
+        unsafe { &*self[..][index].Get() }
+    }
+}

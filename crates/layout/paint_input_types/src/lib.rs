@@ -15,6 +15,9 @@ pub mod layout_input;
 pub mod layout_input_types;
 pub mod paint_input;
 pub mod paint_resources;
+// Blink core/paint/paint_result.h: returned by Paint and retained on the
+// Layout-owned PaintLayer (previous_paint_result_).
+pub mod paint_result;
 // Resolved SVG filter region/primitive geometry over the authored filter
 // graph values (Blink SVGFilterBuilder / FilterEffect geometry): shared by
 // SVG Layout, Paint property filters and Raster image filters.
