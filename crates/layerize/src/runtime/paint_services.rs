@@ -979,24 +979,53 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             // leave PaintedScrollbarLayer attached to the old snapshot.
             // Promote only those repaints to the canonical full layer update;
             // all other repaint and resize fast paths remain unchanged.
-            // A shared display-item list carries the same payloads.
+            // A shared display-item list carries the same payloads. Items the
+            // PaintController moved into the repainted artifact left
+            // tombstones in `previous` (paint_controller.cc:283-286,737-820)
+            // and carry their payload unchanged, as Chromium's moved
+            // ScrollbarDisplayItem keeps its cc::Scrollbar; so only
+            // re-recorded scrollbar items are compared: each live old one
+            // with the new item of the same id, and any new one that neither
+            // replaces a live old item nor was moved from the cache.
             let scrollbar_inputs_changed = repainted
                 && !previous
                     .display_items
                     .PtrEq(&input.artifact().display_items)
                 && {
                     let access = ::paint::artifact_access();
-                    let changed = previous
-                        .display_items
-                        .get(&access)
+                    let old_items = previous.display_items.get(&access);
+                    let mut old_live: std::collections::HashMap<_, _> = old_items
                         .iter()
-                        .filter_map(|item| item.scrollbar.as_ref())
-                        .ne(input
-                            .artifact()
-                            .display_items
-                            .get(&access)
-                            .iter()
-                            .filter_map(|item| item.scrollbar.as_ref()));
+                        .filter(|item| !item.IsTombstone())
+                        .filter_map(|item| item.scrollbar.as_ref().map(|data| (item.id, data)))
+                        .collect();
+                    let moved_items: std::collections::HashSet<_> = old_items
+                        .iter()
+                        .filter(|item| item.IsTombstone() && !item.IsSubsequenceTombstone())
+                        .map(|item| item.id)
+                        .collect();
+                    let new_items = input.artifact().display_items.get(&access);
+                    let mut changed = false;
+                    'chunks: for chunk in input.artifact().chunks.get(&access).iter() {
+                        let range = chunk.begin_index as usize..chunk.end_index as usize;
+                        for item in &new_items[range] {
+                            let Some(data) = item.scrollbar.as_ref() else {
+                                continue;
+                            };
+                            let differs = match old_live.remove(&item.id) {
+                                Some(old) => old != data,
+                                None => {
+                                    !chunk.is_moved_from_cached_subsequence
+                                        && !moved_items.contains(&item.id)
+                                }
+                            };
+                            if differs {
+                                changed = true;
+                                break 'chunks;
+                            }
+                        }
+                    }
+                    let changed = changed || !old_live.is_empty();
                     changed
                 };
             // Blink's PrePaint calls LocalFrameView::

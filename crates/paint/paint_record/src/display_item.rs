@@ -237,6 +237,66 @@ impl RecordedDisplayItem {
         self.scroll_translation = None;
     }
 
+    /// Source: display_item_list.h:197-207,264-277 (AppendByMoving /
+    /// ReplaceLastByMoving -> MoveItem). The item, with its PaintRecord,
+    /// scrollbar and foreign-layer payloads, moves out; this slot becomes the
+    /// single-item tombstone CreateTombstone describes, keeping the identity,
+    /// invalidation and visual-rect fields DisplayItemRasterInvalidator reads
+    /// from the old list (display_item_raster_invalidator.cc:51-89).
+    pub fn MoveOutLeavingTombstone(&mut self) -> Self {
+        assert!(!self.IsTombstone());
+        let tombstone = Self {
+            is_cacheable: self.is_cacheable,
+            is_tombstone: false,
+            paint_invalidation_reason: self.paint_invalidation_reason,
+            scrollbar: None,
+            foreign_layer: None,
+            kind: self.kind,
+            id: self.id,
+            visual_rect: self.visual_rect,
+            visual_rect_is_accurate: self.visual_rect_is_accurate,
+            draws_content: self.draws_content,
+            raster_effect_outset: self.raster_effect_outset,
+            record_rect_known_to_be_opaque: self.record_rect_known_to_be_opaque,
+            record_background: self.record_background,
+            record_has_text: self.record_has_text,
+            record_begin: self.record_begin,
+            record_end: self.record_end,
+            record_source: None,
+            scroll_translation: None,
+        };
+        let moved = std::mem::replace(self, tombstone);
+        self.CreateTombstone();
+        moved
+    }
+
+    /// Source: display_item_list.h:209-232 (AppendSubsequenceByMoving). The
+    /// item moves out and this slot becomes the zeroed subsequence tombstone.
+    pub fn MoveOutLeavingSubsequenceTombstone(&mut self) -> Self {
+        let mut tombstone = Self {
+            is_cacheable: true,
+            is_tombstone: true,
+            paint_invalidation_reason: None,
+            scrollbar: None,
+            foreign_layer: None,
+            kind: RecordedDisplayItemKind::Drawing,
+            id: Default::default(),
+            visual_rect: Default::default(),
+            visual_rect_is_accurate: false,
+            draws_content: false,
+            raster_effect_outset: RasterEffectOutset::kNone,
+            record_rect_known_to_be_opaque: Default::default(),
+            record_background: Default::default(),
+            record_has_text: false,
+            record_begin: 0,
+            record_end: 0,
+            record_source: None,
+            scroll_translation: None,
+        };
+        tombstone.CreateSubsequenceTombstone();
+        std::mem::replace(self, tombstone)
+    }
+
     // Source: display_item.h:278-286; display_item.cc:203-240.
     pub fn IsSubsequenceTombstone(&self) -> bool {
         self.is_tombstone && self.id.client_id == 0

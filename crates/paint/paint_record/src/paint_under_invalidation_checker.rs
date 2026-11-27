@@ -7,7 +7,7 @@
 use foundation::PaintInvalidationReason;
 use paint_model::PaintResult;
 
-use crate::artifact_access::artifact_access;
+use crate::artifact_access::{artifact_access, artifact_writer};
 use crate::paint_controller::paint_controller_debug_data::DebugDataAsStringForArtifacts;
 use crate::{PaintRecording, RecordedDisplayItem};
 
@@ -99,7 +99,7 @@ impl PaintUnderInvalidationChecker {
     /// Source: `paint_under_invalidation_checker.cc:64-102`.
     pub(crate) fn CheckNewItem(
         &mut self,
-        old_artifact: &mut PaintRecording,
+        old_artifact: &PaintRecording,
         new_artifact: &mut PaintRecording,
         is_skipping_cache: bool,
         old_subsequences: &[SubsequenceMarkers],
@@ -149,28 +149,30 @@ impl PaintUnderInvalidationChecker {
         let new_record_begin = new_item.record_begin;
         debug_assert!(new_item.record_source.is_none());
         debug_assert_eq!(new_item.record_end, new_artifact.items.len());
-        let mut relocated = old_item.clone();
-        relocated.MoveRecordFrom(old_artifact, new_record_begin);
         drop(access);
 
-        let moved = new_artifact
-            .display_items
-            .make_mut()
-            .ReplaceLastByMoving(&mut old_artifact.display_items.make_mut()[old_item_index]);
+        // Source: paint_under_invalidation_checker.cc:64-102. The cached item
+        // replaces the freshly recorded duplicate by moving out of the
+        // current artifact (DisplayItemList::ReplaceLastByMoving), leaving a
+        // tombstone there for the raster invalidators that still hold it.
+        let new_items = new_artifact.display_items.make_mut();
+        {
+            let mut writer = artifact_writer();
+            old_artifact.display_items.modify(&mut writer, |old_items| {
+                new_items.ReplaceLastByMoving(&mut old_items[old_item_index]);
+            });
+        }
+        let moved = new_items.last_mut().expect("moved cached display item");
         moved.SetPaintInvalidationReason(if moved.IsCacheable() {
             PaintInvalidationReason::kNone
         } else {
             PaintInvalidationReason::kUncacheable
         });
+        // DisplayItem owns its PaintRecord in Blink. The moved item keeps its
+        // record allocation (MoveRecordFrom) at the position the duplicate
+        // occupied in the new artifact's op stream, whose ops are dropped.
+        moved.MoveRecordFrom(old_artifact, new_record_begin);
         std::sync::Arc::make_mut(&mut new_artifact.items).truncate(new_record_begin);
-        let moved = new_artifact
-            .display_items
-            .make_mut()
-            .last_mut()
-            .expect("moved cached display item");
-        moved.record_begin = relocated.record_begin;
-        moved.record_end = relocated.record_end;
-        moved.record_source = relocated.record_source;
 
         if self.subsequence_client_id_.is_some() {
             self.old_item_index_ = Some(old_item_index + 1);

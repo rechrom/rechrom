@@ -63,12 +63,11 @@ impl DisplayItemList {
     }
 
     // Source: display_item_list.h:197-207,264-277. The source byte-copies a
-    // trivially-copyable item then preserves identity fields in a tombstone.
-    // Rust clones owned payloads and applies the same logical state transition.
+    // trivially-copyable item, transferring its subclass payload, then marks
+    // the old slot a tombstone that keeps the identity fields. Rust moves the
+    // item out (no payload clone) and leaves the same tombstone state.
     pub fn AppendByMoving(&mut self, item: &mut RecordedDisplayItem) -> &mut RecordedDisplayItem {
-        assert!(!item.IsTombstone());
-        let moved = item.clone();
-        item.CreateTombstone();
+        let moved = item.MoveOutLeavingTombstone();
         self.items_.push(moved);
         self.items_.last_mut().expect("just appended DisplayItem")
     }
@@ -77,9 +76,7 @@ impl DisplayItemList {
         &mut self,
         item: &mut RecordedDisplayItem,
     ) -> &mut RecordedDisplayItem {
-        assert!(!item.IsTombstone());
-        let moved = item.clone();
-        item.CreateTombstone();
+        let moved = item.MoveOutLeavingTombstone();
         *self
             .items_
             .last_mut()
@@ -89,21 +86,7 @@ impl DisplayItemList {
 
     // Source: display_item_list.h:209-232. Unlike a single-item move, Blink
     // clears every old subsequence slot because raster invalidation will not
-    // inspect it. CreateSubsequenceTombstone performs that zero-state mapping.
-    /// AppendSubsequenceByMoving's append half, for a current list that stays
-    /// shared with other frame owners: the caller records the tombstones.
-    pub fn AppendSubsequenceByCopying(
-        &mut self,
-        from: &DisplayItemList,
-        begin_index: usize,
-        end_index: usize,
-    ) {
-        assert!(end_index >= begin_index);
-        assert!(end_index <= from.len());
-        self.items_
-            .extend_from_slice(&from.items_[begin_index..end_index]);
-    }
-
+    // inspect it (CreateSubsequenceTombstone's zero state).
     pub fn AppendSubsequenceByMoving(
         &mut self,
         from: &mut DisplayItemList,
@@ -116,10 +99,10 @@ impl DisplayItemList {
         }
         assert!(begin_index < from.len());
         assert!(end_index <= from.len());
-        self.items_
-            .extend_from_slice(&from.items_[begin_index..end_index]);
+        self.items_.reserve(end_index - begin_index);
         for item in &mut from.items_[begin_index..end_index] {
-            item.CreateSubsequenceTombstone();
+            debug_assert!(!item.IsTombstone());
+            self.items_.push(item.MoveOutLeavingSubsequenceTombstone());
         }
     }
 

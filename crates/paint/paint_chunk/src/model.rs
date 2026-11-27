@@ -69,6 +69,48 @@ impl PaintChunk {
         self.end_index - self.begin_index
     }
 
+    /// Source: paint_chunk.h:60-82 `PaintChunk(wtf_size_t begin, PaintChunk&&
+    /// other)`, used by PaintController::AppendSubsequenceByMoving
+    /// (paint_controller.cc:752-764). The identity, bounds, properties and
+    /// derived values are copied; the owned hit-test, region-capture,
+    /// layer-selection and tracked-element data move to the returned chunk
+    /// and leave this moved-from chunk without them, which is what readers of
+    /// the old artifact see afterwards (RasterInvalidator matches old chunks
+    /// by id and reads their properties, raster_invalidator.cc:39-62).
+    /// PaintChunker::AppendByMoving assigns the new indices and flags.
+    pub fn MoveOut(&mut self) -> PaintChunk {
+        let compositor = self.compositor.as_deref_mut().map(|old| {
+            Box::new(PaintChunkCompositorData {
+                background_color: old.background_color,
+                background_area: old.background_area,
+                background_is_solid_color: old.background_is_solid_color,
+                has_text: old.has_text,
+                text_known_to_be_on_opaque_background: old.text_known_to_be_on_opaque_background,
+                hit_test_opaqueness: old.hit_test_opaqueness,
+                hit_test_data: old.hit_test_data.take(),
+                region_capture_data: old.region_capture_data.take(),
+                tracked_element_rects: old.tracked_element_rects.take(),
+                layer_selection_data: old.layer_selection_data.take(),
+            })
+        });
+        PaintChunk {
+            compositor,
+            id: self.id,
+            is_cacheable: self.is_cacheable,
+            client_is_just_created: self.client_is_just_created,
+            begin_index: self.begin_index,
+            end_index: self.end_index,
+            bounds: self.bounds,
+            drawable_bounds: self.drawable_bounds,
+            rect_known_to_be_opaque: self.rect_known_to_be_opaque,
+            bounds_are_complete: self.bounds_are_complete,
+            raster_effect_outset: self.raster_effect_outset,
+            properties: self.properties.clone(),
+            is_moved_from_cached_subsequence: self.is_moved_from_cached_subsequence,
+            effectively_invisible: self.effectively_invisible,
+        }
+    }
+
     // Source: paint_chunk.h:133-135.
     pub fn DrawsContent(&self) -> bool {
         !self.effectively_invisible && !self.drawable_bounds.is_empty()

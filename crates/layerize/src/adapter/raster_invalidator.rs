@@ -55,17 +55,6 @@ pub trait RasterInvalidationArtifact<M: RasterInvalidationTypes + ?Sized> {
     /// Identity of the artifact's immutable display-item recording; zero
     /// when the artifact carries no such identity.
     fn RecordingRevision(&self) -> u64;
-    /// For the items of `old`'s chunk `old_chunk_index`, whether this (new)
-    /// artifact moved each one out of the cache: Chromium's
-    /// `old_item.IsTombstone()` (display_item_raster_invalidator.cc:51-56,
-    /// 62,74-79,89). Interim until cached items are moved in place and leave
-    /// real tombstones in the old artifact. Empty means none.
-    fn OldDisplayItemsMovedFromCacheInChunk<'a>(
-        &'a self,
-        access: &ArtifactAccess,
-        old: &Self,
-        old_chunk_index: usize,
-    ) -> &'a [bool];
 }
 pub trait RasterInvalidationSubset<M: RasterInvalidationTypes + ?Sized> {
     fn artifact(&self) -> &Arc<M::Artifact>;
