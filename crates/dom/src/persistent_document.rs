@@ -1412,6 +1412,12 @@ pub struct PersistentDocument {
     // HTMLImageElement::last_auto_sizes_width_. Kept on the DOM/image-loader
     // owner because it survives source reselection but is reset by removal.
     responsive_image_auto_sizes: HashMap<usize, f64>,
+    // Document::ObserveForLazyLoadedAutoSizedImg /
+    // UnobserveForLazyLoadedAutoSizedImg (document.cc): the targets of the
+    // Document's lazily created auto-sizes ResizeObserver. Only these images
+    // publish a rendered auto-sizes width after layout; an empty set means no
+    // per-frame observation work at all.
+    lazy_loaded_auto_sized_images: BTreeSet<usize>,
     scroll_offsets: HashMap<u64, Offset>,
     // StyleFetchedImage::AddClient/RemoveClient: only resolved CSS consumers
     // need their background/mask resource IDs refreshed on image completion.
@@ -1632,6 +1638,7 @@ impl PersistentDocument {
             responsive_image_selections: HashMap::new(),
             replaced_image_consumers: HashMap::new(),
             responsive_image_auto_sizes: HashMap::new(),
+            lazy_loaded_auto_sized_images: BTreeSet::new(),
             scroll_offsets: HashMap::new(),
             style_image_consumers: HashMap::new(),
             style_state: Default::default(),
@@ -6081,6 +6088,7 @@ impl PersistentDocument {
             self.UserActionElementDetached(node);
             self.responsive_image_selections.remove(&node);
             self.responsive_image_auto_sizes.remove(&node);
+            self.lazy_loaded_auto_sized_images.remove(&node);
             // Element::DetachLayoutTree descends into its ShadowRoot as well.
             // The shadow tree remains owned by the detached host, while its
             // document-computed styles and layout/resource clients are released.
@@ -6463,7 +6471,11 @@ impl PersistentDocument {
         self.RecordAttributeSelectorKeys(element, "style", "", Some(text.as_str()));
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
-        self.BumpCollectionMembershipRevision();
+        // InvalidateStyleAttribute never reaches Element::AttributeChanged's
+        // InvalidateNodeListCachesInAncestors (element.cc), and no node-list,
+        // HTMLCollection or ancestor selector-filter input depends on the style
+        // attribute. Keep the collection membership revision, so a per-frame
+        // CSSOM write does not revoke document-wide membership caches.
         self.InvalidateSelectorAttributes(element, "style", existing.is_none());
         let inline = crate::style_state::StyleChange::InlineStyle(element);
         let independent = independent
@@ -10348,6 +10360,11 @@ impl PersistentDocument {
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case("auto,"))
         })
     }
+    /// Whether the Document's lazy-loaded auto-sized image ResizeObserver has
+    /// any target (document.cc ObserveForLazyLoadedAutoSizedImg).
+    pub fn HasLazyLoadedAutoSizedImages(&self) -> bool {
+        !self.lazy_loaded_auto_sized_images.is_empty()
+    }
     pub fn ResponsiveImageAutoSize(&self, node: usize) -> Option<f64> {
         self.responsive_image_auto_sizes.get(&node).copied()
     }
@@ -10378,6 +10395,15 @@ impl PersistentDocument {
         node: usize,
         selection: Option<ResponsiveImageSelection>,
     ) -> bool {
+        // HTMLImageElement::SetBestFitURLAndDPRFromImageCandidate
+        // (html_image_element.cc): each source selection observes an
+        // auto-sized lazy image with the Document's auto-sizes ResizeObserver
+        // and unobserves every other image.
+        if self.AllowsResponsiveImageAutoSizes(node) {
+            self.lazy_loaded_auto_sized_images.insert(node);
+        } else {
+            self.lazy_loaded_auto_sized_images.remove(&node);
+        }
         let changed = self.responsive_image_selections.get(&node) != selection.as_ref();
         if !changed {
             return false;
@@ -10884,14 +10910,23 @@ impl PersistentDocument {
         if !self.ShouldRecordStyleChange(node) {
             return;
         }
+        let change = self.style_state.attribute_changes.entry(node).or_default();
+        // A repeated write of the same attribute in one style batch records
+        // the existing name fact; do not allocate a second key string.
+        if !change.names.contains(name) {
+            change.names.insert(name.to_string());
+        }
+        // Only id/class rule-set keys need the old value (StyleEngine::
+        // IdChangedForElement / ClassChangedForElement).
+        if !namespace.is_empty() || !matches!(name, "id" | "class") {
+            return;
+        }
         let old = self.arena[node]
             .attributes
             .iter()
             .find(|a| a.local_name == name && a.namespace_uri == namespace)
             .map(|a| a.value.as_str());
-        let change = self.style_state.attribute_changes.entry(node).or_default();
-        change.names.insert(name.to_string());
-        if namespace.is_empty() && name == "id" {
+        if name == "id" {
             change.ids.extend(
                 old.into_iter()
                     .chain(value)

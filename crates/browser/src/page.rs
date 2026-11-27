@@ -5210,6 +5210,21 @@ impl Page {
         mut output: LayoutPaintOutput,
     ) -> io::Result<LayoutPaintOutput> {
         let mut trace = browser_tracing::span("lifecycle", "Page.ReconcileResponsiveAutoSizes");
+        // ResizeObserverController::GatherObservations visits observer
+        // targets only. Without a lazy-loaded auto-sized <img> target
+        // (Document::ObserveForLazyLoadedAutoSizedImg) Blink has no such
+        // observer, so no fragment walk runs.
+        if !self
+            .state
+            .document
+            .borrow()
+            .GetDocument()
+            .HasLazyLoadedAutoSizedImages()
+        {
+            trace.set("iterations", 0.0);
+            trace.set("responsive_images", 0.0);
+            return Ok(output);
+        }
         fn collect(
             document: &Document,
             node: PaintFragmentCursor<'_>,
