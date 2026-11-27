@@ -20,9 +20,11 @@ pub mod clip_path_clipper;
 pub mod compositing_reason_finder;
 pub mod contoured_border_geometry;
 pub mod cull_rect_updater;
+pub mod fragment_data;
 pub mod nine_piece_geometry;
 pub mod nine_piece_image_grid;
 pub mod object_paint_invalidator;
+pub mod object_paint_properties;
 pub mod paint_invalidator;
 // PaintLayer classification of a Layout fragment (core/paint/paint_layer.cc).
 pub mod paint_order;
