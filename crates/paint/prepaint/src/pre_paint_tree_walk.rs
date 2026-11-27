@@ -31,7 +31,7 @@ use layout::paint::{PaintFragmentCursor, PaintFragmentLease};
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::block_paint_invalidator::BlockPaintInvalidator;
 use crate::box_paint_invalidator::{
-    BackgroundInvalidation, BackgroundInvalidationType, BoxPaintInvalidator,
+    BackgroundInvalidation, BackgroundInvalidationType, BoxPaintInvalidator, ViewBackgroundRects,
 };
 use crate::compositing_reason_finder::CompositingReasonFinder;
 use crate::cull_rect_updater::CullRectUpdater;
@@ -1194,6 +1194,9 @@ pub struct PrePaintTreeWalk {
     // LayoutView::BackgroundRect changes mark every registered fixed
     // background object for full background invalidation in Chromium.
     view_background_geometry_changed: bool,
+    /// The walk root's LayoutView background rects, read once per walk, and
+    /// the address of the root's FragmentPaintData they belong to.
+    view_background_rects: Option<(usize, ViewBackgroundRects)>,
     /// The (slot id, key) of every property slot registered by the builds
     /// in progress (BuildNode drains its own range into NodeCache::own_keys),
     /// and the change each in-place slot update reported.
@@ -1303,6 +1306,7 @@ impl Default for PrePaintTreeWalk {
             completed_local_frame_prepaint: HashSet::new(),
             requires_main_thread_for_background_attachment_fixed: None,
             view_background_geometry_changed: false,
+            view_background_rects: None,
             own_key_log: Vec::new(),
             own_change_log: Vec::new(),
             logical_effect_contexts: HashMap::default(),
@@ -7715,13 +7719,21 @@ impl PrePaintTreeWalk {
             );
         if should_run_invalidation {
             let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
+                let fragment_data: &FragmentPaintData = &fragment;
+                let view_background_rects = self
+                    .view_background_rects
+                    .filter(|(owner, _)| {
+                        *owner == fragment_data as *const FragmentPaintData as usize
+                    })
+                    .map(|(_, rects)| rects);
                 let mut background =
-                    BoxPaintInvalidator::ComputeBackgroundInvalidationWithPreviousGapRules(
+                    BoxPaintInvalidator::ComputeBackgroundInvalidationWithViewRects(
                         &fragment,
                         Some(fragment.Cursor()),
                         PreviousFragment(old_fragment),
                         old_gap_rules.as_deref(),
                         invalidation_context,
+                        view_background_rects,
                     );
                 if self.view_background_geometry_changed
                     && fragment.paint.IsBackgroundAttachmentFixedObject()
@@ -9037,10 +9049,21 @@ impl PrePaintTreeWalk {
             flex_or_grid_item: false,
         };
         let mut previous = self.retained_tree.take();
-        self.view_background_geometry_changed = BoxPaintInvalidator::ViewBackgroundGeometryChanged(
-            &root,
-            previous.as_ref().and_then(|node| node.fragment.as_deref()),
-        );
+        // LayoutView::BackgroundRect() and PreviousBackgroundRect() read
+        // once per walk: Chromium reads them once, in the LayoutView's
+        // ComputeViewBackgroundInvalidation (box_paint_invalidator.cc:
+        // 257-259); nothing in PrePaint changes either before that.
+        let root_data: &FragmentPaintData = &root;
+        let view_background_rects = ViewBackgroundRects::Read(root_data);
+        self.view_background_rects = Some((
+            root_data as *const FragmentPaintData as usize,
+            view_background_rects,
+        ));
+        self.view_background_geometry_changed =
+            BoxPaintInvalidator::ViewBackgroundGeometryChangedWithRects(
+                view_background_rects,
+                previous.as_ref().and_then(|node| node.fragment.as_deref()),
+            );
         // A viewport value change dirties the viewport clip and LayoutView,
         // not every descendant, while the same LayoutResult sidecar remains
         // resident. A replacement owner is different: retained nodes contain
@@ -9134,6 +9157,7 @@ impl PrePaintTreeWalk {
             previous,
             force,
         );
+        self.view_background_rects = None;
         // Source: pre_paint_tree_walk.cc:1584-1585. Clear each visited
         // object's consumed flags (children before parents, as recorded).
         for data in std::mem::take(&mut self.deferred_paint_flag_clears) {

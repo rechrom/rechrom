@@ -115,6 +115,36 @@ impl PaintStyle {
         }
     }
 
+    /// Share `previous`'s already resolved values when this is an unresolved
+    /// projection of exactly the same inputs (PendingPaintStyle::SameInputs:
+    /// ComputedStyle, LayoutObject and the retained StyleResourceData Arc).
+    /// The projection is a pure function of those inputs except for SVG
+    /// clip-path / mask resource viewports, which are resolved against
+    /// another object's layout (ResolveFragmentPaintStyle); styles that
+    /// reference them always re-resolve. A projection written through
+    /// DerefMut has no pending inputs and is never shared.
+    pub(crate) fn AdoptResolvedProjection(&mut self, previous: &PaintStyle) {
+        if self.data.get().is_some() {
+            return;
+        }
+        let (Some(pending), Some(previous_pending), Some(data)) =
+            (&self.pending, &previous.pending, previous.data.get())
+        else {
+            return;
+        };
+        if !pending.SameInputs(previous_pending) {
+            return;
+        }
+        let Some(style) = self.Source() else {
+            return;
+        };
+        if style.ClipPath().is_some() || style.MaskLayers().AnyLayerHasImage() {
+            return;
+        }
+        let data = Arc::clone(data);
+        let _ = self.data.set(data);
+    }
+
     /// False only for a pending fragment projection none of whose projected
     /// values has been read yet.
     pub fn IsResolved(&self) -> bool {
@@ -637,15 +667,15 @@ impl PaintStyle {
     /// one source resolution: whether any background layer has a fixed
     /// attachment image (ComputedStyle::HasFixedAttachmentBackgroundImage),
     /// and whether this style paints any image or filter resource.
+    ///
+    /// A live source is read in place, as Chromium's PrePaint reads
+    /// `object.StyleRef()` (paint_invalidator.cc, box_paint_invalidator.cc);
+    /// that path never resolves a pending projection.
     pub fn ResourceUsageFacts(&self, nine_piece_images: bool) -> (bool, bool) {
-        let data_images = self.Data().image_resource_id.is_some()
-            || self.Data().border_image.is_some()
-            || self.Data().mask_box_image.is_some()
-            || self.Data().box_reflection_mask_image.is_some();
         match self.Source() {
             Some(style) => (
                 style.HasFixedAttachmentBackgroundImage(),
-                self.Data().image_resource_id.is_some()
+                self.HasImageResourceId()
                     // Box fragments paint nine-piece images from the style
                     // (border-image, mask-box-image, reflection mask).
                     || (nine_piece_images
@@ -668,12 +698,27 @@ impl PaintStyle {
                     .background_images
                     .iter()
                     .any(|layer| layer.attachment == BackgroundAttachment::kFixed),
-                data_images
+                self.Data().image_resource_id.is_some()
+                    || self.Data().border_image.is_some()
+                    || self.Data().mask_box_image.is_some()
+                    || self.Data().box_reflection_mask_image.is_some()
                     || !self.Data().background_images.is_empty()
                     || !self.Data().mask_images.is_empty()
                     || !self.Data().filters.is_empty()
                     || !self.Data().backdrop_filters.is_empty(),
             ),
+        }
+    }
+
+    /// Whether the projection carries an image resource id, without resolving
+    /// a pending projection: ExportForPaint copies it verbatim from the
+    /// paired StyleResourceData (ExportStyleWithInputResources), and the
+    /// memoized projection of the same pair carries the same value.
+    fn HasImageResourceId(&self) -> bool {
+        match (self.data.get(), &self.pending) {
+            (Some(data), _) => data.image_resource_id.is_some(),
+            (None, Some(pending)) => pending.resources.image_resource_id.is_some(),
+            (None, None) => self.Data().image_resource_id.is_some(),
         }
     }
 

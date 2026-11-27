@@ -164,6 +164,24 @@ pub(crate) fn ViewBackgroundForRoot<'a>(
     Some(canvas)
 }
 
+/// The root geometry ViewBackgroundForRoot records (document element size,
+/// borders, padding, content box, scrollable overflow, previous geometry and
+/// transform), without the canvas background source selection. Its style
+/// and background-layer facts are the document element's own, not the
+/// selected source's; LayoutView invalidation reads those from
+/// ViewBackgroundForRoot only when this geometry changed.
+pub(crate) fn ViewBackgroundRootGeometryForRoot<'a>(
+    root_object: &'a LayoutObject,
+    output: crate::layout_engine::PaintFragmentCursor<'a>,
+) -> Option<CanvasBackgroundPaintView<'a>> {
+    if !root_object.ShouldApplyRootBackgroundBehaviorForLayout() {
+        return None;
+    }
+    let mut root = RootFragmentBackground(root_object, output)?;
+    root.document_element_has_transform = root_object.HasTransform();
+    Some(root)
+}
+
 /// ViewBackgroundForRoot when it paints anything: a transparent canvas
 /// background without images records no canvas drawing.
 pub(crate) fn CanvasBackgroundForRoot<'a>(

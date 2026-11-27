@@ -104,13 +104,25 @@ fn InitializeProperties(
         output.pre_paint_invalidation = invalidation;
         return true;
     }
-    let properties = ExportProperties(
+    let mut properties = ExportProperties(
         object,
         fragment_data,
         effective_style,
         LayoutUpdateKind::Paint,
         exported_styles,
     );
+    // Chromium's PrePaint and painters read `object.StyleRef()` in place; a
+    // descendant-only dirty walk does not touch the object's style. The
+    // projection of an object whose own style and resources are unchanged
+    // (same ComputedStyle, LayoutObject and StyleResourceData identities,
+    // and no own dirty bit, as RetainedProjectionIsCurrent proves for the
+    // retained payload) is kept with that identity instead of re-resolved:
+    // the boundary's exported-style cache generation advances at every
+    // compatible style replacement, so without this every re-exported
+    // ancestor of a restyled element re-projected its unchanged style.
+    if retained && !invalidation.own() {
+        properties.style.AdoptResolvedProjection(&output.paint.style);
+    }
     // The binding recorded this slot's resident owner; a fresh payload keeps it.
     let resident_owner = output.resident_owner;
     *output = FragmentPaintData::new(properties);

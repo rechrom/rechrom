@@ -1303,6 +1303,23 @@ impl<'a> PaintFragmentCursor<'a> {
         crate::internal::boundary::layout_boundary::ViewBackgroundForRoot(object, self)
     }
 
+    /// The document element geometry of ViewBackground alone (its
+    /// `document_element_*`, `previous_document_element_geometry` and
+    /// `document_element_has_transform` values), without selecting and
+    /// reading the canvas background source. Chromium's
+    /// ComputeViewBackgroundInvalidation reads only these from the root box
+    /// before it needs any background layer (box_paint_invalidator.cc:
+    /// 280-311). None exactly when ViewBackground's root geometry is None.
+    pub fn ViewBackgroundRootGeometry(
+        self,
+    ) -> Option<crate::fragment_tree::CanvasBackgroundPaintView<'a>> {
+        let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
+        if !object.IsLayoutView() {
+            return None;
+        }
+        crate::internal::boundary::layout_boundary::ViewBackgroundRootGeometryForRoot(object, self)
+    }
+
     /// The document element's own background facts, reached from any fragment
     /// through its LayoutObject's View(): document.GetLayoutView()->StyleRef()
     /// as BoxFragmentPainter paints it for a kPageBorderBox. The style is the

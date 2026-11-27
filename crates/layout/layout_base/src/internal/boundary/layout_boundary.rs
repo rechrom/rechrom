@@ -194,7 +194,7 @@ use layout_fragment_nine_piece_image_export::ExportNinePieceImages;
 mod layout_fragment_global_paint_export;
 pub(crate) use layout_fragment_global_paint_export::{
     CanvasBackgroundForRoot, DocumentElementBackgroundForObject, PageBackgroundViewFacts,
-    ViewBackgroundForRoot,
+    ViewBackgroundForRoot, ViewBackgroundRootGeometryForRoot,
 };
 mod layout_fragment_inline_fragment_paint_policy;
 pub(crate) use layout_fragment_inline_fragment_paint_policy::{

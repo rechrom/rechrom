@@ -21,6 +21,28 @@ use crate::paint_invalidator::PaintInvalidatorContext;
 
 pub struct BoxPaintInvalidator;
 
+/// LayoutView::PreviousBackgroundRect() and BackgroundRect() of a fragment,
+/// read live from its source object (None for anything but a LayoutView
+/// source; `current` falls back to a detached fragment's stored rect).
+/// Source: `box_paint_invalidator.cc:257-259`. Both stay fixed during a
+/// PrePaint walk (the previous rect is saved after the artifact commits), so
+/// the walk reads them once and shares them between the fixed-background
+/// check and the LayoutView's own background invalidation.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewBackgroundRects {
+    pub previous: Option<FragmentPaintRect>,
+    pub current: Option<FragmentPaintRect>,
+}
+
+impl ViewBackgroundRects {
+    pub fn Read(fragment: &FragmentPaintData) -> Self {
+        Self {
+            previous: fragment.paint.PreviousViewBackgroundRect(),
+            current: fragment.paint.ViewBackgroundRect(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BackgroundInvalidationType {
     #[default]
@@ -67,6 +89,27 @@ impl BoxPaintInvalidator {
         previous_gap_rules: Option<&GapRulePaintData>,
         context: PaintInvalidatorContext,
     ) -> BackgroundInvalidation {
+        Self::ComputeBackgroundInvalidationWithViewRects(
+            fragment,
+            source,
+            previous,
+            previous_gap_rules,
+            context,
+            None,
+        )
+    }
+
+    /// ComputeBackgroundInvalidationWithPreviousGapRules with the
+    /// LayoutView's background rects already read for this walk
+    /// (`view_background_rects`, None to read them from `fragment`).
+    pub fn ComputeBackgroundInvalidationWithViewRects(
+        fragment: &FragmentPaintData,
+        source: Option<PaintFragmentCursor<'_>>,
+        previous: Option<&FragmentPaintData>,
+        previous_gap_rules: Option<&GapRulePaintData>,
+        context: PaintInvalidatorContext,
+        view_background_rects: Option<ViewBackgroundRects>,
+    ) -> BackgroundInvalidation {
         let mut result = BackgroundInvalidation::default();
         let previous_geometry = PreviousGeometry(fragment, previous);
         let invalidation = fragment.pre_paint_invalidation;
@@ -111,8 +154,10 @@ impl BoxPaintInvalidator {
         }
 
         if fragment.paint.IsLayoutView() {
+            let rects =
+                view_background_rects.unwrap_or_else(|| ViewBackgroundRects::Read(fragment));
             let view_kind =
-                ComputeViewBackgroundInvalidation(fragment, source, previous, context);
+                ComputeViewBackgroundInvalidation(fragment, source, previous, context, rects);
             result.kind = result.kind.max(view_kind);
         }
         result
@@ -122,12 +167,20 @@ impl BoxPaintInvalidator {
         fragment: &FragmentPaintData,
         previous: Option<&FragmentPaintData>,
     ) -> bool {
+        Self::ViewBackgroundGeometryChangedWithRects(ViewBackgroundRects::Read(fragment), previous)
+    }
+
+    /// ViewBackgroundGeometryChanged over rects already read from the
+    /// fragment (ViewBackgroundRects::Read).
+    pub fn ViewBackgroundGeometryChangedWithRects(
+        rects: ViewBackgroundRects,
+        previous: Option<&FragmentPaintData>,
+    ) -> bool {
         match (
-            fragment
-                .paint
-                .PreviousViewBackgroundRect()
+            rects
+                .previous
                 .or_else(|| previous.and_then(|old| old.paint.view_background_rect)),
-            fragment.paint.ViewBackgroundRect(),
+            rects.current,
         ) {
             (Some(old), Some(new)) => old != new,
             _ => false,
@@ -344,13 +397,13 @@ fn ComputeViewBackgroundInvalidation(
     source: Option<PaintFragmentCursor<'_>>,
     previous: Option<&FragmentPaintData>,
     context: PaintInvalidatorContext,
+    rects: ViewBackgroundRects,
 ) -> BackgroundInvalidationType {
     let (old_rect, new_rect) = match (
-        fragment
-            .paint
-            .PreviousViewBackgroundRect()
+        rects
+            .previous
             .or_else(|| previous.and_then(|old| old.paint.view_background_rect)),
-        fragment.paint.ViewBackgroundRect(),
+        rects.current,
     ) {
         (Some(old), Some(new)) => (old, new),
         _ => return BackgroundInvalidationType::None,
@@ -370,8 +423,17 @@ fn ComputeViewBackgroundInvalidation(
     // The canvas background selection and root element geometry, read live
     // from the LayoutView (box_paint_invalidator.cc ComputeViewBackground-
     // Invalidation reads the document element's LayoutBox).
+    // Chromium reads the root box geometry first and a background layer
+    // only for a geometry that changed (box_paint_invalidator.cc:280-311).
+    // When the root geometry is unchanged and untransformed, every branch
+    // below falls through to the size-change result, so the canvas
+    // background source is not selected or read.
+    let previous_view = previous.and_then(|old| old.paint.view_background_invalidation.as_ref());
     let view_background = match source {
-        Some(cursor) => cursor.ViewBackground(),
+        Some(cursor) => cursor
+            .ViewBackgroundRootGeometry()
+            .filter(|root| ViewRootGeometryMayInvalidate(root, previous_view))
+            .and_then(|_| cursor.ViewBackground()),
         None => fragment
             .paint
             .view_background_invalidation
@@ -379,8 +441,6 @@ fn ComputeViewBackgroundInvalidation(
             .map(|view| view.AsRef()),
     };
     if let Some(new) = view_background.as_ref() {
-        let previous_view =
-            previous.and_then(|old| old.paint.view_background_invalidation.as_ref());
         let old_geometry = new.previous_document_element_geometry.or_else(|| {
             previous_view.map(|old| PreviousBoxGeometry {
                 size: old.document_element_size,
@@ -439,6 +499,35 @@ fn ComputeViewBackgroundInvalidation(
     } else {
         BackgroundInvalidationType::None
     }
+}
+
+/// Whether ComputeViewBackgroundInvalidation's root-box branch can return
+/// anything but the size-change result for `root` (ViewBackgroundRoot-
+/// Geometry): it reads the same old geometry as that branch and reports
+/// whether the document element's size, scrollable overflow or content box
+/// changed, or whether it has a transform. Each Full return of the branch
+/// requires one of these (box_paint_invalidator.cc:283-311).
+fn ViewRootGeometryMayInvalidate(
+    root: &layout::paint::CanvasBackgroundPaintView<'_>,
+    previous_view: Option<&layout::paint::CanvasBackgroundPaintData>,
+) -> bool {
+    let old_geometry = root.previous_document_element_geometry.or_else(|| {
+        previous_view.map(|old| PreviousBoxGeometry {
+            size: old.document_element_size,
+            content_box: old.document_element_content_box,
+            scrollable_overflow: old.document_element_scrollable_overflow.unwrap_or_default(),
+            ..PreviousBoxGeometry::default()
+        })
+    });
+    let Some(old) = old_geometry else {
+        return false;
+    };
+    root.document_element_has_transform
+        || old.size != root.document_element_size
+        || root
+            .document_element_scrollable_overflow
+            .is_some_and(|overflow| overflow != old.scrollable_overflow)
+        || old.content_box != root.document_element_content_box
 }
 
 fn HasEffectiveBackground(fragment: &FragmentPaintData) -> bool {
