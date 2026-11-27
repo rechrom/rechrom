@@ -366,11 +366,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> crate::adapter::paint_chu
         c: paint::ClipNode<R>,
         e: paint::EffectNode<R>,
     ) -> paint::PropertyTreeState<R> {
-        let mut s = paint::PropertyTreeState::default();
-        s.set_transform(t);
-        s.set_clip(c);
-        s.set_effect(e);
-        s
+        paint::PropertyTreeState::new(t, c, e)
     }
     fn IdentityTransform(&self) -> super::geometry::Transform<R> {
         Default::default()

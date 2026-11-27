@@ -312,11 +312,22 @@ impl<R> PartialEq for PropertyTreeState<R> {
 impl<R> Eq for PropertyTreeState<R> {}
 impl<R> Default for PropertyTreeState<R> {
     fn default() -> Self {
-        Self::from_source(&paint_property_tree::PropertyTreeState::default())
+        // PropertyTreeState::Root() (property_tree_state.h:275-280) is a
+        // `const&` to the sequence's sentinels: retain each root node once.
+        paint_property_tree::PropertyTreeState::WithRoot(Self::from_source)
     }
 }
 
 impl<R> PropertyTreeState<R> {
+    /// The three-node state of `transform`, `clip` and `effect`
+    /// (property_tree_state.h:91-96), without passing through the root.
+    pub fn new(transform: TransformNode<R>, clip: ClipNode<R>, effect: EffectNode<R>) -> Self {
+        Self {
+            transform_: transform,
+            clip_: clip,
+            effect_: effect,
+        }
+    }
     pub fn from_source(state: &paint_property_tree::PropertyTreeState) -> Self {
         Self {
             transform_: TransformNode::from_arc(state.transform.clone()),

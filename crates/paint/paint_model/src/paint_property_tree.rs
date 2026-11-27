@@ -2245,18 +2245,29 @@ impl fmt::Display for PropertyTreeState {
     }
 }
 
+// Source: transform_paint_property_node.cc:117-122 and its clip, effect and
+// scroll equivalents: Root() returns DEFINE_STATIC_LOCAL sentinels of the
+// single painting thread. Rechrom paints several Pages per process, one
+// document sequence each, so the sentinels belong to the calling sequence:
+// their mutable members (changed markers, cc node ids) are written by that
+// Page's PaintArtifactCompositor only.
+thread_local! {
+    static ROOT: PropertyTreeState = PropertyTreeState::CreateRoot();
+}
+
 impl Default for PropertyTreeState {
     fn default() -> Self {
-        // Source: transform_paint_property_node.cc:117-122 and its clip, effect
-        // and scroll equivalents: Root() returns DEFINE_STATIC_LOCAL sentinels of
-        // the single painting thread. Rechrom paints several Pages per process,
-        // one document sequence each, so the sentinels belong to the calling
-        // sequence: their mutable members (changed markers, cc node ids) are
-        // written by that Page's PaintArtifactCompositor only.
-        thread_local! {
-            static ROOT: PropertyTreeState = PropertyTreeState::CreateRoot();
-        }
-        ROOT.with(PropertyTreeState::clone)
+        Self::WithRoot(PropertyTreeState::clone)
+    }
+}
+
+impl PropertyTreeState {
+    /// Lends the calling sequence's root sentinels, as Blink's
+    /// `PropertyTreeState::Root()` returns a `const&` to its static
+    /// (property_tree_state.h:275-280), without retaining the three nodes.
+    #[inline]
+    pub fn WithRoot<T>(f: impl FnOnce(&PropertyTreeState) -> T) -> T {
+        ROOT.with(f)
     }
 }
 
@@ -2395,7 +2406,7 @@ impl PropertyTreeState {
         crate::property_node_geometry::PropertyStateChanged(access, self, change, relative_to)
     }
     pub fn ChangedToRoot(&self, access: &PropertyAccess, change: PaintPropertyChangeType) -> bool {
-        self.Changed(access, change, &Self::Root())
+        Self::WithRoot(|root| self.Changed(access, change, root))
     }
 
     /// Source: property_tree_state.cc:198-200,212-218.

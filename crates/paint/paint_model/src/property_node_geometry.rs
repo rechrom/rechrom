@@ -19,12 +19,9 @@ pub fn TransformChanged(
         }
         current = node.Parent(access).map(|parent| &**parent);
     }
-    TransformChanged(
-        access,
-        relative,
-        change,
-        &crate::paint_property_tree::PropertyTreeState::default().transform,
-    )
+    crate::paint_property_tree::PropertyTreeState::WithRoot(|root| {
+        TransformChanged(access, relative, change, &root.transform)
+    })
 }
 // Source: clip_paint_property_node.cc:47-69. Chromium producer nodes are
 // unaliased.

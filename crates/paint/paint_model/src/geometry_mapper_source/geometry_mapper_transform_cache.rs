@@ -55,6 +55,17 @@ struct PlaneRootTransform {
     plane_root: CachedNode,
     has_animation: bool,
 }
+/// Stores `value` in the cache's plane-root member, reusing the allocation a
+/// previous generation left there: Blink's Update rewrites the existing
+/// member in place (geometry_mapper_transform_cache.cc:26-133) instead of
+/// allocating a new one for every cache generation.
+fn SetPlaneRootTransform(slot: &mut Option<Box<PlaneRootTransform>>, value: PlaneRootTransform) {
+    if slot.is_some() {
+        **slot.as_mut().unwrap() = value;
+    } else {
+        *slot = Some(Box::new(value));
+    }
+}
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.h:239-245.
 struct ScreenTransform<M> {
     to_screen: M,
@@ -286,12 +297,15 @@ impl NativeGeometryMapperTransformCache {
                 let translation = node.Get2dTranslation();
                 self.to_2d_translation_root_ += translation;
                 if parent.data.plane_root_transform_.is_some() {
-                    self.plane_root_transform_ = Some(Box::new(PlaneRootTransform {
-                        plane_root: CachedNode::of(parent.data.plane_root(&parent_arc), &owner),
-                        to_plane_root: parent.data.to_plane_root().clone(),
-                        from_plane_root: SharedGeometryTransform::default(),
-                        has_animation: false,
-                    }));
+                    SetPlaneRootTransform(
+                        &mut self.plane_root_transform_,
+                        PlaneRootTransform {
+                            plane_root: CachedNode::of(parent.data.plane_root(&parent_arc), &owner),
+                            to_plane_root: parent.data.to_plane_root().clone(),
+                            from_plane_root: SharedGeometryTransform::default(),
+                            has_animation: false,
+                        },
+                    );
                     let plane = self.plane_root_transform_.as_mut().unwrap();
                     plane
                         .to_plane_root
@@ -312,12 +326,15 @@ impl NativeGeometryMapperTransformCache {
                 if is_plane_root {
                     self.plane_root_transform_ = None;
                 } else {
-                    self.plane_root_transform_ = Some(Box::new(PlaneRootTransform {
-                        plane_root: CachedNode::of(parent.data.plane_root(&parent_arc), &owner),
-                        to_plane_root: SharedGeometryTransform::default(),
-                        from_plane_root: SharedGeometryTransform::default(),
-                        has_animation: false,
-                    }));
+                    SetPlaneRootTransform(
+                        &mut self.plane_root_transform_,
+                        PlaneRootTransform {
+                            plane_root: CachedNode::of(parent.data.plane_root(&parent_arc), &owner),
+                            to_plane_root: SharedGeometryTransform::default(),
+                            from_plane_root: SharedGeometryTransform::default(),
+                            has_animation: false,
+                        },
+                    );
                     let plane = self.plane_root_transform_.as_mut().unwrap();
                     plane.to_plane_root = SharedGeometryTransform::default();
                     parent.data.ApplyToPlaneRoot(&mut plane.to_plane_root);
