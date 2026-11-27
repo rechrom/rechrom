@@ -492,6 +492,37 @@ pub struct CompositedAnimationPropertyUpdate {
     pub bindings: Vec<prepaint::CompositedAnimationPropertyBinding>,
 }
 
+/// The local border box transform and effect an animated object applies
+/// itself, read from its FragmentData (fragment_data.h:104-110,137-142):
+/// the transform when one of the object's own ObjectPaintProperties
+/// transform slots is its LocalBorderBoxProperties transform, and the
+/// effect when its own Effect node carries a non-unit opacity (the
+/// opacity Effect, object_paint_properties.h:511-523). These are the
+/// PaintTreeNode `applies_transform` / `applies_opacity` facts derived from
+/// the slots instead of the node copies.
+fn OwnAnimatedPropertyStarts(
+    data: &prepaint::fragment_data::PrePaintFragmentData,
+) -> (
+    Option<Arc<paint_model::paint_property_tree::TransformPaintPropertyNode>>,
+    Option<Arc<paint_model::paint_property_tree::EffectPaintPropertyNode>>,
+) {
+    let (Some(properties), Some(state)) =
+        (data.PaintProperties(), data.LocalBorderBoxPropertiesRef())
+    else {
+        return (None, None);
+    };
+    let transform = properties
+        .ForTransformNodes(|node| Arc::ptr_eq(node, &state.transform))
+        .then(|| state.transform.clone());
+    let effect = properties
+        .Effect()
+        .is_some_and(|effect| {
+            paint_model::property_cell::with_access(|a| effect.state(a).opacity != 1.0)
+        })
+        .then(|| state.effect.clone());
+    (transform, effect)
+}
+
 fn CollectCompositedAnimationPropertyUpdate(
     tree: &crate::pre_paint_tree_walk::PaintTreeNode<'_>,
     targeted_nodes: &[u64],
@@ -628,12 +659,25 @@ fn CollectCompositedAnimationPropertyUpdate(
                 self.matched_targets.insert(node_id);
                 // Blink's pending sets contain LayoutObjects, not every
                 // property ancestor reachable through their state. Inspect
-                // only the local slots this object applies.
-                if node.applies_transform {
-                    self.transform(node_id, &node.properties.nodes.transform);
+                // only the local slots this object applies: its
+                // FragmentData's ObjectPaintProperties (fragment_data.h:
+                // 104-110; object_paint_properties.h:503-523 update the
+                // object's own Transform and Effect nodes). Hand-built nodes
+                // without FragmentData keep their own copies.
+                let (transform, effect) = match node.FragmentData() {
+                    Some(data) => OwnAnimatedPropertyStarts(data),
+                    None => (
+                        node.applies_transform
+                            .then(|| node.properties.nodes.transform.clone()),
+                        node.applies_opacity
+                            .then(|| node.properties.nodes.effect.clone()),
+                    ),
+                };
+                if let Some(transform) = &transform {
+                    self.transform(node_id, transform);
                 }
-                if node.applies_opacity {
-                    self.effect(node_id, &node.properties.nodes.effect);
+                if let Some(effect) = &effect {
+                    self.effect(node_id, effect);
                 }
             }
             for child in &node.children {
@@ -1658,22 +1702,25 @@ impl PaintPropertyUpdates for PaintEngine {
 /// Read-only PaintLayer queries for hit testing and cursor selection (Blink
 /// PaintLayer::HitTestLayer and PaintLayerClipper, core/paint/paint_layer.cc).
 pub trait PaintLayerQueries {
-    fn ReverseResidentLayerOrder(
-        &self,
-        source: layout::paint::PaintFragmentCursor<'_>,
+    /// The PaintLayer `source` names, iterated over Layout's own PaintLayer
+    /// children and PaintLayerStackingNode lists
+    /// (paint_layer_paint_order_iterator.cc:39-79), which Paint shares.
+    fn ReverseResidentLayerOrder<'a>(
+        &'a self,
+        source: layout::paint::PaintFragmentCursor<'a>,
         selection: crate::resident_hit_test::ResidentLayerSelection,
-    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>>;
-    fn ResidentLayerOrder(
-        &self,
-        source: layout::paint::PaintFragmentCursor<'_>,
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'a>>;
+    fn ResidentLayerOrder<'a>(
+        &'a self,
+        source: layout::paint::PaintFragmentCursor<'a>,
         selection: crate::resident_hit_test::ResidentLayerSelection,
         reverse: bool,
-    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>>;
-    fn ResidentOverlayControlsAfter(
-        &self,
-        source: layout::paint::PaintFragmentCursor<'_>,
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'a>>;
+    fn ResidentOverlayControlsAfter<'a>(
+        &'a self,
+        source: layout::paint::PaintFragmentCursor<'a>,
         child: layout::paint::PaintFragmentCursor<'_>,
-    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>>;
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'a>>;
     /// Borrow committed PrePaint data for this exact resident Layout fragment.
     /// The lease prevents a paint lifecycle mutation while the query runs.
     fn ResidentHitTest(
@@ -1695,57 +1742,43 @@ pub trait PaintLayerQueries {
 }
 
 impl PaintLayerQueries for PaintEngine {
-    fn ReverseResidentLayerOrder(
-        &self,
-        source: layout::paint::PaintFragmentCursor<'_>,
+    fn ReverseResidentLayerOrder<'a>(
+        &'a self,
+        source: layout::paint::PaintFragmentCursor<'a>,
         selection: crate::resident_hit_test::ResidentLayerSelection,
-    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'a>> {
         self.ResidentLayerOrder(source, selection, true)
     }
-    fn ResidentLayerOrder(
-        &self,
-        source: layout::paint::PaintFragmentCursor<'_>,
+    fn ResidentLayerOrder<'a>(
+        &'a self,
+        source: layout::paint::PaintFragmentCursor<'a>,
         selection: crate::resident_hit_test::ResidentLayerSelection,
         reverse: bool,
-    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'a>> {
         // The query names a PaintLayer, which belongs to its LayoutObject:
-        // resolve it by object identity, as the layer itself was resolved
-        // (ResidentLayerHitTest), so an inline-level layer reached through
-        // its FragmentItem cursor finds its box fragment's resident node.
+        // it is resolved by object identity, so an inline-level layer
+        // reached through its FragmentItem cursor names its own PaintLayer.
+        // Layout keeps the stacking node's lists current before PrePaint
+        // (PaintLayer::UpdateDescendantDependentFlags), so no Paint-side
+        // list preparation precedes the query.
         self.pre_paint
-            .WithResidentLayerNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
-        Some(
-            self.pre_paint
-                .ResidentLayerHitTest(source)?
-                .LayerOrder(selection, None, reverse),
-        )
+            .ResidentLayerOrder(source, selection, None, reverse)
     }
 
-    fn ResidentOverlayControlsAfter(
-        &self,
-        source: layout::paint::PaintFragmentCursor<'_>,
+    fn ResidentOverlayControlsAfter<'a>(
+        &'a self,
+        source: layout::paint::PaintFragmentCursor<'a>,
         child: layout::paint::PaintFragmentCursor<'_>,
-    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'a>> {
         // Both cursors name PaintLayers; resolve them by object identity
         // like ResidentLayerOrder.
-        self.pre_paint
-            .WithResidentLayerNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
-        let child = self
-            .pre_paint
-            .ResidentLayerHitTest(child)?
-            .Fragment()
-            .paint
-            .PaintLayerClientId();
         let all = crate::resident_hit_test::ResidentLayerSelection {
             negative_z: true,
             normal_flow: true,
             positive_z: true,
         };
-        Some(
-            self.pre_paint
-                .ResidentLayerHitTest(source)?
-                .LayerOrder(all, Some(child), false),
-        )
+        self.pre_paint
+            .ResidentLayerOrder(source, all, Some(child), false)
     }
 
     fn ResidentHitTest(

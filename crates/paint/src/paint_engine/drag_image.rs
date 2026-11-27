@@ -112,11 +112,21 @@ impl PaintEngine {
                         y: rect.y,
                     }
                 } else {
+                    // data_transfer.cc:131-134 adds FirstFragment().PaintOffset().
+                    // The recorded ops are in the flat replay space, so read
+                    // the FragmentData offset in that convention.
+                    let layer_paint_offset = layer.FlatPaintOffset();
                     Offset {
-                        x: rect.x + layer.paint_offset.x,
-                        y: rect.y + layer.paint_offset.y,
+                        x: rect.x + layer_paint_offset.x,
+                        y: rect.y + layer_paint_offset.y,
                     }
                 };
+                // data_transfer.cc:136-137 FirstFragment().LocalBorderBoxProperties().
+                // Hand-built nodes without FragmentData keep their own state.
+                let border_box_properties = layer.FragmentData().map_or_else(
+                    || layer.properties.nodes.clone(),
+                    |data| data.LocalBorderBoxProperties(),
+                );
                 DragImageRecording {
                     artifact: paint_commit::CommitArtifact(output),
                     layout_size: Size {
@@ -124,7 +134,7 @@ impl PaintEngine {
                         height: rect.height,
                     },
                     paint_offset,
-                    border_box_properties: layer.properties.nodes.clone(),
+                    border_box_properties,
                 }
             },
         )
