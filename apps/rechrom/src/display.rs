@@ -697,7 +697,8 @@ impl Display {
         // the selected SurfaceId changes. That root replacement must clear
         // the retained host target before a transparent Page root is drawn.
         let full_redraw = stale_surfaces != 0 || self.last_rendered_placements != placements;
-        if std::env::var_os("RECHROM_DIAG_ROOTS").is_some() {
+        static DIAG_ROOTS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DIAG_ROOTS.get_or_init(|| std::env::var_os("RECHROM_DIAG_ROOTS").is_some()) {
             let roots = aggregate
                 .Frame()
                 .RenderPasses()

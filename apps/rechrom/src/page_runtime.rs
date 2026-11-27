@@ -2737,6 +2737,8 @@ fn run_document(
     // ContentFrameProvenance (Display waits for a fresh main frame).
     let mut main_frame_count = 0u64;
     let mut status = None;
+    // (Document identity, DOM tree version) of the last reported title.
+    let mut status_title_key: Option<(u128, u64)> = None;
     let mut caret_feedback = None;
     let mut text_input_feedback = None;
     let mut last_memory_report: Option<Instant> = None;
@@ -2926,8 +2928,29 @@ fn run_document(
                                 },
                             );
                         }
-                        let next = (page.URL().to_string(), title(&page), page.IsLoading());
-                        if status.as_ref() != Some(&next) {
+                        // Blink reports the title from Document::UpdateTitle
+                        // (document.cc:2140-2185 -> DispatchDidReceiveTitle)
+                        // only when it changes. The title is a function of
+                        // the Document's tree and text, so a frame whose
+                        // Document identity and DOM tree version are
+                        // unchanged since the last report reuses it instead
+                        // of walking the tree for <title> again.
+                        let loading = page.IsLoading();
+                        let title_key = {
+                            let owner = page.Document();
+                            let document = owner.GetDocument();
+                            (document.RootHandle().Identity(), document.DomTreeVersion())
+                        };
+                        let status_current = !loading
+                            && status_title_key == Some(title_key)
+                            && status.as_ref().is_some_and(|(url, _, was_loading)| {
+                                !*was_loading && url.as_str() == page.URL()
+                            });
+                        let next = (!status_current).then(|| {
+                            status_title_key = Some(title_key);
+                            (page.URL().to_string(), title(&page), loading)
+                        });
+                        if let Some(next) = next.filter(|next| status.as_ref() != Some(next)) {
                             (params.events)(
                                 params.document,
                                 Event::Status {
