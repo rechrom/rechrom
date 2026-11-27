@@ -1435,6 +1435,21 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> HostResult {
+        // V8CSSStyleDeclaration's named/indexed property callbacks are bound
+        // straight to their CSSStyleDeclaration implementation
+        // (css_style_declaration.cc:173-243 AnonymousNamedGetter/Setter); no
+        // other host operation can claim these members, so they bypass the
+        // generic operation lookup below.
+        if matches!(
+            member,
+            "__cssStyleNamedGet"
+                | "__cssStyleNamedSet"
+                | "__cssStyleNamedQuery"
+                | "__cssStyleLength"
+                | "__cssStyleItem"
+        ) {
+            return self.CallCSSStyleDeclaration(receiver, member, arguments);
+        }
         if member == "__formElements" {
             let valid = {
                 let owner = self.document.borrow();
@@ -3470,80 +3485,6 @@ impl DOMJavaScriptBindings {
                 }
                 Self::value(HostValue::Object(child))
             }
-            // V8CSSStyleDeclaration's named/indexed property callbacks:
-            // CSSStyleDeclaration::AnonymousNamedGetter/AnonymousNamedSetter
-            // (css_style_declaration.cc:173-243) resolve the script name once
-            // through CssPropertyInfo, then run the property's get/set; an
-            // unknown name is not intercepted. Array-index names are the
-            // indexed getter item() (css_style_declaration.idl).
-            "__cssStyleNamedGet"
-            | "__cssStyleNamedSet"
-            | "__cssStyleNamedQuery"
-            | "__cssStyleLength"
-            | "__cssStyleItem" => {
-                if node.Type() != DOMNodeType::kElement {
-                    return Self::type_error("Illegal invocation");
-                }
-                let key = match arguments.first() {
-                    Some(HostValue::String(key)) => Some(key.as_str()),
-                    _ => None,
-                };
-                let item_index = if member == "__cssStyleItem" {
-                    Some(match arguments.first() {
-                        Some(HostValue::Number(index)) if *index >= 0.0 => *index as usize,
-                        _ => usize::MAX,
-                    })
-                } else if member == "__cssStyleLength" {
-                    None
-                } else {
-                    key.and_then(CSSStyleArrayIndex)
-                };
-                if member == "__cssStyleLength" || item_index.is_some() {
-                    // No indexed setter: an index assignment is ignored.
-                    if member == "__cssStyleNamedSet" {
-                        return HostResult::default();
-                    }
-                    // CSSPropertyValueSet::PropertyCount/PropertyAt over the
-                    // element's declaration (one entry per longhand).
-                    let inline_style = node.InlineStyle();
-                    let declarations = style::ParseCSSDeclarationList(inline_style.SourceText());
-                    if member == "__cssStyleLength" {
-                        return Self::value(HostValue::Number(declarations.len() as f64));
-                    }
-                    let property = declarations
-                        .into_iter()
-                        .nth(item_index.unwrap_or(usize::MAX))
-                        .map(|declaration| declaration.property);
-                    return match (member, property) {
-                        ("__cssStyleItem", property) => {
-                            Self::value(HostValue::String(property.unwrap_or_default()))
-                        }
-                        ("__cssStyleNamedQuery", property) => {
-                            Self::value(HostValue::Boolean(property.is_some()))
-                        }
-                        (_, Some(property)) => Self::value(HostValue::String(property)),
-                        (_, None) => Self::unhandled(),
-                    };
-                }
-                let Some(property) = key.and_then(CssPropertyInfo) else {
-                    return Self::unhandled();
-                };
-                if member == "__cssStyleNamedQuery" {
-                    return Self::value(HostValue::Boolean(true));
-                }
-                let mut forwarded = arguments.to_vec();
-                forwarded[0] = HostValue::String(property);
-                drop(owner);
-                self.call(
-                    receiver,
-                    if member == "__cssStyleNamedGet" {
-                        "getStyle"
-                    } else {
-                        "setStyle"
-                    },
-                    &forwarded,
-                )
-            }
             // cpp: webapi/dom_bindings.cc:899-921
             "getStyle" | "setStyle" | "hasStyle" => {
                 let Some(HostValue::String(property)) = arguments.first() else {
@@ -3562,6 +3503,22 @@ impl DOMJavaScriptBindings {
                         .is_some(),
                     ));
                 }
+                if member == "setStyle" {
+                    let Some(HostValue::String(value)) = arguments.get(1) else {
+                        return Self::type_error("style value is required");
+                    };
+                    let priority = match arguments.get(2) {
+                        Some(HostValue::String(priority)) => priority.as_str(),
+                        _ => "",
+                    };
+                    drop(owner);
+                    return self.SetInlineStyleDeclaration(
+                        receiver,
+                        InlineStyleProperty::Name(property.as_str()),
+                        value,
+                        priority,
+                    );
+                }
                 let inline_style = node.InlineStyle();
                 let standard_mode = node.Namespace() == DOMNamespace::kHTML
                     && document.GetCompatibilityMode()
@@ -3579,91 +3536,16 @@ impl DOMJavaScriptBindings {
                                 self.cssom_world.borrow().clone(),
                             )
                         });
-                if member == "getStyle" {
-                    if let Some(context) = &cssom_context {
-                        return Self::value(HostValue::String(
-                            style::GetInlineCSSDeclarationWithContext(
-                                &inline_style,
-                                property,
-                                context,
-                            ),
-                        ));
-                    }
-                    return Self::value(HostValue::String(style::GetInlineCSSDeclaration(
-                        &inline_style,
-                        property,
-                        standard_mode,
-                    )));
+                if let Some(context) = &cssom_context {
+                    return Self::value(HostValue::String(
+                        style::GetInlineCSSDeclarationWithContext(&inline_style, property, context),
+                    ));
                 }
-                let Some(HostValue::String(value)) = arguments.get(1) else {
-                    return Self::type_error("style value is required");
-                };
-                let priority = match arguments.get(2) {
-                    Some(HostValue::String(priority)) => priority.as_str(),
-                    _ => "",
-                };
-                let result = cssom_context.as_ref().map_or_else(
-                    || {
-                        style::SetInlineCSSDeclaration(
-                            &inline_style,
-                            property,
-                            value,
-                            priority,
-                            standard_mode,
-                        )
-                    },
-                    |context| {
-                        style::SetInlineCSSDeclarationWithContext(
-                            &inline_style,
-                            property,
-                            value,
-                            priority,
-                            context,
-                        )
-                    },
-                );
-                let Some(result) = result else {
-                    return HostResult::default();
-                };
-                let (mutation_type, value, inline_style_independent, inline_style) = match result {
-                    // DOM retains the declaration itself and serializes the
-                    // style attribute lazily (Element::SynchronizeStyleAttribute
-                    // on read); the CSSOM write path builds no attribute text.
-                    style::CSSInlineDeclarationMutation::Changed(style) => (
-                        DOMMutationType::kSetAttribute,
-                        String::new(),
-                        false,
-                        Some(style),
-                    ),
-                    style::CSSInlineDeclarationMutation::ChangedIndependent(style) => (
-                        DOMMutationType::kSetAttribute,
-                        String::new(),
-                        true,
-                        Some(style),
-                    ),
-                    style::CSSInlineDeclarationMutation::Unchanged => {
-                        if document.CustomElementDefinitionForElement(index).is_none() {
-                            return HostResult::default();
-                        }
-                        (
-                            DOMMutationType::kNotifyInlineStyleUnchanged,
-                            String::new(),
-                            false,
-                            None,
-                        )
-                    }
-                };
-                drop(owner);
-                self.EmitOwnedMutation(DOMMutation {
-                    mutation_type,
-                    target_node_id: receiver,
-                    name: "style".into(),
-                    value,
-                    inline_style_independent,
-                    inline_style,
-                    ..Default::default()
-                });
-                HostResult::default()
+                Self::value(HostValue::String(style::GetInlineCSSDeclaration(
+                    &inline_style,
+                    property,
+                    standard_mode,
+                )))
             }
             // cpp: webapi/dom_bindings.cc:922-949
             "querySelectorAll" => {
@@ -4082,6 +3964,16 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         } else {
             (call.receiver, call.member)
         };
+        // A named CSSStyleDeclaration write (V8CSSStyleDeclaration's
+        // NamedPropertySetterCallback -> AnonymousNamedSetter) is none of the
+        // special operations below: go straight to its receiver check and
+        // mutation scope.
+        let named_style_write =
+            call.operation == HostOperation::kCall && member == "__cssStyleNamedSet";
+        'operations: {
+        if named_style_write {
+            break 'operations;
+        }
         // ElementCSSInlineStyle::style creates the element's one
         // InlineCSSStyleDeclaration (element.cc EnsureElementRareData().
         // EnsureInlineCSSStyleDeclaration); its wrapper is a V8
@@ -4278,6 +4170,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 call.arguments
             };
             return Some(self.PrepareSyntheticDispatch(id, arguments));
+        }
         }
         // Preserve call routing: collections/bound events/invalid objects must
         // go through Invoke; source Node(receiver) precedes focus/blur.
@@ -4874,24 +4767,49 @@ fn ParseCSSPropertyName(name: &str) -> Option<String> {
 /// css_style_declaration.cc CssPropertyInfo: a static map from the script
 /// name to its known property, filled on first use, so a hot
 /// AnonymousNamedGetter/Setter resolves the property with one lookup.
-/// Custom properties ("--x") are not named properties.
-fn CssPropertyInfo(name: &str) -> Option<String> {
+/// Custom properties ("--x") are not named properties. The entry keeps the
+/// unresolved CSSPropertyID next to the CSS name, as Blink's
+/// CssPropertyInfo returns the CSSPropertyID that AnonymousNamedSetter hands
+/// to SetPropertyInternal.
+fn CssPropertyInfo(name: &str) -> Option<Rc<CSSNamedProperty>> {
     thread_local! {
-        static PROPERTIES: RefCell<HashMap<String, Option<String>>> =
+        static PROPERTIES: RefCell<HashMap<String, Option<Rc<CSSNamedProperty>>>> =
             RefCell::new(HashMap::new());
     }
     if let Some(cached) = PROPERTIES.with(|map| map.borrow().get(name).cloned()) {
         return cached;
     }
-    let property = ParseCSSPropertyName(name).filter(|property| {
-        !property.starts_with("--")
-            && style::css_property_names::FindProperty(property.as_bytes()).is_some()
-    });
+    let property = ParseCSSPropertyName(name)
+        .filter(|property| {
+            !property.starts_with("--")
+                && style::css_property_names::FindProperty(property.as_bytes()).is_some()
+        })
+        .map(|property| {
+            Rc::new(CSSNamedProperty {
+                id: style::CSSOMPropertyID(&property)
+                    .filter(|id| *id != foundation::CSSPropertyID::kVariable),
+                name: property,
+            })
+        });
     PROPERTIES.with(|map| {
         map.borrow_mut()
             .insert(name.to_owned(), property.clone())
     });
     property
+}
+
+/// One CssPropertyInfo entry: the CSS property name and, when the name maps
+/// to a known property, its unresolved CSSPropertyID.
+struct CSSNamedProperty {
+    name: String,
+    id: Option<foundation::CSSPropertyID>,
+}
+
+/// The property a CSSOM inline-style write names: the CSSOM name of
+/// setProperty()/removeProperty(), or the id a named setter already resolved.
+enum InlineStyleProperty<'a> {
+    Name(&'a str),
+    Resolved(&'a CSSNamedProperty),
 }
 
 // cpp: webapi/dom_bindings.cc:189-197
@@ -5076,6 +4994,209 @@ impl DOMJavaScriptBindings {
         let id = self.next_collection_id.get();
         self.next_collection_id.set(id + 1);
         id
+    }
+    /// V8CSSStyleDeclaration's named/indexed property callbacks:
+    /// CSSStyleDeclaration::AnonymousNamedGetter/AnonymousNamedSetter
+    /// (css_style_declaration.cc:173-243) resolve the script name once through
+    /// CssPropertyInfo, then run the property's get/set; an unknown name is
+    /// not intercepted. Array-index names are the indexed getter item()
+    /// (css_style_declaration.idl).
+    fn CallCSSStyleDeclaration(
+        &mut self,
+        receiver: HostObjectId,
+        member: &str,
+        arguments: &[HostValue],
+    ) -> HostResult {
+        let owner = self.document.borrow();
+        let document = owner.GetDocument();
+        let Some(index) = document.FindNodeById(receiver) else {
+            return Self::type_error("host object no longer exists");
+        };
+        let node = document.Node(index);
+        if node.Type() != DOMNodeType::kElement {
+            return Self::type_error("Illegal invocation");
+        }
+        let key = match arguments.first() {
+            Some(HostValue::String(key)) => Some(key.as_str()),
+            _ => None,
+        };
+        let item_index = if member == "__cssStyleItem" {
+            Some(match arguments.first() {
+                Some(HostValue::Number(index)) if *index >= 0.0 => *index as usize,
+                _ => usize::MAX,
+            })
+        } else if member == "__cssStyleLength" {
+            None
+        } else {
+            key.and_then(CSSStyleArrayIndex)
+        };
+        if member == "__cssStyleLength" || item_index.is_some() {
+            // No indexed setter: an index assignment is ignored.
+            if member == "__cssStyleNamedSet" {
+                return HostResult::default();
+            }
+            // CSSPropertyValueSet::PropertyCount/PropertyAt over the
+            // element's declaration (one entry per longhand).
+            let inline_style = node.InlineStyle();
+            let declarations = style::ParseCSSDeclarationList(inline_style.SourceText());
+            if member == "__cssStyleLength" {
+                return Self::value(HostValue::Number(declarations.len() as f64));
+            }
+            let property = declarations
+                .into_iter()
+                .nth(item_index.unwrap_or(usize::MAX))
+                .map(|declaration| declaration.property);
+            return match (member, property) {
+                ("__cssStyleItem", property) => {
+                    Self::value(HostValue::String(property.unwrap_or_default()))
+                }
+                ("__cssStyleNamedQuery", property) => {
+                    Self::value(HostValue::Boolean(property.is_some()))
+                }
+                (_, Some(property)) => Self::value(HostValue::String(property)),
+                (_, None) => Self::unhandled(),
+            };
+        }
+        let Some(property) = key.and_then(CssPropertyInfo) else {
+            return Self::unhandled();
+        };
+        match member {
+            "__cssStyleNamedQuery" => Self::value(HostValue::Boolean(true)),
+            // AnonymousNamedSetter -> SetPropertyInternal(property id, value,
+            // important = false): the resolved id goes straight to the
+            // declaration's parser, without a second name lookup.
+            "__cssStyleNamedSet" => {
+                let Some(HostValue::String(value)) = arguments.get(1) else {
+                    return Self::type_error("style value is required");
+                };
+                drop(owner);
+                self.SetInlineStyleDeclaration(
+                    receiver,
+                    InlineStyleProperty::Resolved(&*property),
+                    value,
+                    "",
+                )
+            }
+            _ => {
+                drop(owner);
+                self.call(
+                    receiver,
+                    "getStyle",
+                    &[HostValue::String(property.name.clone())],
+                )
+            }
+        }
+    }
+    /// AbstractPropertySetCSSStyleDeclaration::SetPropertyInternal on the
+    /// element's InlineCSSStyleDeclaration (css_style_declaration.cc,
+    /// abstract_property_set_css_style_declaration.cc): edit the retained
+    /// declaration, then report InlineStyleChanged as one DOM mutation.
+    fn SetInlineStyleDeclaration(
+        &self,
+        receiver: HostObjectId,
+        property: InlineStyleProperty<'_>,
+        value: &str,
+        priority: &str,
+    ) -> HostResult {
+        let owner = self.document.borrow();
+        let document = owner.GetDocument();
+        let Some(index) = document.FindNodeById(receiver) else {
+            return Self::type_error("host object no longer exists");
+        };
+        let node = document.Node(index);
+        let inline_style = node.InlineStyle();
+        let standard_mode = node.Namespace() == DOMNamespace::kHTML
+            && document.GetCompatibilityMode()
+                != dom::persistent_document::CompatibilityMode::kQuirks;
+        let cssom_context = self
+            .services
+            .host
+            .cssom_document
+            .as_ref()
+            .map(|(source, policy)| {
+                source.CSSOMContextForElement(
+                    document,
+                    index,
+                    policy.Get(),
+                    self.cssom_world.borrow().clone(),
+                )
+            });
+        let result = match property {
+            InlineStyleProperty::Resolved(CSSNamedProperty { id: Some(id), .. })
+                if priority.is_empty() =>
+            {
+                let value = foundation::String::FromUtf8(value.as_bytes());
+                Some(match &cssom_context {
+                    Some(context) => style::SetInlineCSSPropertyWithContext(
+                        &inline_style,
+                        *id,
+                        &value,
+                        false,
+                        context,
+                    ),
+                    None => style::SetInlineCSSProperty(
+                        &inline_style,
+                        *id,
+                        &value,
+                        false,
+                        standard_mode,
+                    ),
+                })
+            }
+            property => {
+                let name = match property {
+                    InlineStyleProperty::Name(name) => name,
+                    InlineStyleProperty::Resolved(property) => property.name.as_str(),
+                };
+                match &cssom_context {
+                    Some(context) => style::SetInlineCSSDeclarationWithContext(
+                        &inline_style,
+                        name,
+                        value,
+                        priority,
+                        context,
+                    ),
+                    None => style::SetInlineCSSDeclaration(
+                        &inline_style,
+                        name,
+                        value,
+                        priority,
+                        standard_mode,
+                    ),
+                }
+            }
+        };
+        let Some(result) = result else {
+            return HostResult::default();
+        };
+        let (mutation_type, inline_style_independent, inline_style) = match result {
+            // DOM retains the declaration itself and serializes the style
+            // attribute lazily (Element::SynchronizeStyleAttribute on read);
+            // the CSSOM write path builds no attribute text.
+            style::CSSInlineDeclarationMutation::Changed(style) => {
+                (DOMMutationType::kSetAttribute, false, Some(style))
+            }
+            style::CSSInlineDeclarationMutation::ChangedIndependent(style) => {
+                (DOMMutationType::kSetAttribute, true, Some(style))
+            }
+            style::CSSInlineDeclarationMutation::Unchanged => {
+                if document.CustomElementDefinitionForElement(index).is_none() {
+                    return HostResult::default();
+                }
+                (DOMMutationType::kNotifyInlineStyleUnchanged, false, None)
+            }
+        };
+        drop(owner);
+        self.EmitOwnedMutation(DOMMutation {
+            mutation_type,
+            target_node_id: receiver,
+            name: "style".into(),
+            value: String::new(),
+            inline_style_independent,
+            inline_style,
+            ..Default::default()
+        });
+        HostResult::default()
     }
     /// Emit a mutation this branch owns. While PrepareInvocation captures
     /// the scoped call's one mutation, move it into that slot instead of
