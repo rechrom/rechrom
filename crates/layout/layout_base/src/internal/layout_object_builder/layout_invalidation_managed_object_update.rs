@@ -408,10 +408,17 @@ fn create_managed_object(
             .as_ref()
             .is_some_and(|element| element.image_resource_is_loaded || element.image_resource_error)
     };
+    // cpp: core/layout/layout_object.cc:2991-3030 (LayoutObject::SetStyle)
+    // computes VisualInvalidationDiff once per style replacement. The retained
+    // source and effective envelopes are one owner for every element (and a
+    // LayoutText without a separate source style), so the second comparison
+    // repeats the first one exactly; evaluate it only for distinct owners.
     let paint_only = previous.as_ref().is_some_and(|old| {
         same_non_style_inputs
             && old.input.style.LayoutEquivalent(&descriptor.style)
-            && old.effective_style.LayoutEquivalent(&effective_style)
+            && ((Arc::ptr_eq(&old.input.style, &old.effective_style)
+                && Arc::ptr_eq(&descriptor.style, &effective_style))
+                || old.effective_style.LayoutEquivalent(&effective_style))
     });
     let context = layout_algo_block_fragmentation_context::fragmentation_context(parent);
     let prepare_style = |data: &NodeConstructionData,
@@ -587,6 +594,11 @@ fn create_managed_object(
     let old_font_dirty = previous
         .as_ref()
         .is_some_and(|old| unsafe { &*old.node }.NeedsInputFontBinding());
+    // Targeted NodeInput restyles only: attribute the retained metadata
+    // refresh and LayoutObject::SetStyle separately. Full attachment
+    // transactions create no per-node spans here.
+    let metadata_trace = targeted_style_update
+        .then(|| browser_tracing::span("layout", "layout_invalidation.NodeInput.Metadata"));
     let metadata_node: *mut Node = if let Some(old) = &previous {
         if kind == NodeKind::kText {
             unsafe { &mut *old.node }.UpdateInputData(&input);
@@ -644,6 +656,7 @@ fn create_managed_object(
     }
     NodeMetadataRelations::AttachIncrementalRelations(unsafe { &mut *metadata_node })
         .unwrap_or_else(|error| panic!("{error:?}"));
+    drop(metadata_trace);
     let object = if let Some(old) = &previous {
         storage.stats.updated += 1;
         if kind == NodeKind::kText && old.input.text != input.text {
@@ -657,10 +670,10 @@ fn create_managed_object(
                 .SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
                     &raw const crate::internal::layout_invalidation_reason::kSizeChanged,
                 );
-        } else if !same_non_style_inputs
-            || !old.effective_style.LayoutEquivalent(&effective_style)
-            || !old.input.style.LayoutEquivalent(&descriptor.style)
-        {
+        } else if !paint_only {
+            // `paint_only` is exactly same_non_style_inputs && both
+            // LayoutEquivalent results for this same `old`; reuse it rather
+            // than diffing the same two ComputedStyles again.
             unsafe { &mut *old.object }.SetNeedsLayoutAndIntrinsicWidthsRecalc(
                 &raw const crate::internal::layout_invalidation_reason::kStyleChange,
             );
@@ -679,7 +692,10 @@ fn create_managed_object(
     // Keeping the alias null until after SetStyle made the root Node unable to
     // resolve its LayoutView during PaintLayerScrollableArea registration.
     unsafe { &mut *metadata_node }.SetLayoutObject(object);
+    let set_style_trace = targeted_style_update
+        .then(|| browser_tracing::span("layout", "layout_invalidation.NodeInput.SetStyle"));
     unsafe { &mut *object }.SetStyle(layout_style);
+    drop(set_style_trace);
     if unsafe { &*object }.IsLayoutImage() {
         let ratio = descriptor
             .element

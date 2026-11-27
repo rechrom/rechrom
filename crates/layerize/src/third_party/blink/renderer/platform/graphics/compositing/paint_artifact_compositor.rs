@@ -1757,6 +1757,13 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
     }
 
     fn build_and_commit_property_trees(&mut self) -> usize {
+        // Sub-phase attribution of paint_artifact_compositor.cc:385-520
+        // (PropertyTreeManager setup, per-layer UpdateCompositedLayer and cc
+        // node assignment, Finalize, layer list). Spans only; no work moves.
+        let setup_trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.BuildPropertyTrees.Setup",
+        );
         let host = self
             .compositor
             .root_layer_
@@ -1803,6 +1810,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
         for node in painted.keys() {
             manager.EnsureCompositorScrollAndTransformNode(node);
         }
+        drop(setup_trace);
         let report_metrics = self.context.services.ShouldRecordSubsampledMetric(0.01);
         let mut fixed_count = 0;
         let mut merged_fixed_count = 0;
@@ -1814,7 +1822,14 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
         for (index, pending) in compositor.pending_layers_.iter_mut().enumerate() {
             let state = pending.GetPropertyTreeState();
             let state_for_paint = GetPropertyTreeStateForPaint::<B>(&state);
+            let mut update_trace = browser_tracing::span(
+                "compositor.layerize",
+                "Compositor.Layerize.BuildPropertyTrees.UpdateCompositedLayer",
+            );
+            update_trace.set("index", index as f64);
+            update_trace.set("chunks", pending.Chunks().len() as f64);
             let old = old_matcher.Find(pending);
+            update_trace.set("matched_old", old.is_some() as u8 as f64);
             pending.UpdateCompositedLayer(
                 old,
                 state_for_paint,
@@ -1824,6 +1839,11 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
                 self.context.pending,
                 manager.LayerContextMutable(),
                 self.context.services,
+            );
+            drop(update_trace);
+            let _assign_trace = browser_tracing::span(
+                "compositor.layerize",
+                "Compositor.Layerize.BuildPropertyTrees.AssignNodes",
             );
             let layer = pending.CcLayer();
             if { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_STACKING").is_some()) } {
@@ -1956,6 +1976,10 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
             .LayerContextMutable()
             .HostMut(host)
             .RegisterSelection(selection);
+        let finalize_trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.BuildPropertyTrees.Finalize",
+        );
         manager.Finalize();
         {
             let (client, c) = manager.ClientAndLayerContext();
@@ -1973,6 +1997,11 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
             .HostMut(host)
             .property_trees_mut()
             .set_sequence_number(*self.context.property_tree_sequence_number);
+        drop(finalize_trace);
+        let _layer_list_trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.BuildPropertyTrees.LayerList",
+        );
         let layers = manager.LayerListBuilderMutable().Finalize();
         let committed_layers = layers.len();
         manager.UpdateConditionalRenderSurfaceReasons(

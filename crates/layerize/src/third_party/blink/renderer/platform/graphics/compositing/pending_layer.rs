@@ -877,6 +877,10 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         if self.compositing_type_ == CompositingType::kForeignLayer {
             return;
         }
+        let _trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.UpdateLayerProperties",
+        );
         let layer = self.CcLayer();
         super::paint_chunks_to_cc_layer::UpdateLayerProperties::<B>(
             &layer,
