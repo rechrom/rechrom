@@ -54,6 +54,10 @@ pub struct PrePaintUpdateStats {
     pub property_geometry_changes: usize,
     pub property_geometry_changes_with_own_keys: usize,
     pub property_geometry_changes_needing_property_update: usize,
+    /// Of the property geometry changes, those local to their object, which
+    /// kept the retained post-update results instead of forcing the
+    /// whole-tree post-update pass.
+    pub local_geometry_changes: usize,
     pub skipped_subtrees: usize,
     pub same_context_nodes: usize,
     pub retained_context_nodes: usize,

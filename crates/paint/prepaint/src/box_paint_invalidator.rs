@@ -9,7 +9,7 @@ use foundation::{
     IsLayoutFullPaintInvalidationReason, PaintInvalidationReason,
 };
 use layout::fragment::PreviousBoxGeometry;
-use layout::paint::FragmentPaintData;
+use layout::paint::{FragmentPaintData, GapRulePaintData};
 use paint_input_types::FragmentPaintRect;
 use paint_input_types::layout_input::{Offset, Size};
 use layout::paint::PaintFragmentCursor;
@@ -47,12 +47,32 @@ impl BoxPaintInvalidator {
         previous: Option<&FragmentPaintData>,
         context: PaintInvalidatorContext,
     ) -> BackgroundInvalidation {
+        Self::ComputeBackgroundInvalidationWithPreviousGapRules(
+            fragment,
+            source,
+            previous,
+            previous.and_then(|old| old.paint.gap_rules.as_deref()),
+            context,
+        )
+    }
+
+    /// ComputeBackgroundInvalidation with the gap geometry this box last
+    /// painted with kept beside the previous fragment, as LayoutBox keeps its
+    /// previous GapGeometry (box_paint_invalidator.cc:467-510), instead of
+    /// written into a copy of the shared paint payload.
+    pub fn ComputeBackgroundInvalidationWithPreviousGapRules(
+        fragment: &FragmentPaintData,
+        source: Option<PaintFragmentCursor<'_>>,
+        previous: Option<&FragmentPaintData>,
+        previous_gap_rules: Option<&GapRulePaintData>,
+        context: PaintInvalidatorContext,
+    ) -> BackgroundInvalidation {
         let mut result = BackgroundInvalidation::default();
         let previous_geometry = PreviousGeometry(fragment, previous);
         let invalidation = fragment.pre_paint_invalidation;
         if invalidation.background_needs_full_paint_invalidation
             || context.HasSubtreeFullInvalidation()
-            || ShouldInvalidateGapDecorations(fragment, previous)
+            || ShouldInvalidateGapDecorations(fragment, previous_gap_rules)
         {
             result.kind = BackgroundInvalidationType::Full;
             result.invalidate_both_spaces = true;
@@ -441,12 +461,12 @@ fn BackgroundGeometryDependsOnScrollableOverflowRect(fragment: &FragmentPaintDat
 /// per-fragment GapGeometry for the purpose of deciding whether to re-record.
 fn ShouldInvalidateGapDecorations(
     fragment: &FragmentPaintData,
-    previous: Option<&FragmentPaintData>,
+    previous_rules: Option<&GapRulePaintData>,
 ) -> bool {
-    let Some(previous_rules) = previous.and_then(|old| old.paint.gap_rules.as_ref()) else {
+    let Some(previous_rules) = previous_rules else {
         return false;
     };
-    fragment.ViewGapRules().as_ref() != Some(previous_rules)
+    fragment.ViewGapRules().as_deref() != Some(previous_rules)
 }
 
 fn RepeatRule(layer: &BackgroundImageLayer, horizontal: bool) -> BackgroundRepeatRule {

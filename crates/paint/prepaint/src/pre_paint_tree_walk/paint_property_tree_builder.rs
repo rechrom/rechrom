@@ -1980,6 +1980,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             subtree_resource_usage: 0,
             record: Default::default(),
             previous_fragment: None,
+            previous_gap_rules: None,
             own_change,
             subtree_keys: own_keys.clone(),
             own_keys,

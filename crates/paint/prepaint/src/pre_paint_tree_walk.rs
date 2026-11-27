@@ -1008,6 +1008,12 @@ struct NodeCache {
     /// (shared, not copied) and the fragment's own scalar fields. The paint
     /// invalidators read them as the previous fragment.
     previous_fragment: Option<FragmentPaintData>,
+    /// The gap geometry this fragment painted with at its last visit, the
+    /// baseline of ShouldInvalidateGapDecorations (LayoutBox's previous
+    /// GapGeometry, box_paint_invalidator.cc:467-510). Kept here, not written
+    /// into `previous_fragment`'s paint payload, which is shared with the
+    /// live fragment and would be deep-copied by that write.
+    previous_gap_rules: Option<Arc<layout::paint::GapRulePaintData>>,
     /// The maximum change the in-place `Update` of this object's own
     /// property slots reported when it was last built (Chromium's
     /// PaintPropertyTreeBuilder `properties_changed_`). The node states
@@ -1168,6 +1174,13 @@ pub struct PrePaintTreeWalk {
     /// node UpdateNode is visiting (0 for one that establishes none).
     physical_ancestor_ids: Vec<u64>,
     needs_post_update: bool,
+    /// Whether the last complete PrepareOutlines found an inline outline
+    /// continuation group. Only such groups keep prepared outline rects
+    /// (every other outline is collected at paint time from the live
+    /// fragment, as BoxFragmentPainter::PaintOutline reads
+    /// LayoutObject::OutlineRects in Chromium), so a node-local geometry
+    /// change can skip the post-update pass only while none exists.
+    inline_outline_groups: bool,
     /// Root-to-node transform products of property nodes seen this walk.
     /// The Arc keeps each key's allocation alive for the walk.
     transform_world_memo: HashMap<usize, (Arc<TransformPaintPropertyNode>, TransformMatrix)>,
@@ -1241,6 +1254,7 @@ impl Default for PrePaintTreeWalk {
             logical_effect_contexts: HashMap::default(),
             physical_ancestor_ids: Vec::new(),
             needs_post_update: false,
+            inline_outline_groups: true,
             transform_world_memo: HashMap::default(),
             shift_check: std::env::var_os("RECHROM_PREPAINT_SHIFT_CHECK").is_some(),
             invalidation_only_check: std::env::var_os("RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK")
@@ -4405,22 +4419,19 @@ fn GatherInlineOutlineGroups<'a>(
     }
 }
 
-fn PrepareSelfOutlineRects(node: &mut PaintTreeNode<'_>) {
+/// One occurrence's AddSelfOutlineRects, in paint space, appended to `rects`.
+fn AppendSelfOutlineRects(node: &PaintTreeNode<'_>, rects: &mut Vec<PaintRect>) {
     let fragment = node
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
     if let Some(outline) = fragment.ViewSelfOutline() {
-        node.outline_rects
-            .extend(outline.rects.iter().map(|rect| PaintRect {
-                x: node.paint_offset.x + rect.offset.x,
-                y: node.paint_offset.y + rect.offset.y,
-                width: rect.size.width,
-                height: rect.size.height,
-            }));
-    }
-    for child in &mut node.children {
-        PrepareSelfOutlineRects(child);
+        rects.extend(outline.rects.iter().map(|rect| PaintRect {
+            x: node.paint_offset.x + rect.offset.x,
+            y: node.paint_offset.y + rect.offset.y,
+            width: rect.size.width,
+            height: rect.size.height,
+        }));
     }
 }
 
@@ -4488,23 +4499,37 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
     }
 }
 
-fn PrepareOutlines(root: &mut PaintTreeNode<'_>) {
-    PrepareSelfOutlineRects(root);
+/// Joins the outline of each inline continuation group onto its first
+/// occurrence (OutlinePainter paints the united outline once). Returns
+/// whether any group exists.
+///
+/// Only grouped inline outlines are prepared here. Chromium collects every
+/// other outline at paint time (BoxFragmentPainter::PaintObject ->
+/// FragmentPainter::PaintOutline -> AddOutlineRects,
+/// core/paint/fragment_painter.cc), and BoxFragmentPainter::PaintOutline
+/// here does the same from the live fragment when a node carries no
+/// prepared rects, so a whole-tree ViewSelfOutline pass would only cache
+/// the value Paint reads anyway.
+fn PrepareOutlines(root: &mut PaintTreeNode<'_>) -> bool {
     let mut groups = BTreeMap::new();
     GatherInlineOutlineGroups(root, &mut groups);
+    let any_group = !groups.is_empty();
     for (_unused_key, occurrences) in groups {
         let owner_pointer = occurrences[0];
         let mut outline_rects = Vec::new();
         for occurrence_pointer in occurrences {
             // The pointers refer to distinct boxed nodes that remain owned by
             // the tree for this whole pass.
-            outline_rects.append(unsafe { &mut (*occurrence_pointer).outline_rects });
+            let occurrence = unsafe { &mut *occurrence_pointer };
+            AppendSelfOutlineRects(occurrence, &mut outline_rects);
+            occurrence.outline_rects.clear();
             if occurrence_pointer != owner_pointer {
-                unsafe { (*occurrence_pointer).paints_outline = false };
+                occurrence.paints_outline = false;
             }
         }
         unsafe { (*owner_pointer).outline_rects = outline_rects };
     }
+    any_group
 }
 
 fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
@@ -4912,21 +4937,16 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
 /// The previous-fragment view a retained node keeps for the paint
 /// invalidators: the shared paint payload (an Arc, not a copy) and the
 /// fragment's scalar fields. CSSOM inline rectangles are not paint inputs.
+/// The gap geometry baseline is kept beside it (NodeCache::
+/// previous_gap_rules): writing it into this payload would deep-copy the
+/// payload the live fragment shares.
 fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
-    let mut snapshot = FragmentPaintData {
+    FragmentPaintData {
         // Document resources are read from the document, never the slot.
         resources: None,
         paint: f.paint.clone(),
         ..*f
-    };
-    // Gap rules are read live from the resident box; keep the value this
-    // fragment painted with as the comparison baseline
-    // (ShouldInvalidateGapDecorations).
-    let gap_rules = f.ViewGapRules();
-    if snapshot.paint.gap_rules != gap_rules {
-        snapshot.paint.gap_rules = gap_rules;
     }
-    snapshot
 }
 
 /// The record of a retained node; empty if it has none.
@@ -5872,13 +5892,105 @@ fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintD
 
 /// SamePhaseInputs against the recorded previous values.
 fn SamePreviousPhaseInputs(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
+    SamePreviousPhaseStructure(recorded, current) && recorded.size == current.size
+}
+
+/// SamePhaseStructure against the recorded previous values: the inputs of
+/// this object's own paint-phase needs (MarkPaintPhaseNeeds) and of its
+/// inline-outline grouping, without its size.
+fn SamePreviousPhaseStructure(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
     recorded.phase_flags == current.phase_flags
         && recorded.floating == current.floating
         && recorded.display == current.display
         && recorded.outline_style == current.outline_style
         && recorded.outline_width == current.outline_width
         && recorded.outline_alpha == current.outline_alpha
-        && recorded.size == current.size
+}
+
+/// Whether the rebuilt node `built` differs from the retained node `old`
+/// only in this object's own geometry and property values, so every result
+/// of the post-update pass that `old` carries also holds for `built`:
+///
+/// - the client directory (RetainTree) and the physical/logical topology:
+///   same source identity, same DisplayItemClients, same logical position
+///   and the same containing-block abilities (RestoreLogicalOutOfFlowParents);
+/// - the paint-phase needs (MarkPaintPhaseNeeds): same phase structure, same
+///   paint-layer boundary and, for a layer, the same overlay overflow
+///   controls;
+/// - the PaintLayer stacking order the hit-test order lists name
+///   (ResetPostPaintData);
+/// - the property slots, so the effect directory (GatherFinalEffects) names
+///   the same live nodes, updated in place.
+///
+/// Chromium's PrePaintTreeWalk::WalkInternal updates such an object inside
+/// the walk and runs nothing over the rest of the tree
+/// (pre_paint_tree_walk.cc:650-760).
+fn LocalGeometryChange(
+    old: &PaintTreeNode<'_>,
+    built: &PaintTreeNode<'_>,
+    current: &PrePaintPrevious,
+) -> bool {
+    let (Some(old_cache), Some(new_cache), Some(bf)) = (
+        old.cache.as_ref(),
+        built.cache.as_ref(),
+        built.fragment.as_deref(),
+    ) else {
+        return false;
+    };
+    let recorded = old_cache.record;
+    if IsNewClient(
+        &RecordedClientIds(&recorded),
+        bf.paint.DisplayItemClientId(),
+        bf.paint.DisplayItemClientState().is_just_created,
+    ) || !SamePreviousSourceIdentity(old, bf)
+        || !SameClientDirectory(old, bf)
+        // RetainTree's directory also names these two clients.
+        || recorded.selection_client_id != current.selection_client_id
+        || recorded.scrolling_background_client_id != current.scrolling_background_client_id
+        || !SamePreviousPhaseStructure(&recorded, current)
+        || !SamePreviousLogicalPosition(&recorded, current)
+        || old_cache.own_keys != new_cache.own_keys
+    {
+        return false;
+    }
+    macro_rules! same_fields {
+        ($($field:ident),* $(,)?) => {
+            $(if old.$field != built.$field { return false; })*
+        };
+    }
+    same_fields!(
+        is_paint_layer,
+        is_self_painting_layer,
+        has_self_painting_layer_descendant,
+        is_stacking_context,
+        is_stacked,
+        is_root,
+        stacking_level,
+        is_z_order_list_visible,
+        is_in_top_or_view_transition_layer,
+        is_direct_layout_view_child,
+        is_under_svg_hidden_container,
+        can_contain_absolute_position_objects,
+        can_contain_fixed_position_objects,
+        has_overlay_overflow_controls,
+        paint_layer_order_parent_unique_id,
+        paint_layer_order,
+        child_paint_blocked_by_display_lock,
+    );
+    if old.horizontal_scrollbar_properties.is_some() != built.horizontal_scrollbar_properties.is_some()
+        || old.vertical_scrollbar_properties.is_some() != built.vertical_scrollbar_properties.is_some()
+    {
+        return false;
+    }
+    // A layer's own overflow-controls phase (MarkPaintPhaseNeeds) must agree
+    // with the aggregate it keeps.
+    if built.is_paint_layer
+        && bf.ViewScrollbarsPaintAsOverlay().is_some_and(|overlay| overlay)
+            != old.needs_overflow_controls_phase
+    {
+        return false;
+    }
+    true
 }
 
 /// The logical-tree inputs SameGeometry and the invalidation-only refresh
@@ -6720,6 +6832,10 @@ impl PrePaintTreeWalk {
             .as_mut()
             .and_then(|node| node.cache.as_mut())
             .and_then(|cache| cache.previous_fragment.take());
+        let old_gap_rules = previous
+            .as_mut()
+            .and_then(|node| node.cache.as_mut())
+            .and_then(|cache| cache.previous_gap_rules.take());
         let old_fragment = old_snapshot
             .as_ref()
             .map(|fragment| fragment as *const FragmentPaintData);
@@ -7082,7 +7198,31 @@ impl PrePaintTreeWalk {
                         .pre_paint_invalidation
                         .needs_paint_property_update
                         as usize;
-                    self.needs_post_update = true;
+                    // Source: pre_paint_tree_walk.cc:650-760 (WalkInternal).
+                    // Chromium updates this object's FragmentData and runs
+                    // PaintInvalidator::InvalidatePaint inside the one walk;
+                    // no whole-tree pass follows a geometry change. When the
+                    // change is local to this object (same identity, client
+                    // directory, paint-phase and stacking structure, logical
+                    // position and property slots), every post-update result
+                    // of the retained node still holds: keep them and leave
+                    // the post-update pass to topology and structure changes.
+                    if !force
+                        && !self.inline_outline_groups
+                        && LocalGeometryChange(&old, &built, &current_record)
+                    {
+                        self.stats.local_geometry_changes += 1;
+                        built.paints_outline = old.paints_outline;
+                        built.needs_float_phase = old.needs_float_phase;
+                        built.needs_outline_phase = old.needs_outline_phase;
+                        built.needs_overflow_controls_phase = old.needs_overflow_controls_phase;
+                        // The same PaintLayerStackingNode lists: the stacking
+                        // facts and every Box address they name are unchanged.
+                        *built.hit_test_layer_order.get_mut() =
+                            old.hit_test_layer_order.get_mut().take();
+                    } else {
+                        self.needs_post_update = true;
+                    }
                 }
                 built.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
                 built.children = std::mem::take(&mut old.children);
@@ -7195,12 +7335,14 @@ impl PrePaintTreeWalk {
             );
         if should_run_invalidation {
             let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
-                let mut background = BoxPaintInvalidator::ComputeBackgroundInvalidation(
-                    &fragment,
-                    Some(fragment.Cursor()),
-                    PreviousFragment(old_fragment),
-                    invalidation_context,
-                );
+                let mut background =
+                    BoxPaintInvalidator::ComputeBackgroundInvalidationWithPreviousGapRules(
+                        &fragment,
+                        Some(fragment.Cursor()),
+                        PreviousFragment(old_fragment),
+                        old_gap_rules.as_deref(),
+                        invalidation_context,
+                    );
                 if self.view_background_geometry_changed
                     && fragment.paint.IsBackgroundAttachmentFixedObject()
                 {
@@ -7324,9 +7466,11 @@ impl PrePaintTreeWalk {
         // Children record theirs in their own UpdateNode, after the identity
         // check below has read them.
         let snapshot = node.fragment.as_deref().map(PreviousFragmentSnapshot);
+        let gap_rules = node.fragment.as_deref().and_then(|f| f.ViewGapRules());
         if let Some(cache) = node.cache.as_mut() {
             cache.record = current_record;
             cache.previous_fragment = snapshot;
+            cache.previous_gap_rules = gap_rules;
         }
         // Source: core/paint/pre_paint_tree_walk.cc:1517-1535.
         // Display locking blocks only the child walk. WalkInternal has already
@@ -8528,7 +8672,7 @@ impl PrePaintTreeWalk {
             }
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.PrepareOutlines");
-                PrepareOutlines(&mut tree);
+                self.inline_outline_groups = PrepareOutlines(&mut tree);
             }
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.MarkPaintPhaseNeeds");
@@ -8586,6 +8730,11 @@ impl PrePaintTreeWalk {
                 self.stats.source_tree_compatible_nodes as f64,
             );
             admission.set("invalidation_nodes", self.stats.invalidation_nodes as f64);
+            admission.set(
+                "local_geometry_changes",
+                self.stats.local_geometry_changes as f64,
+            );
+            admission.set("post_update", self.needs_post_update as u8 as f64);
         }
         PropagateAutoDarkModeState(&mut tree, false);
         let mut repaint_counts = [0; 3];
