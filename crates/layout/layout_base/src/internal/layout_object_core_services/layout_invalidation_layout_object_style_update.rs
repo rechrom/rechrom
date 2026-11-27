@@ -493,7 +493,10 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
                 &LayoutObjectVisualInvalidationContext,
             );
         }
-        if old_style_ref != new_style_ref
+        // A non-zero field diff already proves the styles differ; only an
+        // empty one needs the complete ComputedStyle comparison (Chromium's
+        // SetStyle classifies from the diff alone, layout_object.cc:3018).
+        if (field_diff != 0 || old_style_ref != new_style_ref)
             && (!property_only || StyleChangeNeedsPaintInvalidation(&visual_difference))
         {
             difference.SetNeedsNormalPaintInvalidation();

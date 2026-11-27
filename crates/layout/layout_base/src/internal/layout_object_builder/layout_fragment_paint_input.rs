@@ -13,13 +13,13 @@ use crate::internal::layout_object::MarkingBehavior;
 /// unpublished id to a decoded PaintImage id. Keep that resource transition
 /// in the retained-paint invalidation proof instead of reusing the drawing
 /// recorded while the image was absent.
-fn StyleImageResourceBindings(style: &StyleComputedStyle) -> Vec<(String, u64)> {
+fn StyleImageResourceBindings(style: &StyleComputedStyle) -> Vec<(&str, u64)> {
     use layout_style::style::{
         content_data::ImageContentData, fill_layer::FillLayer, style_fetched_image::FetchedImage,
         style_image::StyleImage,
     };
 
-    fn append(image: *mut StyleImage, output: &mut Vec<(String, u64)>) {
+    fn append<'a>(image: *mut StyleImage, output: &mut Vec<(&'a str, u64)>) {
         let Some(image) = (unsafe { image.as_ref() }) else {
             return;
         };
@@ -27,10 +27,10 @@ fn StyleImageResourceBindings(style: &StyleComputedStyle) -> Vec<(String, u64)> 
             .and_then(|mask| mask.FetchedImage())
             .unwrap_or(image);
         if let Some(image) = FetchedImage(image) {
-            output.push((image.SourceURL().to_owned(), image.ResourceId()));
+            output.push((image.SourceURL(), image.ResourceId()));
         }
     }
-    fn layers(mut layer: *const FillLayer, output: &mut Vec<(String, u64)>) {
+    fn layers<'a>(mut layer: *const FillLayer, output: &mut Vec<(&'a str, u64)>) {
         while let Some(current) = unsafe { layer.as_ref() } {
             append(current.GetImage(), output);
             layer = current.Next();
@@ -350,6 +350,15 @@ pub(super) fn paint_input_plan(
     })
 }
 
+/// A shared placeholder owner for a record's second envelope handle while its
+/// first handle is replaced, so releasing it never allocates.
+fn DetachedEnvelope() -> Arc<ComputedStyle> {
+    thread_local! {
+        static DETACHED: Arc<ComputedStyle> = Arc::new(ComputedStyle::default());
+    }
+    DETACHED.with(Arc::clone)
+}
+
 #[inline(never)]
 pub(super) fn update_paint_input(
     tree: &mut LayoutObjectTree,
@@ -387,7 +396,17 @@ pub(super) fn update_paint_input(
             &record.input.element,
             style,
         );
-        let layout_style = PreservePaintOnlyFontBinding(style, previous);
+        let layout_style = {
+            let mut trace = layout_commit::fragment_trace::span(
+                layout_commit::fragment_trace::TracePhase::PaintInputFontBinding,
+            );
+            let layout_style = PreservePaintOnlyFontBinding(style, previous);
+            trace.set("copied", (!std::ptr::eq(layout_style, style)) as u8 as f64);
+            layout_style
+        };
+        let invalidation_trace = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::PaintInputInvalidation,
+        );
         let image_resource_id = record.input.resources.image_resource_id;
         // Chromium's resource client edges are untouched by an ordinary
         // paint-only restyle; rebuild the retained projection only when one
@@ -429,10 +448,21 @@ pub(super) fn update_paint_input(
                 foundation::PaintInvalidationReason::kStyle,
             );
         }
+        drop(invalidation_trace);
+        let mut envelope_trace = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::PaintInputEnvelope,
+        );
+        let resources_changed = new_resources.is_some();
         if let Some(new_resources) = new_resources {
             record.input.resources = Arc::new(new_resources);
         }
         record.input.computed_style = style;
+        // Source: core/layout/layout_object.cc:2991-3030 (LayoutObject::SetStyle).
+        // Chromium installs the new ComputedStyle pointer and nothing else;
+        // the envelope only pairs that pointer with the resource handles, so
+        // a restyle that keeps every resource edge rewrites the pointer in
+        // place and leaves the shared paint projection untouched.
+        let mut envelopes_copied = 0u32;
         let mut replace_envelope = |owner: &mut Arc<ComputedStyle>| {
             let old = Arc::as_ptr(owner);
             if let Some((_, _, replacement)) = replaced_envelopes
@@ -442,22 +472,39 @@ pub(super) fn update_paint_input(
                 *owner = Arc::clone(replacement);
                 return;
             }
+            if Arc::get_mut(owner).is_none() {
+                envelopes_copied += 1;
+            }
             let compatibility = Arc::make_mut(owner);
             compatibility.style = style;
-            resources.ApplyTo(compatibility);
-            compatibility.paint.image_resource_id = image_resource_id;
+            if !resources.MatchesApplied(compatibility) {
+                resources.ApplyTo(compatibility);
+            }
+            if compatibility.paint.image_resource_id != image_resource_id {
+                compatibility.paint.image_resource_id = image_resource_id;
+            }
             replaced_envelopes.push((old, image_resource_id, Arc::clone(owner)));
         };
         // The input and effective handles normally name one envelope owner
         // (create_managed_object shares them); replace it once and keep them
-        // shared.
+        // shared. Release the effective handle first so a record-private
+        // envelope is updated in place instead of copied by make_mut.
         let shared_owner = Arc::ptr_eq(&record.input.style, &record.effective_style);
+        if shared_owner {
+            record.effective_style = DetachedEnvelope();
+        }
         replace_envelope(&mut record.input.style);
         if shared_owner {
             record.effective_style = Arc::clone(&record.input.style);
         } else {
             replace_envelope(&mut record.effective_style);
         }
+        envelope_trace.set("resources_changed", resources_changed as u8 as f64);
+        envelope_trace.set("envelopes_copied", envelopes_copied as f64);
+        drop(envelope_trace);
+        let node_data_trace = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::PaintInputNodeData,
+        );
         let element_changed = if record.input.kind == NodeKind::kText {
             record.input.element.is_some()
         } else {
@@ -483,10 +530,14 @@ pub(super) fn update_paint_input(
         node.UpdatePaintInputData(&record.input);
         node.ClearInputFontBinding();
         node.SetComputedStyle(layout_style);
+        drop(node_data_trace);
         // `layout_style` retains the previous resident Font binding
         // (PreservePaintOnlyFontBinding), so the resident pair differs from
         // the admitted canonical pair only by that identical binding: the
         // admission's field diff is this replacement's diff.
+        let _set_style_trace = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::PaintInputSetStyle,
+        );
         unsafe { &mut *record.object }.SetStyleWithFieldDiff(layout_style, field_diff);
     }
     Some(PaintInputUpdate {

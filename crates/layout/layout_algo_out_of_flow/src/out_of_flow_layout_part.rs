@@ -2916,6 +2916,10 @@ impl OutOfFlowLayoutPart {
         if !self.should_add_outer_fragmentainer_children_
             || self.GetConstraintSpace().IsInitialColumnBalancingPass()
         {
+            let _trace = browser_tracing::span(
+                "layout",
+                "layout_algo_out_of_flow.ComputeInlineContainingBlocks",
+            );
             self.ComputeInlineContainingBlocks(candidates);
         }
         for candidate in candidates {
@@ -2941,8 +2945,16 @@ impl OutOfFlowLayoutPart {
                 let is_inside_fragmentation_context =
                     InvolvedInBlockFragmentationForBuilder(unsafe { &*builder_ptr })
                         && RuntimeEnabledFeatures::FragmentedOofInCbEnabled();
-                let node_info = self.SetupNodeInfo(candidate);
-                let offset_info = self.CalculateOffset(&node_info, is_inside_fragmentation_context);
+                let node_info = {
+                    let _trace =
+                        browser_tracing::span("layout", "layout_algo_out_of_flow.SetupNodeInfo");
+                    self.SetupNodeInfo(candidate)
+                };
+                let offset_info = {
+                    let _trace =
+                        browser_tracing::span("layout", "layout_algo_out_of_flow.CalculateOffset");
+                    self.CalculateOffset(&node_info, is_inside_fragmentation_context)
+                };
                 let mut node_to_layout = NodeToLayout {
                     node_info,
                     offset_info,
@@ -2970,8 +2982,14 @@ impl OutOfFlowLayoutPart {
                         continue;
                     }
                 }
-                let result = self.LayoutOOFNode(&mut node_to_layout, std::ptr::null(), false);
+                let result = {
+                    let _trace =
+                        browser_tracing::span("layout", "layout_algo_out_of_flow.LayoutOOFNode");
+                    self.LayoutOOFNode(&mut node_to_layout, std::ptr::null(), false)
+                };
                 let result = unsafe { &*result };
+                let add_result_trace =
+                    browser_tracing::span("layout", "layout_algo_out_of_flow.AddResult");
                 let physical_margins = node_to_layout
                     .offset_info
                     .node_dimensions
@@ -3005,6 +3023,7 @@ impl OutOfFlowLayoutPart {
                             .push(Member::from_ptr(fragment.MutableOwnerLayoutBox()));
                     }
                 }
+                drop(add_result_trace);
                 let mut child_candidates = HeapVector::<LogicalOofPositionedNode>::default();
                 unsafe { &mut *builder_ptr }
                     .SwapOutOfFlowPositionedCandidates(&mut child_candidates);

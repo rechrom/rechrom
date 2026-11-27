@@ -21,6 +21,8 @@ pub enum TracePhase {
     EnsureStyleIndices,
     BuildPaintResources,
     UpdateDescendantDependentFlags,
+    RecalcLayerVisualOverflow,
+    Update3DTransformedDescendantStatus,
     InstallPublication,
     FinishPublication,
     ReleasePaintState,
@@ -28,10 +30,16 @@ pub enum TracePhase {
     UpdateStickyOffsets,
     PaintStyle,
     PaintInput,
+    PaintInputFontBinding,
+    PaintInputInvalidation,
+    PaintInputEnvelope,
+    PaintInputNodeData,
+    PaintInputSetStyle,
     BuildScrollIndex,
     PublishPaintData,
     RefreshTargetedPaintData,
     RefreshTargetedPaintInputs,
+    RefreshRetainedPaintStyle,
     RefreshBoundaryCache,
     RefreshScrollPaintProperties,
     RefreshScrollPaintIndex,
@@ -64,6 +72,10 @@ impl TracePhase {
             Self::UpdateDescendantDependentFlags => {
                 "layout_fragment.UpdateDescendantDependentFlags"
             }
+            Self::RecalcLayerVisualOverflow => "layout_fragment.RecalcLayerVisualOverflow",
+            Self::Update3DTransformedDescendantStatus => {
+                "layout_fragment.Update3DTransformedDescendantStatus"
+            }
             Self::InstallPublication => "layout_fragment.InstallPublication",
             Self::FinishPublication => "layout_fragment.FinishPublication",
             Self::ReleasePaintState => "layout_fragment.ReleasePaintState",
@@ -71,10 +83,18 @@ impl TracePhase {
             Self::UpdateStickyOffsets => "layout_fragment.UpdateStickyOffsets",
             Self::PaintStyle => "layout_fragment.PaintStyle",
             Self::PaintInput => "layout_fragment.PaintInput",
+            Self::PaintInputFontBinding => "layout_fragment.PaintInput.FontBinding",
+            Self::PaintInputInvalidation => "layout_fragment.PaintInput.Invalidation",
+            Self::PaintInputEnvelope => "layout_fragment.PaintInput.Envelope",
+            Self::PaintInputNodeData => "layout_fragment.PaintInput.NodeData",
+            Self::PaintInputSetStyle => "layout_fragment.PaintInput.SetStyle",
             Self::BuildScrollIndex => "layout_fragment.BuildScrollIndex",
             Self::PublishPaintData => "layout_fragment.PublishPaintData",
             Self::RefreshTargetedPaintData => "layout_fragment.RefreshTargetedPaintData",
             Self::RefreshTargetedPaintInputs => "layout_fragment.RefreshTargetedPaintInputs",
+            Self::RefreshRetainedPaintStyle => {
+                "layout_fragment.RefreshTargetedPaintInputs.RetainedPaintStyle"
+            }
             Self::RefreshBoundaryCache => "layout_fragment.RefreshBoundaryCache",
             Self::RefreshScrollPaintProperties => "layout_fragment.RefreshScrollPaintProperties",
             Self::RefreshScrollPaintIndex => "layout_fragment.RefreshScrollPaintIndex",

@@ -248,6 +248,12 @@ impl BlockNode {
         } else {
             None
         };
+        // Root-only attribution of the work around the algorithm (fragment
+        // geometry and FinishLayout); descendants stay span-free.
+        let root_traced = root_trace.is_some();
+        let root_phase = move |name: &'static str| {
+            root_traced.then(|| browser_tracing::span("layout", name))
+        };
         let previous_result = unsafe { &mut *box_ }.GetCachedLayoutResult(break_token);
         if !previous_result.is_null() {
             constraint_space.GetExclusionSpace().PreInitialize(
@@ -261,6 +267,7 @@ impl BlockNode {
         let mut fragment_geometry: Option<FragmentGeometry> = None;
         let needed_layout = unsafe { &*box_ }.NeedsLayout();
         let reuse_lookup = layout_reuse::LayoutReuseLookupTrace::begin();
+        let lookup_phase = root_phase("LayoutEngine.RootCacheLookup");
         let mut layout_result = unsafe { &mut *box_ }.CachedLayoutResult(
             constraint_space,
             break_token,
@@ -269,6 +276,7 @@ impl BlockNode {
             &mut fragment_geometry,
             &mut cache_status,
         );
+        drop(lookup_phase);
         reuse_lookup.finish(cache_status);
         if let Some(trace) = root_trace.as_mut() {
             trace.set("needed_layout", needed_layout as u8 as f64);
@@ -312,6 +320,7 @@ impl BlockNode {
         }
 
         if fragment_geometry.is_none() {
+            let _phase = root_phase("LayoutEngine.RootFragmentGeometry");
             fragment_geometry = Some(CalculateInitialFragmentGeometry(
                 constraint_space,
                 self,
@@ -370,6 +379,7 @@ impl BlockNode {
         } else {
             None
         };
+        let finish_phase = root_phase("LayoutEngine.RootFinishLayout");
         self.FinishLayout(
             block_flow,
             constraint_space,
@@ -377,6 +387,7 @@ impl BlockNode {
             layout_result,
             optional_old_box_size,
         );
+        drop(finish_phase);
 
         if !intrinsic_logical_widths_dirty_before && unsafe { &*box_ }.IntrinsicLogicalWidthsDirty()
         {
