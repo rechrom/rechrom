@@ -1009,6 +1009,15 @@ struct PageState {
         RefCell<Option<interaction::adapter::page_pointer_hit_test::InteractionTextSettings>>,
     scrollbar_scroll_runtime: RefCell<Weak<PageInteractionScrollRuntime>>,
     blocking_wheel_registry_dirty: Cell<bool>,
+    /// The root frame's blocking wheel target identities, as Blink's
+    /// EventHandlerRegistry holds them between listener changes
+    /// (event_handler_registry.cc:128-170 updates only on add/remove).
+    /// Valid only for the bindings whose registry invalidation this Page
+    /// bound; the invalidation callback clears it.
+    blocking_wheel_targets: RefCell<Option<local_frame_scroll::BlockingWheelTargetsCache>>,
+    /// The bindings (by address) whose blocking-wheel invalidation callback
+    /// reaches this Page; 0 when none was bound.
+    blocking_wheel_invalidation_bindings: Cell<usize>,
     mouse_autoscroll:
         RefCell<Weak<interaction::adapter::page_mouse_autoscroll::PageMouseAutoscroll>>,
     autoscroll_cursor_overridden: Cell<bool>,
@@ -2869,6 +2878,8 @@ impl PageState {
             ),
             scrollbar_scroll_runtime: RefCell::new(Weak::new()),
             blocking_wheel_registry_dirty: Cell::new(false),
+            blocking_wheel_targets: RefCell::new(None),
+            blocking_wheel_invalidation_bindings: Cell::new(0),
             mouse_autoscroll: RefCell::new(Weak::new()),
             autoscroll_cursor_overridden: Cell::new(false),
             document_loader_owners: Default::default(),
@@ -3817,9 +3828,19 @@ impl PageState {
 
     fn ConnectDOMBindings(&self, bindings: &Rc<RefCell<DOMJavaScriptBindings>>) {
         *self.bindings.borrow_mut() = Rc::downgrade(bindings);
+        self.blocking_wheel_targets.borrow_mut().take();
+        self.blocking_wheel_invalidation_bindings.set(0);
         if let Some(domain) = self.local_frames.get() {
-            local_frame_scroll::InteractionScrollOwner::Root(domain.page.Downgrade())
+            let page = domain.page.Downgrade();
+            // The callback clears the cache of the PageState it names; only
+            // that PageState may retain targets for these bindings.
+            let reaches_self = std::ptr::eq(page.as_ptr(), self);
+            local_frame_scroll::InteractionScrollOwner::Root(page)
                 .BindBlockingWheelInvalidation(&bindings.borrow());
+            if reaches_self {
+                self.blocking_wheel_invalidation_bindings
+                    .set(Rc::as_ptr(bindings) as *const () as usize);
+            }
         }
     }
     /// Element::RecalcOwnStyle still installs a visually identical computed
@@ -8006,38 +8027,48 @@ impl Page {
             trace.set("clean", 1.0);
             return Ok(());
         }
-        let document_committed = self.open_engine.HasCommittedDocument();
-        let render_blocking_resources = !self
-            .state
-            .document
-            .borrow()
-            .GetDocument()
-            .HaveRenderBlockingResourcesLoaded();
-        let renderable_root = self.state.document.HasRenderableRoot();
-        trace.set("document_committed", document_committed as u8 as f64);
-        trace.set(
-            "render_blocking_resources",
-            render_blocking_resources as u8 as f64,
-        );
-        if let Some(manager) = self
-            .state
-            .document
-            .borrow()
-            .GetDocument()
-            .GetRenderBlockingResourceManager()
-        {
-            let (styles, scripts, font_preloads, imperative_fonts, expect_links) =
-                manager.borrow().DebugPendingCounts();
-            trace.set("render_blocking_styles", styles as f64);
-            trace.set("render_blocking_scripts", scripts as f64);
-            trace.set("render_blocking_font_preloads", font_preloads as f64);
-            trace.set("render_blocking_imperative_fonts", imperative_fonts as f64);
-            trace.set("render_blocking_expect_links", expect_links as u8 as f64);
-        }
-        trace.set("renderable_root", renderable_root as u8 as f64);
-        if self.frame.is_none()
-            && (!document_committed || render_blocking_resources || !renderable_root)
-        {
+        // Document::RenderingHasBegun (document.h): once the first frame is
+        // presented, Blink no longer consults the render-blocking or
+        // renderable-root gates (a document-tree search for <body>), so a
+        // presented Page neither evaluates nor traces them.
+        let rendering_gate_needed = self.frame.is_none();
+        let rendering_blocked = if rendering_gate_needed {
+            let document_committed = self.open_engine.HasCommittedDocument();
+            let render_blocking_resources = !self
+                .state
+                .document
+                .borrow()
+                .GetDocument()
+                .HaveRenderBlockingResourcesLoaded();
+            let renderable_root = self.state.document.HasRenderableRoot();
+            trace.set("document_committed", document_committed as u8 as f64);
+            trace.set(
+                "render_blocking_resources",
+                render_blocking_resources as u8 as f64,
+            );
+            if browser_tracing::enabled() {
+                if let Some(manager) = self
+                    .state
+                    .document
+                    .borrow()
+                    .GetDocument()
+                    .GetRenderBlockingResourceManager()
+                {
+                    let (styles, scripts, font_preloads, imperative_fonts, expect_links) =
+                        manager.borrow().DebugPendingCounts();
+                    trace.set("render_blocking_styles", styles as f64);
+                    trace.set("render_blocking_scripts", scripts as f64);
+                    trace.set("render_blocking_font_preloads", font_preloads as f64);
+                    trace.set("render_blocking_imperative_fonts", imperative_fonts as f64);
+                    trace.set("render_blocking_expect_links", expect_links as u8 as f64);
+                }
+            }
+            trace.set("renderable_root", renderable_root as u8 as f64);
+            !document_committed || render_blocking_resources || !renderable_root
+        } else {
+            false
+        };
+        if rendering_blocked {
             self.state
                 .local_frames
                 .get()

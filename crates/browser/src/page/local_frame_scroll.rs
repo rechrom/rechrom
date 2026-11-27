@@ -18,6 +18,16 @@ pub(super) enum InteractionScrollOwner {
         runtime: Weak<LocalFrameRuntime>,
     },
 }
+/// The root frame's blocking wheel targets for one bindings owner and one
+/// Document identity. Blink's EventHandlerRegistry keeps its target set
+/// between listener changes and recomputes nothing per frame
+/// (event_handler_registry.cc:128-170, 207-244).
+pub(super) struct BlockingWheelTargetsCache {
+    bindings: usize,
+    document: u64,
+    targets: Arc<[u64]>,
+}
+
 impl InteractionScrollOwner {
     pub(super) fn BlockingWheelTargets(&self) -> Arc<[u64]> {
         let (mut targets, document) = match self {
@@ -26,10 +36,38 @@ impl InteractionScrollOwner {
                     return Arc::from([]);
                 };
                 let bindings = page.bindings.borrow().upgrade();
-                let targets = bindings.map_or_else(Vec::new, |bindings| {
+                let bindings_key = bindings
+                    .as_ref()
+                    .map_or(0, |bindings| Rc::as_ptr(bindings) as *const () as usize);
+                let document_id = page.document.borrow().GetDocument().RootHandle().Id();
+                if let Some(cached) = page.blocking_wheel_targets.borrow().as_ref() {
+                    if cached.bindings == bindings_key && cached.document == document_id {
+                        return cached.targets.clone();
+                    }
+                }
+                let mut targets = bindings.map_or_else(Vec::new, |bindings| {
                     bindings.borrow().BlockingListenerTargets("wheel")
                 });
-                (targets, page.document.clone())
+                for target in &mut targets {
+                    if *target == document_id {
+                        *target = 0;
+                    }
+                }
+                targets.sort_unstable();
+                targets.dedup();
+                let targets: Arc<[u64]> = targets.into();
+                // Only bindings whose registry invalidation reaches this
+                // Page may retain their targets across frames.
+                if bindings_key != 0
+                    && page.blocking_wheel_invalidation_bindings.get() == bindings_key
+                {
+                    *page.blocking_wheel_targets.borrow_mut() = Some(BlockingWheelTargetsCache {
+                        bindings: bindings_key,
+                        document: document_id,
+                        targets: targets.clone(),
+                    });
+                }
+                return targets;
             }
             Self::Child { .. } => {
                 let Some((frame, runtime)) = self.ChildOwners() else {
@@ -73,6 +111,11 @@ impl InteractionScrollOwner {
         let owner = self.clone();
         bindings.SetBlockingWheelInvalidation(Rc::new(move |node| {
             if let Self::Root(page) = &owner {
+                // EventHandlerRegistry::UpdateEventHandlerInternal changed the
+                // blocking wheel target set: the retained targets are stale.
+                if let Some(page) = page.upgrade() {
+                    page.blocking_wheel_targets.borrow_mut().take();
+                }
                 if page.upgrade().is_none_or(|page| {
                     Some(page.document.borrow().GetDocument().RootHandle()) != document_root
                 }) {

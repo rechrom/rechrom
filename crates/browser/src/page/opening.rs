@@ -216,7 +216,12 @@ pub(super) fn ResolvePageStylesAndLoadResources(
     // resource discovery has its own dirty state and cannot use style-cache
     // validity as a proxy. Clear before callbacks so reentrant mutations
     // remain dirty for the next discovery pass.
-    let profile = std::env::var_os("BROWSER_PROFILE_RESOURCES").map(|_| std::time::Instant::now());
+    // The diagnostic switch is process-wide; read the environment once, not
+    // on every rendering opportunity.
+    static PROFILE_RESOURCES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let profile = PROFILE_RESOURCES
+        .get_or_init(|| std::env::var_os("BROWSER_PROFILE_RESOURCES").is_some())
+        .then(std::time::Instant::now);
     let elapsed = || profile.map(|start| start.elapsed()).unwrap_or_default();
     // Network/parser task turns may complete resources, but they are not a
     // rendering opportunity.  Blink batches parser mutations until the next
