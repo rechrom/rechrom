@@ -195,6 +195,9 @@ impl<R: PaintSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for P
     fn ClientDebugName(&self, id: usize) -> &str {
         self.ClientDebugName(id)
     }
+    fn RecordingRevision(&self) -> u64 {
+        self.recording_revision
+    }
 }
 impl<R: PaintSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for PaintChunkSubset {
     fn artifact(&self) -> &Arc<PaintArtifact> {

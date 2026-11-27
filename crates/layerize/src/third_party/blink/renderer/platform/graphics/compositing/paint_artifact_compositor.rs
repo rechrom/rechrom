@@ -254,6 +254,14 @@ impl<B: SynthesizedClipTypes> SynthesizedClipRef<B> {
     }
 }
 impl<B: PendingLayerTypes> LayerListBuilder<B> {
+    /// The default builder with room reserved for `layers` entries.
+    pub fn WithCapacity(layers: usize) -> Self {
+        Self {
+            list_valid_: true,
+            list_: Vec::with_capacity(layers),
+            layer_ids_: HashSet::with_capacity(layers),
+        }
+    }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:1803-1811.
     pub fn Add(&mut self, layer: LayerRef<B>) {
         debug_assert!(self.list_valid_);
@@ -1773,7 +1781,10 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
             .expect("source attached host");
         let compositor = &mut *self.compositor;
         let old_matcher = self.old_matcher.as_mut().expect("prepared old layers");
-        let mut builder = LayerListBuilder::default();
+        // Each pending layer adds one cc layer (synthesized clip mask layers
+        // add more); size the builder for them instead of growing its list
+        // and id set from empty on every update.
+        let mut builder = LayerListBuilder::WithCapacity(compositor.pending_layers_.len());
         let root = compositor.root_layer_.as_ref().unwrap();
         let mut client = PropertyTreeManagerClientFacade {
             cache: &mut compositor.synthesized_clip_cache_,

@@ -48,6 +48,9 @@ pub trait RasterInvalidationArtifact<M: RasterInvalidationTypes + ?Sized> {
     fn ImageContentRevisionsInChunk(&self, index: usize) -> &[Vec<(u64, u64)>];
     fn ChunkHasResourceChange(&self, index: usize) -> bool;
     fn ClientDebugName(&self, id: DisplayItemClientId) -> &str;
+    /// Identity of the artifact's immutable display-item recording; zero
+    /// when the artifact carries no such identity.
+    fn RecordingRevision(&self) -> u64;
 }
 pub trait RasterInvalidationSubset<M: RasterInvalidationTypes + ?Sized> {
     fn artifact(&self) -> &Arc<M::Artifact>;
