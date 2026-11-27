@@ -385,11 +385,36 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
     // move the commit and retain only its selective persistent constructor.
     pub fn ActivateCommitState(&mut self, owner: PropertyTreesOwnerId) -> CommitState<F> {
         debug_assert!(self.IsMainThread());
-        self.pending.property_trees.AssignFrom(&self.property_trees);
-        self.pending
-            .property_trees
-            .TakeChangeStateFrom(&mut self.property_trees);
-        self.property_trees.ResetAllChangeTracking();
+        // Chromium copies the main trees here (`pending_commit_state()->
+        // property_trees = *property_trees();`, layer_tree_host.cc:509-511):
+        // the main LayerTreeHost keeps its trees for the next incremental
+        // PaintArtifactCompositor update, while the copy is locked in for
+        // the impl thread. The copy is not a move.
+        let mut trace =
+            browser_tracing::span("layerize", "Layerize.LayerTreeHost.ActivateCommitState");
+        if browser_tracing::enabled() {
+            trace.set("transform_nodes", self.property_trees.transform_tree().size() as f64);
+            trace.set("effect_nodes", self.property_trees.effect_tree().size() as f64);
+            trace.set("clip_nodes", self.property_trees.clip_tree().size() as f64);
+            trace.set("scroll_nodes", self.property_trees.scroll_tree().size() as f64);
+        }
+        {
+            let _copy_trace = browser_tracing::span(
+                "layerize",
+                "Layerize.LayerTreeHost.ActivateCommitState.CopyPropertyTrees",
+            );
+            self.pending.property_trees.AssignFrom(&self.property_trees);
+        }
+        {
+            let _change_trace = browser_tracing::span(
+                "layerize",
+                "Layerize.LayerTreeHost.ActivateCommitState.TakeChangeState",
+            );
+            self.pending
+                .property_trees
+                .TakeChangeStateFrom(&mut self.property_trees);
+            self.property_trees.ResetAllChangeTracking();
+        }
         let persistent = self.pending.CopyPersistent(owner);
         std::mem::replace(&mut self.pending, persistent)
     }
@@ -413,6 +438,8 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
         services: &dyn MainLayerServices,
         derived: &(dyn CpuPaintServices<F> + 'static),
     ) {
+        let mut trace =
+            browser_tracing::span("layerize", "Layerize.LayerTreeHost.CollectLayerUpdateRects");
         let Some(root) = self.unsafe_state.root_layer.as_ref().map(LayerRef::borrow) else {
             self.pending.layer_update_rects.clear();
             return;
@@ -435,6 +462,7 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
             }
         });
         update_rects.sort_by_key(|(id, _)| *id);
+        trace.set("update_rects", update_rects.len() as f64);
         self.pending.layer_update_rects = update_rects.into_iter().collect();
     }
     // Source: cc/trees/layer_tree_host.cc:1477-1530,1719-1771. Surface identity
@@ -601,10 +629,18 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
         // draw_property_utils::UpdatePropertyTrees (draw_property_utils.cc:
         // 1590-1605) over the main PropertyTrees.
         let ids = self.pending.viewport_property_ids;
-        crate::commit::draw_property_utils::UpdatePropertyTrees(
-            &mut self.property_trees,
-            &ids,
-            features,
+        {
+            let _trace =
+                browser_tracing::span("layerize", "Layerize.LayerTreeHost.UpdatePropertyTrees");
+            crate::commit::draw_property_utils::UpdatePropertyTrees(
+                &mut self.property_trees,
+                &ids,
+                features,
+            );
+        }
+        let mut find_trace = browser_tracing::span(
+            "layerize",
+            "Layerize.LayerTreeHost.FindLayersThatNeedUpdates",
         );
         let root = self
             .unsafe_state
@@ -650,7 +686,12 @@ impl<F: LayerizeFamily> CpuMainLayerHost<F> {
                 iterator.Increment(context);
             }
         });
+        find_trace.set("layers", self.unsafe_state.num_layers() as f64);
+        find_trace.set("updates", updates.len() as f64);
+        drop(find_trace);
 
+        let _paint_trace =
+            browser_tracing::span("layerize", "Layerize.LayerTreeHost.PaintContent");
         self.in_paint_layer_contents = true;
         let mut updated = false;
         self.with_layer_context(services, derived, |context| {

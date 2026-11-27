@@ -265,7 +265,12 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
         services.TraceScope("cc", "RecordingSource::FinishDisplayItemListUpdate", None);
         self.DetermineIfSolidColor(services);
         let display_list = self.display_list_.as_ref().expect("display list");
-        display_list.EmitTraceSnapshot();
+        // DisplayItemList::EmitTraceSnapshot's TRACE_EVENT_OBJECT_SNAPSHOT
+        // evaluates its traced value (every r-tree bound) only while the
+        // snapshot categories are enabled.
+        if services.TraceSnapshotsEnabled() {
+            display_list.EmitTraceSnapshot();
+        }
         self.directly_composited_image_info_ = display_list.GetDirectlyCompositedImageInfo();
         if self.directly_composited_image_info_.is_some() {
             self.SetRequiresClear(true);

@@ -394,10 +394,14 @@ impl<F: LayerizeFamily> LayerizeEngine<F> {
         main.WillCommit(self.paint.as_ref(), self.paint.as_ref());
         let state = main.ActivateCommitState(owner);
         if !has_updates {
+            let _trace =
+                browser_tracing::span("layerize", "Layerize.LayerTreeHost.UnwindCommitState");
             main.UnwindCommitState(state);
             return None;
         }
         main.pending_commit_state_mut().source_frame_number += 1;
+        let _trace =
+            browser_tracing::span("layerize", "Layerize.LayerTreeHost.BeginProtectedSequence");
         self.endpoint.BeginProtectedSequence(completion.clone());
         self.endpoint.DidBeginCommit();
         let lease = ProtectedCommitLease::new(
@@ -479,6 +483,8 @@ impl<F: LayerizeFamily<Skia = SkRegion>> LayerizeEngine<F> {
         input: PaintInput,
         sequence: &mut i32,
     ) -> Result<Option<Arc<canvas::CanvasChildRecordPublication>>, LayerizeError> {
+        let prepare_trace =
+            browser_tracing::span("layerize", "Layerize.UpdatePaintArtifact.Prepare");
         // ChromeClient::AttachRootLayer on the first push, before PAC::Update
         // (which returns while its root has no host).
         if self.main.GetMut(&self.endpoint).root_layer().is_none() {
@@ -495,6 +501,7 @@ impl<F: LayerizeFamily<Skia = SkRegion>> LayerizeEngine<F> {
         };
         let mut context =
             LayerContext::<F>::new(&mut hosts, self.paint.as_ref()).WithDerivedServices(self.paint.as_ref());
+        drop(prepare_trace);
         self.paint.UpdateCompositor(
             self.pac.as_mut().unwrap(),
             input,
@@ -503,6 +510,8 @@ impl<F: LayerizeFamily<Skia = SkRegion>> LayerizeEngine<F> {
             &mut context,
             sequence,
         )?;
+        let _publication_trace =
+            browser_tracing::span("layerize", "Layerize.UpdatePaintArtifact.CanvasPublication");
         let pac = self.pac.as_ref().unwrap();
         let publication = match artifact.canvas_document.clone() {
             Some(_) if !had_canvas_children && pac.CanvasChildIds().next().is_none() => None,

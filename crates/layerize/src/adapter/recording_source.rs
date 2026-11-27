@@ -32,6 +32,10 @@ pub trait RecordingSourceTypes: Sized {
 pub trait RecordingSourceServices<B: RecordingSourceTypes> {
     fn CreateRasterSource(&self, recording: &RecordingSource<B>) -> Arc<B::RasterSource>;
     fn TraceScope(&self, category: &str, name: &str, op_count: Option<usize>);
+    /// TRACE_EVENT_CATEGORY_GROUP_ENABLED of the display-list snapshot
+    /// categories (cc/paint/display_item_list.cc EmitTraceSnapshot): the
+    /// snapshot value is built only while they record.
+    fn TraceSnapshotsEnabled(&self) -> bool;
 }
 
 pub fn LayerRect(size: Size) -> Rect {

@@ -436,11 +436,16 @@ where
         client: &mut dyn MainFrameClient<F>,
     ) -> MainFrameResult {
         let answer = self.RunBeginMainFrame(state, layerize, features, client);
+        let mut post_trace = browser_tracing::span("layerize", "Layerize.ProxyMain.PostToImpl");
         // PAC scroll callbacks fired by ApplyCompositorChanges reach the
         // embedder in the same task (cc::ScrollCallbacks).
         while let Some(effect) = layerize.borrow().PopScrollEffect() {
             client.DidCompositorScroll(effect);
         }
+        post_trace.set(
+            "ready_to_commit",
+            matches!(answer, MainFrameAnswer::ReadyToCommit { .. }) as u8 as f64,
+        );
         match answer {
             MainFrameAnswer::ReadyToCommit {
                 commit_state,
@@ -530,6 +535,8 @@ where
         let blocking;
         let mut scroll_and_viewport_changes_synced = false;
         {
+            let _apply_trace =
+                browser_tracing::span("layerize", "Layerize.ProxyMain.ApplyImplChanges");
             let mut main = layerize.borrow_mut();
             // proxy_main.cc:322-327.
             if let Some(reason) = main.MainFrameLifecycleMut().Expire(main_thread_start_time) {
@@ -540,14 +547,25 @@ where
             blocking = std::mem::take(&mut self.block_on_next_commit);
             // proxy_main.cc:332-343.
             if !main.MainFrameLifecycle().IsDeferringCommits() {
+                let mut trace = browser_tracing::span(
+                    "layerize",
+                    "Layerize.LayerTreeHost.ApplyCompositorChanges",
+                );
+                trace.set("scrolls", state.commit_data.scrolls.len() as f64);
                 if let Some(scale) = main.ApplyCompositorChanges(&mut state.commit_data) {
                     client.ApplyViewportChanges(scale, &state.commit_data);
                 }
                 scroll_and_viewport_changes_synced = true;
             }
             // proxy_main.cc:345-346.
-            let finished = main.ApplyMutatorEvents(state.mutator_events.take());
-            client.ScrollAnimationsFinished(finished);
+            {
+                let _trace = browser_tracing::span(
+                    "layerize",
+                    "Layerize.LayerTreeHost.ApplyMutatorEvents",
+                );
+                let finished = main.ApplyMutatorEvents(state.mutator_events.take());
+                client.ScrollAnimationsFinished(finished);
+            }
             // The cc::ScrollCallbacks of ApplyCompositorChanges reach the
             // embedder before its lifecycle, in the same task.
             while let Some(effect) = main.PopScrollEffect() {
@@ -579,7 +597,12 @@ where
             pipeline.current = CommitPipelineStage::UPDATE_LAYERS_PIPELINE_STAGE;
             pipeline.final_stage >= CommitPipelineStage::UPDATE_LAYERS_PIPELINE_STAGE
         };
-        let updated = should_update_layers && main.UpdateLayers(features);
+        let updated = should_update_layers && {
+            let mut trace = browser_tracing::span("layerize", "Layerize.ProxyMain.UpdateLayers");
+            let updated = main.UpdateLayers(features);
+            trace.set("updated", updated as u8 as f64);
+            updated
+        };
         let has_updates = {
             let mut pipeline = self.endpoint.pipeline();
             if updated {
@@ -597,9 +620,12 @@ where
         // proxy_main.cc:472-478: MANUAL-reset completion; WillCommit stores
         // it and opens the protected sequence when it returns a CommitState.
         let completion = CompletionEvent::new();
-        let Some((mut commit_state, lease)) =
+        let will_commit = {
+            let mut trace = browser_tracing::span("layerize", "Layerize.ProxyMain.WillCommit");
+            trace.set("has_updates", has_updates as u8 as f64);
             main.WillCommit(has_updates, owner, completion.clone(), blocking)
-        else {
+        };
+        let Some((mut commit_state, lease)) = will_commit else {
             // proxy_main.cc:482-521: kFinishedNoUpdates; from the embedder's
             // perspective the commit went through.
             completion.Signal();
