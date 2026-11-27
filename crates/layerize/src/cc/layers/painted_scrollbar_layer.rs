@@ -123,7 +123,21 @@ impl<B: PaintedScrollbarLayerTypes> PaintedScrollbarLayer<B> {
             || state.internal_content_bounds != pixel
             || scrollbar.ThumbNeedsRepaint();
         if repaint && !pixel.IsEmpty() {
-            let bitmap = B::RasterizeScrollbarThumb(&scrollbar, logical, pixel);
+            // Source: painted_scrollbar_layer.cc Update/RasterizeScrollbarPart
+            // paint the thumb through the layer's live cc::Scrollbar, whose
+            // PaintThumb clears ThumbNeedsRepaint (Blink
+            // scrollbar_layer_delegate.cc PaintThumb). The resident snapshot
+            // is that adapter here: keep the painted (cleared) value, so an
+            // unchanged scrollbar does not re-raster its thumb and replace
+            // its UI resource on every later main frame. A new snapshot from
+            // a full update (ReusePaintedScrollbarSnapshot) or an animation
+            // (UpdatePaintedScrollbarAnimation) carries its own flag again.
+            let mut painted: B::Scrollbar = (*scrollbar).clone();
+            let bitmap = B::RasterizeScrollbarThumb(&mut painted, logical, pixel);
+            *self
+                .scrollbar_
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = Arc::new(painted);
             if state.thumb_resource != UIResourceId::default() {
                 c.HostMut(host_id).DeleteUIResource(state.thumb_resource);
             }
