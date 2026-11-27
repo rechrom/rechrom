@@ -60,8 +60,26 @@ impl ComputedStyle {
         other: &Self,
         context: &dyn VisualInvalidationDiffContext,
     ) -> StyleDifference {
+        self.VisualInvalidationDiffWithFieldDiff(
+            other,
+            ComputedStyleBase::FieldInvalidationDiff(self, other),
+            context,
+        )
+    }
+
+    /// VisualInvalidationDiff for a caller that already holds
+    /// `ComputedStyleBase::FieldInvalidationDiff(self, other)`. Chromium
+    /// computes the generated field diff once at the top of
+    /// VisualInvalidationDiff (core/style/computed_style.cc:749-760); a
+    /// retained LayoutObject restyle that already classified the same pair
+    /// passes it in instead of comparing every field group again.
+    pub fn VisualInvalidationDiffWithFieldDiff(
+        &self,
+        other: &Self,
+        field_diff: u64,
+        context: &dyn VisualInvalidationDiffContext,
+    ) -> StyleDifference {
         let mut diff = StyleDifference::default();
-        let field_diff = ComputedStyleBase::FieldInvalidationDiff(self, other);
         let changed = |flag: F| field_diff & flag.bits() != 0;
         if self.DiffNeedsReshape(other, field_diff) {
             diff.set_needs_reshape(true);

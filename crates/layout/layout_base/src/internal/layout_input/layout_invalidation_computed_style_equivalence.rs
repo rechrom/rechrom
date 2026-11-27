@@ -26,14 +26,28 @@ impl ComputedStyle {
     /// box/containing-block model in this implementation.
     #[inline(always)]
     pub fn LayoutEquivalent(&self, other: &Self) -> bool {
-        layout_equivalent(self, other)
+        layout_equivalent(self, other, None)
+    }
+
+    /// `LayoutEquivalent` for a caller that already holds
+    /// `ComputedStyleBase::FieldInvalidationDiff(self.style, other.style)`.
+    /// The retained-object restyle classifies one style replacement once, as
+    /// LayoutObject::SetStyle does (core/layout/layout_object.cc:3018-3020),
+    /// and reuses that field diff for layout, font retention and SetStyle.
+    #[inline(always)]
+    pub fn LayoutEquivalentWithFieldDiff(&self, other: &Self, field_diff: u64) -> bool {
+        layout_equivalent(self, other, Some(field_diff))
     }
 }
 
 // Keep the sampled symbol package-qualified. Rust omits an inherent impl's
 // source module from the method's demangled symbol.
 #[inline(never)]
-fn layout_equivalent(style: &ComputedStyle, other: &ComputedStyle) -> bool {
+fn layout_equivalent(
+    style: &ComputedStyle,
+    other: &ComputedStyle,
+    field_diff: Option<u64>,
+) -> bool {
     // Chromium ComputedStyle::VisualInvalidationDiff/ DiffNeedsFullLayout
     // consume the generated FieldInvalidationDiff kLayout/kReshape bits. Chromium
     // styles are canonical at this boundary; the minimal projection does
@@ -48,7 +62,8 @@ fn layout_equivalent(style: &ComputedStyle, other: &ComputedStyle) -> bool {
         }) else {
             return false;
         };
-        let fields = ComputedStyleBase::FieldInvalidationDiff(old, new);
+        let fields =
+            field_diff.unwrap_or_else(|| ComputedStyleBase::FieldInvalidationDiff(old, new));
         // cpp: ComputedStyle::VisualInvalidationDiff. Keep the generated bits
         // and their value-sensitive second stage in one shared translated
         // owner so style lifecycle and retained LayoutObjects cannot drift.

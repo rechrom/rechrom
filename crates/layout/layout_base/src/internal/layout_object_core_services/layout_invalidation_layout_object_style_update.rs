@@ -40,7 +40,20 @@ impl LayoutObject {
         style: *const ComputedStyle,
         apply_changes: ApplyStyleChanges,
     ) {
-        LayoutObjectSetStyleWithChanges(self, style, apply_changes)
+        LayoutObjectSetStyleWithChanges(self, style, apply_changes, None)
+    }
+
+    /// LayoutObject::SetStyle for a retained-object restyle whose caller has
+    /// already computed `ComputedStyleBase::FieldInvalidationDiff` for this
+    /// style replacement (old canonical style -> new canonical style; the
+    /// resident pair may differ from it only by an identical retained font
+    /// binding, so `field_diff` equals or covers the resident pair's diff).
+    /// Chromium's SetStyle classifies a replacement once
+    /// (core/layout/layout_object.cc:2991-3030); this keeps that single
+    /// classification instead of re-diffing every field group here.
+    #[inline]
+    pub(crate) fn SetStyleWithFieldDiff(&mut self, style: *const ComputedStyle, field_diff: u64) {
+        LayoutObjectSetStyleWithChanges(self, style, ApplyStyleChanges::kYes, Some(field_diff))
     }
 
     // cpp: layoutng/internal/layout_object.h:2208-2209
@@ -424,6 +437,7 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
     object: &mut LayoutObject,
     style: *const ComputedStyle,
     apply_changes: ApplyStyleChanges,
+    field_diff_hint: Option<u64>,
 ) {
     object.CheckIsNotDestroyed();
     if object.StylePtr() == style {
@@ -445,7 +459,12 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
         let new_style_ref = unsafe { &*style };
         painted_output_invisible_changed =
             painted_output_invisible(old_style_ref) != painted_output_invisible(new_style_ref);
-        let field_diff = ComputedStyleBase::FieldInvalidationDiff(old_style_ref, new_style_ref);
+        // ComputedStyle::VisualInvalidationDiff computes the generated field
+        // diff once (computed_style.cc:749-760); reuse it for the projected
+        // difference and the visual diff instead of comparing twice.
+        let field_diff = field_diff_hint.unwrap_or_else(|| {
+            ComputedStyleBase::FieldInvalidationDiff(old_style_ref, new_style_ref)
+        });
         difference = transform_style_difference(old_style_ref, new_style_ref, field_diff);
         // Source: core/layout/layout_object.cc:3018-3020. Chromium starts
         // SetStyle() with ComputedStyle::VisualInvalidationDiff(). The layout
@@ -468,8 +487,11 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
             | FieldDifference::kScrollAnchor.bits();
         let property_only = field_diff != 0 && field_diff & !PROPERTY_ONLY_FIELDS == 0;
         if field_diff != 0 {
-            visual_difference = old_style_ref
-                .VisualInvalidationDiff(new_style_ref, &LayoutObjectVisualInvalidationContext);
+            visual_difference = old_style_ref.VisualInvalidationDiffWithFieldDiff(
+                new_style_ref,
+                field_diff,
+                &LayoutObjectVisualInvalidationContext,
+            );
         }
         if old_style_ref != new_style_ref
             && (!property_only || StyleChangeNeedsPaintInvalidation(&visual_difference))

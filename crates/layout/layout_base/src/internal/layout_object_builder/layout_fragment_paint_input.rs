@@ -164,6 +164,17 @@ pub(super) fn update_paint_style(
     binding
 }
 
+/// An admitted paint-only restyle. `records` pairs every retained record with
+/// the one `FieldInvalidationDiff` of its style replacement, so
+/// LayoutObject::SetStyle classifies the replacement from the same diff that
+/// admitted it (core/layout/layout_object.cc:3018-3020) instead of comparing
+/// every field group again.
+pub(super) struct PaintInputAdmission {
+    pub(super) ids: std::collections::HashSet<u64>,
+    pub(super) inline_ink_changes: Vec<u64>,
+    pub(super) records: Vec<(InputKey, u64)>,
+}
+
 #[inline(never)]
 pub(super) fn paint_input_plan(
     tree: &LayoutObjectTree,
@@ -171,7 +182,7 @@ pub(super) fn paint_input_plan(
     style: &StyleComputedStyle,
     resources: &crate::style_projection::StyleResourceBindings<'_>,
     element: &Option<ElementData>,
-) -> Option<(std::collections::HashSet<u64>, Vec<u64>)> {
+) -> Option<PaintInputAdmission> {
     use layout_style::style::computed_style_base::{ComputedStyleBase, FieldDifference as F};
     let mut trace = layout_commit::fragment_trace::span(
         layout_commit::fragment_trace::TracePhase::ValidatePaintInput,
@@ -189,7 +200,11 @@ pub(super) fn paint_input_plan(
         // Hidden, inactive flat-tree and collapsible text sources can retain
         // computed style without any attached layout object.
         trace.set("no_layout_object", 1.0);
-        return Some((Default::default(), Vec::new()));
+        return Some(PaintInputAdmission {
+            ids: Default::default(),
+            inline_ink_changes: Vec::new(),
+            records: Vec::new(),
+        });
     }
     // Source: core/dom/text.cc Text::RecalcTextStyle. A resident LayoutText is
     // restyled from its style parent even when StyleForText returned a distinct
@@ -209,10 +224,11 @@ pub(super) fn paint_input_plan(
     let records = ids
         .iter()
         .flat_map(|&id| storage.InputKeys(id))
-        .map(|key| &storage.managed[key])
-        .collect::<Vec<_>>();
+        .map(|key| (key, &**storage.managed.get(key).unwrap()))
+        .collect::<Vec<(&InputKey, &ManagedObject)>>();
     let mut inline_ink_changes = Vec::new();
-    for record in &records {
+    let mut admitted: Vec<(InputKey, u64)> = Vec::with_capacity(records.len());
+    for &(key, record) in &records {
         let object = unsafe { &*record.object };
         let old = unsafe { record.effective_computed_style.as_ref() };
         let Some(old) = old else {
@@ -323,10 +339,15 @@ pub(super) fn paint_input_plan(
         if text_ink {
             inline_ink_changes.push(record.input.id);
         }
+        admitted.push((key.clone(), fields));
     }
     drop(records);
     trace.set("admitted", 1.0);
-    Some((ids, inline_ink_changes))
+    Some(PaintInputAdmission {
+        ids,
+        inline_ink_changes,
+        records: admitted,
+    })
 }
 
 #[inline(never)]
@@ -337,14 +358,23 @@ pub(super) fn update_paint_input(
     resources: &crate::style_projection::StyleResourceBindings<'_>,
     element: Option<ElementData>,
 ) -> Option<PaintInputUpdate> {
-    let (ids, inline_ink_changes) = paint_input_plan(tree, id, style, resources, &element)?;
+    let PaintInputAdmission {
+        ids,
+        inline_ink_changes,
+        records,
+    } = paint_input_plan(tree, id, style, resources, &element)?;
     let storage = unsafe { &mut *tree.storage_ };
     let _factory_scope = LayoutObjectFactoryScope::new(&storage.factories);
-    let keys = ids
-        .iter()
-        .flat_map(|&id| storage.InputKeys(id).iter().cloned())
-        .collect::<Vec<_>>();
-    for key in keys {
+    // Retained envelopes shared by several records (an element and the
+    // LayoutTexts restyled from it) take one replacement envelope, keyed by
+    // the old owner and its resident image identity, rather than one
+    // Arc::make_mut copy per record and per input/effective handle.
+    // An old owner's address is only reused once it is freed, and every owner
+    // freed here was replaced on an already-visited record, so a key never
+    // names a different live envelope.
+    let mut replaced_envelopes: Vec<(*const ComputedStyle, Option<u64>, Arc<ComputedStyle>)> =
+        Vec::new();
+    for (key, field_diff) in records {
         let record = storage.managed.get_mut(&key).unwrap();
         let previous = unsafe { &*record.object }.StyleRef();
         let control_paint_state_changed = ControlPaintStateChanged(&element, &record.input.element);
@@ -403,11 +433,30 @@ pub(super) fn update_paint_input(
             record.input.resources = Arc::new(new_resources);
         }
         record.input.computed_style = style;
-        {
-            let compatibility = Arc::make_mut(&mut record.input.style);
+        let mut replace_envelope = |owner: &mut Arc<ComputedStyle>| {
+            let old = Arc::as_ptr(owner);
+            if let Some((_, _, replacement)) = replaced_envelopes
+                .iter()
+                .find(|(retained, id, _)| *retained == old && *id == image_resource_id)
+            {
+                *owner = Arc::clone(replacement);
+                return;
+            }
+            let compatibility = Arc::make_mut(owner);
             compatibility.style = style;
             resources.ApplyTo(compatibility);
             compatibility.paint.image_resource_id = image_resource_id;
+            replaced_envelopes.push((old, image_resource_id, Arc::clone(owner)));
+        };
+        // The input and effective handles normally name one envelope owner
+        // (create_managed_object shares them); replace it once and keep them
+        // shared.
+        let shared_owner = Arc::ptr_eq(&record.input.style, &record.effective_style);
+        replace_envelope(&mut record.input.style);
+        if shared_owner {
+            record.effective_style = Arc::clone(&record.input.style);
+        } else {
+            replace_envelope(&mut record.effective_style);
         }
         let element_changed = if record.input.kind == NodeKind::kText {
             record.input.element.is_some()
@@ -420,12 +469,6 @@ pub(super) fn update_paint_input(
             } else {
                 element.clone()
             };
-        }
-        {
-            let compatibility = Arc::make_mut(&mut record.effective_style);
-            compatibility.style = style;
-            resources.ApplyTo(compatibility);
-            compatibility.paint.image_resource_id = image_resource_id;
         }
         record.effective_computed_style = style;
         let styles = [
@@ -440,7 +483,11 @@ pub(super) fn update_paint_input(
         node.UpdatePaintInputData(&record.input);
         node.ClearInputFontBinding();
         node.SetComputedStyle(layout_style);
-        unsafe { &mut *record.object }.SetStyle(layout_style);
+        // `layout_style` retains the previous resident Font binding
+        // (PreservePaintOnlyFontBinding), so the resident pair differs from
+        // the admitted canonical pair only by that identical binding: the
+        // admission's field diff is this replacement's diff.
+        unsafe { &mut *record.object }.SetStyleWithFieldDiff(layout_style, field_diff);
     }
     Some(PaintInputUpdate {
         sources: ids.into_iter().collect(),
