@@ -2736,7 +2736,7 @@ fn run_document(
     // ProxyMain::BeginMainFrame count, the main-frame identity of
     // ContentFrameProvenance (Display waits for a fresh main frame).
     let mut main_frame_count = 0u64;
-    let mut status = None;
+    let mut status: Option<(String, String, bool)> = None;
     // (Document identity, DOM tree version) of the last reported title.
     let mut status_title_key: Option<(u128, u64)> = None;
     let mut caret_feedback = None;
