@@ -77,7 +77,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let phase = paint_info.phase;
-        let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance();
+        let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance(self.node, paint_info);
 
         if decoration_data.ShouldPaintShadow() {
             fragment_painter.PaintBoxShadows(phase, false);

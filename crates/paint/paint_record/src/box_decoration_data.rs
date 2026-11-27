@@ -23,7 +23,12 @@ pub struct BoxDecorationData {
     should_paint_border: bool,
     should_paint_shadow: bool,
     should_paint_gap_decorations: bool,
-    bleed_avoidance: BackgroundBleedAvoidance,
+    // The background and border decisions ComputeBleedAvoidance reads: the
+    // constructed ones, kept by BackgroundOnly / BorderOnly / WithoutBorder;
+    // WithoutBackground clears the background one, whose bleed avoidance is
+    // then kBackgroundBleedNone.
+    bleed_should_paint_background: bool,
+    bleed_should_paint_border: bool,
 }
 
 impl BoxDecorationData {
@@ -66,16 +71,19 @@ impl BoxDecorationData {
         let should_paint_gap_decorations =
             fragment.ViewGapRules().is_some() && !paint_info.ShouldSkipGapDecorations();
 
-        let mut result = Self {
+        // Chromium resolves the bleed avoidance lazily, at the first
+        // GetBackgroundBleedAvoidance() (box_decoration_data.h:68-72,172), so
+        // a box whose decoration drawing is cached never resolves its radii
+        // or border image.
+        Self {
             has_appearance,
             should_paint_background,
             should_paint_border,
             should_paint_shadow,
             should_paint_gap_decorations,
-            bleed_avoidance: BackgroundBleedAvoidance::kBackgroundBleedNone,
-        };
-        result.bleed_avoidance = result.ComputeBleedAvoidance(node, paint_info);
-        result
+            bleed_should_paint_background: should_paint_background,
+            bleed_should_paint_border: should_paint_border,
+        }
     }
 
     pub fn BackgroundOnly(self) -> Self {
@@ -86,7 +94,7 @@ impl BoxDecorationData {
             should_paint_border: false,
             should_paint_shadow: false,
             should_paint_gap_decorations: false,
-            bleed_avoidance: self.bleed_avoidance,
+            ..self
         }
     }
 
@@ -98,14 +106,14 @@ impl BoxDecorationData {
             should_paint_border: true,
             should_paint_shadow: false,
             should_paint_gap_decorations: false,
-            bleed_avoidance: self.bleed_avoidance,
+            ..self
         }
     }
 
     pub fn WithoutBackground(self) -> Self {
         Self {
             should_paint_background: false,
-            bleed_avoidance: BackgroundBleedAvoidance::kBackgroundBleedNone,
+            bleed_should_paint_background: false,
             ..self
         }
     }
@@ -145,8 +153,15 @@ impl BoxDecorationData {
             || self.ShouldPaintGapDecorations()
     }
 
-    pub fn GetBackgroundBleedAvoidance(self) -> BackgroundBleedAvoidance {
-        self.bleed_avoidance
+    // Chromium: box_decoration_data.h:68-72. Every painter reads it once per
+    // recorded decoration, from the node and PaintInfo the decision was
+    // built from, so it is resolved at that read.
+    pub fn GetBackgroundBleedAvoidance(
+        self,
+        node: &PaintTreeNode<'_>,
+        paint_info: &PaintInfo<'_, '_>,
+    ) -> BackgroundBleedAvoidance {
+        self.ComputeBleedAvoidance(node, paint_info)
     }
 
     fn BorderObscuresBackgroundEdge(self, node: &PaintTreeNode<'_>) -> bool {
@@ -177,7 +192,7 @@ impl BoxDecorationData {
     ) -> BackgroundBleedAvoidance {
         use BackgroundBleedAvoidance::*;
 
-        if !self.should_paint_background
+        if !self.bleed_should_paint_background
             || paint_info.IsPaintingBackgroundInContentsSpace()
             || node.is_root
         {
@@ -194,7 +209,7 @@ impl BoxDecorationData {
         let has_border_image = border_image.is_some();
         let has_border_radius = BackgroundRadii(node, BackgroundBox::kBorderBox).HasRadius();
 
-        if !self.should_paint_border || !has_border_radius || has_border_image {
+        if !self.bleed_should_paint_border || !has_border_radius || has_border_image {
             if let Some(border_image) = border_image.as_ref() {
                 if has_border_radius
                     || border_image.outsets.top != 0.0

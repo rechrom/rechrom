@@ -1153,19 +1153,21 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 && ShouldSkipPaintUnderInvalidationChecking(fragment);
             let cache_skipper =
                 skip_under_invalidation_cache.then(|| DisplayItemCacheSkipper::new(self.context));
-            let decoration_visual_rect = DecorationVisualRect(self.node);
             let cached_box_decoration = has_box_decoration
                 && DrawingRecorder::UseCachedDrawingIfPossible(
                     self.context,
                     self.node,
                     DisplayItemIdType::kBoxDecorationBackground,
                 );
+            // The visual rect only bounds a new DrawingRecorder
+            // (box_fragment_painter.cc:1534-1540); a cached decoration never
+            // reads it, so it is computed on the recording path alone.
             let background_recorder = (has_box_decoration && !cached_box_decoration).then(|| {
                 DrawingRecorder::new(
                     self.context,
                     self.node,
                     DisplayItemIdType::kBoxDecorationBackground,
-                    decoration_visual_rect,
+                    DecorationVisualRect(self.node),
                 )
             });
             // Chromium theme ownership is a property of the control appearance,
@@ -1909,7 +1911,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let phase = paint_info.phase;
-        let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance();
+        let bleed_avoidance = decoration_data.GetBackgroundBleedAvoidance(self.node, paint_info);
 
         if decoration_data.ShouldPaintShadow() {
             self.PaintBoxShadows(phase, false);
@@ -6069,6 +6071,22 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let style = &fragment.paint.style;
+        // BoxFragmentPainter::PaintObject tests HasPaintedOutline(style, node)
+        // before FragmentPainter::PaintOutline reads any outline geometry
+        // (box_fragment_painter.cc:953-957). Without a focus ring or a
+        // painted CSS outline nothing below records, so the outline colour
+        // and the exported self-outline rects are not read.
+        if !self.node.paints_outline
+            || (!fragment
+                .paint
+                .FormControl()
+                .is_some_and(|control| control.auto_focus_ring)
+                && !(style.outline_width() > 0.0
+                    && style.outline_color().alpha > 0.0
+                    && style.outline_style() != BorderLineStyle::kNone))
+        {
+            return;
+        }
         let outline_color =
             InvertColorIfNeeded(style, style.outline_color(), ElementRole::kBackground);
         let self_outline_data = fragment.ViewSelfOutline();
@@ -6769,7 +6787,7 @@ pub(crate) fn DecorationVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     // BoxPainter::VisualRect:124-129; inline boxes use their item ink overflow.
     let rect = fragment
         .ViewBoxSelfVisualOverflow()
-        .or(fragment.ViewInkOverflow())
+        .or_else(|| fragment.ViewInkOverflow())
         .expect("painted box fragment has source visual overflow");
     // Source: core/paint/box_fragment_painter.cc:3021-3030 and
     // core/paint/box_painter.cc:124-129. Layout owns visual overflow; Paint
@@ -7083,7 +7101,7 @@ fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Paint
         .unwrap_or(fragment.ViewSize());
     // One live LayoutBox::ScrollWidth/ScrollHeight read (LayoutView::
     // DocumentRect, view_painter.cc:126-135) serves both axes.
-    let scroll_size = fragment.ViewScrollGeometry().0;
+    let scroll_size = fragment.ViewScrollSize();
     let mut rect = PaintRect {
         x: node.paint_offset.x,
         y: node.paint_offset.y,
@@ -7695,7 +7713,7 @@ fn ContentsBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     // LayoutBox::ScrollWidth/Height describe the scrolling padding area. The
     // background painter adds the border widths while recording the local
     // layer into scrolling-contents space.
-    let scroll_size = fragment.ViewScrollGeometry().0;
+    let scroll_size = fragment.ViewScrollSize();
     rect.width = scroll_size.width + border.left + border.right;
     rect.height = scroll_size.height + border.top + border.bottom;
     rect
