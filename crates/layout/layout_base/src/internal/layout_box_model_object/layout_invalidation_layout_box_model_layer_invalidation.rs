@@ -24,6 +24,21 @@ impl LayoutBoxModelObject {
         // child is detached. Rechrom derives layer links from LayoutObject, so
         // perform the same invalidation while that relationship is still live.
         MarkLayerParentAfterTreeChange(self.Layer());
+        // Source: core/paint/paint_layer.cc:774-775 (RemoveChild dirties the
+        // z-order list in which the layer is contained) and 803-809
+        // (RemoveOnlyThisLayerAfterStyleChange hands its paint-phase needs to
+        // the enclosing self-painting layer).
+        let layer = unsafe { &mut *self.Layer() };
+        layer.DirtyStackingContextZOrderLists();
+        if layer.IsSelfPaintingLayer() {
+            let parent = layer.Parent();
+            if !parent.is_null() {
+                let enclosing = unsafe { &*parent }.EnclosingSelfPaintingLayer();
+                if let Some(enclosing) = unsafe { enclosing.as_ref() } {
+                    enclosing.MergeNeedsPaintPhaseFlagsFrom(layer);
+                }
+            }
+        }
         self.DisposeScrollableAreaForPaintLayer();
         self.SetHasLayer(false);
         // FragmentData::SetLayer owns the single PaintLayer::Destroy() call.
@@ -79,6 +94,28 @@ impl LayoutBoxModelObject {
         // chain. Our links are derived instead of stored, but the invalidation
         // is still required so the root PrePaint refresh visits this new layer.
         MarkLayerParentAfterTreeChange(layer);
+        let layer = unsafe { &mut *layer };
+        let parent = layer.Parent();
+        if !parent.is_null() {
+            // Source: core/paint/paint_layer.cc:731-735. Dirty the z-order
+            // list in which we are contained.
+            if layer.GetLayoutObject().IsStacked() || !layer.FirstChild().is_null() {
+                layer.DirtyStackingContextZOrderLists();
+            }
+            // Source: core/paint/paint_layer.cc:750-754.
+            if layer.NeedsCullRectUpdate() {
+                unsafe { &*parent }.SetDescendantNeedsCullRectUpdate();
+            } else {
+                layer.SetNeedsCullRectUpdate();
+            }
+            // Source: core/paint/paint_layer.cc:852-857.
+            if layer.IsSelfPaintingLayer() {
+                let enclosing = unsafe { &*parent }.EnclosingSelfPaintingLayer();
+                if let Some(enclosing) = unsafe { enclosing.as_ref() } {
+                    layer.MergeNeedsPaintPhaseFlagsFrom(enclosing);
+                }
+            }
+        }
         self.SetNeedsPaintPropertyUpdate();
     }
 }

@@ -15,6 +15,9 @@ use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_geometry::geometry::static_position::LogicalStaticPosition;
 use layout_style::css::css_reflection_direction::CSSReflectionDirection;
 use layout_style::style::box_reflection::{BoxReflection, ReflectionDirection};
+use layout_style::style::computed_style::ComputedStyle;
+use paint_input_types::paint_result::PaintResult;
+use std::cell::Cell;
 
 use super::super::layout_object::LayoutObject;
 #[cfg(test)]
@@ -27,6 +30,7 @@ use super::super::layout_box_model_object::{LayoutBoxModelObject, PaintLayerType
 use super::super::layout_inline::LayoutInline;
 use super::super::layout_node_metadata::Node;
 use super::super::map_coordinates_flags::MapCoordinatesMode;
+use super::paint_layer_stacking_node::PaintLayerStackingNode;
 
 // Source: core/paint/paint_layer.h:93-105.
 #[repr(u8)]
@@ -81,6 +85,24 @@ pub struct PaintLayer {
     static_position_: LogicalStaticPosition,
     invisible_for_position_visibility_: u8,
     descendant_needs_check_position_visibility_: bool,
+    // Source: core/paint/paint_layer.h:744-754. PrePaint's CullRectUpdater
+    // writes the cull-rect bits and PaintLayerPainter the previous result;
+    // both reach the layer through a shared `&PaintLayer` borrowed from the
+    // resident Layout result, so these are sequence-confined Cells
+    // (PaintLayer is neither Send nor Sync).
+    needs_cull_rect_update_: Cell<bool>,
+    forces_children_cull_rect_update_: Cell<bool>,
+    descendant_needs_cull_rect_update_: Cell<bool>,
+    previous_paint_result_: Cell<PaintResult>,
+    needs_paint_phase_descendant_outlines_: Cell<bool>,
+    needs_paint_phase_float_: Cell<bool>,
+    // Source: core/paint/paint_layer.h:427-431,710 and paint_layer.cc:197.
+    needs_reorder_overlay_overflow_controls_: bool,
+    // Source: core/paint/paint_layer.h:706-708,809.
+    stacking_node_: Member<PaintLayerStackingNode>,
+    // Source: core/paint/paint_layer.h:527-529,816-818,877-894.
+    #[cfg(debug_assertions)]
+    layer_list_mutation_allowed_: Cell<bool>,
     is_destroyed_: bool,
 }
 
@@ -127,6 +149,17 @@ impl PaintLayer {
             static_position_: LogicalStaticPosition::default(),
             invisible_for_position_visibility_: 0,
             descendant_needs_check_position_visibility_: false,
+            // Source: core/paint/paint_layer.cc:184-189,197,206-208.
+            needs_cull_rect_update_: Cell::new(false),
+            forces_children_cull_rect_update_: Cell::new(false),
+            descendant_needs_cull_rect_update_: Cell::new(false),
+            previous_paint_result_: Cell::new(PaintResult::kMayBeClippedByCullRect),
+            needs_paint_phase_descendant_outlines_: Cell::new(false),
+            needs_paint_phase_float_: Cell::new(false),
+            needs_reorder_overlay_overflow_controls_: false,
+            stacking_node_: Member::default(),
+            #[cfg(debug_assertions)]
+            layer_list_mutation_allowed_: Cell::new(true),
             is_destroyed_: false,
         };
         // Source: core/paint/paint_layer.cc:216.
@@ -201,7 +234,7 @@ impl PaintLayer {
     /// `parent_root`, as when iterating that parent's children: the same
     /// LayoutObject walk without re-deriving the parent through
     /// EnclosingLayer() at every step.
-    fn NextSiblingWithin(&self, parent_root: *const LayoutObject) -> *mut PaintLayer {
+    pub(crate) fn NextSiblingWithin(&self, parent_root: *const LayoutObject) -> *mut PaintLayer {
         let object = self.GetLayoutObject() as *const LayoutBoxModelObject as *const LayoutObject;
         let mut next = unsafe { &*object }.NextInPreOrderAfterChildren(parent_root);
         while !next.is_null() {
@@ -581,6 +614,224 @@ impl PaintLayer {
         self.subtree_needs_clear_repaint_flags_ = false;
     }
 
+    // Source: core/paint/paint_layer.h:462-480; paint_layer.cc:2787-2815.
+    // CullRectUpdater (PrePaint) reads, sets and clears these bits.
+    pub fn NeedsCullRectUpdate(&self) -> bool {
+        self.needs_cull_rect_update_.get()
+    }
+    pub fn ForcesChildrenCullRectUpdate(&self) -> bool {
+        self.forces_children_cull_rect_update_.get()
+    }
+    pub fn DescendantNeedsCullRectUpdate(&self) -> bool {
+        self.descendant_needs_cull_rect_update_.get()
+    }
+    pub fn SelfOrDescendantNeedsCullRectUpdate(&self) -> bool {
+        self.needs_cull_rect_update_.get() || self.descendant_needs_cull_rect_update_.get()
+    }
+    // Source: core/paint/paint_layer.cc:2787-2794.
+    pub fn SetNeedsCullRectUpdate(&self) {
+        if self.needs_cull_rect_update_.get() {
+            return;
+        }
+        self.needs_cull_rect_update_.set(true);
+        if let Some(parent) = unsafe { self.Parent().as_ref() } {
+            parent.SetDescendantNeedsCullRectUpdate();
+        }
+    }
+    // Source: core/paint/paint_layer.cc:2796-2804.
+    pub fn SetForcesChildrenCullRectUpdate(&self) {
+        if self.forces_children_cull_rect_update_.get() {
+            return;
+        }
+        self.forces_children_cull_rect_update_.set(true);
+        self.descendant_needs_cull_rect_update_.set(true);
+        if let Some(parent) = unsafe { self.Parent().as_ref() } {
+            parent.SetDescendantNeedsCullRectUpdate();
+        }
+    }
+    // Source: core/paint/paint_layer.cc:2806-2815.
+    pub fn SetDescendantNeedsCullRectUpdate(&self) {
+        let mut layer = self as *const PaintLayer;
+        while let Some(current) = unsafe { layer.as_ref() } {
+            if current.descendant_needs_cull_rect_update_.get() {
+                break;
+            }
+            current.descendant_needs_cull_rect_update_.set(true);
+            // Only propagate the dirty bit up to the display locked ancestor.
+            if current
+                .GetLayoutObject()
+                .ChildPrePaintBlockedByDisplayLock()
+            {
+                break;
+            }
+            layer = current.Parent();
+        }
+    }
+    // Source: core/paint/paint_layer.h:475-479.
+    pub fn ClearNeedsCullRectUpdate(&self) {
+        self.needs_cull_rect_update_.set(false);
+        self.forces_children_cull_rect_update_.set(false);
+        self.descendant_needs_cull_rect_update_.set(false);
+    }
+
+    // Source: core/paint/paint_layer.h:481-488. The paint result of this
+    // layer during the previous painting with subsequence; PaintLayerPainter
+    // writes it.
+    pub fn PreviousPaintResult(&self) -> PaintResult {
+        self.previous_paint_result_.get()
+    }
+    // Source: core/paint/paint_layer.cc:2827-2832. The source returns early
+    // while CullRectUpdater::IsOverridingCullRects() (cc:2828-2829); that
+    // static scope is owned by PrePaint's CullRectUpdater, which Layout cannot
+    // name, so the painting caller applies that gate before this call.
+    pub fn SetPreviousPaintResult(&self, result: PaintResult) {
+        self.previous_paint_result_.set(result);
+    }
+
+    // Source: core/paint/paint_layer.h:490-507. Set during paint invalidation
+    // on a self painting layer if any contained object has outline / float.
+    pub fn NeedsPaintPhaseDescendantOutlines(&self) -> bool {
+        self.needs_paint_phase_descendant_outlines_.get()
+    }
+    pub fn SetNeedsPaintPhaseDescendantOutlines(&self) {
+        debug_assert!(self.IsSelfPaintingLayer());
+        self.needs_paint_phase_descendant_outlines_.set(true);
+    }
+    pub fn NeedsPaintPhaseFloat(&self) -> bool {
+        self.needs_paint_phase_float_.get()
+    }
+    pub fn SetNeedsPaintPhaseFloat(&self) {
+        debug_assert!(self.IsSelfPaintingLayer());
+        self.needs_paint_phase_float_.set(true);
+    }
+    // Source: core/paint/paint_layer.h:698-702.
+    pub(crate) fn MergeNeedsPaintPhaseFlagsFrom(&self, layer: &PaintLayer) {
+        self.needs_paint_phase_descendant_outlines_.set(
+            self.needs_paint_phase_descendant_outlines_.get()
+                | layer.needs_paint_phase_descendant_outlines_.get(),
+        );
+        self.needs_paint_phase_float_
+            .set(self.needs_paint_phase_float_.get() | layer.needs_paint_phase_float_.get());
+    }
+
+    // Source: core/paint/paint_layer.h:427-431. See
+    // PaintLayerStackingNode::layer_to_overlay_overflow_controls_painting_after_.
+    pub fn NeedsReorderOverlayOverflowControls(&self) -> bool {
+        self.needs_reorder_overlay_overflow_controls_
+    }
+    // Source: core/paint/paint_layer.cc:2650-2655. Written only by the
+    // owning PaintLayerStackingNode (paint_layer.h:710,825).
+    pub(crate) fn SetNeedsReorderOverlayOverflowControls(&mut self, b: bool) {
+        if b != self.needs_reorder_overlay_overflow_controls_ {
+            self.SetNeedsRepaint();
+            self.needs_reorder_overlay_overflow_controls_ = b;
+        }
+    }
+
+    // Source: core/paint/paint_layer.h:706-708. Chromium keeps this private to
+    // PaintLayer and PaintLayerPaintOrderIterator; Rechrom's iterators live in
+    // the Paint and hit-test packages, so the borrowed node is public and
+    // read-only. Present only on a stacking context with stacked descendants
+    // (paint_layer.cc:864-882), with lists current after
+    // UpdateDescendantDependentFlags().
+    pub fn StackingNode(&self) -> Option<&PaintLayerStackingNode> {
+        unsafe { self.stacking_node_.Get().as_ref() }
+    }
+    pub(crate) fn StackingNodePointer(&self) -> *mut PaintLayerStackingNode {
+        self.stacking_node_.Get()
+    }
+
+    // Source: core/paint/paint_layer.cc:864-882.
+    fn UpdateStackingNode(&mut self) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.LayerListMutationAllowed());
+
+        let needs_stacking_node = self.has_stacked_descendant_in_current_stacking_context_
+            && self.GetLayoutObject().IsStackingContext();
+
+        if needs_stacking_node != !self.stacking_node_.Get().is_null() {
+            if needs_stacking_node {
+                let this = self as *mut PaintLayer;
+                self.stacking_node_ = Member::from_ptr(foundation::MakeGarbageCollected(
+                    PaintLayerStackingNode::new(this),
+                ));
+            } else {
+                self.stacking_node_.Clear();
+            }
+        }
+
+        let node = self.stacking_node_.Get();
+        if !node.is_null() {
+            // The node is a separate heap object; rebuilding mutates this
+            // layer and its descendants only through their own owners.
+            unsafe { &mut *node }.UpdateZOrderLists();
+        }
+    }
+
+    // Source: core/paint/paint_layer.cc:2817-2825.
+    pub fn DirtyStackingContextZOrderLists(&mut self) {
+        let stacking_context = self.AncestorStackingContext();
+        if stacking_context.is_null() {
+            return;
+        }
+        let node = unsafe { &*stacking_context }.StackingNodePointer();
+        if !node.is_null() {
+            unsafe { &mut *node }.DirtyZOrderLists();
+        }
+
+        self.MarkAncestorChainForFlagsUpdate(
+            DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+        );
+    }
+
+    // Source: core/paint/paint_layer.cc:2435-2443,2505-2510, the stacking
+    // part of PaintLayer::StyleDidChange. LayoutBoxModelObject::StyleDidChange
+    // calls it with the previous style after the layer was updated.
+    pub(crate) fn UpdateStackingAfterStyleChange(&mut self, old_style: *const ComputedStyle) {
+        if PaintLayerStackingNode::StyleDidChange(self, old_style) {
+            // The PaintingContainer may have changed so we need to ensure
+            // `descendant_needs_repaint_` is propagated up the new
+            // PaintingContainer chain.
+            if self.SelfOrDescendantNeedsRepaint() {
+                self.MarkPaintingContainerChainForNeedsRepaint();
+            }
+            self.MarkAncestorChainForFlagsUpdate(
+                DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+            );
+        }
+
+        // HasViewTransitionName() reads the style instead of caching
+        // has_view_transition_name_; compare the two styles. If
+        // `IsZOrderListVisible()` changes, invalidate z-order lists.
+        let had_view_transition_name = unsafe { old_style.as_ref() }
+            .is_some_and(|old_style| !old_style.ViewTransitionName().Get().is_null());
+        if had_view_transition_name != self.HasViewTransitionName() {
+            self.DirtyStackingContextZOrderLists();
+        }
+    }
+
+    // Source: core/paint/paint_layer.cc:1126-1128.
+    pub fn IsInTopOrViewTransitionLayer(&self) -> bool {
+        self.GetLayoutObject().IsInTopOrViewTransitionLayer()
+    }
+
+    // Source: core/paint/paint_layer.h:527-529.
+    #[cfg(debug_assertions)]
+    pub fn LayerListMutationAllowed(&self) -> bool {
+        self.layer_list_mutation_allowed_.get()
+    }
+    // Source: core/paint/paint_layer.h:877-894. PaintLayerListMutationDetector
+    // saves and restores the flag around paint-order iteration; returns the
+    // previous state.
+    #[cfg(debug_assertions)]
+    pub fn SetLayerListMutationAllowed(&self, allowed: bool) -> bool {
+        self.layer_list_mutation_allowed_.replace(allowed)
+    }
+
+    pub(crate) fn IsDestroyed(&self) -> bool {
+        self.is_destroyed_
+    }
+
     // Source: core/paint/paint_layer.h:263-289.
     pub fn SetStaticPositionFromNG(&mut self, position: &LogicalStaticPosition) {
         self.static_position_ = *position;
@@ -734,10 +985,10 @@ impl PaintLayer {
 
     // Source: core/paint/paint_layer.cc:386-478,482-483,491,494,496,
     // 498-499,503,506,512-513
-    // and paint_layer.h:406-425,440-442. Host display-lock notifications,
-    // mutable StackingNode dirtiness, LayoutView background invalidation and
-    // 3D paint-order status remain with their unavailable host owners; every
-    // PaintLayer-owned descendant aggregate is maintained here.
+    // and paint_layer.h:406-425,440-442. Host display-lock notifications and
+    // LayoutView background invalidation remain with their unavailable host
+    // owners; every PaintLayer-owned descendant aggregate and the stacking
+    // node's z-order lists (cc:474-480) are maintained here.
     pub fn UpdateDescendantDependentFlags(&mut self) {
         if !self.needs_descendant_dependent_flags_update_ {
             return;
@@ -814,8 +1065,14 @@ impl PaintLayer {
             }
         }
 
+        // Source: core/paint/paint_layer.cc:474-480. Stacking node z-order
+        // lists depend on visibility (`HasVisibleContent()` and
+        // `HasVisibleSelfPaintingDescendant()`), so these must be updated
+        // prior to `UpdateStackingNode()`.
         self.SetHasVisibleSelfPaintingDescendant(has_visible_self_painting_descendant);
         self.UpdateHasVisibleContent();
+
+        self.UpdateStackingNode();
 
         if old_has_non_isolated_descendant_with_blend_mode
             != self.has_non_isolated_descendant_with_blend_mode_
@@ -867,6 +1124,23 @@ impl PaintLayer {
         }
         if self.has_visible_content_ != previously_has_visible_content {
             unsafe { &mut *self.layout_object_.Get() }.SetShouldCheckForPaintInvalidation();
+            // Source: core/paint/paint_layer.cc:551-557. If
+            // `IsZOrderListVisible()` changes, invalidate z-order lists.
+            self.DirtyAncestorStackingNodeZOrderLists();
+        }
+    }
+
+    // Source: core/paint/paint_layer.cc:553-556,563-567: the ancestor
+    // stacking context's node only, without DirtyStackingContextZOrderLists'
+    // ancestor-chain flag marking.
+    fn DirtyAncestorStackingNodeZOrderLists(&self) {
+        let stacking_context = self.AncestorStackingContext();
+        if stacking_context.is_null() {
+            return;
+        }
+        let node = unsafe { &*stacking_context }.StackingNodePointer();
+        if !node.is_null() {
+            unsafe { &mut *node }.DirtyZOrderLists();
         }
     }
 
@@ -924,8 +1198,12 @@ impl PaintLayer {
         false
     }
 
-    // Source: core/paint/paint_layer.cc:561,570.
+    // Source: core/paint/paint_layer.cc:561-571.
     fn SetHasVisibleSelfPaintingDescendant(&mut self, has_visible: bool) {
+        // If `IsZOrderListVisible()` changes, invalidate z-order lists.
+        if has_visible != self.has_visible_self_painting_descendant_ {
+            self.DirtyAncestorStackingNodeZOrderLists();
+        }
         self.has_visible_self_painting_descendant_ = has_visible;
     }
 
@@ -1011,6 +1289,11 @@ impl PaintLayer {
             object.DisposeScrollableAreaForPaintLayer();
         }
         object.SetNeedsPaintPropertyUpdate();
+        // Source: core/paint/paint_layer.cc:923-925. To clear z-ordering
+        // information of overlay overflow controls.
+        if self.NeedsReorderOverlayOverflowControls() {
+            self.DirtyStackingContextZOrderLists();
+        }
     }
 
     // Source: core/paint/paint_layer.cc:594-599,601-604. VisibleSizeChanged()
@@ -1225,10 +1508,10 @@ impl PaintLayer {
     }
 
     // Source: core/paint/paint_layer.h:551. Chromium caches this style fact on
-    // PaintLayer and dirties mutable z-order lists when it changes. Rechrom's
-    // paint-order lists are rebuilt from immutable PrePaint input, so reading
-    // the authoritative style preserves the value without duplicating cache
-    // invalidation state.
+    // PaintLayer and dirties the z-order lists when it changes
+    // (paint_layer.cc:2505-2510). Reading the authoritative style preserves
+    // the value; UpdateStackingAfterStyleChange() compares the old and new
+    // styles to issue the same dirtying.
     pub fn HasViewTransitionName(&self) -> bool {
         !self
             .GetLayoutObject()
@@ -1257,6 +1540,15 @@ impl PaintLayer {
             unsafe { &mut *parent }.MarkAncestorChainForFlagsUpdate(
                 DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
             );
+            // Source: core/paint/paint_layer.cc:2320-2327.
+            let enclosing_self_painting_layer = unsafe { &*parent }.EnclosingSelfPaintingLayer();
+            if let Some(enclosing) = unsafe { enclosing_self_painting_layer.as_ref() } {
+                if is_self_painting_layer {
+                    self.MergeNeedsPaintPhaseFlagsFrom(enclosing);
+                } else {
+                    enclosing.MergeNeedsPaintPhaseFlagsFrom(self);
+                }
+            }
         }
     }
 
@@ -1273,6 +1565,8 @@ impl PaintLayer {
 impl Traceable for PaintLayer {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         visitor.Trace(&self.layout_object_);
+        // Source: core/paint/paint_layer.cc:2887.
+        visitor.Trace(&self.stacking_node_);
         self.display_item_client_.Trace(visitor);
     }
 }
@@ -1304,6 +1598,16 @@ mod tests {
             static_position_: LogicalStaticPosition::default(),
             invisible_for_position_visibility_: 0,
             descendant_needs_check_position_visibility_: false,
+            needs_cull_rect_update_: Cell::new(false),
+            forces_children_cull_rect_update_: Cell::new(false),
+            descendant_needs_cull_rect_update_: Cell::new(false),
+            previous_paint_result_: Cell::new(PaintResult::kMayBeClippedByCullRect),
+            needs_paint_phase_descendant_outlines_: Cell::new(false),
+            needs_paint_phase_float_: Cell::new(false),
+            needs_reorder_overlay_overflow_controls_: false,
+            stacking_node_: Member::default(),
+            #[cfg(debug_assertions)]
+            layer_list_mutation_allowed_: Cell::new(true),
             is_destroyed_: false,
         })
     }

@@ -43,6 +43,7 @@ pub mod views {
     pub mod event_registry;
     pub mod form_control;
     pub mod hit_test;
+    pub mod paint_layer;
     pub mod pointer;
     pub mod resource;
     pub mod scroll;

@@ -84,6 +84,8 @@ impl LayoutBoxModelObject {
             // Source: core/layout/layout_box_model_object.cc:294 and
             // core/paint/paint_layer.cc:2416-2418,2435-2453.
             unsafe { &mut *layer }.UpdateScrollableArea();
+            // Source: core/paint/paint_layer.cc:2435-2443,2505-2510.
+            unsafe { &mut *layer }.UpdateStackingAfterStyleChange(old_style);
             let scrollable_area = self.GetScrollableArea();
             if !scrollable_area.is_null() {
                 unsafe { &mut *scrollable_area }.UpdateAfterStyleChange(old_style);
