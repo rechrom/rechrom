@@ -661,14 +661,20 @@ impl<E: Eq, D: Clone + Default> MatchedPropertiesCache<E, D> {
             !item.entries.is_empty()
         });
     }
+    // cpp: matched_properties_cache.cc:453-521 (kCacheLimit). The weak
+    // callback prunes least-recently-used entries once the cache holds more
+    // entries than this; dead entries below the limit wait for the next one.
+    pub fn ExceedsCacheLimit(&self) -> bool {
+        const CACHE_LIMIT: u32 = 500;
+        self.cache_entries_ > CACHE_LIMIT
+    }
     // cpp: matched_properties_cache.cc:453-521
     // Existing Rc-backed MatchResult property storage supplies liveness through
     // Weak::upgrade. The engine invokes this at its weak-cleanup point; Find
     // also rejects expired or mutated keys before touching cached styles.
     pub fn CleanMatchedPropertiesCache(&mut self) {
-        const CACHE_LIMIT: u32 = 500;
         const PRUNE_TARGET: usize = 300;
-        if self.cache_entries_ <= CACHE_LIMIT {
+        if !self.ExceedsCacheLimit() {
             self.cache_.retain(|_, item| {
                 if item.ShouldRemoveMPCEntry() {
                     self.cache_entries_ =

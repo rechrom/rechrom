@@ -775,9 +775,21 @@ fn DocumentBodyLinkColors(
     Option<foundation::Color>,
     Option<foundation::Color>,
 ) {
-    let Some(body) =
+    // cpp: Document::body() (document.cc): the parser's body is a child of the
+    // html documentElement. Look there first; only a document without one
+    // falls back to the first body element in arena order, so an ordinary
+    // style update does not scan every node for its TextLinkColors owner.
+    let canonical_body = document.DocumentElement().and_then(|html| {
+        document
+            .Node(html)
+            .Children()
+            .iter()
+            .copied()
+            .find(|&child| document.Node(child).IsHTMLElement("body"))
+    });
+    let Some(body) = canonical_body.or_else(|| {
         (0..document.NodeCount()).find(|&index| document.Node(index).IsHTMLElement("body"))
-    else {
+    }) else {
         return (None, None, None);
     };
     let color = |name| {
@@ -897,6 +909,29 @@ pub struct DocumentStyleEngine {
     // document-author registry, never from Layout or a Page-side CSS scan.
     font_feature_values: crate::font_feature_values_registry::FontFeatureValuesRegistry,
     translated_rule_set_environment: Option<MediaValuesCachedData>,
+    // cpp: StyleEngine::UpdateActiveStyle (style_engine.cc) returns before
+    // UpdateActiveStyleSheets when no TreeScope collection is dirty, and
+    // StyleSheetContents::EnsureRuleSet keeps each RuleSet until its media
+    // results change. The active-sheet owners, compatibility mode and media
+    // environment the typed sheets and RuleSets were last synchronized for;
+    // any synchronization clears it.
+    synchronized_style_sheets: Option<(
+        Arc<Vec<(Rc<CSSStyleSheet>, CascadeOrigin)>>,
+        Arc<Vec<Option<usize>>>,
+        CompatibilityMode,
+    )>,
+    // Whether every synchronized author RuleSet is a flat ordinary sheet whose
+    // matched-rule signatures are complete. Derived only from the retained
+    // typed sheets and RuleSets above, so it lives exactly as long as they do.
+    ordinary_signature_sheets_complete: Option<bool>,
+    // cpp: StyleResolver::ua_rule_set_groups_ and ScopedStyleResolver's
+    // retained CascadeLayerMap. Both survive style updates until the active
+    // RuleSets they were built from change; any synchronization clears them.
+    retained_rule_collections:
+        Option<Rc<crate::resolver::production_style_resolver::ProductionRuleCollectionCache>>,
+    retained_resolver_batch:
+        Option<Rc<crate::resolver::production_style_resolver::ProductionResolverBatch>>,
+    empty_user_agent_rules: RetainedRuleSet,
     // Blink discovers viewport-unit users by walking the live element tree
     // when the viewport dirty flags are consumed. Keep the equivalent exact
     // result set alongside the resolved styles so the Rust boundary does not
@@ -1102,6 +1137,11 @@ impl DocumentStyleEngine {
             resolver_dependencies: Default::default(),
             font_feature_values: Default::default(),
             translated_rule_set_environment: None,
+            synchronized_style_sheets: None,
+            ordinary_signature_sheets_complete: None,
+            retained_rule_collections: None,
+            retained_resolver_batch: None,
+            empty_user_agent_rules: Rc::new(crate::rule_set::RuleSet::new()),
             viewport_dependent_elements: HashSet::new(),
             container_dependent_elements: HashSet::new(),
             svg_style_elements: HashSet::new(),
@@ -1187,6 +1227,7 @@ impl DocumentStyleEngine {
         // viewport_resolver_/media_query_evaluator_ and their cached results.
         self.environment = None;
         self.translated_rule_set_environment = None;
+        self.InvalidateSynchronizedStyleSheets();
         self.media_query_cache = Default::default();
         self.registered_container_properties = None;
         // This facade retains the metrics input, not CSSFontSelector's
@@ -2040,27 +2081,45 @@ impl DocumentStyleEngine {
                     })
                     .collect::<Vec<_>>()
             });
-        self.SynchronizeTypedSheets(document, &active_sheets);
-        // Ordinary standards-mode author and UA-mode user-agent matching
-        // consume these retained RuleSets below. Rebuild only when the sheet
-        // revision or media environment changes; advanced recalc contexts
-        // remain explicit compatibility-collector fallbacks.
-        let retained_viewport_environment =
-            self.SynchronizeTranslatedRuleSets(&active_sheets, media);
+        // cpp: StyleEngine::UpdateActiveStyle (style_engine.cc) skips
+        // UpdateActiveStyleSheets when no style sheet collection is dirty, and
+        // a RuleSet is rebuilt only when its media query results change. The
+        // typed sheets and RuleSets synchronized for these exact active-sheet
+        // owners, parser mode and media environment are therefore current.
+        let compatibility_mode = document.GetCompatibilityMode();
+        let sheets_synchronized = self.synchronized_style_sheets.as_ref().is_some_and(
+            |(sheets, scopes, mode)| {
+                Arc::ptr_eq(sheets, &active_sheets)
+                    && Arc::ptr_eq(scopes, &active_sheet_scopes)
+                    && *mode == compatibility_mode
+            },
+        ) && self.translated_rule_set_environment.as_ref() == Some(media);
+        let retained_viewport_environment = if sheets_synchronized {
+            // An unchanged environment is never a viewport-only change, which
+            // is the only case SynchronizeTranslatedRuleSets reports as retained.
+            false
+        } else {
+            self.SynchronizeTypedSheets(document, &active_sheets);
+            // Ordinary standards-mode author and UA-mode user-agent matching
+            // consume these retained RuleSets below. Rebuild only when the sheet
+            // revision or media environment changes; advanced recalc contexts
+            // remain explicit compatibility-collector fallbacks.
+            let retained = self.SynchronizeTranslatedRuleSets(&active_sheets, media);
+            self.synchronized_style_sheets = Some((
+                active_sheets.clone(),
+                active_sheet_scopes.clone(),
+                compatibility_mode,
+            ));
+            retained
+        };
         // DOM invalidations were recorded while the previous active RuleSets
         // still owned their feature data. Keep those owners through this
         // batch, just as mutation-time PendingInvalidations do in Blink; sheet
         // synchronization may already have pruned their old revision keys.
         // New rules participate too when sheet and DOM changes are batched.
-        let attribute_invalidation_rules = active_sheets
-            .iter()
-            .map(|(sheet, _)| {
-                self.translated_rule_sets
-                    .get(&(sheet.Identity(), sheet.Revision()))
-                    .cloned()
-            })
-            .chain(old_rule_sets.iter().flatten().cloned())
-            .collect::<Option<Vec<_>>>();
+        // Only attribute/inline-style invalidation consults them, so collect
+        // them when such a change is scheduled rather than on every update.
+        let attribute_invalidation_rules = std::cell::OnceCell::new();
         drop(sheets_trace);
         let invalidation_trace =
             browser_tracing::span("style_invalidation", "StyleEngine.Invalidate");
@@ -2159,9 +2218,14 @@ impl DocumentStyleEngine {
             self.matched_properties_cache.ClearViewportDependent();
         }
         // cpp: matched_properties_cache.cc:392-431. Blink performs this from
-        // the Oilpan weak callback; the retained Rust document owner reaches
-        // the same lifecycle point once per style update.
-        self.matched_properties_cache.Clean();
+        // the Oilpan weak callback. Sheet RuleSet owners are released only
+        // when the active sheets change; other dead entries (replaced inline
+        // declarations) are bounded by the cache limit and rejected by Find.
+        self.matched_properties_cache.CleanAtWeakProcessingPoint(
+            !Arc::ptr_eq(&self.active_sheets, &active_sheets)
+                || !sheets_synchronized
+                || document.StyleState().all_dirty,
+        );
         // cpp: StyleEngine::ApplyRuleSetChanges(TreeScope&, old, new, diffs).
         // Sheet order is local to a TreeScope. Inserting a shadow sheet can
         // shift every later slot in the flattened host projection without
@@ -2226,27 +2290,37 @@ impl DocumentStyleEngine {
         let signature_context_unchanged = signature_non_rule_context_unchanged
             && self.active_sheet_scopes.as_slice() == active_sheet_scopes.as_slice()
             && !rule_sets_changed;
-        let ordinary_signature_complete = environment_variables.is_none()
-            && active_sheet_scopes
-                .iter()
-                .flatten()
-                .all(|scope| *scope == document.Root())
-            && active_sheets.iter().all(|(sheet, _)| {
-                let key = (sheet.Identity(), sheet.Revision());
-                self.typed_sheets
-                    .get(&key)
-                    .zip(self.translated_rule_sets.get(&key))
-                    .is_some_and(|(typed, rule_set)| {
-                        OrdinaryMatchedRuleSignaturesAreComplete(typed, rule_set)
-                            && rule_set
-                                .AllRuleData()
-                                .iter()
-                                .map(|data| Rc::as_ptr(data.Rule()) as usize)
-                                .collect::<HashSet<_>>()
-                                .len()
-                                == sheet.rules.len()
-                    })
-            });
+        // A property of the synchronized typed sheets and RuleSets alone, like
+        // RuleSet feature data in Blink: computed once per synchronization
+        // instead of rescanning every active rule on every style update.
+        let ordinary_sheets_complete = match self.ordinary_signature_sheets_complete {
+            Some(complete) => complete,
+            None => {
+                let complete = active_sheet_scopes
+                    .iter()
+                    .flatten()
+                    .all(|scope| *scope == document.Root())
+                    && active_sheets.iter().all(|(sheet, _)| {
+                        let key = (sheet.Identity(), sheet.Revision());
+                        self.typed_sheets
+                            .get(&key)
+                            .zip(self.translated_rule_sets.get(&key))
+                            .is_some_and(|(typed, rule_set)| {
+                                OrdinaryMatchedRuleSignaturesAreComplete(typed, rule_set)
+                                    && rule_set
+                                        .AllRuleData()
+                                        .iter()
+                                        .map(|data| Rc::as_ptr(data.Rule()) as usize)
+                                        .collect::<HashSet<_>>()
+                                        .len()
+                                        == sheet.rules.len()
+                            })
+                    });
+                self.ordinary_signature_sheets_complete = Some(complete);
+                complete
+            }
+        };
+        let ordinary_signature_complete = environment_variables.is_none() && ordinary_sheets_complete;
         let quirks = document.GetCompatibilityMode() == CompatibilityMode::kQuirks;
         // This compatibility counter counts dependency scans, not computed style
         // RuleSet compilation. The latter is owned by shared_rule_sets above.
@@ -2256,58 +2330,68 @@ impl DocumentStyleEngine {
         let mut retained_hits = 0;
         let mut contents_hits = 0;
         let mut legacy_parses = 0;
-        self.shared_selector_dependencies
-            .retain(|_, (contents, _)| contents.strong_count() != 0);
-        let retained = self
-            .active_sheets
-            .iter()
-            .zip(&self.sheet_dependencies)
-            .map(|((sheet, origin), dependencies)| {
-                (
-                    (Rc::as_ptr(sheet) as usize, *origin as u8),
-                    dependencies.clone(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        let sheet_dependencies: Vec<_> = active_sheets
-            .iter()
-            .map(|(sheet, origin)| {
-                if !quirks_changed {
-                    if let Some(dependencies) =
-                        retained.get(&(Rc::as_ptr(sheet) as usize, *origin as u8))
-                    {
-                        retained_hits += 1;
-                        return dependencies.clone();
+        // The same active-sheet owners keep the feature data they were
+        // collected with; there is nothing to look up per sheet.
+        let sheet_dependencies: Vec<_> = if !quirks_changed
+            && Arc::ptr_eq(&self.active_sheets, &active_sheets)
+            && self.sheet_dependencies.len() == active_sheets.len()
+        {
+            retained_hits = active_sheets.len();
+            self.sheet_dependencies.clone()
+        } else {
+            self.shared_selector_dependencies
+                .retain(|_, (contents, _)| contents.strong_count() != 0);
+            let retained = self
+                .active_sheets
+                .iter()
+                .zip(&self.sheet_dependencies)
+                .map(|((sheet, origin), dependencies)| {
+                    (
+                        (Rc::as_ptr(sheet) as usize, *origin as u8),
+                        dependencies.clone(),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            active_sheets
+                .iter()
+                .map(|(sheet, origin)| {
+                    if !quirks_changed {
+                        if let Some(dependencies) =
+                            retained.get(&(Rc::as_ptr(sheet) as usize, *origin as u8))
+                        {
+                            retained_hits += 1;
+                            return dependencies.clone();
+                        }
                     }
-                }
-                // CSSOM edits without a canonical backing keep their existing
-                // parser/diagnostic route. Standards-mode retained contents carry
-                // the exact selectors which produced this projection.
-                let parsed = (!quirks && sheet.HasCurrentSource())
-                    .then(|| {
-                        self.typed_sheets
-                            .get(&(sheet.Identity(), sheet.Revision()))
-                            .cloned()
-                    })
-                    .flatten();
-                if let Some(parsed) = parsed {
-                    let key = Rc::as_ptr(&parsed) as usize;
-                    if let Some((_, dependencies)) = self.shared_selector_dependencies.get(&key) {
-                        contents_hits += 1;
-                        return dependencies.clone();
+                    // CSSOM edits without a canonical backing keep their existing
+                    // parser/diagnostic route. Standards-mode retained contents carry
+                    // the exact selectors which produced this projection.
+                    let parsed = (!quirks && sheet.HasCurrentSource())
+                        .then(|| {
+                            self.typed_sheets
+                                .get(&(sheet.Identity(), sheet.Revision()))
+                                .cloned()
+                        })
+                        .flatten();
+                    if let Some(parsed) = parsed {
+                        let key = Rc::as_ptr(&parsed) as usize;
+                        if let Some((_, dependencies)) = self.shared_selector_dependencies.get(&key) {
+                            contents_hits += 1;
+                            return dependencies.clone();
+                        }
+                        rule_sets_built += 1;
+                        let dependencies = SelectorDependencies::ForParsedSheet(&parsed);
+                        self.shared_selector_dependencies
+                            .insert(key, (Rc::downgrade(&parsed), dependencies.clone()));
+                        dependencies
+                    } else {
+                        rule_sets_built += 1;
+                        legacy_parses += 1;
+                        SelectorDependencies::ForSheets(document, &[(sheet.clone(), *origin)])
                     }
-                    rule_sets_built += 1;
-                    let dependencies = SelectorDependencies::ForParsedSheet(&parsed);
-                    self.shared_selector_dependencies
-                        .insert(key, (Rc::downgrade(&parsed), dependencies.clone()));
-                    dependencies
-                } else {
-                    rule_sets_built += 1;
-                    legacy_parses += 1;
-                    SelectorDependencies::ForSheets(document, &[(sheet.clone(), *origin)])
-                }
-            })
-            .collect();
+                })
+                .collect()
+        };
         dependency_trace.set("retained_hits", retained_hits as f64);
         dependency_trace.set("contents_hits", contents_hits as f64);
         dependency_trace.set("dependency_sets_built", rule_sets_built as f64);
@@ -2639,7 +2723,15 @@ impl DocumentStyleEngine {
                         if !self.InvalidateAttributeRelations(
                             document,
                             index,
-                            attribute_invalidation_rules.as_deref(),
+                            attribute_invalidation_rules
+                                .get_or_init(|| {
+                                    AttributeInvalidationRuleSets(
+                                        &self.translated_rule_sets,
+                                        &active_sheets,
+                                        old_rule_sets.as_deref(),
+                                    )
+                                })
+                                .as_deref(),
                             &mut candidates,
                         ) {
                             self.InvalidateRelations(
@@ -2683,7 +2775,15 @@ impl DocumentStyleEngine {
                             if !self.InvalidateAttributeRelations(
                                 document,
                                 index,
-                                attribute_invalidation_rules.as_deref(),
+                                attribute_invalidation_rules
+                                    .get_or_init(|| {
+                                        AttributeInvalidationRuleSets(
+                                            &self.translated_rule_sets,
+                                            &active_sheets,
+                                            old_rule_sets.as_deref(),
+                                        )
+                                    })
+                                    .as_deref(),
                                 &mut candidates,
                             ) {
                                 self.InvalidateRelations(
@@ -3492,21 +3592,35 @@ impl DocumentStyleEngine {
             ))?;
         drop(invalidation_trace);
         let _recalc_trace = browser_tracing::span("style", "StyleEngine.RecalcStyle");
-        // The batch owns a bounded set of immutable preparation records.
-        // No DOM/session state or previous stylesheet revision survives here.
-        let rule_collections = Rc::new(
-            crate::resolver::production_style_resolver::ProductionRuleCollectionCache::default(),
-        );
-        let resolver_batch = Rc::new(
-            crate::resolver::production_style_resolver::ProductionResolverBatch::ForMediaControls(
-                production_resolver_rule_sets
-                    .media_controls_user_agent
-                    .clone(),
-                production_resolver_rule_sets
-                    .forced_media_controls_user_agent
-                    .clone(),
-            ),
-        );
+        // The cache owns a bounded set of immutable preparation records, each
+        // validated against the exact RuleSet inputs of a request. Like
+        // StyleResolver::ua_rule_set_groups_ and ScopedStyleResolver's
+        // CascadeLayerMap, both owners survive style updates and are released
+        // whenever the active RuleSets are synchronized again. No DOM state
+        // survives here.
+        let rule_collections = self
+            .retained_rule_collections
+            .get_or_insert_with(|| {
+                Rc::new(
+                    crate::resolver::production_style_resolver::ProductionRuleCollectionCache::default(),
+                )
+            })
+            .clone();
+        let resolver_batch = self
+            .retained_resolver_batch
+            .get_or_insert_with(|| {
+                Rc::new(
+                    crate::resolver::production_style_resolver::ProductionResolverBatch::ForMediaControls(
+                        production_resolver_rule_sets
+                            .media_controls_user_agent
+                            .clone(),
+                        production_resolver_rule_sets
+                            .forced_media_controls_user_agent
+                            .clone(),
+                    ),
+                )
+            })
+            .clone();
         // MatchResult carries the exact highlight names which matched each
         // originating element. No document-wide selector inventory is needed.
         // Build and install each immutable style in traversal order. The
@@ -5347,11 +5461,21 @@ impl DocumentStyleEngine {
         );
         Ok(impact)
     }
+    // Forget the owners derived from the synchronized typed sheets and
+    // RuleSets. Every synchronization, including a scrollbar request for a
+    // different active-sheet list, starts a new synchronized state.
+    fn InvalidateSynchronizedStyleSheets(&mut self) {
+        self.synchronized_style_sheets = None;
+        self.ordinary_signature_sheets_complete = None;
+        self.retained_rule_collections = None;
+        self.retained_resolver_batch = None;
+    }
     fn SynchronizeTypedSheets(
         &mut self,
         document: &Document,
         sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
     ) {
+        self.InvalidateSynchronizedStyleSheets();
         let mut trace = browser_tracing::span("style_rules", "StyleEngine.SynchronizeTypedSheets");
         let mut inline_hits = 0;
         let active_keys = sheets
@@ -5462,6 +5586,7 @@ impl DocumentStyleEngine {
         sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
         media: &MediaValuesCachedData,
     ) -> bool {
+        self.InvalidateSynchronizedStyleSheets();
         let environment_changed = self.translated_rule_set_environment.as_ref() != Some(media);
         let viewport_only_change = self
             .translated_rule_set_environment
@@ -5744,11 +5869,16 @@ impl DocumentStyleEngine {
                 _ => None,
             };
             if !sheet.owner_media_conditions.iter().all(|condition| {
-                let query = self
-                    .media_query_cache
-                    .entry(condition.clone())
-                    .or_insert_with(|| Rc::new(ParseMediaQuerySet(condition)))
-                    .clone();
+                // Every style update consults the owner media; look the
+                // retained parsed set up by borrow before allocating a key.
+                let query = match self.media_query_cache.get(condition) {
+                    Some(query) => query.clone(),
+                    None => self
+                        .media_query_cache
+                        .entry(condition.clone())
+                        .or_insert_with(|| Rc::new(ParseMediaQuerySet(condition)))
+                        .clone(),
+                };
                 evaluator.Eval(query.as_ref())
             }) {
                 self.translated_rule_shadow_stats.skipped_owner_media += 1;
@@ -5822,9 +5952,12 @@ impl DocumentStyleEngine {
                 _ => unreachable!("origin was checked above"),
             }
         }
+        // A document without an HTML UA sheet matches one empty RuleSet. Keep
+        // its identity stable so retained UA RuleSetGroups and rule
+        // collections built from it stay valid across style updates.
         let html_user_agent = html_user_agent.unwrap_or_else(|| {
             crate::resolver::production_style_resolver::ProductionResolverRuleSetInput::plain(
-                Rc::new(crate::rule_set::RuleSet::new()),
+                self.empty_user_agent_rules.clone(),
             )
         });
         Some(ProductionResolverRuleSets {
@@ -8798,6 +8931,22 @@ fn ContainerQueryDependent(style: &ComputedStyle) -> bool {
             }
             .is_some_and(|pseudo| change.RecalcContainerQueryDependentStyle(pseudo))
         })
+}
+
+// The current and previous RuleSet owners of the active sheets. DOM
+// invalidations recorded against the previous RuleSets keep them alive for
+// this batch, as mutation-time PendingInvalidations do in Blink. None when a
+// sheet has no retained RuleSet.
+fn AttributeInvalidationRuleSets(
+    rule_sets: &HashMap<(u64, u64), RetainedRuleSet>,
+    active_sheets: &[(Rc<CSSStyleSheet>, CascadeOrigin)],
+    old_rule_sets: Option<&[Option<RetainedRuleSet>]>,
+) -> Option<Vec<RetainedRuleSet>> {
+    active_sheets
+        .iter()
+        .map(|(sheet, _)| rule_sets.get(&(sheet.Identity(), sheet.Revision())).cloned())
+        .chain(old_rule_sets.into_iter().flatten().cloned())
+        .collect()
 }
 
 /// Proves that the retained RuleSet identities are a complete ordinary-element
