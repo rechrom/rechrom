@@ -8688,11 +8688,9 @@ impl PrePaintTreeWalk {
         self.paint_invalidator.BeginPass();
         // The root's dirty bits decide the clean-tree admission below.
         unsafe { root.Cursor().ReadPrePaintInvalidationForVisit() };
-        if source_result_changed {
-            // Sliced inline strips depend on every fragment of the object;
-            // resolve them before any node reads them.
-            crate::inline_stitched_decoration::PopulateInlineStitchedDecorations(root.Cursor());
-        }
+        // A sliced inline box's strip is computed when it is read
+        // (ViewStitchedDecoration over the live inline cursor), as Chromium's
+        // InlineBoxFragmentPainter does; PrePaint does not pre-populate it.
         self.requires_main_thread_for_background_attachment_fixed = root
             .paint
             .RequiresMainThreadScrollingForBackgroundAttachmentFixed();

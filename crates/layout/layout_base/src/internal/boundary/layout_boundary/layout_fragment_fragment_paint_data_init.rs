@@ -285,7 +285,6 @@ pub(crate) fn InitializePhysicalFragmentPaintData(
     // the unchanged style and resources proven above) is still current.
     if !(kept && same_owner) {
         ExportDetachedNinePieceImages(object, effective_style, resources, output);
-        ExportBoxPaintGeometry(box_fragment, &mut output.paint);
         RecordRebindScrollOrigin(box_fragment, output);
     }
     // ViewEstablishesPaintState reads this only for SVG foreignObject / text
@@ -343,6 +342,5 @@ pub(crate) fn InitializeInlineItemPaintData(
         return;
     };
     ExportDetachedNinePieceImages(object, effective_style, resources, output);
-    ExportBoxPaintGeometry(box_fragment, &mut output.paint);
     RecordRebindScrollOrigin(box_fragment, output);
 }

@@ -197,25 +197,94 @@ pub(crate) fn ExportSelfOutlineGeometry(
     })
 }
 
-#[inline(never)]
-pub(super) fn ExportBoxPaintGeometry(
-    box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
-) {
-    // The scroll offset is read live from the bound source LayoutObject
-    // (PaintProperties::ScrollOffset -> LiveScrollOffset: the element's
-    // committed input, else its PaintLayerScrollableArea); it is not copied.
-    // Borders, padding and included sides are read from this resident
-    // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
-    // read PhysicalBoxFragment directly; they are not copied here. The
-    // content size and a non-inline box's stitched geometry are read live
-    // too (ViewContentSize / ViewStitchedDecoration). A sliced inline box's
-    // strip spans the object's sibling box fragments and is written by
-    // PrePaint (PopulateInlineStitchedDecorations) only for strips of two or
-    // more fragments, so a republished inline box drops its previous strip.
-    if box_fragment.IsInlineBox() && paint.stitched_decoration.is_some() {
-        paint.stitched_decoration = None;
+/// A sliced inline box's strip, computed when Paint reads it
+/// (ViewStitchedDecoration) from the live inline cursor over the object's
+/// fragment items; nothing is stored on the Paint sidecar.
+///
+/// Source: core/paint/inline_box_fragment_painter.cc:39-53
+/// (MayHaveMultipleFragmentItems), :277-311
+/// (InlineBoxFragmentPainterBase::ComputeFragmentOffsetOnLine) and :313-333
+/// (PaintRectForImageStrip): the fragment is one piece of a single strip
+/// whose inline size is the sum of the object's box fragments, offset by the
+/// inline size of the fragments before it (after it, for RTL).
+pub(crate) fn ExportInlineStitchedDecorationData(
+    item: &FragmentItem,
+) -> Option<StitchedDecorationData> {
+    if item.Type() != ItemType::kBox {
+        return None;
     }
+    let box_fragment = unsafe { item.BoxFragment().as_ref() }?;
+    let object = unsafe { item.GetLayoutObject().as_ref() }?;
+    // MayHaveMultipleFragmentItems: a single item is its own strip.
+    if item.IsFirstForNode() && item.IsLastForNode() && !object.IsInsideMulticol() {
+        return None;
+    }
+    let style = box_fragment.Style();
+    // inline_box_fragment_painter.cc:526-529: a cloned decoration paints
+    // each fragment on its own.
+    if style.BoxDecorationBreak() != EBoxDecorationBreak::kSlice {
+        return None;
+    }
+    let writing_direction = style.GetWritingDirection();
+    let mut cursor = crate::inline_cursor::InlineCursor::default();
+    cursor.MoveToLayoutObject(object);
+    let mut before = LayoutUnit::default();
+    let mut after = LayoutUnit::default();
+    let mut before_self = true;
+    let mut boxes = 0usize;
+    while cursor.IsNotNull() {
+        if std::ptr::eq(cursor.CurrentItem(), item as *const FragmentItem) {
+            before_self = false;
+        } else if let Some(other) = unsafe { cursor.Current().BoxFragment().as_ref() } {
+            let inline_size = LogicalFragment::new(writing_direction, other).InlineSize();
+            if before_self {
+                before += inline_size;
+            } else {
+                after += inline_size;
+            }
+        }
+        boxes += 1;
+        cursor.MoveToNextForSameLayoutObject();
+    }
+    // The item is not in its object's chain (not the resident result), or
+    // it is the object's only box: no strip.
+    if before_self || boxes < 2 {
+        return None;
+    }
+    let total_width =
+        before + after + LogicalFragment::new(writing_direction, box_fragment).InlineSize();
+    // The fragments were visited in physical order; swap for RTL.
+    let offset_on_line = if style.Direction() == foundation::TextDirection::kLtr {
+        before
+    } else {
+        after
+    };
+    let own_size = box_fragment.Size();
+    Some(if style.IsHorizontalWritingMode() {
+        StitchedDecorationData {
+            fragment_offset: Offset {
+                x: Number(offset_on_line),
+                y: 0.0,
+            },
+            size: Size {
+                width: Number(total_width),
+                height: Number(own_size.height),
+            },
+            ..StitchedDecorationData::default()
+        }
+    } else {
+        StitchedDecorationData {
+            fragment_offset: Offset {
+                x: 0.0,
+                y: Number(offset_on_line),
+            },
+            size: Size {
+                width: Number(own_size.width),
+                height: Number(total_width),
+            },
+            ..StitchedDecorationData::default()
+        }
+    })
 }
 
 /// LayoutVideo display mode can change without a new physical fragment.

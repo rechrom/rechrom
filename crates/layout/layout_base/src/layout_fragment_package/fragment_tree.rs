@@ -447,10 +447,6 @@ pub struct PaintProperties {
     pub border: Edges,
     pub border_styles: [BorderLineStyle; 4],
     pub padding: Edges,
-    /// A sliced inline box's strip, written by PrePaint
-    /// (PopulateInlineStitchedDecorations), and the fixture fallback. Other
-    /// resident boxes read it live (ViewStitchedDecoration).
-    pub stitched_decoration: Option<StitchedDecorationData>,
     pub display: Display,
     pub position: Position,
     // A fixed-position LayoutBox whose containing block is the LayoutView.
@@ -610,7 +606,6 @@ impl Default for PaintProperties {
             border: Edges::default(),
             border_styles: [BorderLineStyle::kNone; 4],
             padding: Edges::default(),
-            stitched_decoration: None,
             display: Display::kBlock,
             position: Position::kStatic,
             fixed_to_view: false,
@@ -800,8 +795,8 @@ pub trait ResidentBoxGeometry {
     /// (text paint timing ignores whitespace-only text).
     fn ViewTextPaintTimingNonWhitespace(&self) -> bool;
     /// Stitched decoration geometry: computed from the resident block box
-    /// across its LayoutBox fragments; inline boxes keep PrePaint's stitched
-    /// inline geometry (InlineBoxFragmentPainter).
+    /// across its LayoutBox fragments; an inline box computes its strip from
+    /// the live inline cursor (InlineBoxFragmentPainter).
     fn ViewStitchedDecoration(&self) -> Option<StitchedDecorationData>;
     /// LayoutImage::MutableForPainting::UpdatePaintedRect on the live
     /// LayoutImage; true when the painted rect changed.
@@ -1218,13 +1213,30 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewStitchedDecoration(&self) -> Option<StitchedDecorationData> {
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.ResidentBoxFragment() {
             Some(box_fragment) if !box_fragment.IsInlineBox() => {
                 crate::internal::boundary::layout_boundary::ExportStitchedDecorationData(
                     box_fragment,
                 )
             }
-            _ => self.paint.stitched_decoration.clone(),
+            // An inline box computes its strip from its own resident item
+            // when Paint reads it (InlineBoxFragmentPainterBase::
+            // ComputeFragmentOffsetOnLine, core/paint/
+            // inline_box_fragment_painter.cc:277-311).
+            Some(_) => match self.resident_owner {
+                ResidentFragmentOwner::InlineItem { items, index } => {
+                    let items =
+                        unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                    items.Items().get(index).and_then(|item| {
+                        crate::internal::boundary::layout_boundary::ExportInlineStitchedDecorationData(
+                            item,
+                        )
+                    })
+                }
+                _ => None,
+            },
+            None => None,
         }
     }
 
