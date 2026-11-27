@@ -820,7 +820,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
 
     // Chromium constructors: box_fragment_painter.h:40-46,114-119,346-388.
     pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
-        Self { node, context }
+        // The occurrence's FragmentData, resolved once per painted object.
+        Self { node, context, fragment_data: node.FragmentData() }
     }
 
     // Chromium: box_fragment_painter.h:57-60; box_fragment_painter.cc:615-641.
