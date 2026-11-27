@@ -27,8 +27,10 @@ pub enum LayoutUpdateKind {
     Paint,
 }
 
-/// Opaque client set produced by Paint after its artifact is complete.
-/// Layout consumes it to advance source DisplayItemClient state. Delayed
+/// Opaque client set produced by Paint after its artifact is complete: the
+/// used clients Paint's resident client directory could not validate itself
+/// (paint_controller.cc:127-143 validates each used client directly).
+/// Layout consumes it to advance those source DisplayItemClients. Delayed
 /// full paint invalidations are re-armed by PrePaint itself at the end of
 /// its walk (paint_invalidator.cc:291-294), so the commit carries none.
 #[derive(Clone)]

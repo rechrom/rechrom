@@ -2747,6 +2747,34 @@ impl PaintProperties {
             .is_some()
     }
 
+    /// The PaintController cycle's end validates each client its new paint
+    /// used, through the client itself (paint_controller.cc:127-143;
+    /// display_item_client.h:99-107). Validate every live client of this
+    /// payload (LayoutObject, LayoutText selection, PaintLayer, scrollbar,
+    /// scroll corner, scrolling background) whose identity is `id`. Returns
+    /// false when no live client of this payload has that identity.
+    pub fn ValidateLiveClientForCommittedPaint(&self, id: u64) -> bool {
+        if id == 0 {
+            return false;
+        }
+        let mut validated = false;
+        for client in [
+            self.LiveDisplayItemClient(),
+            self.LiveSelectionClient(),
+            self.LivePaintLayerClient(),
+            self.LiveScrollClient(id),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if client.Id() as u64 == id {
+                client.ValidateForCommittedPaint();
+                validated = true;
+            }
+        }
+        validated
+    }
+
     pub fn HasLiveDisplayItemClient(&self) -> bool {
         self.LiveDisplayItemClient().is_some()
     }

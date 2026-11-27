@@ -7,7 +7,7 @@
 
 #![allow(non_snake_case)]
 
-use std::collections::HashSet;
+use std::{cell::Cell, collections::HashSet};
 
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 
@@ -19,34 +19,42 @@ use crate::{
     },
 };
 
-/// Commit clients reachable from this document's source tree.
+/// Commit the used clients Paint could not validate itself, on their source
+/// owners in this document's tree.
 ///
-/// Source: platform/graphics/paint/paint_controller.cc:127-143. Paint reads
-/// the LayoutObject, selection, PaintLayer and scrollable-area clients live
-/// (PaintProperties::*ClientState), so validating them here is the whole
-/// commit: no fragment mirror of their state remains to be republished. The
-/// traversal stays out of line so a sampling profiler assigns its work to
-/// `layout_commit_package`.
+/// Source: platform/graphics/paint/paint_controller.cc:127-143. The
+/// PaintController cycle validates the clients its new paint used through
+/// their own pointers (`clients_to_validate_`, filled by
+/// MarkClientForValidation, paint_controller.cc:528-533 and
+/// paint_chunker.cc:22-28); clients the paint did not use keep their state.
+/// Paint resolves almost every used client through its resident client
+/// directory (prepaint `ValidateLiveClientsForCommittedPaint`) and hands only
+/// the rest here, so a frame whose used clients all resolved does no tree
+/// walk. For the remaining ids this walk validates the LayoutObject,
+/// selection, PaintLayer and scrollable-area clients that carry them and
+/// stops once `source_clients` of them are found. The traversal stays out of
+/// line so a sampling profiler assigns its work to `layout_commit_package`.
 #[inline(never)]
 pub fn commit_paint_client_state(
     tree: &LayoutObjectTree,
     used_clients: &HashSet<u64>,
+    source_clients: usize,
     _fragments: &mut LayoutResultHandle,
 ) {
-    let mut matched_clients = 0usize;
+    let matched_clients = Cell::new(0usize);
     let mut object_count = 0usize;
-    {
-        let mut trace = layout_commit::trace_span(layout_commit::TracePhase::CollectClients);
-        let mut commit = |client: &DisplayItemClient| {
+    let mut trace = layout_commit::trace_span(layout_commit::TracePhase::CollectClients);
+    if source_clients > 0 {
+        let commit = |client: &DisplayItemClient| {
             let id = client.Id() as u64;
             if used_clients.contains(&id) {
                 client.ValidateForCommittedPaint();
-                matched_clients += 1;
+                matched_clients.set(matched_clients.get() + 1);
             }
         };
         // SVG and table virtual child lists belong to the tree's assembly.
         // Paint commit runs after layout's temporary scope has ended, so use
-        // the same persistent factory set while traversing all source clients.
+        // the same persistent factory set while traversing the source clients.
         tree.WithObjectFactoryScope(|| {
             let root = tree.Root() as *const LayoutObject;
             let mut object = root.cast_mut();
@@ -90,10 +98,15 @@ pub fn commit_paint_client_state(
                 // geometry and visibility, and re-arms delayed full
                 // invalidations after the walk (pre_paint_tree_walk.cc:107,
                 // 1584-1585). The commit only validates recorded clients.
+                // Client ids are process-unique, so once every handed-over
+                // source client is found the rest of the tree holds none.
+                if matched_clients.get() >= source_clients {
+                    break;
+                }
                 object = next;
             }
         });
-        trace.set("objects", object_count as f64);
-        trace.set("matched_clients", matched_clients as f64);
     }
+    trace.set("objects", object_count as f64);
+    trace.set("matched_clients", matched_clients.get() as f64);
 }
