@@ -101,8 +101,14 @@ pub struct LayerizeEngine<F: LayerizeFamily> {
     paint: Arc<CpuMainPaintServices<F::Skia>>,
     pac: Option<PaintArtifactCompositor<F>>,
     // Blink classifies each producer replacement against the artifact that
-    // populated the resident PAC. This is the immutable engine input itself,
-    // not a copied snapshot.
+    // populated the resident PAC (LocalFrameView::PaintTree's
+    // previous_artifact, local_frame_view.cc:3189-3226). This is the
+    // immutable engine input itself, not a copied snapshot; PendingLayer's
+    // PaintChunkSubset and RasterInvalidator::old_paint_artifact_ retain the
+    // same object, as in Chromium. Paint's commit writes only an artifact it
+    // has just recorded (still unshared), so holding this costs no per-frame
+    // copy: a frame without repaint pushes this very Arc again (identity =
+    // "not repainted"); only resource and retained-scroll updates version it.
     previous_artifact: Option<Arc<PaintArtifact>>,
     // PAC stores only Weak. Retaining this exact strong owner is required for
     // source scroll/snap/scrollbar-hidden delivery throughout PAC's lifetime.

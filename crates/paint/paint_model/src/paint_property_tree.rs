@@ -75,6 +75,9 @@ impl PaintPropertyNodeIdentity {
     const INVALID_CC_NODE_ID: i32 = -1;
 
     fn new(changed: PaintPropertyChangeType) -> Self {
+        if changed != PaintPropertyChangeType::Unchanged {
+            crate::property_cell::NotePropertyChange();
+        }
         let owner = PaintSequenceId::current();
         Self {
             cc_node: MutableCell::with_owner(owner, (0, Self::INVALID_CC_NODE_ID)),
@@ -102,6 +105,9 @@ impl PaintPropertyNodeIdentity {
 
     /// Source: paint_property_node.h:185-188 `AddChanged`.
     fn add_changed(&self, access: &PropertyAccess, changed: PaintPropertyChangeType) {
+        if changed != PaintPropertyChangeType::Unchanged {
+            crate::property_cell::NotePropertyChange();
+        }
         if changed > self.changed.get(access) {
             self.changed.set(access, changed);
         }

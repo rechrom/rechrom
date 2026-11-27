@@ -932,8 +932,14 @@ impl PaintController {
             .chain(artifact.chunks.iter().map(|chunk| chunk.id))
             .map(|id| id.client_id)
             .collect();
-        for chunk in &mut artifact.chunks {
-            chunk.client_is_just_created = false;
+        // The flag lives on the chunk as in Chromium (paint_controller.cc:
+        // 141-143). A chunk list moved in whole from the previous artifact
+        // still shares its backing with it; read first so that list is
+        // written (and so copied) only when a chunk really is just created.
+        if artifact.chunks.iter().any(|chunk| chunk.client_is_just_created) {
+            for chunk in &mut artifact.chunks {
+                chunk.client_is_just_created = false;
+            }
         }
         clients
     }

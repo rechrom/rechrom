@@ -1255,9 +1255,18 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     let mut result = ScrollPropertyUpdate::default();
     // Chunk property states, display-item scroll translations and the
     // compositor viewport name the resident nodes updated in place above;
-    // only the cached-subsequence flag changes.
-    for chunk in artifact.chunks.iter_mut() {
-        chunk.is_moved_from_cached_subsequence = true;
+    // only the cached-subsequence flag changes. The chunk list is shared with
+    // the artifact Layerize and the compositor still hold; after the first
+    // retained scroll every flag is already set, so read before writing
+    // instead of copying the whole list on each scroll step.
+    if artifact
+        .chunks
+        .iter()
+        .any(|chunk| !chunk.is_moved_from_cached_subsequence)
+    {
+        for chunk in artifact.chunks.iter_mut() {
+            chunk.is_moved_from_cached_subsequence = true;
+        }
     }
     for (index, ops, scrollbar) in replacements {
         let record = &mut artifact.display_items[index];

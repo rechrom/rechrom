@@ -755,6 +755,24 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
     }
 }
 
+/// Whether two artifact objects carry the one recording Paint kept without
+/// a PaintController cycle: every recording backing, resource catalog and
+/// resource-revision sidecar is the same allocation. Paint republishes a
+/// kept recording under a new header only for live property-value changes;
+/// a resource or retained-scroll update replaces one of these backings.
+fn SharesRecording(previous: &paint::PaintArtifact, current: &paint::PaintArtifact) -> bool {
+    Arc::ptr_eq(&previous.items, &current.items)
+        && previous.display_items.PtrEq(&current.display_items)
+        && previous.chunks.PtrEq(&current.chunks)
+        && Arc::ptr_eq(&previous.image_content_revisions, &current.image_content_revisions)
+        && Arc::ptr_eq(&previous.resource_changed_chunks, &current.resource_changed_chunks)
+        && match (&previous.resources, &current.resources) {
+            (None, None) => true,
+            (Some(previous), Some(current)) => Arc::ptr_eq(previous, current),
+            _ => false,
+        }
+}
+
 /// This adapter has no resident state: the native factory takes all value
 /// capabilities from its call argument. It prevents overlapping mutable
 /// PendingServices/shared PACServices borrows of the same capability owner.
@@ -942,6 +960,19 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             );
         }
         if let Some(previous) = previous_artifact {
+            // LocalFrameView::PaintTree calls SetNeedsUpdateAfterRepaint only
+            // after a PaintController cycle committed a new artifact
+            // (local_frame_view.cc:3185-3227). A frame that kept the artifact
+            // pushes the very same object, or, when only live property values
+            // changed, a new header over the very same recording backings;
+            // either leaves PAC's update type alone, so a pending
+            // raster-inducing scroll stays on its fast path instead of being
+            // promoted to a full update by an identical "repaint"
+            // (paint_artifact_compositor.cc:82-112). Property changes still
+            // reach SetNeedsUpdate below; a resource or retained-scroll
+            // version replaces a backing and is classified as before.
+            let repainted = !Arc::ptr_eq(previous, input.artifact())
+                && !SharesRecording(previous, input.artifact());
             // Chromium's ScrollbarDisplayItem retains a live cc::Scrollbar
             // adapter. PaintedScrollbarLayer can therefore reuse its layer on
             // the repaint fast path and still observe changing geometry and
@@ -952,15 +983,20 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             // leave PaintedScrollbarLayer attached to the old snapshot.
             // Promote only those repaints to the canonical full layer update;
             // all other repaint and resize fast paths remain unchanged.
-            let scrollbar_inputs_changed = previous
-                .display_items
-                .iter()
-                .filter_map(|item| item.scrollbar.as_ref())
-                .ne(input
-                    .artifact()
+            // A shared display-item list carries the same payloads.
+            let scrollbar_inputs_changed = repainted
+                && !previous
+                    .display_items
+                    .PtrEq(&input.artifact().display_items)
+                && previous
                     .display_items
                     .iter()
-                    .filter_map(|item| item.scrollbar.as_ref()));
+                    .filter_map(|item| item.scrollbar.as_ref())
+                    .ne(input
+                        .artifact()
+                        .display_items
+                        .iter()
+                        .filter_map(|item| item.scrollbar.as_ref()));
             // Blink's PrePaint calls LocalFrameView::
             // SetPaintArtifactCompositorNeedsUpdate when a property node
             // changed beyond composited values, before LocalFrameView calls
@@ -975,7 +1011,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                 || unabsorbed_scroll_offset_change;
             if property_trees_changed || scrollbar_inputs_changed {
                 pac.SetNeedsUpdate();
-            } else {
+            } else if repainted {
                 pac.SetNeedsUpdateAfterRepaint(previous, input.artifact(), self);
             }
         }

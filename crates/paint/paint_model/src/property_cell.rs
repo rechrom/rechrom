@@ -124,6 +124,21 @@ pub fn ClearClipCache() {
     })
 }
 
+/// Count of property-node change markers raised on this document sequence
+/// (every `AddChanged` with a change, paint_property_node.h:185-188). Paint
+/// reads it to tell whether a frame that kept its artifact still changed
+/// live property values that the compositor push must observe; it is a
+/// sequence value like the GeometryMapper generations, never artifact state.
+#[inline]
+pub fn PropertyChangeEpoch() -> u64 {
+    CHANGE_EPOCH.with(Cell::get)
+}
+
+#[inline]
+pub(crate) fn NotePropertyChange() {
+    CHANGE_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+}
+
 impl fmt::Debug for PropertyAccess {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -136,6 +151,7 @@ impl fmt::Debug for PropertyAccess {
 thread_local! {
     static SEQUENCE: PaintSequenceId = PaintSequenceId::allocate();
     static GENERATIONS: Cell<[u32; 2]> = const { Cell::new([1, 1]) };
+    static CHANGE_EPOCH: Cell<u64> = const { Cell::new(0) };
     static ACCESS: RefCell<PropertyAccess> = RefCell::new(PropertyAccess::new());
 }
 

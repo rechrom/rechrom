@@ -474,12 +474,14 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                     // item comparison only for a different PaintArtifact
                     // object: an artifact Paint did not re-record stays the
                     // same object, so the invalidation reasons recorded with
-                    // its last repaint are never replayed. Paint's commit
-                    // republishes an unchanged recording under a new Arc (it
-                    // stamps commit-time lookup values on its owner) while
+                    // its last repaint are never replayed. Paint keeps that
+                    // same Arc for a frame without repaint; it versions an
+                    // unchanged recording under a new Arc only for a value
+                    // outside the recording (a PrePaint property-tree update
+                    // generation, a retained scroll step's chunk flags),
                     // keeping the recording identity, which is therefore the
-                    // same-artifact proof here. A resource change still
-                    // compares the display items, as before.
+                    // fallback same-artifact proof here. A resource change
+                    // still compares the display items, as before.
                     let same_artifact = Arc::ptr_eq(chunks.artifact(), &old_artifact);
                     let recording_revision = chunks.artifact().RecordingRevision();
                     let same_recording = same_artifact

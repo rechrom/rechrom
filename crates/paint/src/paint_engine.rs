@@ -678,7 +678,7 @@ fn RecordPaint(
     prepared: Option<PreparedPrePaint>,
     reuse_admissible: bool,
 ) -> (
-    PaintRecording,
+    Option<PaintRecording>,
     paint_record::SubsequencesData,
     crate::performance::PaintPerformanceSnapshot,
 ) {
@@ -782,7 +782,7 @@ fn RecordPaint(
     //      SelfOrDescendantNeedsRepaint(); otherwise the persistent data keeps
     //      the previous PaintArtifact. Live property nodes already carry this
     //      PrePaint's values, so a property-only frame records nothing.
-    if let Some(previous) = previous.as_ref().filter(|previous| {
+    if previous.as_ref().is_some_and(|previous| {
         reuse_admissible
             && !pre_paint.RootNeedsRepaint(&paint_tree)
             && previous.compositor_viewport == output.compositor_viewport
@@ -797,8 +797,13 @@ fn RecordPaint(
             let _trace = browser_tracing::span("prepaint", "PrePaint.RetainTree");
             pre_paint.RetainTree(paint_tree);
         }
+        // No PaintController ran, so nothing is committed: the persistent
+        // data keeps the very same artifact object (`None` here), which is
+        // what RasterInvalidator's identity check relies on
+        // (raster_invalidator.cc:293-301) and what keeps the shared artifact
+        // free of any per-frame write.
         return (
-            PaintRecording::clone(previous),
+            None,
             previous_subsequences,
             crate::performance::PaintPerformanceSnapshot {
                 prepaint: pre_paint.stats,
@@ -974,7 +979,7 @@ fn RecordPaint(
         );
     }
     (
-        output,
+        Some(output),
         subsequences,
         crate::performance::PaintPerformanceSnapshot {
             prepaint: pre_paint.stats,
@@ -1003,6 +1008,18 @@ pub struct PaintEngine {
     foreign_layers: foundation::TrustedIdentityHashMap<u64, Arc<dyn ForeignLayer>>,
     foreign_layers_changed: bool,
     recorded_since_commit: bool,
+    /// A PaintController cycle committed a new artifact since the last
+    /// CommitPaintResult. Chromium validates clients and clears
+    /// `client_is_just_created` only at the end of such a cycle
+    /// (PaintController::~PaintController, paint_controller.cc:127-143);
+    /// a frame that reused the artifact writes nothing into it.
+    repainted_since_commit: bool,
+    /// `property_cell::PropertyChangeEpoch` when the current artifact object
+    /// was published. A kept artifact is republished as a new header (every
+    /// recording Arc shared) only when live property values changed since,
+    /// so the compositor push still runs for them; otherwise it keeps its
+    /// identity.
+    published_property_epoch: u64,
     /// The editing state the current artifact was recorded with.
     last_editing: Option<EditingPaintState>,
 }
@@ -1034,7 +1051,7 @@ impl PaintEngine {
         self.last_editing = Some(editing.clone());
         self.foreign_layers_changed = false;
         self.recorded_since_commit = true;
-        let (mut result, subsequences, performance) = RecordPaint(
+        let (result, subsequences, performance) = RecordPaint(
             &mut self.pre_paint,
             layout_result,
             source_lease,
@@ -1046,7 +1063,6 @@ impl PaintEngine {
             prepared,
             reuse_admissible,
         );
-        result.canvas_document = document;
         // This recording consumed every PrePaint walk so far; the retained
         // scroll path may again trust the live dirty bits against it.
         self.pre_paint.MarkPrePaintRecorded();
@@ -1055,10 +1071,42 @@ impl PaintEngine {
             self.retained_scroll_state_initialized = false;
         }
         self.performance = performance;
-        self.persistent_data.CommitNewDisplayItemsWithSubsequences(
-            paint_commit::CommitArtifact(result),
-            subsequences,
-        );
+        let property_epoch = paint_model::property_cell::PropertyChangeEpoch();
+        let property_values_changed =
+            std::mem::replace(&mut self.published_property_epoch, property_epoch) != property_epoch;
+        let artifact = match result {
+            // PaintController::CommitNewDisplayItems: a new artifact object
+            // replaces the current one (paint_controller.cc:84-91,823-848);
+            // its clients are validated by the next CommitPaintResult.
+            Some(mut recording) => {
+                recording.canvas_document = document;
+                self.repainted_since_commit = true;
+                paint_commit::CommitArtifact(recording)
+            }
+            // LocalFrameView::PaintTree without a repaint keeps the current
+            // artifact object (local_frame_view.cc:3185-3227), and nothing
+            // is written into it. Chromium's PrePaint pushes changed live
+            // property values to PAC directly; here they reach Layerize with
+            // the next artifact push, which Page skips for an artifact object
+            // it already pushed. So when live property values changed since
+            // this object was published, republish the same recording under
+            // a new header: a shallow clone sharing every recording Arc
+            // (items, display items, chunks, resources), never a chunk copy.
+            None => {
+                let current = self
+                    .persistent_data
+                    .GetPaintArtifactMut()
+                    .expect("artifact reuse requires a current artifact");
+                if property_values_changed || current.canvas_document != document {
+                    let mut header = PaintRecording::clone(&**current);
+                    header.canvas_document = document;
+                    *current = Arc::new(header);
+                }
+                current.clone()
+            }
+        };
+        self.persistent_data
+            .CommitNewDisplayItemsWithSubsequences(artifact, subsequences);
         if let Some(lifecycle) = lifecycle {
             lifecycle.AdvanceTo(PaintLifecyclePhase::PaintClean);
         }
@@ -1312,20 +1360,43 @@ impl PaintLifecycle for PaintEngine {
     fn CommitPaintResult(&mut self) -> PaintOutput {
         let mut trace = browser_tracing::span("paint_commit", "PaintCommit.Publish");
         self.recorded_since_commit = false;
-        let artifact = Arc::make_mut(
-            self.persistent_data
-                .GetPaintArtifactMut()
-                .expect("Paint must complete before commit"),
-        );
-        let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
-        artifact.property_tree_update_generation =
-            self.pre_paint.property_node_store.CompositorUpdateGeneration();
+        let repainted = std::mem::take(&mut self.repainted_since_commit);
+        let generation = self.pre_paint.property_node_store.CompositorUpdateGeneration();
+        let current = self
+            .persistent_data
+            .GetPaintArtifactMut()
+            .expect("Paint must complete before commit");
+        // Source: paint_controller.cc:127-143. Only the PaintController cycle
+        // that produced a new artifact validates its clients and clears its
+        // chunks' client_is_just_created; that artifact has not been handed
+        // to Page or Layerize yet, so the write is in place. A frame that
+        // kept the current artifact (LocalFrameView::PaintTree without
+        // repaint, local_frame_view.cc:3185-3227) has no clients to validate
+        // and leaves the shared artifact untouched.
+        let clients = if repainted {
+            let artifact = Arc::make_mut(current);
+            let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
+            artifact.property_tree_update_generation = generation;
+            clients
+        } else {
+            // LocalFrameView::SetPaintArtifactCompositorNeedsUpdate's typed
+            // value (local_frame_view.cc:3545-3563). It versions the shared
+            // artifact only when PrePaint actually changed property nodes
+            // beyond composited values; the copy is the shallow artifact
+            // header, every recording Arc stays shared.
+            if current.property_tree_update_generation != generation {
+                Arc::make_mut(current).property_tree_update_generation = generation;
+            }
+            std::collections::HashSet::new()
+        };
+        let recording_revision = current.recording_revision;
         self.performance.commit = paint_commit::PaintCommitMetrics {
             clients: clients.len(),
-            recording_revision: artifact.recording_revision,
+            recording_revision,
         };
         trace.set("clients", clients.len() as f64);
-        trace.set("recording_revision", artifact.recording_revision as f64);
+        trace.set("repainted", repainted as u8 as f64);
+        trace.set("recording_revision", recording_revision as f64);
         self.pre_paint.CommitClients(clients.iter().copied());
         PaintOutput::new(
             self.persistent_data
@@ -1558,9 +1629,13 @@ impl PaintPropertyUpdates for PaintEngine {
         );
         trace.set("records_reused", result.is_ok() as u8 as f64);
         if result.is_ok() {
-            if let Some(artifact) = self.persistent_data.GetPaintArtifactMut() {
-                Arc::make_mut(artifact).property_tree_update_generation =
-                    self.pre_paint.property_node_store.CompositorUpdateGeneration();
+            let generation = self.pre_paint.property_node_store.CompositorUpdateGeneration();
+            if let Some(artifact) = self
+                .persistent_data
+                .GetPaintArtifactMut()
+                .filter(|artifact| artifact.property_tree_update_generation != generation)
+            {
+                Arc::make_mut(artifact).property_tree_update_generation = generation;
             }
         }
         if let Ok(update) = &result {
