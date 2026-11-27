@@ -173,6 +173,27 @@ pub enum PaintPropertyNodeKind {
     Clip,
 }
 
+/// A shared reference to an existing live node of one kind, for
+/// [`ObjectPaintProperties::AdoptSlotNode`].
+#[derive(Clone, Debug)]
+pub enum PaintPropertySlotNodeRef {
+    Transform(Arc<TransformPaintPropertyNode>),
+    Scroll(Arc<ScrollPaintPropertyNode>),
+    Effect(Arc<EffectPaintPropertyNode>),
+    Clip(Arc<ClipPaintPropertyNode>),
+}
+
+impl PaintPropertySlotNodeRef {
+    pub fn Kind(&self) -> PaintPropertyNodeKind {
+        match self {
+            Self::Transform(_) => PaintPropertyNodeKind::Transform,
+            Self::Scroll(_) => PaintPropertyNodeKind::Scroll,
+            Self::Effect(_) => PaintPropertyNodeKind::Effect,
+            Self::Clip(_) => PaintPropertyNodeKind::Clip,
+        }
+    }
+}
+
 macro_rules! object_paint_properties {
     ($(
         $kind:ident $node:ty, $has:ident, $for_nodes:ident => [
@@ -261,6 +282,29 @@ macro_rules! object_paint_properties {
             pub fn HasSlot(&self, slot: ObjectPaintPropertySlot) -> bool {
                 match slot {
                     $($(ObjectPaintPropertySlot::$slot => self.$field.is_some(),)*)*
+                }
+            }
+
+            /// Stores `node`, an existing live node of `slot`'s kind, in
+            /// `slot` without creating a second node. S2 dual-write
+            /// transition: the walker's keyed store still creates and
+            /// updates the node and this slot names the same `Arc`, so each
+            /// slot keeps one live node (object_paint_properties.h:528-551).
+            pub fn AdoptSlotNode(
+                &mut self,
+                slot: ObjectPaintPropertySlot,
+                node: PaintPropertySlotNodeRef,
+            ) {
+                match (slot, node) {
+                    $($(
+                        (
+                            ObjectPaintPropertySlot::$slot,
+                            PaintPropertySlotNodeRef::$kind(node),
+                        ) => self.$field = Some(node),
+                    )*)*
+                    (slot, node) => {
+                        panic!("{slot:?} cannot hold a {:?} node", node.Kind())
+                    }
                 }
             }
 
