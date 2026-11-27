@@ -1360,6 +1360,26 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
                 HostResult::default()
             }));
         }
+        // Window-owned operations (performance.now(), timers and animation
+        // frames: window_performance.cc, dom_window_timers.cc,
+        // LocalDOMWindow::requestAnimationFrame) run inside invoke() itself;
+        // no DOM operation prepares a continuation for them.
+        if call.symbol == HostSymbol::kNone
+            && call.operation == HostOperation::kCall
+            && (call.receiver == PERFORMANCE
+                || (call.receiver == 0
+                    && matches!(
+                        call.member,
+                        "setTimeout"
+                            | "setInterval"
+                            | "clearTimeout"
+                            | "clearInterval"
+                            | "requestAnimationFrame"
+                            | "cancelAnimationFrame"
+                    )))
+        {
+            return None;
+        }
         self.InvocationDOM(call)
             .borrow_mut()
             .PrepareInvocation(call)

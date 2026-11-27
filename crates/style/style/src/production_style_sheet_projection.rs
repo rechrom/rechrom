@@ -446,7 +446,12 @@ fn InlineParserMode(standard_mode: bool) -> crate::parser::css_parser_mode::CSSP
     }
 }
 
-fn CSSOMPropertyID(name: &str) -> Option<foundation::CSSPropertyID> {
+/// The unresolved CSSPropertyID of a CSSOM property name (CSSPropertyID
+/// lookup in css_style_declaration.cc CssPropertyInfo and
+/// AbstractPropertySetCSSStyleDeclaration::setProperty): aliases keep their
+/// alias id, which SetPropertyInternal resolves. Bindings resolve a script
+/// name once and pass the typed id to SetInlineCSSProperty*.
+pub fn CSSOMPropertyID(name: &str) -> Option<foundation::CSSPropertyID> {
     use foundation::{CSSPropertyID, String as CSSString, StringView};
     if name.starts_with("--") {
         let source = CSSString::FromUtf8(name.as_bytes());

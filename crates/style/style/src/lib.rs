@@ -171,7 +171,7 @@ pub use style_parser::production_css_execution_context::{
 };
 
 pub use production_style_sheet_projection::{
-    SetInlineCSSDeclarationWithContext, SetInlineCSSPropertyWithContext,
+    CSSOMPropertyID, SetInlineCSSDeclarationWithContext, SetInlineCSSPropertyWithContext,
 };
 
 pub use production_style_sheet_projection::GetInlineCSSDeclarationWithContext;
