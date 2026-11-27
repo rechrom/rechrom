@@ -17,7 +17,10 @@ use paint_model::{CullRect, PaintPhase, PaintRect, PaintResult};
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
 use crate::display_item_id::DisplayItemIdType;
-use crate::paint_context::ScopedPaintChunkProperties;
+use crate::paint_context::{
+    ContentsTransform, HasOwnPropertyRole, LocalBorderBoxProperties, ObjectReplayScopes,
+    PaintOffsetTranslation, ScopedPaintChunkProperties,
+};
 use crate::paint_info::PaintInfo;
 use crate::{DisplayItem, DisplayItemType};
 
@@ -64,8 +67,8 @@ pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
     contents.y += node.paint_offset.y;
     if fragment.paint.SvgViewBox().is_some() {
         contents = SourceToDestinationRect(
-            &node.properties.nodes.transform,
-            &node.contents_properties.nodes.transform,
+            &LocalBorderBoxProperties(node).transform,
+            &ContentsTransform(node),
             contents,
         )
         .map(PaintRect::enclosing)
@@ -139,13 +142,16 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         let layer_adjusted = paint_info.phase == PaintPhase::kOverlayOverflowControls
             || (node.is_paint_layer && node.is_self_painting_layer);
         let svg_child = IsSvgLayoutChild(fragment.paint.SourceKind());
+        // Source: scoped_paint_state.cc:56-81. The occurrence's own
+        // ObjectPaintProperties::PaintOffsetTranslation slot.
+        let paint_offset_translation = PaintOffsetTranslation(node);
         let paint_offset_translation_as_drawing = !layer_adjusted
             && !svg_child
-            && node.paint_offset_translation.is_some()
+            && paint_offset_translation.is_some()
             && paint_info.context.borrow().InDrawingRecorder();
         if paint_offset_translation_as_drawing {
             let translation = paint_model::property_cell::with_access(|access| {
-                *node.paint_offset_translation.as_ref().unwrap().Matrix(access)
+                *paint_offset_translation.unwrap().Matrix(access)
             });
             paint_info.context.borrow_mut().Append(
                 DisplayItem {
@@ -171,10 +177,10 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
             // ObjectPaintProperties has no ElementCanvasTransform slot in the
             // current typed boundary. The other individual-transform assertions
             // remain runtime checks, matching ScopedPaintState's source contract.
-            debug_assert!(!node.HasOwnPropertyRole(PaintPropertyRole::Translate));
-            debug_assert!(!node.HasOwnPropertyRole(PaintPropertyRole::Rotate));
-            debug_assert!(!node.HasOwnPropertyRole(PaintPropertyRole::Scale));
-            debug_assert!(!node.HasOwnPropertyRole(PaintPropertyRole::Offset));
+            debug_assert!(!HasOwnPropertyRole(node, PaintPropertyRole::Translate));
+            debug_assert!(!HasOwnPropertyRole(node, PaintPropertyRole::Rotate));
+            debug_assert!(!HasOwnPropertyRole(node, PaintPropertyRole::Scale));
+            debug_assert!(!HasOwnPropertyRole(node, PaintPropertyRole::Offset));
         }
         let chunk_properties = if paint_info.phase == PaintPhase::kMask {
             // PaintLayerPainter's source path installs MaskProperties before
@@ -191,7 +197,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
                 node,
                 DisplayItemIdType::PaintPhaseToDrawingType(paint_info.phase),
             ))
-        } else if node.applies_transform || node.applies_effect {
+        } else if ObjectReplayScopes::OwnsTransformOrEffect(node) {
             Some(ScopedPaintChunkProperties::new(
                 paint_info.context,
                 node,
@@ -226,9 +232,8 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         {
             return true;
         }
-        let may_install = node.applies_transform
-            || node.applies_effect
-            || (node.paint_offset_translation.is_some()
+        let may_install = ObjectReplayScopes::OwnsTransformOrEffect(node)
+            || (PaintOffsetTranslation(node).is_some()
                 && paint_info.context.borrow().InDrawingRecorder());
         if !may_install && !fragment.IsPageBorderBox() {
             return true;
@@ -352,8 +357,8 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
         // contents transform differs from the border-box transform) adds the
         // box's ScrollOrigin().
         if !Arc::ptr_eq(
-            &node.properties.nodes.transform,
-            &node.contents_properties.nodes.transform,
+            &LocalBorderBoxProperties(node).transform,
+            &ContentsTransform(node),
         ) {
             if let Some(scroll_origin) = fragment.ViewScrollOrigin() {
                 state.paint_offset.x += scroll_origin.x;
