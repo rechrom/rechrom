@@ -46,7 +46,54 @@ impl AnalysisMatrix for Matrix {
         }
     }
 }
-pub struct NoDrawCanvas(pub(crate) core::pin::Pin<Box<SkNoDrawCanvas<'static>>>);
+/// The analysis canvas of one SolidColorAnalyzer::DetermineIfSolidColor call.
+///
+/// cc/paint/solid_color_analyzer.cc:232-233 constructs an `SkNoDrawCanvas`
+/// on the stack for every analysis; that is a few stores in C++. The
+/// translated canvas is a pinned heap owner whose construction allocates the
+/// canvas, its MCRec storage and its SkNoPixelsDevice, and whose drop
+/// releases them again. Each thread therefore keeps its one idle canvas and
+/// re-initializes it with Skia's own reuse entry point,
+/// `SkNoDrawCanvas::resetCanvas` (include/utils/SkNoDrawCanvas.h:30;
+/// src/core/SkCanvas.cpp:287-302: restore to the base save, reset the root
+/// no-pixels device to the new bounds, reset the MCRec matrix and clip).
+/// The analysis observes exactly the state of a newly constructed canvas.
+pub struct NoDrawCanvas(core::mem::ManuallyDrop<core::pin::Pin<Box<SkNoDrawCanvas<'static>>>>);
+thread_local! {
+    static IDLE_NO_DRAW_CANVAS: core::cell::Cell<Option<core::pin::Pin<Box<SkNoDrawCanvas<'static>>>>> =
+        const { core::cell::Cell::new(None) };
+}
+impl NoDrawCanvas {
+    fn with_size(width: i32, height: i32) -> Self {
+        let idle: Option<core::pin::Pin<Box<SkNoDrawCanvas<'static>>>> =
+            IDLE_NO_DRAW_CANVAS.try_with(core::cell::Cell::take).ok().flatten();
+        if let Some(mut canvas) = idle {
+            // Safety: the idle canvas is the original pinned SkNoDrawCanvas
+            // allocation built by SkNoDrawCanvas::new, so its root device is
+            // the complete SkNoPixelsDevice, and no device or canvas
+            // reference to it is outstanding while it sits idle.
+            if unsafe { canvas.as_mut().resetCanvas(width, height) }.is_ok() {
+                return Self(core::mem::ManuallyDrop::new(canvas));
+            }
+        }
+        Self(core::mem::ManuallyDrop::new(SkNoDrawCanvas::new(width, height)))
+    }
+    fn pinned(&self) -> core::pin::Pin<&SkNoDrawCanvas<'static>> {
+        (*self.0).as_ref()
+    }
+    fn pinned_mut(&mut self) -> core::pin::Pin<&mut SkNoDrawCanvas<'static>> {
+        (*self.0).as_mut()
+    }
+}
+impl Drop for NoDrawCanvas {
+    fn drop(&mut self) {
+        // Safety: the field is taken exactly once, here, and never read again.
+        let canvas = unsafe { core::mem::ManuallyDrop::take(&mut self.0) };
+        // A canvas that cannot be parked (thread-local storage already torn
+        // down) is dropped with the closure.
+        let _ = IDLE_NO_DRAW_CANVAS.try_with(move |idle| drop(idle.replace(Some(canvas))));
+    }
+}
 fn bounds(r: AnalysisRect) -> Rect {
     Rect::MakeLTRB(r.left, r.top, r.right, r.bottom)
 }
@@ -64,16 +111,16 @@ fn matrix_col_major(values: [f32; 16]) -> SkM44 {
 }
 impl NoDrawCanvas {
     fn as_source(&self) -> &SkCanvas<'static> {
-        self.0.as_ref().canvas_ref()
+        self.pinned().canvas_ref()
     }
     fn save(&mut self) {
         unsafe {
-            self.0.as_mut().canvas().save();
+            self.pinned_mut().canvas().save();
         }
     }
     fn restore(&mut self) {
         unsafe {
-            let mut canvas = self.0.as_mut().canvas();
+            let mut canvas = self.pinned_mut().canvas();
             let address = core::ptr::NonNull::from(canvas.as_mut().get_unchecked_mut());
             SkCanvas::restore_raw(address).expect("SkNoDrawCanvas restore");
         }
@@ -85,17 +132,17 @@ impl NoDrawCanvas {
     }
     fn translate_by(&mut self, x: f32, y: f32) {
         unsafe {
-            self.0.as_mut().canvas().translate(x, y);
+            self.pinned_mut().canvas().translate(x, y);
         }
     }
     fn concat_m44(&mut self, matrix: &SkM44) {
         unsafe {
-            self.0.as_mut().canvas().concat44(matrix);
+            self.pinned_mut().canvas().concat44(matrix);
         }
     }
     fn clip_rect(&mut self, rect: Rect, difference: bool, aa: bool) {
         unsafe {
-            self.0.as_mut().canvas().clipRect(
+            self.pinned_mut().canvas().clipRect(
                 &rect,
                 if difference {
                     SkClipOp::kDifference
@@ -330,7 +377,7 @@ impl SolidColorBackend<CpuPaintOpBuffer<SkRegion>> for CpuSolidColorBackend {
     type RRectShape<'a> = RRectShape;
     type TraceScope = super::PaintTraceScope;
     fn MakeNoDrawCanvas(&self, w: i32, h: i32) -> NoDrawCanvas {
-        NoDrawCanvas(SkNoDrawCanvas::new(w, h))
+        NoDrawCanvas::with_size(w, h)
     }
     fn Flags<'a>(&'a self, op: CpuPaintOpRef<'a, SkRegion>) -> Flags<'a> {
         Flags(op)
