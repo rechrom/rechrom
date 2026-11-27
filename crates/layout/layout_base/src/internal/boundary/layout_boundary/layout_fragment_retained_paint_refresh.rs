@@ -65,6 +65,10 @@ pub(super) fn refresh_retained_paint_inputs(
             }
         }
     }
+    let mut retained_style_trace = layout_commit::fragment_trace::span(
+        layout_commit::fragment_trace::TracePhase::RefreshRetainedPaintStyle,
+    );
+    retained_style_trace.set("objects", objects.len() as f64);
     for &object in &objects {
         let client_id = unsafe { &*(object as *const DisplayItemClient) }.Id() as u64;
         // Only the style-derived slice changes on a paint-only restyle;

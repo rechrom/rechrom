@@ -194,6 +194,14 @@ impl PaintLayer {
         }
         let parent_root = unsafe { &*parent }.GetLayoutObject() as *const LayoutBoxModelObject
             as *const LayoutObject;
+        self.NextSiblingWithin(parent_root)
+    }
+
+    /// NextSibling() of a child layer whose parent layer's LayoutObject is
+    /// `parent_root`, as when iterating that parent's children: the same
+    /// LayoutObject walk without re-deriving the parent through
+    /// EnclosingLayer() at every step.
+    fn NextSiblingWithin(&self, parent_root: *const LayoutObject) -> *mut PaintLayer {
         let object = self.GetLayoutObject() as *const LayoutBoxModelObject as *const LayoutObject;
         let mut next = unsafe { &*object }.NextInPreOrderAfterChildren(parent_root);
         while !next.is_null() {
@@ -748,13 +756,15 @@ impl PaintLayer {
         self.has_descendant_with_transform_anim_ = false;
 
         let can_contain_abs = self.GetLayoutObject().CanContainAbsolutePositionObjects();
+        let self_root =
+            self.GetLayoutObject() as *const LayoutBoxModelObject as *const LayoutObject;
         let mut child = if self.GetLayoutObject().ChildPrePaintBlockedByDisplayLock() {
             std::ptr::null_mut()
         } else {
             self.FirstChild()
         };
         while !child.is_null() {
-            let next = unsafe { &*child }.NextSibling();
+            let next = unsafe { &*child }.NextSiblingWithin(self_root);
             let child_layer = unsafe { &mut *child };
             child_layer.UpdateDescendantDependentFlags();
             let child_object = child_layer.GetLayoutObject();
@@ -813,11 +823,19 @@ impl PaintLayer {
             unsafe { &mut *self.layout_object_.Get() }.SetNeedsPaintPropertyUpdate();
         }
 
-        self.Update3DTransformedDescendantStatus();
+        {
+            let _trace = layout_commit::fragment_trace::span(
+                layout_commit::fragment_trace::TracePhase::Update3DTransformedDescendantStatus,
+            );
+            self.Update3DTransformedDescendantStatus();
+        }
 
         self.needs_descendant_dependent_flags_update_ = false;
         if self.IsSelfPaintingLayer() && self.needs_visual_overflow_recalc_ {
             if !self.GetLayoutObject().ChildPrePaintBlockedByDisplayLock() {
+                let _trace = layout_commit::fragment_trace::span(
+                    layout_commit::fragment_trace::TracePhase::RecalcLayerVisualOverflow,
+                );
                 let object = self.layout_object_.Get().cast::<LayoutObject>();
                 unsafe { &mut *object }.RecalcVisualOverflow();
             }
@@ -860,6 +878,8 @@ impl PaintLayer {
     // membership walk without retaining a second mutable z-order list.
     fn Update3DTransformedDescendantStatus(&mut self) {
         self.has_3d_transformed_descendant_ = false;
+        let self_root =
+            self.GetLayoutObject() as *const LayoutBoxModelObject as *const LayoutObject;
         let mut child = self.FirstChild();
         while !child.is_null() {
             let child_layer = unsafe { &*child };
@@ -877,11 +897,13 @@ impl PaintLayer {
                 self.has_3d_transformed_descendant_ = true;
                 return;
             }
-            child = child_layer.NextSibling();
+            child = child_layer.NextSiblingWithin(self_root);
         }
     }
 
     fn StackedSubtreeHas3DTransformedDescendant(layer: *mut PaintLayer) -> bool {
+        let layer_root = unsafe { &*layer }.GetLayoutObject() as *const LayoutBoxModelObject
+            as *const LayoutObject;
         let mut child = unsafe { &*layer }.FirstChild();
         while !child.is_null() {
             let child_layer = unsafe { &*child };
@@ -897,7 +919,7 @@ impl PaintLayer {
             {
                 return true;
             }
-            child = child_layer.NextSibling();
+            child = child_layer.NextSiblingWithin(layer_root);
         }
         false
     }

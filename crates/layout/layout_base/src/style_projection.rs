@@ -120,6 +120,23 @@ impl<'a> StyleResourceBindings<'a> {
             && *self.replaced_image_shader == data.replaced_image_shader
     }
 
+    /// Whether `style` already carries exactly the values `ApplyTo` would
+    /// write. Reads the envelope's projection through `Deref` only: writing
+    /// through `PaintStyle`'s `DerefMut` copy-on-writes the whole shared
+    /// PaintStyleData, which a paint-only restyle that keeps every resource
+    /// edge (Chromium leaves its resource clients untouched) must not pay.
+    pub(crate) fn MatchesApplied(&self, style: &LayoutComputedStyle) -> bool {
+        let paint: &crate::internal::paint_input::PaintStyleData = &style.paint;
+        (std::sync::Arc::ptr_eq(self.svg_filter_graphs, &paint.svg_filter_graphs)
+            || **self.svg_filter_graphs == *paint.svg_filter_graphs)
+            && *self.svg_clip_resources == style.svg_clip_resources
+            && *self.svg_mask_resource == paint.svg_mask_resource
+            && *self.svg_fill_server == paint.svg_fill_server
+            && *self.svg_stroke_server == paint.svg_stroke_server
+            && self.svg_markers == paint.svg_markers.as_slice()
+            && *self.replaced_image_shader == paint.replaced_image_shader
+    }
+
     pub(crate) fn ApplyTo(&self, style: &mut LayoutComputedStyle) {
         style.paint.svg_filter_graphs = std::sync::Arc::clone(self.svg_filter_graphs);
         style.svg_clip_resources = self.svg_clip_resources.clone();
