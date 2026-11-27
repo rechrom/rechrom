@@ -766,6 +766,11 @@ pub trait ResidentBoxGeometry {
     fn ViewScrollsOverflow(&self) -> bool {
         self.ViewScrollGeometry().2
     }
+    /// `ViewScrollGeometry()`'s scroll size alone (LayoutBox::ScrollWidth /
+    /// ScrollHeight), without the CSSOM client size or ScrollsOverflow.
+    fn ViewScrollSize(&self) -> Size {
+        self.ViewScrollGeometry().0
+    }
     /// Overflow-control paint data from the resident box's scrollable area.
     fn ViewScrollbars(&self) -> Option<Arc<ScrollbarPaintData>>;
     /// The resident box's self outline rects (AddSelfOutlineRects).
@@ -1460,6 +1465,21 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 crate::internal::boundary::layout_boundary::LiveScrollGeometry(layout_box)
             }
             None => (self.paint.scroll_size, None, false),
+        }
+    }
+
+    fn ViewScrollSize(&self) -> Size {
+        let layout_box = self.ResidentBoxFragment().and_then(|box_fragment| unsafe {
+            foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(
+                box_fragment.GetLayoutObject(),
+            )
+            .as_ref()
+        });
+        match layout_box {
+            Some(layout_box) => {
+                crate::internal::boundary::layout_boundary::LiveScrollSize(layout_box)
+            }
+            None => self.paint.scroll_size,
         }
     }
 

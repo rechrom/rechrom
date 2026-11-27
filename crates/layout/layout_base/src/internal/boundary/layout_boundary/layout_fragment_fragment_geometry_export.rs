@@ -564,6 +564,24 @@ pub(crate) fn LiveScrollGeometry(layout_box: &LayoutBox) -> (Size, Option<Size>,
     (scroll_size, client_size, scrolls_overflow)
 }
 
+/// `LiveScrollGeometry(layout_box).0` alone: LayoutBox::ScrollWidth/Height,
+/// as ViewPainter reads them for the document rect (view_painter.cc:126-135),
+/// without the CSSOM client size or ScrollsOverflow.
+pub(crate) fn LiveScrollSize(layout_box: &LayoutBox) -> Size {
+    let object: &LayoutObject = layout_box;
+    if object.IsSVG()
+        && !object.IsSVGRoot()
+        && !object.IsSVGText()
+        && !object.IsSVGForeignObject()
+    {
+        return Size::default();
+    }
+    Size {
+        width: Number(layout_box.ScrollWidth()),
+        height: Number(layout_box.ScrollHeight()),
+    }
+}
+
 /// The box's computed box-decoration-break, as BoxPainterBase and
 /// NinePieceImageGrid read it from the fragment's ComputedStyle.
 pub(crate) fn LiveBoxDecorationBreak(box_fragment: &PhysicalBoxFragment) -> BoxDecorationBreak {

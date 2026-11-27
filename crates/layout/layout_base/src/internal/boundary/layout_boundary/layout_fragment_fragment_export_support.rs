@@ -7,8 +7,13 @@
 
 use super::*;
 
+/// LayoutUnit::ToDouble (platform/geometry/layout_unit.h): the raw value
+/// over kFixedPointDenominator. Converting the i32 raw value directly yields
+/// the same exact f64 as the generic FixedPoint::ToDouble without its i128
+/// widening (`__floattidf`), which ran for every rect a painter reads.
+#[inline]
 pub(super) fn Number(value: LayoutUnit) -> f64 {
-    value.ToDouble()
+    f64::from(value.RawValue()) / LayoutUnit::kFixedPointDenominator as f64
 }
 
 #[inline(never)]

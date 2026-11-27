@@ -81,15 +81,15 @@ impl SVGModelObjectPainter {
         let rect = fragment
             .paint
             .SvgVisualRect()
-            .or(fragment.ViewInkOverflow())
-            .or(fragment.ViewContentsInkOverflow())
-            .or(fragment.ViewSelfInkOverflow())
+            .or_else(|| fragment.ViewInkOverflow())
+            .or_else(|| fragment.ViewContentsInkOverflow())
+            .or_else(|| fragment.ViewSelfInkOverflow())
             // Rechrom's source SVG shape object is a LayoutBlockFlow.  Its
             // LayoutBox::SelfVisualOverflowRect() is exported separately from
             // PhysicalFragment ink overflow and is the retained source value
             // corresponding to LayoutSVGModelObject::DecoratedBoundingBox().
             // Do not substitute the fragment frame when neither exists.
-            .or(fragment.ViewBoxSelfVisualOverflow())?;
+            .or_else(|| fragment.ViewBoxSelfVisualOverflow())?;
         Some(PaintRect {
             x: node.paint_offset.x + rect.offset.x,
             y: node.paint_offset.y + rect.offset.y,
