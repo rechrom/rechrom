@@ -273,7 +273,7 @@ fn sticky_constraint_reaches_the_paint_property_scroll_owner() {
         );
         let artifact = &page.CurrentPaintArtifact().unwrap();
         let sticky = artifact
-            .chunks
+            .chunks.get(&paint::artifact_access())
             .iter()
             .find_map(|chunk| {
                 let mut transform = Some(&chunk.properties.transform);
@@ -421,7 +421,7 @@ fn resizer_records_the_expanded_touch_hit_test_chunk() {
         let chunk = page
             .CurrentPaintArtifact()
             .unwrap()
-            .chunks
+            .chunks.get(&paint::artifact_access())
             .iter()
             .find(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest)
             .cloned()
@@ -441,8 +441,9 @@ fn resizer_records_the_expanded_touch_hit_test_chunk() {
         assert_eq!(chunk.bounds.height, 30.0);
 
         let artifact = &page.CurrentPaintArtifact().unwrap();
+        let access = paint::artifact_access();
         let drawing = artifact
-            .display_items
+            .display_items.get(&access)
             .iter()
             .find(|item| item.id.r#type == DisplayItemIdType::kResizer)
             .expect("platform resizer drawing");
@@ -472,7 +473,7 @@ fn transparent_scroll_hit_test_omits_the_resizer_chunk() {
         assert!(!page
             .CurrentPaintArtifact()
             .unwrap()
-            .chunks
+            .chunks.get(&paint::artifact_access())
             .iter()
             .any(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest));
     });
@@ -490,12 +491,12 @@ fn printing_suppresses_overlay_scrollbars_but_not_the_resizer() {
             true,
         );
         let artifact = &page.CurrentPaintArtifact().unwrap();
-        assert!(!artifact.display_items.iter().any(|item| matches!(
+        assert!(!artifact.display_items.get(&paint::artifact_access()).iter().any(|item| matches!(
             item.id.r#type,
             DisplayItemIdType::kScrollbarHorizontal | DisplayItemIdType::kScrollbarVertical
         )));
         assert!(artifact
-            .display_items
+            .display_items.get(&paint::artifact_access())
             .iter()
             .any(|item| item.id.r#type == DisplayItemIdType::kResizer));
     });
@@ -512,14 +513,16 @@ fn resizer_geometry_scales_from_dip() {
             2.0,
         );
         let artifact = &page.CurrentPaintArtifact().unwrap();
+        let access = paint::artifact_access();
         let touch = artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find(|chunk| chunk.id.r#type == DisplayItemIdType::kResizerScrollHitTest)
             .expect("scaled resizer touch metadata");
         assert_eq!((touch.bounds.width, touch.bounds.height), (60.0, 60.0));
+        let access = paint::artifact_access();
         let drawing = artifact
-            .display_items
+            .display_items.get(&access)
             .iter()
             .find(|item| item.id.r#type == DisplayItemIdType::kResizer)
             .expect("scaled platform resizer drawing");

@@ -1268,7 +1268,7 @@ mod tests {
         assert!(!draws[0].antialias);
         assert!(recording.first_contentful_painted);
         assert!(!recording
-            .chunks
+            .chunks.get(&crate::artifact_access::artifact_access())
             .iter()
             .any(|chunk| chunk.id.r#type == DisplayItemIdType::kHitTest));
     }
@@ -1306,8 +1306,9 @@ mod tests {
             drop(paint_info);
             drop(context);
 
+            let access = crate::artifact_access::artifact_access();
             let chunk = recording
-                .chunks
+                .chunks.get(&access)
                 .iter()
                 .find(|chunk| chunk.id.r#type == DisplayItemIdType::kHitTest)
                 .expect("SVG hit-test chunk");
@@ -1335,8 +1336,9 @@ mod tests {
                     height: 8.0,
                 }]
             );
+            let access = crate::artifact_access::artifact_access();
             let region_chunk = recording
-                .chunks
+                .chunks.get(&access)
                 .iter()
                 .find(|chunk| {
                     chunk
@@ -1407,7 +1409,7 @@ mod tests {
             rect: visual_rect,
             ..DisplayItem::default()
         }]);
-        previous.display_items.push(RecordedDisplayItem {
+        previous.display_items.make_mut().push(RecordedDisplayItem {
             is_cacheable: true,
             is_tombstone: false,
             paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
@@ -1447,10 +1449,11 @@ mod tests {
         );
         drop(paint_info);
         drop(context);
-        assert_eq!(output.display_items.len(), 1);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(output.items.len(), 1);
+        let access = crate::artifact_access::artifact_access();
         let hit_test_chunk = output
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find(|chunk| chunk.id.r#type == DisplayItemIdType::kHitTest)
             .expect("hit-test data must be rebuilt before cached drawing reuse");

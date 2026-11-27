@@ -528,7 +528,7 @@ fn svg_reflection_mask_container_is_requested_before_resource_snapshot() {
         // Reflection's downstream property clip is independently unsupported;
         // this regression covers its resource request and exact publication.
         let artifact = &page.CurrentPaintArtifact().unwrap();
-        for chunk in &artifact.chunks {
+        for chunk in artifact.chunks.get(&paint::artifact_access()) {
             for layer in chunk.properties.effect.filters.reflection_mask_layers() {
                 if let (Some(image), Some(key)) =
                     (&layer.image, &layer.document_image_container_key)

@@ -235,7 +235,7 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
                 interest_rect: Rect::new(0, 0, bounds.width(), bounds.height()),
                 debug_name: chunks
                     .artifact()
-                    .ClientDebugName(chunks.chunk(0).client_id()),
+                    .ClientDebugName(chunks.chunk(&::paint::artifact_access(), 0).client_id()),
             })
         } else {
             None

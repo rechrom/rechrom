@@ -176,9 +176,9 @@ fn git_text_metrics_probe() {
 
     let frame = page.CurrentFrame().unwrap();
     let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
-    for (chunk_index, chunk) in frame_artifact.chunks.iter().enumerate() {
+    for (chunk_index, chunk) in frame_artifact.chunks.get(&paint::artifact_access()).iter().enumerate() {
         for (semantic_offset, recorded) in frame_artifact
-            .display_items
+            .display_items.get(&paint::artifact_access())
             .ItemsInRange(chunk.begin_index as usize, chunk.end_index as usize)
             .iter()
             .enumerate()
@@ -278,8 +278,9 @@ fn git_text_metrics_probe() {
                 );
                 dom_index = dom_node.Parent();
             }
+            let access = paint::artifact_access();
             let chunk = frame_artifact
-                .chunks
+                .chunks.get(&access)
                 .iter()
                 .find(|chunk| {
                     chunk.begin_index as usize <= item_index

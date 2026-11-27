@@ -138,7 +138,7 @@ fn render(page: &Page, label: &str) -> Vec<u32> {
 fn dump_artifact(a: &std::sync::Arc<PaintArtifact>, path: &std::path::Path) {
     use std::fmt::Write;
     let mut dump = String::new();
-    for (i, c) in a.chunks.iter().enumerate() {
+    for (i, c) in a.chunks.get(&paint::artifact_access()).iter().enumerate() {
         writeln!(
             dump,
             "chunk {i} records={}..{} transform={:?} clip={:?} effect={:?}",

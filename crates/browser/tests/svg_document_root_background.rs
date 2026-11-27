@@ -33,12 +33,12 @@ fn svg_document_root_background_is_not_transferred_to_the_html_canvas() {
         >(&created.initial_frame.record)
         .unwrap();
 
-        assert!(record.artifact.display_items.iter().all(|item| item
+        assert!(record.artifact.display_items.get(&paint::artifact_access()).iter().all(|item| item
             .id
             .r#type
             .TypeAsDebugString()
             != "DocumentBackground"));
-        assert!(record.artifact.display_items.iter().any(|item| item
+        assert!(record.artifact.display_items.get(&paint::artifact_access()).iter().any(|item| item
             .id
             .r#type
             .TypeAsDebugString()

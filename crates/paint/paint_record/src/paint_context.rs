@@ -556,7 +556,7 @@ impl<'o> PaintContext<'o> {
         );
         let mut moved = cached_item;
         moved.paint_invalidation_reason = Some(foundation::PaintInvalidationReason::kNone);
-        self.output.display_items.push(moved);
+        self.output.display_items.make_mut().push(moved);
         true
     }
 
@@ -654,7 +654,7 @@ impl<'o> PaintContext<'o> {
             record_background,
             record_has_text,
         );
-        self.output.display_items.push(RecordedDisplayItem {
+        self.output.display_items.make_mut().push(RecordedDisplayItem {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
@@ -891,7 +891,7 @@ impl<'o> PaintContext<'o> {
             record_background,
             record_has_text,
         );
-        self.output.display_items.push(RecordedDisplayItem {
+        self.output.display_items.make_mut().push(RecordedDisplayItem {
             is_cacheable: client.is_cacheable,
             is_tombstone: false,
             paint_invalidation_reason: client.invalidation_reason,
@@ -943,7 +943,7 @@ impl<'o> PaintContext<'o> {
             Default::default(),
             false,
         );
-        self.output.display_items.push(item);
+        self.output.display_items.make_mut().push(item);
         self.paint_controller
             .CheckNewItem(self.output, self.skipping_cache_count != 0);
     }
@@ -1294,7 +1294,7 @@ impl<'o> PaintContext<'o> {
 
     pub fn LastChunkProperties(&self) -> Option<PropertyTreeState> {
         self.paint_controller
-            .LastChunk(self.output)
+            .LastChunk(&crate::artifact_access::artifact_access(), self.output)
             .map(|chunk| chunk.properties.clone())
     }
 
@@ -1303,13 +1303,13 @@ impl<'o> PaintContext<'o> {
     /// there is no chunk, matching the caller's `NumNewChunks() > 0` guard.
     pub fn LastChunkPropertiesSameNodes(&self, properties: &PropertyTreeState) -> bool {
         self.paint_controller
-            .LastChunk(self.output)
+            .LastChunk(&crate::artifact_access::artifact_access(), self.output)
             .is_none_or(|chunk| chunk.properties.same_nodes(properties))
     }
 
     pub fn LastChunkBounds(&self) -> Option<PaintRect> {
         self.paint_controller
-            .LastChunk(self.output)
+            .LastChunk(&crate::artifact_access::artifact_access(), self.output)
             .map(|chunk| chunk.bounds)
     }
 
@@ -2262,7 +2262,7 @@ mod opaque_record_tests {
             rect: visual_rect,
             ..Default::default()
         }]);
-        previous.display_items.push(RecordedDisplayItem {
+        previous.display_items.make_mut().push(RecordedDisplayItem {
             is_cacheable: true,
             is_tombstone: false,
             paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
@@ -2300,7 +2300,7 @@ mod opaque_record_tests {
         );
         assert!(context.UseCachedDrawingWithClient(id, client, None));
         drop(context);
-        assert_eq!(cached.display_items[0].visual_rect, visual_rect);
+        assert_eq!(cached.display_items.get(&crate::artifact_access::artifact_access())[0].visual_rect, visual_rect);
 
         let mut invalid = PaintRecording::default();
         let mut context =

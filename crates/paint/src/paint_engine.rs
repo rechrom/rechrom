@@ -51,6 +51,7 @@ pub use paint_chunk::{
     PaintTrackedElementSubRectType,
 };
 
+pub use paint_commit::{artifact_access, artifact_writer, ArtifactAccess, ArtifactAccessScope};
 pub use paint_commit::{
     DocumentPaintArtifactRecord, DocumentRecordArtifact, NewDocumentPaintArtifactRecord,
     PaintRecordForArtifact, PaintRecordForItem, ImageDependencyIndex, ImagePaintDependency, PaintArtifact,
@@ -130,7 +131,7 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
     let updated = Arc::make_mut(&mut scrolling);
     // This ownership test models a new property snapshot only; it invokes no
     // source identity, layout or recording algorithm.
-    Arc::make_mut(&mut updated.chunks[0].properties.transform)
+    Arc::make_mut(&mut updated.chunks.make_mut()[0].properties.transform)
         .state_mut()
         .matrix
         .values[13] = -12.0;
@@ -143,10 +144,15 @@ fn artifact_property_updates_share_ops_and_real_op_edits_isolate_old_frames() {
         !old.chunks.PtrEq(&scrolling.chunks),
         "only the changed chunk directory detaches"
     );
+    let artifacts = artifact_access();
     paint_model::property_cell::with_access(|a| {
-        assert_eq!(old.chunks[0].properties.transform.Matrix(a).values[13], 0.0);
-        assert_eq!(scrolling.chunks[0].properties.transform.Matrix(a).values[13], -12.0);
+        assert_eq!(old.chunks.get(&artifacts)[0].properties.transform.Matrix(a).values[13], 0.0);
+        assert_eq!(
+            scrolling.chunks.get(&artifacts)[0].properties.transform.Matrix(a).values[13],
+            -12.0
+        );
     });
+    drop(artifacts);
     Arc::make_mut(&mut Arc::make_mut(&mut scrolling).items)[0]
         .rect
         .x = 9.0;
@@ -929,16 +935,22 @@ fn RecordPaint(
     // items keep references to the live ObjectPaintProperties nodes, which
     // PrePaint updated in place, so they observe current values and parents
     // without any rebinding.
-    let record = paint_record::PaintRecordMetrics {
-        paint_ops: output.items.len(),
-        display_items: output.display_items.len(),
+    let (record, chunk) = {
+        let access = artifact_access();
+        (
+            paint_record::PaintRecordMetrics {
+                paint_ops: output.items.len(),
+                display_items: output.display_items.get(&access).len(),
+            },
+            paint_chunk::MeasureChunks(
+                output
+                    .chunks
+                    .get(&access)
+                    .iter()
+                    .map(|chunk| (chunk.begin_index, chunk.end_index)),
+            ),
+        )
     };
-    let chunk = paint_chunk::MeasureChunks(
-        output
-            .chunks
-            .iter()
-            .map(|chunk| (chunk.begin_index, chunk.end_index)),
-    );
     browser_tracing::instant(
         "paint_record",
         "PaintRecord.Summary",
@@ -965,8 +977,8 @@ fn RecordPaint(
         pre_paint.RetainTree(paint_tree);
     }
     trace.set("items", output.items.len() as f64);
-    trace.set("display_items", output.display_items.len() as f64);
-    trace.set("chunks", output.chunks.len() as f64);
+    trace.set("display_items", record.display_items as f64);
+    trace.set("chunks", chunk.chunks as f64);
     if browser_tracing::profile_input() {
         let stats = pre_paint.stats;
         eprintln!(

@@ -32,13 +32,14 @@ impl<M: RasterInvalidationTypes> PaintChunkInfo<M> {
     fn new(
         bounds: Size,
         mapper: &ChunkToLayerMapper<'_, M>,
+        access: &ArtifactAccess,
         artifact: &M::Artifact,
         index: usize,
         m: &M,
     ) -> Self {
-        let chunk = artifact.Chunk(index);
+        let chunk = artifact.Chunk(access, index);
         let mut opaque_backing_rects_in_layer = Vec::new();
-        for item in artifact.DisplayItemsInChunk(index) {
+        for item in artifact.DisplayItemsInChunk(access, index) {
             if !item.DrawsContent() || item.RectKnownToBeOpaque().IsEmpty() {
                 continue;
             }
@@ -66,13 +67,18 @@ impl<M: RasterInvalidationTypes> PaintChunkInfo<M> {
         }
         result
     }
-    fn FromOld(old: &Self, _artifact: &M::Artifact, index: usize) -> Self {
+    fn FromOld(
+        old: &Self,
+        _access: &ArtifactAccess,
+        _artifact: &M::Artifact,
+        index: usize,
+    ) -> Self {
         #[cfg(debug_assertions)]
-        debug_assert!(_artifact.Chunk(index).id() == old.id);
+        debug_assert!(_artifact.Chunk(_access, index).id() == old.id);
         Self {
             index_in_paint_artifact: index,
             #[cfg(debug_assertions)]
-            id: _artifact.Chunk(index).id(),
+            id: _artifact.Chunk(_access, index).id(),
             bounds_in_layer: old.bounds_in_layer,
             opaque_backing_rects_in_layer: old.opaque_backing_rects_in_layer.clone(),
             chunk_to_layer_clip: old.chunk_to_layer_clip,
@@ -181,24 +187,29 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/raster_invalidator.cc:39-62.
     #[inline(always)]
-    fn GetOldChunk(&self, index: usize) -> &M::Chunk {
+    fn GetOldChunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize) -> &'a M::Chunk {
         let info = &self.old_paint_chunks_info_[index];
         let chunk = self
             .old_paint_artifact_
             .as_ref()
             .expect("source old artifact")
-            .Chunk(info.index_in_paint_artifact);
+            .Chunk(access, info.index_in_paint_artifact);
         #[cfg(debug_assertions)]
         debug_assert!(chunk.id() == info.id);
         chunk
     }
     #[inline(always)]
-    fn MatchNewChunkToOldChunk(&self, new: &M::Chunk, index: usize) -> Option<usize> {
+    fn MatchNewChunkToOldChunk(
+        &self,
+        access: &ArtifactAccess,
+        new: &M::Chunk,
+        index: usize,
+    ) -> Option<usize> {
         if !new.CanMatchOldChunk() {
             return None;
         }
         for i in index..self.old_paint_chunks_info_.len() {
-            if new.Matches(self.GetOldChunk(i)) {
+            if new.Matches(self.GetOldChunk(access, i)) {
                 return Some(i);
             }
         }
@@ -319,6 +330,9 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         m: &M,
         callback: &mut dyn RasterInvalidationCallback,
     ) {
+        // One proof for the whole pass over the old and new artifacts.
+        let access = ::paint::artifact_access();
+        let access = &*access;
         let mut mapper = ChunkToLayerMapper::new(m, &self.layer_state_, self.layer_offset_);
         // Partial raster starts from the previous frame's pixels. Preserve
         // the old opaque backing metadata across cached/moved chunks so a
@@ -338,16 +352,16 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         let translation = 1e-2f32;
         let other = 1e-4f32;
         for index in chunks.indices() {
-            let new = chunks.artifact().Chunk(index);
+            let new = chunks.artifact().Chunk(access, index);
             if Self::ShouldSkipForRasterInvalidation(new, &self.layer_state_, m) {
                 continue;
             }
-            let Some(matched_index) = self.MatchNewChunkToOldChunk(new, old_index) else {
+            let Some(matched_index) = self.MatchNewChunkToOldChunk(access, new, old_index) else {
                 mapper.SwitchToChunk(new.properties_unalias(), new.raster_effect_outset());
                 new_infos.push(PaintChunkInfo::new(
                     self.layer_bounds_,
                     &mapper,
-                    chunks.artifact(),
+                    access, chunks.artifact(),
                     index,
                     m,
                 ));
@@ -373,7 +387,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             );
             self.old_paint_chunks_info_[matched_index].bounds_in_layer = clipped;
             let mut reason = if Self::ScrollbarNeedsUpdateDisplay(
-                chunks.artifact().DisplayItemsInChunk(index),
+                chunks.artifact().DisplayItemsInChunk(access, index),
             ) {
                 Reason::kScrollControl
             } else {
@@ -406,7 +420,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             {
                 new_infos.push(PaintChunkInfo::FromOld(
                     &self.old_paint_chunks_info_[matched_index],
-                    chunks.artifact(),
+                    access, chunks.artifact(),
                     index,
                 ));
             } else {
@@ -414,7 +428,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                 new_infos.push(PaintChunkInfo::new(
                     self.layer_bounds_,
                     &mapper,
-                    chunks.artifact(),
+                    access, chunks.artifact(),
                     index,
                     m,
                 ));
@@ -425,7 +439,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                     } else {
                         self.ChunkPropertiesChanged(
                             new,
-                            self.GetOldChunk(matched_index),
+                            self.GetOldChunk(access, matched_index),
                             info,
                             &self.old_paint_chunks_info_[matched_index],
                             &self.layer_state_,
@@ -500,8 +514,8 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                         };
                         DisplayItemRasterInvalidator::new(
                             &mut sink,
-                            old_artifact.DisplayItemsInChunk(old_chunk_index),
-                            chunks.artifact().DisplayItemsInChunk(index),
+                            old_artifact.DisplayItemsInChunk(access, old_chunk_index),
+                            chunks.artifact().DisplayItemsInChunk(access, index),
                             &mapper,
                         )
                         .WithImageContentRevisions(
@@ -518,6 +532,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                             chunks
                                 .artifact()
                                 .OldDisplayItemsMovedFromCacheInChunk(
+                                    access,
                                     &old_artifact,
                                     old_chunk_index,
                                 ),
@@ -532,7 +547,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             if matched[i] {
                 continue;
             }
-            let old = self.GetOldChunk(i);
+            let old = self.GetOldChunk(access, i);
             let reason = if old.is_cacheable() {
                 Reason::kChunkDisappeared
             } else {
@@ -649,9 +664,13 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             );
             if !bounds.IsEmpty() && chunks.len() != 0 {
                 let first = chunks.indices().next().expect("source nonempty chunks");
+                let client_id = chunks
+                    .artifact()
+                    .Chunk(&::paint::artifact_access(), first)
+                    .client_id();
                 self.AddRasterInvalidation(
                     Rect::new(0, 0, bounds.width(), bounds.height()),
-                    chunks.artifact().Chunk(first).client_id(),
+                    client_id,
                     Reason::kFullLayer,
                     ClientIsOldOrNew::kClientIsNew,
                     callback,
@@ -695,9 +714,11 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         m: &M,
     ) {
         debug_assert!(infos.is_empty());
+        let access = ::paint::artifact_access();
+        let access = &*access;
         let mut mapper = ChunkToLayerMapper::new(m, state, offset);
         for index in chunks.indices() {
-            let chunk = chunks.artifact().Chunk(index);
+            let chunk = chunks.artifact().Chunk(access, index);
             if Self::ShouldSkipForRasterInvalidation(chunk, state, m) {
                 continue;
             }
@@ -705,7 +726,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             infos.push(PaintChunkInfo::new(
                 bounds,
                 &mapper,
-                chunks.artifact(),
+                access, chunks.artifact(),
                 index,
                 m,
             ));

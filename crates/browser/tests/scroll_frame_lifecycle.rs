@@ -210,7 +210,7 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
             // Validate the sticky basis published in Paint property state.
             let artifact = &page.CurrentPaintArtifact().unwrap();
             let mut transforms = std::collections::HashMap::new();
-            for chunk in &artifact.chunks {
+            for chunk in artifact.chunks.get(&paint::artifact_access()) {
                 let mut node = Some(chunk.properties.transform.clone());
                 while let Some(transform) = node {
                     transforms.insert(transform.id, transform.clone());

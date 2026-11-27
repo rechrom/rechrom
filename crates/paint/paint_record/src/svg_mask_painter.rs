@@ -146,7 +146,7 @@ mod tests {
             foundation::DynamicRangeLimit::from_mix(0.25, 0.5)
         );
         assert!(output
-            .display_items
+            .display_items.get(&crate::artifact_access::artifact_access())
             .iter()
             .any(|item| item.id.r#type == DisplayItemIdType::kSVGMask));
     }

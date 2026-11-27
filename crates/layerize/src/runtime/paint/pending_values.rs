@@ -212,11 +212,15 @@ where
         paint::paint_engine::PaintChunk::Matches(self, other)
     }
     fn first_display_item_is_foreign_layer_video(&self, a: &PaintArtifact) -> bool {
-        a.display_items[self.begin_index as usize].id.r#type
+        a.display_items.get(&::paint::artifact_access())[self.begin_index as usize].id.r#type
             == paint_model::display_item_id::DisplayItemIdType::kForeignLayerVideo
     }
-    fn FirstDisplayItem<'a>(&self, a: &'a PaintArtifact) -> &'a DisplayItem {
-        &a.display_items[self.begin_index as usize]
+    fn FirstDisplayItem<'a>(
+        &self,
+        access: &'a ::paint::ArtifactAccess,
+        a: &'a PaintArtifact,
+    ) -> &'a DisplayItem {
+        &a.display_items.get(access)[self.begin_index as usize]
     }
     fn is_moved_from_cached_subsequence(&self) -> bool {
         self.is_moved_from_cached_subsequence
@@ -230,8 +234,12 @@ where
         DomNodeId = crate::runtime::types::NodeId,
     >,
 {
-    fn PaintChunk(&self, index: usize) -> Option<&PaintChunk> {
-        self.chunks.get(index)
+    fn PaintChunk<'a>(
+        &'a self,
+        access: &'a ::paint::ArtifactAccess,
+        index: usize,
+    ) -> Option<&'a PaintChunk> {
+        self.chunks.get(access).get(index)
     }
     fn ClientDebugName(&self, client: usize) -> String {
         self.ClientDebugName(client).to_string()
@@ -240,7 +248,7 @@ where
         crate::runtime::types::NodeId(self.ClientOwnerNodeId(client))
     }
     fn PaintChunkCount(&self) -> usize {
-        self.chunks.len()
+        self.chunks.get(&::paint::artifact_access()).len()
     }
 }
 impl<R, B> PendingDisplayItem<B> for DisplayItem

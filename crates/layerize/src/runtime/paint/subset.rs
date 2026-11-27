@@ -1,6 +1,9 @@
 //! Borrowing view over the producer's actual Arc<PaintArtifact>. Indices are
 //! the canonical subset's own storage, never copies of chunks or node trees.
+//! Chunks and display items are read under the caller's document-sequence
+//! proof (paint_record::artifact_access).
 use super::{DisplayItem, PaintArtifact, PaintChunk};
+use ::paint::ArtifactAccess;
 use std::sync::Arc;
 
 // Source: third_party/blink/renderer/platform/graphics/paint/paint_chunk_subset.h:17-41,142-144.
@@ -14,6 +17,7 @@ pub struct PaintChunkSubset {
 /// to borrow the original PaintArtifact and display-item storage.
 pub struct PaintChunkSubsetEntry<'a> {
     artifact: &'a PaintArtifact,
+    access: &'a ArtifactAccess,
     chunk_index: usize,
 }
 
@@ -23,20 +27,20 @@ impl<'a> PaintChunkSubsetEntry<'a> {
     }
 
     pub fn chunk(&self) -> &'a PaintChunk {
-        &self.artifact.chunks[self.chunk_index]
+        &self.artifact.chunks.get(self.access)[self.chunk_index]
     }
 
     pub fn DisplayItems(&self) -> &'a [DisplayItem] {
         let chunk = self.chunk();
         self.artifact
-            .GetDisplayItemList()
+            .GetDisplayItemList(self.access)
             .ItemsInRange(chunk.begin_index as usize, chunk.end_index as usize)
     }
 }
 
 impl PaintChunkSubset {
     pub fn from_first(artifact: Arc<PaintArtifact>, index: usize) -> Self {
-        assert!(index < artifact.chunks.len());
+        assert!(index < artifact.chunks.get(&::paint::artifact_access()).len());
         Self {
             artifact: Some(artifact),
             indices: vec![index],
@@ -46,6 +50,7 @@ impl PaintChunkSubset {
     pub fn from_chunk(artifact: Arc<PaintArtifact>, chunk: &PaintChunk) -> Self {
         let index = artifact
             .chunks
+            .get(&::paint::artifact_access())
             .iter()
             .position(|candidate| std::ptr::eq(candidate, chunk))
             .expect("source PaintChunkSubset chunk belongs to PaintArtifact");
@@ -53,7 +58,7 @@ impl PaintChunkSubset {
     }
 
     pub fn from_artifact(artifact: Arc<PaintArtifact>) -> Self {
-        let indices = (0..artifact.chunks.len()).collect();
+        let indices = (0..artifact.chunks.get(&::paint::artifact_access()).len()).collect();
         Self {
             artifact: Some(artifact),
             indices,
@@ -61,16 +66,28 @@ impl PaintChunkSubset {
     }
     // Source: paint_chunk_subset.h:87-110. The iterator directly indexes the
     // same artifact on each dereference. It creates no projected chunk list.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &PaintChunk> {
-        self.indices
-            .iter()
-            .map(|&index| &self.artifact().chunks[index])
+    pub fn iter<'a>(
+        &'a self,
+        access: &'a ArtifactAccess,
+    ) -> impl ExactSizeIterator<Item = &'a PaintChunk> + 'a {
+        let chunks = self
+            .artifact
+            .as_deref()
+            .map(|artifact| artifact.chunks.get(access));
+        self.indices.iter().map(move |&index| {
+            &chunks.expect("source empty PaintChunkSubset has no PaintArtifact")[index]
+        })
     }
-    pub fn entries(&self) -> impl ExactSizeIterator<Item = PaintChunkSubsetEntry<'_>> {
+    pub fn entries<'a>(
+        &'a self,
+        access: &'a ArtifactAccess,
+    ) -> impl ExactSizeIterator<Item = PaintChunkSubsetEntry<'a>> + 'a {
+        let artifact: Option<&'a PaintArtifact> = self.artifact.as_deref();
         self.indices
             .iter()
-            .map(|&chunk_index| PaintChunkSubsetEntry {
-                artifact: self.artifact(),
+            .map(move |&chunk_index| PaintChunkSubsetEntry {
+                artifact: artifact.expect("source empty PaintChunkSubset has no PaintArtifact"),
+                access,
                 chunk_index,
             })
     }
@@ -88,13 +105,20 @@ impl PaintChunkSubset {
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
-    pub fn chunk(&self, index: usize) -> &PaintChunk {
-        &self.artifact().chunks[self.indices[index]]
+    pub fn chunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize) -> &'a PaintChunk {
+        &self.artifact().chunks.get(access)[self.indices[index]]
     }
     // Source: paint_chunk_subset.h:120-131. Swapping an artifact changes only
     // the retained immutable owner; source subset indices remain untouched.
     pub fn set_artifact(&mut self, artifact: Arc<PaintArtifact>) {
-        debug_assert_eq!(self.artifact().chunks.len(), artifact.chunks.len());
+        #[cfg(debug_assertions)]
+        {
+            let access = ::paint::artifact_access();
+            debug_assert_eq!(
+                self.artifact().chunks.get(&access).len(),
+                artifact.chunks.get(&access).len()
+            );
+        }
         self.artifact = Some(artifact);
     }
     pub fn merge(&mut self, guest: &Self) {
@@ -107,8 +131,12 @@ impl PaintChunkSubset {
     }
     // Source: paint_chunk_subset.cc:11-22. JSON is diagnostic text only.
     pub fn ToJSON(&self) -> serde_json::Value {
+        if self.is_empty() {
+            return serde_json::Value::Array(Vec::new());
+        }
+        let access = ::paint::artifact_access();
         serde_json::Value::Array(
-            self.entries()
+            self.entries(&access)
                 .map(|entry| {
                     serde_json::Value::String(format!(
                         "index={} {}",
@@ -145,8 +173,8 @@ where
     fn len(&self) -> usize {
         self.len()
     }
-    fn chunk(&self, index: usize) -> &PaintChunk {
-        self.chunk(index)
+    fn chunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize) -> &'a PaintChunk {
+        PaintChunkSubset::chunk(self, access, index)
     }
     fn ToDebugJson(&self) -> String {
         self.to_debug_json()
@@ -219,13 +247,14 @@ mod tests {
     fn entries_retain_artifact_indices_and_display_item_ranges() {
         let artifact = artifact();
         let subset = PaintChunkSubset::from_artifact(artifact.clone());
-        let entries: Vec<_> = subset.entries().collect();
+        let access = ::paint::artifact_access();
+        let entries: Vec<_> = subset.entries(&access).collect();
         assert_eq!(entries[0].IndexInPaintArtifact(), 0);
         assert_eq!(entries[0].DisplayItems().len(), 1);
         assert_eq!(entries[1].IndexInPaintArtifact(), 1);
         assert_eq!(entries[1].DisplayItems().len(), 2);
 
-        let single = PaintChunkSubset::from_chunk(artifact.clone(), &artifact.chunks[1]);
+        let single = PaintChunkSubset::from_chunk(artifact.clone(), &artifact.chunks.get(&access)[1]);
         assert_eq!(single.indices(), &[1]);
         assert!(single.to_debug_json().contains("index=1"));
         assert!(subset.to_debug_json().contains("source-client"));

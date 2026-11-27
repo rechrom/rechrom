@@ -146,7 +146,7 @@ fn programmatic_scroll_refreshes_macos_painted_thumb_opacity() {
         assert!(page
             .CurrentPaintArtifact()
             .unwrap()
-            .display_items
+            .display_items.get(&paint::artifact_access())
             .iter()
             .filter_map(|item| item.scrollbar.as_ref())
             .all(|scrollbar| scrollbar.painted_opacity == 0.0));
@@ -167,7 +167,7 @@ fn programmatic_scroll_refreshes_macos_painted_thumb_opacity() {
         assert!(page
             .CurrentPaintArtifact()
             .unwrap()
-            .display_items
+            .display_items.get(&paint::artifact_access())
             .iter()
             .filter_map(|item| item.scrollbar.as_ref())
             .any(|scrollbar| !scrollbar.horizontal && scrollbar.painted_opacity == 1.0));

@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::artifact_access::{artifact_access, ArtifactAccess, ArtifactData};
 use crate::{
     CaretGeometry, DisplayItem, DisplayItemList, DisplayItemListJsonOption, RecordSource,
     RecordedDisplayItem,
@@ -254,7 +255,8 @@ impl ImageDependencyIndex {
 /// new PaintRecord over the artifact here too, paint_artifact.cc
 /// GetPaintRecord).
 pub fn PaintRecordForArtifact(artifact: &Arc<PaintRecording>) -> cc_paint::PaintRecord {
-    let ops = match artifact.ReplayOps() {
+    let access = artifact_access();
+    let ops = match artifact.ReplayOps(&access) {
         std::borrow::Cow::Borrowed(_) => Arc::clone(&artifact.items),
         std::borrow::Cow::Owned(ops) => Arc::new(ops),
     };
@@ -383,8 +385,12 @@ pub struct PaintRecording {
     /// updates retain this backing; an actual operation edit uses Arc::make_mut
     /// to preserve old frame snapshots (Chromium PaintRecord sharing intent).
     pub items: Arc<Vec<DisplayItem>>,
-    pub display_items: SharedArtifactData<DisplayItemList>,
-    pub chunks: SharedArtifactData<PaintChunks>,
+    /// The DisplayItemList and PaintChunks, shared by every header of this
+    /// recording and confined to the document sequence: read under an
+    /// [`ArtifactAccess`], moved out of in place by the PaintController
+    /// (paint_controller.cc:283-286,737-820). See `artifact_access`.
+    pub display_items: ArtifactData<DisplayItemList>,
+    pub chunks: ArtifactData<PaintChunks>,
     /// Identity of the immutable display-item recording and its recording
     /// coordinate basis. A retained property-only scroll keeps this value;
     /// recording or changing any draw operation assigns a new value.
@@ -472,13 +478,14 @@ impl PaintRecording {
     /// The recording's flat replay stream: its own ops with each drawing
     /// moved in from the cache replayed from its record allocation at its
     /// recorded position. Borrowed when no drawing was moved in.
-    pub fn ReplayOps(&self) -> std::borrow::Cow<'_, [DisplayItem]> {
-        if self.display_items.iter().all(|item| item.record_source.is_none()) {
+    pub fn ReplayOps<'a>(&'a self, access: &ArtifactAccess) -> std::borrow::Cow<'a, [DisplayItem]> {
+        let display_items = self.display_items.get(access);
+        if display_items.iter().all(|item| item.record_source.is_none()) {
             return std::borrow::Cow::Borrowed(self.items.as_slice());
         }
         let mut ops = Vec::with_capacity(self.items.len());
         let mut cursor = 0;
-        for item in self.display_items.iter() {
+        for item in display_items.iter() {
             let Some(source) = &item.record_source else {
                 continue;
             };
@@ -491,9 +498,13 @@ impl PaintRecording {
     }
 
     /// Every op the recording replays, in no particular order.
-    pub fn AllOps(&self) -> impl Iterator<Item = &DisplayItem> + '_ {
+    pub fn AllOps<'a>(
+        &'a self,
+        access: &'a ArtifactAccess,
+    ) -> impl Iterator<Item = &'a DisplayItem> + 'a {
         self.items.iter().chain(
             self.display_items
+                .get(access)
                 .iter()
                 .filter_map(|item| item.record_source.as_ref())
                 .flat_map(RecordSource::Ops),
@@ -507,36 +518,54 @@ impl PaintRecording {
     }
     // Source: paint_artifact.h:38.
     pub fn IsEmpty(&self) -> bool {
-        self.chunks.is_empty()
+        self.chunks.get(&artifact_access()).is_empty()
     }
 
     // Source: paint_artifact.h:40-43.
-    pub fn GetDisplayItemList(&self) -> &DisplayItemList {
-        &self.display_items
+    #[inline]
+    pub fn GetDisplayItemList<'a>(&'a self, access: &'a ArtifactAccess) -> &'a DisplayItemList {
+        self.display_items.get(access)
     }
 
-    // Source: paint_artifact.h:40-43. PaintController is the mutable caller.
+    // Source: paint_artifact.h:40-43. The recording's owner (the new
+    // artifact's PaintController, a copy-on-write header update) is the
+    // mutable caller.
+    #[inline]
     pub fn GetDisplayItemListMut(&mut self) -> &mut DisplayItemList {
-        &mut self.display_items
+        self.display_items.make_mut()
     }
 
     // Source: paint_artifact.h:45-46.
-    pub fn GetPaintChunks(&self) -> &PaintChunks {
-        &self.chunks
+    #[inline]
+    pub fn GetPaintChunks<'a>(&'a self, access: &'a ArtifactAccess) -> &'a PaintChunks {
+        self.chunks.get(access)
     }
 
-    // Source: paint_artifact.h:45-46. PaintController is the mutable caller.
+    // Source: paint_artifact.h:45-46. See GetDisplayItemListMut.
+    #[inline]
     pub fn GetPaintChunksMut(&mut self) -> &mut PaintChunks {
-        &mut self.chunks
+        self.chunks.make_mut()
+    }
+
+    /// Both lists, mutably, for the recording's owner.
+    #[inline]
+    pub fn ListsMut(&mut self) -> (&mut DisplayItemList, &mut PaintChunks) {
+        (self.display_items.make_mut(), self.chunks.make_mut())
     }
 
     // Source: paint_artifact.h:48-53.
-    pub fn DisplayItemsInChunk(&self, chunk_index: usize) -> &[RecordedDisplayItem] {
+    pub fn DisplayItemsInChunk<'a>(
+        &'a self,
+        access: &'a ArtifactAccess,
+        chunk_index: usize,
+    ) -> &'a [RecordedDisplayItem] {
         let chunk = self
             .chunks
+            .get(access)
             .get(chunk_index)
             .expect("paint chunk index must be valid");
         self.display_items
+            .get(access)
             .ItemsInRange(chunk.begin_index as usize, chunk.end_index as usize)
     }
 
@@ -546,11 +575,12 @@ impl PaintRecording {
     /// [`PreviousItemsMovedFromCache`]). Empty when this recording was not
     /// painted from `previous`'s recording, in which case no old item counts
     /// as moved.
-    pub fn PreviousItemsMovedFromCacheInChunk(
-        &self,
+    pub fn PreviousItemsMovedFromCacheInChunk<'a>(
+        &'a self,
+        access: &ArtifactAccess,
         previous: &PaintRecording,
         previous_chunk_index: usize,
-    ) -> &[bool] {
+    ) -> &'a [bool] {
         let Some(record) = self.previous_items_moved_from_cache.as_deref() else {
             return &[];
         };
@@ -559,7 +589,7 @@ impl PaintRecording {
         {
             return &[];
         }
-        let Some(chunk) = previous.chunks.get(previous_chunk_index) else {
+        let Some(chunk) = previous.chunks.get(access).get(previous_chunk_index) else {
             return &[];
         };
         record
@@ -570,10 +600,13 @@ impl PaintRecording {
 
     // Source: paint_artifact.cc:14-23.
     pub fn ApproximateUnsharedMemoryUsage(&self) -> usize {
-        let mut total = std::mem::size_of::<Self>() + self.display_items.MemoryUsageInBytes()
+        let access = artifact_access();
+        let chunks = self.chunks.get(&access);
+        let mut total = std::mem::size_of::<Self>()
+            + self.display_items.get(&access).MemoryUsageInBytes()
             - std::mem::size_of::<DisplayItemList>()
-            + self.chunks.capacity() * std::mem::size_of::<PaintChunk>();
-        for chunk in &self.chunks {
+            + chunks.capacity() * std::mem::size_of::<PaintChunk>();
+        for chunk in chunks {
             let chunk_size = chunk.MemoryUsageInBytes();
             debug_assert!(chunk_size >= std::mem::size_of::<PaintChunk>());
             total += chunk_size - std::mem::size_of::<PaintChunk>();
@@ -647,7 +680,8 @@ impl PaintRecording {
 
     // Source: paint_artifact.cc:64-94.
     pub fn ToJSON(&self) -> serde_json::Value {
-        self.ChunksAsJSON(0, self.chunks.len(), DisplayItemListJsonOption::kDefault)
+        let count = self.chunks.get(&artifact_access()).len();
+        self.ChunksAsJSON(0, count, DisplayItemListJsonOption::kDefault)
     }
 
     pub fn ChunksAsJSON(
@@ -656,9 +690,11 @@ impl PaintRecording {
         end_chunk_index: usize,
         option: DisplayItemListJsonOption,
     ) -> serde_json::Value {
+        let access = artifact_access();
+        let all_chunks = self.chunks.get(&access);
         assert!(start_chunk_index <= end_chunk_index);
-        assert!(end_chunk_index <= self.chunks.len());
-        let chunks = self.chunks[start_chunk_index..end_chunk_index]
+        assert!(end_chunk_index <= all_chunks.len());
+        let chunks = all_chunks[start_chunk_index..end_chunk_index]
             .iter()
             .enumerate()
             .map(|(offset, chunk)| {
@@ -694,7 +730,7 @@ impl PaintRecording {
                     DisplayItemList::DisplayItemsAsJSON(
                         self,
                         chunk.begin_index as usize,
-                        self.DisplayItemsInChunk(chunk_index),
+                        self.DisplayItemsInChunk(&access, chunk_index),
                         option,
                     ),
                 );
@@ -708,8 +744,8 @@ impl PaintRecording {
     // members of the same artifact and are cleared with their source owners.
     pub fn clear(&mut self) {
         Arc::make_mut(&mut self.items).clear();
-        self.display_items.clear();
-        self.chunks.clear();
+        self.display_items.make_mut().clear();
+        self.chunks.make_mut().clear();
         self.client_debug_names.clear();
         self.client_owner_node_ids.clear();
         self.image_dependencies = Arc::new(ImageDependencyIndex::default());
@@ -791,7 +827,8 @@ impl PaintRecording {
     /// dependency index and resource catalog. The proof is a separate immutable
     /// sidecar, so resource updates never mutate/copy display items or chunks.
     pub fn RefreshImageContentRevisions(&mut self) -> Vec<usize> {
-        let mut revisions = vec![Vec::new(); self.display_items.len()];
+        let access = artifact_access();
+        let mut revisions = vec![Vec::new(); self.display_items.get(&access).len()];
         if let Some(resources) = self.resources.as_deref() {
             for image in resources.images.iter() {
                 for dependency in self.image_dependencies.dependencies(image.id) {
@@ -829,6 +866,7 @@ impl PaintRecording {
         self.image_content_revisions = Arc::new(revisions);
         self.resource_changed_chunks = Arc::new(
             self.chunks
+                .get(&access)
                 .iter()
                 .enumerate()
                 .filter_map(|(chunk_index, chunk)| {
@@ -849,8 +887,12 @@ impl PaintRecording {
         &self,
         chunk_index: usize,
     ) -> &[Vec<(image_resource::ImageId, u64)>] {
-        let chunk = &self.chunks[chunk_index];
-        &self.image_content_revisions[chunk.begin_index as usize..chunk.end_index as usize]
+        let (begin, end) = {
+            let access = artifact_access();
+            let chunk = &self.chunks.get(&access)[chunk_index];
+            (chunk.begin_index as usize, chunk.end_index as usize)
+        };
+        &self.image_content_revisions[begin..end]
     }
 
     pub fn ChunkHasResourceChange(&self, chunk_index: usize) -> bool {
@@ -910,8 +952,9 @@ impl PaintRecording {
                 }
             }
         }
+        let access = artifact_access();
         let mut output = Vec::new();
-        for item in self.AllOps() {
+        for item in self.AllOps(&access) {
             if let Some(key) = &item.document_image_container_key {
                 let pair = (item.resource_id, key.clone());
                 if item.resource_id != 0 && !output.contains(&pair) {
@@ -937,7 +980,7 @@ impl PaintRecording {
         // They use the same per-container SVG records and must be fulfilled
         // before the second recording snapshots their resource payloads.
         let mut visited = std::collections::HashSet::new();
-        for chunk in &self.chunks {
+        for chunk in self.chunks.get(&access) {
             paint_model::property_cell::with_access(|access| {
             let mut effect = Some(chunk.properties.effect.as_ref());
             while let Some(node) = effect {
@@ -1060,7 +1103,7 @@ mod paint_artifact_tests {
         artifact.recording_revision = 44;
         artifact.clear();
         assert!(artifact.IsEmpty());
-        assert!(artifact.GetDisplayItemList().IsEmpty());
+        assert!(artifact.GetDisplayItemList(&artifact_access()).IsEmpty());
         assert!(artifact.items.is_empty());
         assert!(artifact.client_debug_names.is_empty());
         assert!(artifact.painted_layout_image_resource_ids.is_empty());

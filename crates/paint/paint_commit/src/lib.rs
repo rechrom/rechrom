@@ -12,6 +12,7 @@ use paint_model::display_item_id::DisplayItemId;
 pub mod scroll_paint_update;
 
 pub use paint_model::{PaintCompositorViewport, PaintCompositorViewportMode};
+pub use paint_record::{artifact_access, artifact_writer, ArtifactAccess, ArtifactAccessScope};
 pub use paint_record::{
     DocumentPaintArtifactRecord, DocumentRecordArtifact, NewDocumentPaintArtifactRecord,
     PaintRecordForArtifact, PaintRecordForItem, ImageDependencyIndex, ImagePaintDependency, PaintMutation,
@@ -59,11 +60,15 @@ impl layout::paint::PaintCommitOutput for PaintOutput {
 /// Seal metadata derived from completed record and chunk streams, then assign
 /// the immutable recording identity. This is the commit-stage hot path.
 pub fn FinalizeArtifact(recording: &mut paint_record::PaintRecording) {
-    recording.image_dependencies = Arc::new(ImageDependencyIndex::build(
-        &recording.items,
-        &recording.display_items,
-        &recording.chunks,
-    ));
+    let image_dependencies = {
+        let access = artifact_access();
+        ImageDependencyIndex::build(
+            &recording.items,
+            recording.display_items.get(&access),
+            recording.chunks.get(&access),
+        )
+    };
+    recording.image_dependencies = Arc::new(image_dependencies);
     recording.RefreshImageContentRevisions();
     recording.recording_revision = foundation::NewUniqueObjectId();
 }

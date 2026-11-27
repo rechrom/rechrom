@@ -42,9 +42,13 @@ pub trait RasterInvalidationChunk<M: RasterInvalidationTypes + ?Sized>: PaintChu
     fn DrawsContent(&self) -> bool;
     fn IsForeignLayerType(&self) -> bool;
 }
+/// The document-sequence proof under which an artifact's chunks and display
+/// items are read (paint_record::artifact_access): obtained once per
+/// invalidation pass, never per item.
+pub use ::paint::ArtifactAccess;
 pub trait RasterInvalidationArtifact<M: RasterInvalidationTypes + ?Sized> {
-    fn Chunk(&self, index: usize) -> &M::Chunk;
-    fn DisplayItemsInChunk(&self, index: usize) -> &[M::Item];
+    fn Chunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize) -> &'a M::Chunk;
+    fn DisplayItemsInChunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize) -> &'a [M::Item];
     fn ImageContentRevisionsInChunk(&self, index: usize) -> &[Vec<(u64, u64)>];
     fn ChunkHasResourceChange(&self, index: usize) -> bool;
     fn ClientDebugName(&self, id: DisplayItemClientId) -> &str;
@@ -56,7 +60,12 @@ pub trait RasterInvalidationArtifact<M: RasterInvalidationTypes + ?Sized> {
     /// `old_item.IsTombstone()` (display_item_raster_invalidator.cc:51-56,
     /// 62,74-79,89). Interim until cached items are moved in place and leave
     /// real tombstones in the old artifact. Empty means none.
-    fn OldDisplayItemsMovedFromCacheInChunk(&self, old: &Self, old_chunk_index: usize) -> &[bool];
+    fn OldDisplayItemsMovedFromCacheInChunk<'a>(
+        &'a self,
+        access: &ArtifactAccess,
+        old: &Self,
+        old_chunk_index: usize,
+    ) -> &'a [bool];
 }
 pub trait RasterInvalidationSubset<M: RasterInvalidationTypes + ?Sized> {
     fn artifact(&self) -> &Arc<M::Artifact>;

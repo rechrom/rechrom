@@ -185,25 +185,27 @@ fn ValidateArtifactGraph(
     for node in &viewport.scroll_translation_nodes {
         pending.push(Node::Transform(node.clone()));
     }
-    for (index, chunk) in artifact.chunks.iter().enumerate() {
+    let access = ::paint::artifact_access();
+    let display_items = artifact.display_items.get(&access);
+    for (index, chunk) in artifact.chunks.get(&access).iter().enumerate() {
         if chunk.compositor.is_none() {
             return Err(PaintInputError::MissingChunkCompositorData { chunk: index });
         }
         if chunk.begin_index > chunk.end_index
-            || chunk.end_index as usize > artifact.display_items.len()
+            || chunk.end_index as usize > display_items.len()
         {
             return Err(PaintInputError::InvalidChunkRange {
                 chunk: index,
                 begin: chunk.begin_index,
                 end: chunk.end_index,
-                items: artifact.display_items.len(),
+                items: display_items.len(),
             });
         }
         pending.push(Node::Transform(chunk.properties.transform.clone()));
         pending.push(Node::Clip(chunk.properties.clip.clone()));
         pending.push(Node::Effect(chunk.properties.effect.clone()));
     }
-    for (index, item) in artifact.display_items.iter().enumerate() {
+    for (index, item) in display_items.iter().enumerate() {
         if item.record_begin > item.record_end || item.record_end > artifact.items.len() {
             return Err(PaintInputError::InvalidRecordRange {
                 item: index,
@@ -230,7 +232,7 @@ fn ValidateArtifactGraph(
         .image_dependencies
         .image_ids()
         .collect::<std::collections::BTreeSet<_>>();
-    for op in artifact.AllOps() {
+    for op in artifact.AllOps(&access) {
         if op.resource_id != 0 {
             image_ids.insert(op.resource_id);
         }

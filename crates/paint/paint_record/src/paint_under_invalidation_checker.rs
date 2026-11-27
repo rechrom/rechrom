@@ -7,6 +7,7 @@
 use foundation::PaintInvalidationReason;
 use paint_model::PaintResult;
 
+use crate::artifact_access::artifact_access;
 use crate::paint_controller::paint_controller_debug_data::DebugDataAsStringForArtifacts;
 use crate::{PaintRecording, RecordedDisplayItem};
 
@@ -111,11 +112,14 @@ impl PaintUnderInvalidationChecker {
             return CheckNewItemResult::CacheSkipping { old_item_index };
         }
 
+        let access = artifact_access();
         let new_item = new_artifact
             .display_items
+            .get(&access)
             .last()
             .expect("forced repaint must append a display item");
-        if old_item_index >= old_artifact.display_items.len() {
+        let old_items = old_artifact.display_items.get(&access);
+        if old_item_index >= old_items.len() {
             self.ShowItemError(
                 "extra display item",
                 new_artifact,
@@ -126,7 +130,7 @@ impl PaintUnderInvalidationChecker {
                 new_subsequences,
             );
         }
-        let old_item = &old_artifact.display_items[old_item_index];
+        let old_item = &old_items[old_item_index];
         if !new_item.EqualsForUnderInvalidation(new_artifact, old_item, old_artifact) {
             self.ShowItemError(
                 "display item changed",
@@ -147,10 +151,12 @@ impl PaintUnderInvalidationChecker {
         debug_assert_eq!(new_item.record_end, new_artifact.items.len());
         let mut relocated = old_item.clone();
         relocated.MoveRecordFrom(old_artifact, new_record_begin);
+        drop(access);
 
         let moved = new_artifact
             .display_items
-            .ReplaceLastByMoving(&mut old_artifact.display_items[old_item_index]);
+            .make_mut()
+            .ReplaceLastByMoving(&mut old_artifact.display_items.make_mut()[old_item_index]);
         moved.SetPaintInvalidationReason(if moved.IsCacheable() {
             PaintInvalidationReason::kNone
         } else {
@@ -159,6 +165,7 @@ impl PaintUnderInvalidationChecker {
         std::sync::Arc::make_mut(&mut new_artifact.items).truncate(new_record_begin);
         let moved = new_artifact
             .display_items
+            .make_mut()
             .last_mut()
             .expect("moved cached display item");
         moved.record_begin = relocated.record_begin;
@@ -183,9 +190,10 @@ impl PaintUnderInvalidationChecker {
     ) {
         debug_assert!(!self.IsChecking());
         debug_assert_eq!(markers.client_id, client_id);
-        let first_chunk = &old_artifact.chunks[markers.start_chunk_index];
+        let access = artifact_access();
+        let first_chunk = &old_artifact.chunks.get(&access)[markers.start_chunk_index];
         self.old_chunk_index_ = Some(markers.start_chunk_index);
-        self.new_chunk_index_ = Some(new_artifact.chunks.len());
+        self.new_chunk_index_ = Some(new_artifact.chunks.get(&access).len());
         self.old_item_index_ = Some(first_chunk.begin_index as usize);
         self.subsequence_client_id_ = Some(client_id);
     }
@@ -204,7 +212,7 @@ impl PaintUnderInvalidationChecker {
             return;
         }
         let new_chunk_index = self.new_chunk_index_.expect("checking new chunk");
-        if new_artifact.chunks.len() > new_chunk_index + 1 {
+        if new_artifact.chunks.get(&artifact_access()).len() > new_chunk_index + 1 {
             self.CheckNewChunkInternal(
                 old_artifact,
                 new_artifact,
@@ -231,8 +239,9 @@ impl PaintUnderInvalidationChecker {
         if !self.IsCheckingSubsequence() {
             return;
         }
+        let new_chunk_count = new_artifact.chunks.get(&artifact_access()).len();
         match markers {
-            None if start_chunk_index != new_artifact.chunks.len() => {
+            None if start_chunk_index != new_chunk_count => {
                 self.ShowSubsequenceError(
                     "unexpected subsequence",
                     Some(client_id),
@@ -246,7 +255,7 @@ impl PaintUnderInvalidationChecker {
             }
             Some(markers)
                 if markers.end_chunk_index - markers.start_chunk_index
-                    != new_artifact.chunks.len() - start_chunk_index =>
+                    != new_chunk_count - start_chunk_index =>
             {
                 self.ShowSubsequenceError(
                     "new subsequence wrong length",
@@ -260,7 +269,7 @@ impl PaintUnderInvalidationChecker {
                 );
             }
             Some(_) => {
-                let end_chunk_index = new_artifact.chunks.len();
+                let end_chunk_index = new_chunk_count;
                 if self.new_chunk_index_.expect("checking new chunk") < end_chunk_index {
                     debug_assert_eq!(
                         self.new_chunk_index_.expect("checking new chunk") + 1,
@@ -295,7 +304,8 @@ impl PaintUnderInvalidationChecker {
         debug_assert_eq!(self.subsequence_client_id_, Some(markers.client_id));
         let new_chunk_index = self.new_chunk_index_.expect("checking new chunk");
         let old_chunk_index = self.old_chunk_index_.expect("checking old chunk");
-        let new_chunk = &new_artifact.chunks[new_chunk_index];
+        let access = artifact_access();
+        let new_chunk = &new_artifact.chunks.get(&access)[new_chunk_index];
         if old_chunk_index >= markers.end_chunk_index {
             self.ShowSubsequenceError(
                 "extra chunk",
@@ -308,7 +318,7 @@ impl PaintUnderInvalidationChecker {
                 new_subsequences,
             );
         } else {
-            let old_chunk = &old_artifact.chunks[old_chunk_index];
+            let old_chunk = &old_artifact.chunks.get(&access)[old_chunk_index];
             if !old_chunk.EqualsForUnderInvalidationChecking(new_chunk) {
                 self.ShowSubsequenceError(
                     "chunk changed",
@@ -496,12 +506,12 @@ mod tests {
             CheckNewItemResult::Matched
         );
         assert!(!checker.IsChecking());
-        assert!(old.display_items[0].IsTombstone());
+        assert!(old.display_items.get(&artifact_access())[0].IsTombstone());
         assert_eq!(
-            new.display_items[0].GetPaintInvalidationReason(),
+            new.display_items.get(&artifact_access())[0].GetPaintInvalidationReason(),
             Some(PaintInvalidationReason::kNone)
         );
-        assert!(new.display_items[0].GetPaintRecord(&new) == [op(1.0)]);
+        assert!(new.display_items.get(&artifact_access())[0].GetPaintRecord(&new) == [op(1.0)]);
     }
 
     #[test]
@@ -530,7 +540,7 @@ mod tests {
             .expect("checker panic contains a string diagnostic");
         assert!(message.contains("current paint artifact: []"));
         assert!(message.contains("new paint artifact: []"));
-        assert!(!old.display_items[0].IsTombstone());
+        assert!(!old.display_items.get(&artifact_access())[0].IsTombstone());
     }
 
     #[test]
@@ -551,7 +561,7 @@ mod tests {
             CheckNewItemResult::CacheSkipping { old_item_index: 1 }
         );
         assert!(!checker.IsChecking());
-        assert!(!old.display_items[1].IsTombstone());
+        assert!(!old.display_items.get(&artifact_access())[1].IsTombstone());
     }
 
     #[test]
@@ -572,21 +582,22 @@ mod tests {
         let mut checker = PaintUnderInvalidationChecker::default();
         checker.WouldUseCachedSubsequence(7, markers, &old, &new);
 
-        new.chunks.push(chunk(7, 0, 1));
-        new.display_items.push(item(7, 0, 0));
+        new.chunks.make_mut().push(chunk(7, 0, 1));
+        new.display_items.make_mut().push(item(7, 0, 0));
         checker.CheckNewItem(&mut old, &mut new, false, &[], &[]);
 
-        new.chunks.push(chunk(8, 1, 2));
+        new.chunks.make_mut().push(chunk(8, 1, 2));
         checker.CheckNewChunk(&old, &new, markers, &[], &[]);
-        new.display_items.push(item(8, 0, 0));
+        new.display_items.make_mut().push(item(8, 0, 0));
         checker.CheckNewItem(&mut old, &mut new, false, &[], &[]);
         checker.WillEndSubsequence(7, 0, Some(markers), markers, &old, &new, &[], &[]);
 
         assert!(!checker.IsChecking());
         assert!(old
             .display_items
+            .get(&artifact_access())
             .iter()
             .all(RecordedDisplayItem::IsTombstone));
-        assert_eq!(new.display_items.len(), 2);
+        assert_eq!(new.display_items.get(&artifact_access()).len(), 2);
     }
 }

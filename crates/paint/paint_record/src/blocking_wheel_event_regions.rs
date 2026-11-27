@@ -19,6 +19,9 @@ impl PaintRecording {
     /// The boolean records attachment to the root scrolling transform, not the
     /// positioning of the listener target. `None` means viewport property input
     /// is unavailable; an empty iterator is coherent, empty hit-test geometry.
+    /// The rectangles are collected under one artifact access scope (the
+    /// chunk list is sequence-confined, see `artifact_access`); the input
+    /// owner caches the result per membership revision.
     pub fn CommittedBlockingWheelEventRegions(
         &self,
     ) -> Option<impl Iterator<Item = (PaintRect, bool)> + '_> {
@@ -28,7 +31,8 @@ impl PaintRecording {
             .resources
             .as_ref()
             .map_or(1.0, |r| r.layout_zoom_factor);
-        Some(self.chunks.iter().flat_map(move |chunk| {
+        let access = crate::artifact_access::artifact_access();
+        let regions: Vec<(PaintRect, bool)> = self.chunks.get(&access).iter().flat_map(move |chunk| {
             let root_scrolling = paint_model::property_cell::with_access(|access| {
                 let mut transform = Some(chunk.properties.transform.as_ref());
                 while let Some(node) = transform {
@@ -87,7 +91,8 @@ impl PaintRecording {
                     rect.height /= zoom;
                     (rect, root_scrolling)
                 })
-        }))
+        }).collect();
+        Some(regions.into_iter())
     }
 }
 

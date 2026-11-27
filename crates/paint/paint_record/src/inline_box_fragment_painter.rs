@@ -191,8 +191,9 @@ mod tests {
             context.borrow_mut().Finish();
         }
 
+        let access = crate::artifact_access::artifact_access();
         let metadata = recording
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find_map(|chunk| chunk.compositor.as_deref())
             .and_then(|metadata| metadata.region_capture_data.as_deref())
@@ -209,8 +210,9 @@ mod tests {
                 },
             )]
         );
+        let access = crate::artifact_access::artifact_access();
         let tracked = recording
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find_map(|chunk| {
                 chunk

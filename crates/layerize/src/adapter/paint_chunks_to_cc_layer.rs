@@ -107,9 +107,12 @@ pub trait ConversionPaintChunk<B: PaintChunksTypes> {
 /// PaintChunk stores only source display-item indices. The real immutable
 /// artifact resolves that range, matching native PaintChunkIterator::DisplayItems
 /// without adding a chunk-to-artifact backpointer or copying item payloads.
+/// The display items are read under the document-sequence proof
+/// (paint_record::artifact_access), obtained once per conversion.
 pub trait ConversionPaintArtifact<B: PaintChunksTypes> {
     fn DisplayItemsForChunk<'a>(
         &'a self,
+        access: &'a ::paint::ArtifactAccess,
         chunk: &'a B::PaintChunk,
     ) -> impl ExactSizeIterator<Item = &'a B::DisplayItem>;
 }

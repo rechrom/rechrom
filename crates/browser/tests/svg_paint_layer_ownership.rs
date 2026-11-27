@@ -232,7 +232,7 @@ fn svg_mask_is_owned_by_the_svg_paint_scope_without_a_css_layer() {
         let classification = paint::paint_order::ClassifyFragmentPaintLayer(masked, false, false);
         assert!(!classification.is_paint_layer);
         let artifact = &page.CurrentPaintArtifact().unwrap();
-        assert!(artifact.display_items.iter().any(|item| {
+        assert!(artifact.display_items.get(&paint::artifact_access()).iter().any(|item| {
             item.id.client_id == masked.paint.DisplayItemClientId()
                 && item.id.r#type == paint::display_item_id::DisplayItemIdType::kSVGMask
         }));
@@ -252,7 +252,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
         );
         let node_id = id(&page, "capture");
         let old = page.CurrentPaintArtifact().unwrap().clone();
-        assert!(old.chunks.iter().all(|chunk| chunk
+        assert!(old.chunks.get(&paint::artifact_access()).iter().all(|chunk| chunk
             .compositor
             .as_deref()
             .and_then(|metadata| metadata.region_capture_data.as_deref())
@@ -265,7 +265,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
             if page
                 .CurrentPaintArtifact()
                 .unwrap()
-                .chunks
+                .chunks.get(&paint::artifact_access())
                 .iter()
                 .any(|chunk| {
                     chunk
@@ -294,8 +294,9 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
         );
 
         let artifact = page.CurrentPaintArtifact().unwrap();
+        let access = paint::artifact_access();
         let regions = artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())
             .filter_map(|metadata| metadata.region_capture_data.as_deref())
@@ -312,7 +313,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
                 height: 40.0,
             }
         );
-        assert!(old.chunks.iter().all(|chunk| chunk
+        assert!(old.chunks.get(&paint::artifact_access()).iter().all(|chunk| chunk
             .compositor
             .as_deref()
             .and_then(|metadata| metadata.region_capture_data.as_deref())
@@ -353,14 +354,14 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         for _ in 0..20 {
             page.RunTask().unwrap();
             let artifact = &page.CurrentPaintArtifact().unwrap();
-            let has_region = artifact.chunks.iter().any(|chunk| {
+            let has_region = artifact.chunks.get(&paint::artifact_access()).iter().any(|chunk| {
                 chunk
                     .compositor
                     .as_deref()
                     .and_then(|metadata| metadata.region_capture_data.as_deref())
                     .is_some_and(|data| data.iter().any(|(id, _)| *id == crop_id))
             });
-            let has_tracked = artifact.chunks.iter().any(|chunk| {
+            let has_tracked = artifact.chunks.get(&paint::artifact_access()).iter().any(|chunk| {
                 chunk
                     .compositor
                     .as_deref()
@@ -381,8 +382,9 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         assert_eq!(fragment_tracking[0].feature, 7);
         assert_eq!(fragment_tracking[0].id, tracked_id);
         let artifact = &page.CurrentPaintArtifact().unwrap();
+        let access = paint::artifact_access();
         let regions = artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())
             .filter_map(|metadata| metadata.region_capture_data.as_deref())
@@ -400,7 +402,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
             }
         );
         let capture_chunk = artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find(|chunk| {
                 chunk
@@ -428,7 +430,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
             paint::paint_engine::PaintHitTestOpaqueness::Opaque
         );
         let tracked = artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())
             .filter_map(|metadata| metadata.tracked_element_rects.as_deref())
@@ -460,19 +462,20 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
                 0x9999, 0xaaaa
             ]))
         );
-        assert!(old.chunks.iter().all(|chunk| chunk
+        assert!(old.chunks.get(&paint::artifact_access()).iter().all(|chunk| chunk
             .compositor
             .as_deref()
             .is_none_or(|metadata| metadata.region_capture_data.is_none()
                 && metadata.tracked_element_rects.is_none())));
 
+        drop(access);
         assert!(page.ClearTrackedElementSubRect(node_id, 7));
         for _ in 0..20 {
             page.RunTask().unwrap();
             if page
                 .CurrentPaintArtifact()
                 .unwrap()
-                .chunks
+                .chunks.get(&paint::artifact_access())
                 .iter()
                 .all(|chunk| {
                     chunk
@@ -492,7 +495,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         assert!(page
             .CurrentPaintArtifact()
             .unwrap()
-            .chunks
+            .chunks.get(&paint::artifact_access())
             .iter()
             .all(|chunk| chunk
                 .compositor
@@ -526,7 +529,7 @@ fn tracked_plain_inline_forces_a_fragment_and_publishes_bounds() {
             if page
                 .CurrentPaintArtifact()
                 .unwrap()
-                .chunks
+                .chunks.get(&paint::artifact_access())
                 .iter()
                 .any(|chunk| {
                     chunk
@@ -544,8 +547,9 @@ fn tracked_plain_inline_forces_a_fragment_and_publishes_bounds() {
         assert!(fragment.paint.box_fragment_is_inline_box);
         assert_eq!(fragment.paint.TrackedElementSubRects().len(), 1);
         let artifact = page.CurrentPaintArtifact().unwrap();
+        let access = paint::artifact_access();
         let tracked = artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())
             .filter_map(|metadata| metadata.tracked_element_rects.as_deref())

@@ -27,6 +27,7 @@ use prepaint::{
 };
 
 pub mod artifact;
+pub mod artifact_access;
 mod blocking_wheel_event_regions;
 pub mod box_border_painter;
 pub mod box_decoration_data;
@@ -87,6 +88,10 @@ pub use artifact::{
     DocumentPaintArtifactRecord, DocumentRecordArtifact, NewDocumentPaintArtifactRecord,
     PaintRecordForArtifact, PaintRecordForItem, ImageDependencyIndex, ImagePaintDependency, PaintMutation,
     PaintMutationResult, PaintRecording, PaintResourceUpdate,
+};
+pub use artifact_access::{
+    artifact_access, artifact_writer, ArtifactAccess, ArtifactAccessScope, ArtifactData,
+    ArtifactWriter, ArtifactWriterScope,
 };
 pub use display_item::{
     CaretGeometry, CaretPosition, DecorationPaintPass, DisplayItem, DisplayMaskLayer,

@@ -8495,8 +8495,9 @@ mod background_attachment_tests {
             context.borrow_mut().Finish();
         }
 
+        let access = crate::artifact_access::artifact_access();
         let background = recording
-            .display_items
+            .display_items.get(&access)
             .iter()
             .find(|item| item.draws_content)
             .expect("box decoration background drawing");
@@ -8833,7 +8834,7 @@ mod background_attachment_tests {
             context.borrow_mut().Finish();
         }
         assert!(recording.items.is_empty());
-        assert!(recording.display_items.is_empty());
+        assert!(recording.display_items.get(&crate::artifact_access::artifact_access()).is_empty());
     }
 
     #[test]
@@ -9892,13 +9893,13 @@ mod background_attachment_tests {
             .PaintRootGroup(PaintPhase::kSelfBlockBackgroundOnly);
         drop(context);
 
-        assert_eq!(recording.display_items.len(), 1);
+        assert_eq!(recording.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
-            recording.display_items[0].id.r#type,
+            recording.display_items.get(&crate::artifact_access::artifact_access())[0].id.r#type,
             DisplayItemIdType::kDocumentRootBackdrop
         );
         assert_eq!(
-            recording.display_items[0].visual_rect,
+            recording.display_items.get(&crate::artifact_access::artifact_access())[0].visual_rect,
             PaintRect {
                 x: 0.0,
                 y: 0.0,
@@ -9915,22 +9916,22 @@ mod background_attachment_tests {
         assert_eq!(recording.items[0].color.alpha, 1.0);
         assert_eq!(recording.items[0].color.red, 1.0);
         assert!(recording.items[0].source_overwrite);
-        assert_eq!(recording.chunks.len(), 1);
+        assert_eq!(recording.chunks.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
-            recording.chunks[0].id.r#type,
+            recording.chunks.get(&crate::artifact_access::artifact_access())[0].id.r#type,
             DisplayItemIdType::kDocumentRootBackdrop
         );
         assert!(Arc::ptr_eq(
-            &recording.chunks[0].properties.transform,
+            &recording.chunks.get(&crate::artifact_access::artifact_access())[0].properties.transform,
             &node.contents_properties.nodes.transform,
         ));
         assert_eq!(
-            recording.chunks[0].bounds,
-            recording.display_items[0].visual_rect
+            recording.chunks.get(&crate::artifact_access::artifact_access())[0].bounds,
+            recording.display_items.get(&crate::artifact_access::artifact_access())[0].visual_rect
         );
         assert_eq!(
-            recording.chunks[0].rect_known_to_be_opaque,
-            recording.display_items[0].visual_rect,
+            recording.chunks.get(&crate::artifact_access::artifact_access())[0].rect_known_to_be_opaque,
+            recording.display_items.get(&crate::artifact_access::artifact_access())[0].visual_rect,
         );
 
         let mut skipped = PaintRecording::default();
@@ -9942,7 +9943,7 @@ mod background_attachment_tests {
             context.borrow_mut().Finish();
         }
         assert!(skipped.items.is_empty());
-        assert!(skipped.display_items.is_empty());
+        assert!(skipped.display_items.get(&crate::artifact_access::artifact_access()).is_empty());
     }
 
     #[test]
@@ -9988,7 +9989,7 @@ mod background_attachment_tests {
             BoxFragmentPainter::new(&node, &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
-        assert!(ordinary.chunks.iter().all(|chunk| {
+        assert!(ordinary.chunks.get(&crate::artifact_access::artifact_access()).iter().all(|chunk| {
             chunk
                 .compositor
                 .as_deref()
@@ -10009,8 +10010,9 @@ mod background_attachment_tests {
             BoxFragmentPainter::new(&node, &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
+        let access = crate::artifact_access::artifact_access();
         let hit = special
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find_map(|chunk| {
                 chunk
@@ -10029,8 +10031,9 @@ mod background_attachment_tests {
             hit.touch_action_rects,
             vec![(expected, foundation::TouchAction::kPanX.bits() as u32)]
         );
+        let access = crate::artifact_access::artifact_access();
         let capture = special
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find_map(|chunk| {
                 chunk
@@ -10080,8 +10083,9 @@ mod background_attachment_tests {
             width: 300.0,
             height: 180.0,
         };
+        let access = crate::artifact_access::artifact_access();
         let contents_chunk = contents
-            .chunks
+            .chunks.get(&access)
             .iter()
             .find(|chunk| chunk.id.client_id == 177)
             .expect("scrolling-background metadata client");
@@ -10644,10 +10648,10 @@ mod background_attachment_tests {
 
             drop(paint_info);
             drop(context);
-            assert_eq!(recording.display_items.len(), 1);
-            assert_eq!(recording.display_items[0].is_cacheable, should_cache);
+            assert_eq!(recording.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
+            assert_eq!(recording.display_items.get(&crate::artifact_access::artifact_access())[0].is_cacheable, should_cache);
             assert_eq!(
-                recording.display_items[0].paint_invalidation_reason,
+                recording.display_items.get(&crate::artifact_access::artifact_access())[0].paint_invalidation_reason,
                 Some(if should_cache {
                     foundation::PaintInvalidationReason::kNone
                 } else {
@@ -10741,7 +10745,7 @@ mod background_attachment_tests {
         BoxFragmentPainter::new(&node, &context).PaintReplaced(&paint_info);
 
         drop(context);
-        assert!(recording.display_items.is_empty());
+        assert!(recording.display_items.get(&crate::artifact_access::artifact_access()).is_empty());
         assert!(recording.items.is_empty());
         assert_eq!(fragment.paint.image_last_paint_rect.get(), None);
     }
@@ -10778,7 +10782,7 @@ mod background_attachment_tests {
             rect: visual_rect,
             ..Default::default()
         }]);
-        previous.display_items.push(RecordedDisplayItem {
+        previous.display_items.make_mut().push(RecordedDisplayItem {
             is_cacheable: true,
             is_tombstone: false,
             paint_invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
@@ -10813,7 +10817,7 @@ mod background_attachment_tests {
             false,
         ));
         drop(context);
-        assert_eq!(reused.display_items.len(), 1);
+        assert_eq!(reused.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
 
         let mut changed = PaintRecording::default();
         let context = RefCell::new(PaintContext::WithEditingAndCache(
@@ -10828,7 +10832,7 @@ mod background_attachment_tests {
             true,
         ));
         drop(context);
-        assert!(changed.display_items.is_empty());
+        assert!(changed.display_items.get(&crate::artifact_access::artifact_access()).is_empty());
     }
 
     #[test]
@@ -11009,9 +11013,9 @@ mod background_attachment_tests {
             context.borrow_mut().Finish();
         }
 
-        assert_eq!(output.display_items.len(), 1);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
-            output.display_items[0].visual_rect,
+            output.display_items.get(&crate::artifact_access::artifact_access())[0].visual_rect,
             PaintRect {
                 x: 21.0,
                 y: 35.0,
@@ -11019,7 +11023,7 @@ mod background_attachment_tests {
                 height: 76.0,
             }
         );
-        assert!(!output.display_items[0].draws_content);
+        assert!(!output.display_items.get(&crate::artifact_access::artifact_access())[0].draws_content);
     }
 
     #[test]
@@ -11420,7 +11424,7 @@ mod background_attachment_tests {
             BoxFragmentPainter::new(&root, &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
-        assert!(recording.display_items.iter().all(|item| {
+        assert!(recording.display_items.get(&crate::artifact_access::artifact_access()).iter().all(|item| {
             item.id.r#type != crate::display_item_id::DisplayItemIdType::kDocumentRootBackdrop
         }));
         let canvas_draw = recording

@@ -31,7 +31,11 @@ impl<'a> PaintArtifactAsJSON<'a> {
 
     /// Source: `paint_controller_debug_data.cc:30-33`.
     fn ToString(mut self) -> String {
-        let value = self.ChunksAsJSONArrayRecursive(0, self.artifact_.GetPaintChunks().len());
+        let count = self
+            .artifact_
+            .GetPaintChunks(&crate::artifact_access::artifact_access())
+            .len();
+        let value = self.ChunksAsJSONArrayRecursive(0, count);
         serde_json::to_string_pretty(&value)
             .expect("paint artifact debug data contains only source JSON values")
     }

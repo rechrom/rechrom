@@ -509,21 +509,22 @@ impl<B: PaintArtifactCompositorTypes> OldPendingLayerMatcher<B> {
         }
     }
     fn Find(&mut self, new_layer: &PendingLayer<B>) -> Option<&mut PendingLayer<B>> {
+        let access = ::paint::artifact_access();
         let trace = { static ENV_SWITCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *ENV_SWITCH.get_or_init(|| std::env::var_os("RECHROM_DIAG_LAYER_MATCH").is_some()) };
         if self.pending_layers_.is_empty() {
             if trace {
                 eprintln!(
                     "layer-match new={} result=no-old-layers",
-                    new_layer.FirstPaintChunk().IdToString()
+                    new_layer.FirstPaintChunk(&access).IdToString()
                 );
             }
             return None;
         }
-        if !new_layer.FirstPaintChunk().CanMatchOldChunk() {
+        if !new_layer.FirstPaintChunk(&access).CanMatchOldChunk() {
             if trace {
                 eprintln!(
                     "layer-match new={} result=new-chunk-cannot-match",
-                    new_layer.FirstPaintChunk().IdToString()
+                    new_layer.FirstPaintChunk(&access).IdToString()
                 );
             }
             return None;
@@ -535,10 +536,10 @@ impl<B: PaintArtifactCompositorTypes> OldPendingLayerMatcher<B> {
             if trace {
                 eprintln!(
                     "layer-match new={} new-own={} old-index={} old={} old-own={} matches={}",
-                    new_layer.FirstPaintChunk().IdToString(),
+                    new_layer.FirstPaintChunk(&access).IdToString(),
                     new_layer.ChunkRequiresOwnLayer(),
                     index,
-                    self.pending_layers_[index].FirstPaintChunk().IdToString(),
+                    self.pending_layers_[index].FirstPaintChunk(&access).IdToString(),
                     self.pending_layers_[index].ChunkRequiresOwnLayer(),
                     matches
                 );
@@ -638,8 +639,9 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:291-341.
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h:320-322.
     fn ComputeNeedsCompositedScrolling(&self, artifact: &B::PaintArtifact, cursor: usize) -> bool {
+        let access = ::paint::artifact_access();
         let chunk = artifact
-            .PaintChunk(cursor)
+            .PaintChunk(&access, cursor)
             .expect("source current PaintChunk");
         debug_assert!(chunk.hit_test_data().is_some());
         debug_assert!(
@@ -669,7 +671,7 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
             return true;
         }
         for index in cursor + 1..artifact.PaintChunkCount() {
-            let next = artifact.PaintChunk(index).unwrap();
+            let next = artifact.PaintChunk(&access, index).unwrap();
             if next.SameRawTransform(chunk) {
                 continue;
             }
@@ -691,7 +693,8 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         cursor: usize,
         services: &dyn PaintArtifactCompositorServices<B>,
     ) {
-        let chunk = artifact.PaintChunk(cursor).unwrap();
+        let access = ::paint::artifact_access();
+        let chunk = artifact.PaintChunk(&access, cursor).unwrap();
         let hit = chunk.hit_test_data();
         if let Some(translation) = hit
             .and_then(|hit| hit.scroll_translation())
@@ -757,6 +760,7 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         chunk: &B::PaintChunk,
         services: &dyn PaintArtifactCompositorServices<B>,
     ) -> CompositingType {
+        let access = ::paint::artifact_access();
         let scroll_hit_test_requires_compositing = chunk
             .hit_test_data()
             .and_then(|data| data.scroll_translation())
@@ -778,7 +782,7 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
             ..Default::default()
         };
         if input.has_single_display_item {
-            let item = artifact.DisplayItemsForChunk(chunk).next().unwrap();
+            let item = artifact.DisplayItemsForChunk(&access, chunk).next().unwrap();
             input.single_item_is_foreign_layer = item.IsForeignLayer();
             if input.single_item_is_foreign_layer {
                 return compositor_layerize::chunk_policy::ChooseChunkCompositingType(input);
@@ -828,10 +832,11 @@ fn ForeignLayer<B: PaintArtifactCompositorTypes>(
     chunk: &B::PaintChunk,
     artifact: &B::PaintArtifact,
 ) -> Option<crate::cc::layers::layer::LayerBorrow<B>> {
+    let access = ::paint::artifact_access();
     if chunk.display_item_count() != 1 {
         return None;
     }
-    let item = artifact.DisplayItemsForChunk(chunk).next().unwrap();
+    let item = artifact.DisplayItemsForChunk(&access, chunk).next().unwrap();
     if item.IsForeignLayer() {
         Some(item.ForeignLayerBorrow())
     } else {
@@ -1011,6 +1016,7 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         repainted: &B::PaintArtifact,
         services: &dyn PaintArtifactCompositorServices<B>,
     ) {
+        let access = ::paint::artifact_access();
         if self.needs_update_ == UpdateType::kFull {
             return;
         }
@@ -1028,9 +1034,9 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         }
         for index in 0..previous.PaintChunkCount() {
             let decision = NeedsFullUpdateAfterPaintingChunk::<B>(
-                previous.PaintChunk(index).unwrap(),
+                previous.PaintChunk(&access, index).unwrap(),
                 previous,
-                repainted.PaintChunk(index).unwrap(),
+                repainted.PaintChunk(&access, index).unwrap(),
                 repainted,
                 services,
             );
@@ -1320,7 +1326,8 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::layerize_walk::Layeri
     }
 
     fn chunk_effect(&self, index: usize) -> Self::Effect {
-        self.artifact_.PaintChunk(index).unwrap().UnaliasedEffect()
+        let access = ::paint::artifact_access();
+        self.artifact_.PaintChunk(&access, index).unwrap().UnaliasedEffect()
     }
 
     fn update_before_layerizing_chunk(&mut self, index: usize) {
@@ -1333,9 +1340,10 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::layerize_walk::Layeri
     }
 
     fn push_pending_layer(&mut self, index: usize, canvas_child_id: Self::CanvasChildId) {
+        let access = ::paint::artifact_access();
         let compositing_type = self.compositor_.ChunkCompositingType(
             &self.artifact_,
-            self.artifact_.PaintChunk(index).unwrap(),
+            self.artifact_.PaintChunk(&access, index).unwrap(),
             self.services,
         );
         self.pending_layers_.push(PendingLayer::new(
@@ -1351,7 +1359,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::layerize_walk::Layeri
             let direct = transform.NearestDirectlyCompositedAncestor();
             eprintln!(
                 "will-change-layerize chunk={} bounds={:?} transform-direct={} nearest-direct={} compositing={:?}",
-                pending.FirstPaintChunk().IdToString(),
+                pending.FirstPaintChunk(&access).IdToString(),
                 pending.BoundsForTesting(),
                 transform.HasDirectCompositingReasons(),
                 direct.is_some(),
@@ -1738,6 +1746,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
     }
 
     fn layerize_pending_layers(&mut self) -> usize {
+        let access = ::paint::artifact_access();
         let (pending, merged_sticky_transforms, _) = Layerizer::new(
             self.compositor,
             self.artifact.clone(),
@@ -1753,7 +1762,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
                 eprintln!(
                     "will-change-final-before-decompose index={} first={} chunks={} bounds={:?} offset={:?} draws={} transform-direct={} nearest-direct={}",
                     index,
-                    pending.FirstPaintChunk().IdToString(),
+                    pending.FirstPaintChunk(&access).IdToString(),
                     pending.Chunks().len(),
                     pending.BoundsForTesting(),
                     pending.OffsetOfDecompositedTransforms(),
@@ -1770,7 +1779,7 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
                 eprintln!(
                     "will-change-final-after-decompose index={} first={} chunks={} bounds={:?} offset={:?} transform-direct={} nearest-direct={}",
                     index,
-                    pending.FirstPaintChunk().IdToString(),
+                    pending.FirstPaintChunk(&access).IdToString(),
                     pending.Chunks().len(),
                     pending.BoundsForTesting(),
                     pending.OffsetOfDecompositedTransforms(),
@@ -2070,9 +2079,10 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
     }
 
     fn clear_paint_property_change_markers(&mut self) -> usize {
+        let access = ::paint::artifact_access();
         let count = self.artifact.PaintChunkCount();
         for index in 0..count {
-            let chunk = self.artifact.PaintChunk(index).unwrap();
+            let chunk = self.artifact.PaintChunk(&access, index).unwrap();
             chunk
                 .PropertiesUnalias()
                 .ClearChangedToRoot(*self.context.property_tree_sequence_number);
@@ -2524,6 +2534,7 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         previous: &B::PropertyTreeState,
         services: &dyn PaintArtifactCompositorServices<B>,
     ) -> B::CompositingReasons {
+        let access = ::paint::artifact_access();
         debug_assert!(self.layer_debug_info_enabled_);
         debug_assert!(self.needs_update_ == UpdateType::kFull);
         let singleton = |reason| {
@@ -2534,11 +2545,11 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
         if layer.GetCompositingType() == CompositingType::kScrollHitTestLayer {
             return singleton(CompositingReason::OverflowScrolling);
         }
-        if layer.Chunks().len() == 1 && layer.FirstPaintChunk().display_item_count() == 1 {
+        if layer.Chunks().len() == 1 && layer.FirstPaintChunk(&access).display_item_count() == 1 {
             let item = layer
                 .Chunks()
                 .artifact()
-                .DisplayItemsForChunk(layer.FirstPaintChunk())
+                .DisplayItemsForChunk(&access, layer.FirstPaintChunk(&access))
                 .next()
                 .unwrap();
             let reason = match item.GetType() {
@@ -2809,11 +2820,12 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::fast_path_update::Fas
     fn validate_fast_path_inputs(&mut self) {
         #[cfg(debug_assertions)]
         if self.compositor.needs_update_ != UpdateType::kFull {
+            let access = ::paint::artifact_access();
             for index in 0..self.artifact.PaintChunkCount() {
                 debug_assert!(
                     !self
                         .artifact
-                        .PaintChunk(index)
+                        .PaintChunk(&access, index)
                         .unwrap()
                         .PropertiesUnalias()
                         .ChangedToRoot(B::ChangedOnlySimpleValues())

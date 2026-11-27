@@ -952,7 +952,7 @@ fn visible_selection_handles_publish_compositor_bounds() {
             page.RunTask().unwrap();
             if page.CurrentFrame().is_some_and(|frame| {
                 frame.sequence > initial_sequence
-                    && page.CurrentPaintArtifact().unwrap().chunks.iter().any(|chunk| {
+                    && page.CurrentPaintArtifact().unwrap().chunks.get(&paint::artifact_access()).iter().any(|chunk| {
                         chunk
                             .compositor
                             .as_deref()
@@ -979,8 +979,9 @@ fn visible_selection_handles_publish_compositor_bounds() {
         let frame = page.CurrentFrame().expect("selection frame");
         let frame_artifact = page.CurrentPaintArtifact().unwrap().clone();
         assert!(frame.sequence > initial_sequence);
+        let access = paint::artifact_access();
         let layer_selections: Vec<_> = frame_artifact
-            .chunks
+            .chunks.get(&access)
             .iter()
             .filter_map(|chunk| chunk.compositor.as_deref())
             .filter_map(|metadata| metadata.layer_selection_data.as_deref())

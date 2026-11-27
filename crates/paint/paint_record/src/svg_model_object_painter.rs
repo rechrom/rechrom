@@ -268,9 +268,9 @@ mod tests {
             let context = RefCell::new(PaintContext::new(&mut output));
             let _recorder = SVGDrawingRecorder::for_phase(&context, &node, PaintPhase::kForeground);
         }
-        assert_eq!(output.display_items.len(), 1);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
-            output.display_items[0].visual_rect,
+            output.display_items.get(&crate::artifact_access::artifact_access())[0].visual_rect,
             PaintRect {
                 x: -2.0,
                 y: 2.0,

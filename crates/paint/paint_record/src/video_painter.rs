@@ -355,9 +355,9 @@ mod tests {
         drop(context);
         assert!(recording.image_painted);
         assert!(recording.items.is_empty());
-        assert_eq!(recording.display_items.len(), 1);
+        assert_eq!(recording.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
-            recording.display_items[0].GetType(),
+            recording.display_items.get(&crate::artifact_access::artifact_access())[0].GetType(),
             DisplayItemIdType::kForeignLayerVideo
         );
         assert_eq!(

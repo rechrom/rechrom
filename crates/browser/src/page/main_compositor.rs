@@ -439,8 +439,8 @@ impl PageDomainServices {
         let (viewport, layout_zoom) = self.MainCompositorViewportFor(artifact, width, height, scale)?;
         self.SetMainCompositorViewport(viewport)?;
         let mut trace = browser_tracing::span("compositor_layerize", "Layerize.PaintArtifact");
-        trace.set("display_items", artifact.display_items.len() as f64);
-        trace.set("chunks", artifact.chunks.len() as f64);
+        trace.set("display_items", artifact.display_items.get(&paint::artifact_access()).len() as f64);
+        trace.set("chunks", artifact.chunks.get(&paint::artifact_access()).len() as f64);
         let mut layerize = self.MainLayerize().borrow_mut();
         let input = layerize
             .PrepareInput(artifact.clone())

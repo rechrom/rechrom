@@ -273,8 +273,12 @@ pub trait PendingLayerColor {
     fn GetResultingPaintColor(&self, foreground: Color4f, background: Color4f) -> Color4f;
 }
 
+/// Chunks and display items are read under the document-sequence proof
+/// (paint_record::artifact_access), obtained once per layerization step.
+pub use ::paint::ArtifactAccess;
 pub trait PendingPaintArtifact<B: PendingLayerTypes> {
-    fn PaintChunk(&self, index: usize) -> Option<&B::PaintChunk>;
+    fn PaintChunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize)
+        -> Option<&'a B::PaintChunk>;
     fn ClientDebugName(&self, client: B::ClientId) -> String;
     fn ClientOwnerNodeId(&self, client: B::ClientId) -> B::DomNodeId;
     fn PaintChunkCount(&self) -> usize;
@@ -295,7 +299,11 @@ pub trait PendingPaintChunk<B: PendingLayerTypes> {
     fn non_composited_scroll_translation(&self) -> Option<B::TransformNode>;
     fn Matches(&self, other: &Self) -> bool;
     fn first_display_item_is_foreign_layer_video(&self, artifact: &B::PaintArtifact) -> bool;
-    fn FirstDisplayItem<'a>(&self, artifact: &'a B::PaintArtifact) -> &'a B::DisplayItem;
+    fn FirstDisplayItem<'a>(
+        &self,
+        access: &'a ArtifactAccess,
+        artifact: &'a B::PaintArtifact,
+    ) -> &'a B::DisplayItem;
     fn is_moved_from_cached_subsequence(&self) -> bool;
 }
 
@@ -307,7 +315,7 @@ pub trait PendingPaintChunkSubset<B: PendingLayerTypes>: Sized {
     fn SetPaintArtifact(&mut self, artifact: Arc<B::PaintArtifact>);
     fn Merge(&mut self, guest: &Self);
     fn len(&self) -> usize;
-    fn chunk(&self, index: usize) -> &B::PaintChunk;
+    fn chunk<'a>(&'a self, access: &'a ArtifactAccess, index: usize) -> &'a B::PaintChunk;
     fn ToDebugJson(&self) -> String;
 }
 

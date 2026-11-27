@@ -289,7 +289,7 @@ impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>>
     ) {
         array.push(serde_json::Value::String(format!(
             "{:?}",
-            chunks.chunk(index).id
+            chunks.chunk(&::paint::artifact_access(), index).id
         )))
     }
     fn CanvasChildPaintState(
@@ -984,15 +984,21 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                 && !previous
                     .display_items
                     .PtrEq(&input.artifact().display_items)
-                && previous
-                    .display_items
-                    .iter()
-                    .filter_map(|item| item.scrollbar.as_ref())
-                    .ne(input
-                        .artifact()
+                && {
+                    let access = ::paint::artifact_access();
+                    let changed = previous
                         .display_items
+                        .get(&access)
                         .iter()
-                        .filter_map(|item| item.scrollbar.as_ref()));
+                        .filter_map(|item| item.scrollbar.as_ref())
+                        .ne(input
+                            .artifact()
+                            .display_items
+                            .get(&access)
+                            .iter()
+                            .filter_map(|item| item.scrollbar.as_ref()));
+                    changed
+                };
             // Blink's PrePaint calls LocalFrameView::
             // SetPaintArtifactCompositorNeedsUpdate when a property node
             // changed beyond composited values, before LocalFrameView calls

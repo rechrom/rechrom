@@ -16,7 +16,7 @@ use crate::{
         geometry::{RectF, Size, Vector2dF},
         main_layer::{LayerContext, MainLayerHostId},
         pending_layer::{
-            LcdTextPreference, PendingClipNode, PendingDisplayItem, PendingEffectNode,
+            ArtifactAccess, LcdTextPreference, PendingClipNode, PendingDisplayItem, PendingEffectNode,
             PendingLayerColor, PendingLayerGeometry, PendingLayerJson, PendingLayerServices,
             PendingLayerTypes, PendingMappedVisualRect, PendingPaintArtifact, PendingPaintChunk,
             PendingPaintChunkSubset, PendingPropertyTreeState, PendingTransformNode,
@@ -321,8 +321,9 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         compositing_type: CompositingType,
         geometry: &dyn PendingLayerGeometry<B>,
     ) -> Self {
+        let access = ::paint::artifact_access();
         let first_chunk = artifact
-            .PaintChunk(first_chunk_index)
+            .PaintChunk(&access, first_chunk_index)
             .expect("source first PaintChunk belongs to PaintArtifact");
         debug_assert!(!RequiresOwnLayer(compositing_type) || first_chunk.display_item_count() <= 1);
         let property_tree_state = first_chunk.PropertiesUnalias();
@@ -456,7 +457,7 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         assert_ne!(self.solid_color_chunk_index_, K_NOT_FOUND);
         let background = self
             .chunks_
-            .chunk(self.solid_color_chunk_index_)
+            .chunk(&::paint::artifact_access(), self.solid_color_chunk_index_)
             .background_color();
         debug_assert!(background.is_solid_color);
         background.color
@@ -499,26 +500,26 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:128;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:187-189.
-    pub fn FirstPaintChunk(&self) -> &B::PaintChunk {
-        self.chunks_.chunk(0)
+    pub fn FirstPaintChunk<'a>(&'a self, access: &'a ArtifactAccess) -> &'a B::PaintChunk {
+        self.chunks_.chunk(access, 0)
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:129;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:191-193.
-    pub fn FirstDisplayItem(&self) -> &B::DisplayItem {
-        self.FirstPaintChunk()
-            .FirstDisplayItem(self.chunks_.artifact())
+    pub fn FirstDisplayItem<'a>(&'a self, access: &'a ArtifactAccess) -> &'a B::DisplayItem {
+        self.FirstPaintChunk(access)
+            .FirstDisplayItem(access, self.chunks_.artifact())
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:137-138;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:153-161.
     pub fn DebugName(&self) -> String {
         self.chunks_
             .artifact()
-            .ClientDebugName(self.FirstPaintChunk().client_id())
+            .ClientDebugName(self.FirstPaintChunk(&::paint::artifact_access()).client_id())
     }
     pub fn OwnerNodeId(&self) -> B::DomNodeId {
         self.chunks_
             .artifact()
-            .ClientOwnerNodeId(self.FirstPaintChunk().client_id())
+            .ClientOwnerNodeId(self.FirstPaintChunk(&::paint::artifact_access()).client_id())
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:136;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:134-150.
@@ -547,8 +548,8 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         {
             return false;
         }
-        self.FirstPaintChunk()
-            .Matches(old_pending_layer.FirstPaintChunk())
+        self.FirstPaintChunk(&::paint::artifact_access())
+            .Matches(old_pending_layer.FirstPaintChunk(&::paint::artifact_access()))
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:147-159.
     pub fn ChunkRequiresOwnLayer(&self) -> bool {
@@ -568,9 +569,9 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:926-929.
     pub fn HasVideo(&self) -> bool {
         self.chunks_.len() == 1
-            && self.FirstPaintChunk().display_item_count() == 1
+            && self.FirstPaintChunk(&::paint::artifact_access()).display_item_count() == 1
             && self
-                .FirstPaintChunk()
+                .FirstPaintChunk(&::paint::artifact_access())
                 .first_display_item_is_foreign_layer_video(self.chunks_.artifact())
     }
 
@@ -580,7 +581,7 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         debug_assert_eq!(self.compositing_type_, CompositingType::kScrollHitTestLayer);
         debug_assert_eq!(self.chunks_.len(), 1);
         let scroll_translation = self
-            .FirstPaintChunk()
+            .FirstPaintChunk(&::paint::artifact_access())
             .non_composited_scroll_translation()
             .expect("scroll hit-test PaintChunk must retain its scroll translation");
         debug_assert!(scroll_translation.HasScrollNode());
@@ -620,8 +621,9 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:627-739.
     fn UpdateForeignLayer(&mut self, c: &mut LayerContext<'_, B>) {
         debug_assert_eq!(self.compositing_type_, CompositingType::kForeignLayer);
-        debug_assert!(!self.FirstPaintChunk().HasHitTestData());
-        let item = self.FirstDisplayItem();
+        debug_assert!(!self.FirstPaintChunk(&::paint::artifact_access()).HasHitTestData());
+        let access = ::paint::artifact_access();
+        let item = self.FirstDisplayItem(&access);
         let visual_rect = item.ForeignLayerVisualRect();
         let layer_offset = Vector2dF::new(visual_rect.x(), visual_rect.y());
         let foreign_layer = item.ForeignLayer();
@@ -697,7 +699,8 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         c: &mut LayerContext<'_, B>,
     ) {
         debug_assert_eq!(self.compositing_type_, CompositingType::kScrollbarLayer);
-        let item = self.FirstDisplayItem();
+        let access = ::paint::artifact_access();
+        let item = self.FirstDisplayItem(&access);
         debug_assert!(item.IsScrollbar());
         let old_layer = old_pending_layer.and_then(|old| old.cc_layer_.take());
         let layer =
@@ -841,7 +844,7 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         );
         self.SetPaintArtifact(repainted_artifact);
         let chunks_unchanged = (0..self.chunks_.len())
-            .all(|index| self.chunks_.chunk(index).is_moved_from_cached_subsequence());
+            .all(|index| self.chunks_.chunk(&::paint::artifact_access(), index).is_moved_from_cached_subsequence());
         trace.set("chunks", self.chunks_.len() as f64);
         trace.set("chunks_unchanged", chunks_unchanged as u8 as f64);
         if !self.ChunkRequiresOwnLayer() {
@@ -1081,8 +1084,9 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         &self,
         colors: &dyn PendingLayerColor,
     ) -> crate::adapter::layer_tree_impl::Color4f {
+        let access = ::paint::artifact_access();
         let samples = (0..self.chunks_.len()).rev().map(|index| {
-            let chunk = self.chunks_.chunk(index);
+            let chunk = self.chunks_.chunk(&access, index);
             let background = chunk.background_color();
             let chunk_state = chunk.PropertiesUnalias();
             let effect = if chunk_state.SameEffectNode(&self.property_tree_state_) {

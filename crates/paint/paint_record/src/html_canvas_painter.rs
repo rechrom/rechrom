@@ -396,9 +396,9 @@ mod tests {
         assert_eq!(recording.items.len(), 1);
         assert_eq!(recording.items[0].r#type, DisplayItemType::kCustomData);
         assert_eq!(recording.items[0].custom_data_id, fragment.ViewNodeId() as u32);
-        assert_eq!(recording.display_items.len(), 1);
+        assert_eq!(recording.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
-            recording.display_items[0].id.r#type,
+            recording.display_items.get(&crate::artifact_access::artifact_access())[0].id.r#type,
             DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kForeground)
         );
     }
@@ -439,8 +439,9 @@ mod tests {
         drop(paint_info);
         drop(context);
         assert!(recording.items.is_empty());
-        assert_eq!(recording.display_items.len(), 1);
-        let item = &recording.display_items[0];
+        assert_eq!(recording.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
+        let access = crate::artifact_access::artifact_access();
+        let item = &recording.display_items.get(&access)[0];
         assert_eq!(item.id.r#type, DisplayItemIdType::kForeignLayerCanvas);
         assert_eq!(item.GetForeignLayer().LayerId(), 55);
         assert_eq!(

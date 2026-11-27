@@ -19,6 +19,7 @@ use paint_model::display_item_id::DisplayItemId;
 use paint_model::paint_property_tree::PropertyTreeState;
 use paint_model::{PaintRect, PaintResult};
 
+use crate::artifact_access::{artifact_access, ArtifactAccess};
 use crate::paint_under_invalidation_checker::{CheckNewItemResult, PaintUnderInvalidationChecker};
 use crate::{
     DisplayItem, PaintRecording, RecordedDisplayItem, RecordedDisplayItemKind, SubsequenceMarkers,
@@ -150,7 +151,7 @@ impl PaintController {
     ) -> Self {
         let candidates = previous
             .as_ref()
-            .map_or(0, |artifact| artifact.display_items.len());
+            .map_or(0, |artifact| artifact.display_items.get(&artifact_access()).len());
         Self {
             paint_chunker: PaintChunker::default(),
             previous,
@@ -175,7 +176,9 @@ impl PaintController {
             || self
                 .previous
                 .as_ref()
-                .is_some_and(|previous| previous.display_items[index].is_tombstone)
+                .is_some_and(|previous| {
+                    previous.display_items.get(&artifact_access())[index].is_tombstone
+                })
     }
 
     /// Make the controller's previous artifact unique and write the recorded
@@ -190,8 +193,9 @@ impl PaintController {
                 .as_mut()
                 .expect("under-invalidation checking requires an old artifact"),
         );
+        let items = previous.display_items.make_mut();
         for (index, moved) in moved_items.iter_mut().enumerate() {
-            let item = &mut previous.display_items[index];
+            let item = &mut items[index];
             match std::mem::replace(moved, MovedItem::None) {
                 MovedItem::None => {}
                 MovedItem::Item => item.CreateTombstone(),
@@ -276,7 +280,7 @@ impl PaintController {
 
     /// Source: `paint_controller.cc:154-157`.
     pub(crate) fn EnsureChunk(&mut self, output: &mut PaintRecording) {
-        if self.paint_chunker.EnsureChunk(&mut output.chunks) {
+        if self.paint_chunker.EnsureChunk(output.chunks.make_mut()) {
             self.CheckNewChunk(output);
         }
     }
@@ -287,26 +291,27 @@ impl PaintController {
         output: &PaintRecording,
     ) -> bool {
         self.paint_chunker
-            .CurrentChunkIsNonEmptyAndTransparentToHitTest(&output.chunks)
+            .CurrentChunkIsNonEmptyAndTransparentToHitTest(output.chunks.get(&artifact_access()))
     }
 
     /// Source: `paint_controller.h:200-208`.
     pub(crate) fn NumNewChunks(&self, output: &PaintRecording) -> usize {
-        output.chunks.len()
+        output.chunks.get(&artifact_access()).len()
     }
 
     /// Source: `paint_controller.h:203-208`.
     pub(crate) fn LastChunk<'a>(
         &self,
+        access: &'a ArtifactAccess,
         output: &'a PaintRecording,
     ) -> Option<&'a paint_chunk::PaintChunk> {
-        output.chunks.last()
+        output.chunks.get(access).last()
     }
 
     /// Source: `paint_chunker.cc:15-16`; owned by PaintController at
     /// `paint_controller.h:411`.
     pub(crate) fn Finish(&mut self, output: &mut PaintRecording) -> SubsequencesData {
-        self.paint_chunker.Finish(&mut output.chunks);
+        self.paint_chunker.Finish(output.chunks.make_mut());
         debug_assert!(!self.under_invalidation_checker.IsChecking());
         // Interim for Chromium's tombstones in the current list
         // (paint_controller.cc:283-286,737-820), which
@@ -315,7 +320,7 @@ impl PaintController {
         // controller's moves on the new recording. Replaced when cached items
         // are moved in place in the old artifact.
         output.previous_items_moved_from_cache = self.previous.as_ref().and_then(|previous| {
-            let moved: Vec<bool> = (0..previous.display_items.len())
+            let moved: Vec<bool> = (0..previous.display_items.get(&artifact_access()).len())
                 .map(|index| self.PreviousItemIsTombstone(index))
                 .collect();
             moved.contains(&true).then(|| {
@@ -343,7 +348,7 @@ impl PaintController {
         has_text: bool,
     ) {
         let created = self.paint_chunker.increment_display_item(
-            &mut output.chunks,
+            output.chunks.make_mut(),
             id,
             client,
             visual_rect,
@@ -357,7 +362,7 @@ impl PaintController {
         }
         if draws_content {
             self.paint_chunker.UpdateDrawingDerivedData(
-                &mut output.chunks,
+                output.chunks.make_mut(),
                 background,
                 has_text,
                 visual_rect,
@@ -380,7 +385,7 @@ impl PaintController {
             return;
         }
         let created = self.paint_chunker.AddHitTestDataToCurrentChunk(
-            &mut output.chunks,
+            output.chunks.make_mut(),
             id,
             client,
             rect,
@@ -403,7 +408,7 @@ impl PaintController {
         rect: PaintRect,
     ) {
         let created = self.paint_chunker.AddRegionCaptureDataToCurrentChunk(
-            &mut output.chunks,
+            output.chunks.make_mut(),
             id,
             client,
             crop_id,
@@ -424,7 +429,7 @@ impl PaintController {
         sub_rects: &[PaintTrackedElementSubRect],
     ) {
         let created = self.paint_chunker.AddTrackedElementDataToCurrentChunk(
-            &mut output.chunks,
+            output.chunks.make_mut(),
             id,
             client,
             element_paint_rect,
@@ -446,7 +451,7 @@ impl PaintController {
         data: PaintHitTestData,
     ) {
         self.paint_chunker.CreateScrollHitTestChunk(
-            &mut output.chunks,
+            output.chunks.make_mut(),
             id,
             client,
             rect,
@@ -465,42 +470,47 @@ impl PaintController {
     ) {
         debug_assert!(start.is_some() || end.is_some());
         self.paint_chunker
-            .AddSelectionToCurrentChunk(&mut output.chunks, start, end);
+            .AddSelectionToCurrentChunk(output.chunks.make_mut(), start, end);
     }
 
     /// Source: `paint_controller.h:196-198`.
     pub(crate) fn RecordAnySelectionWasPainted(&mut self, output: &mut PaintRecording) {
         self.paint_chunker
-            .RecordAnySelectionWasPainted(&mut output.chunks);
+            .RecordAnySelectionWasPainted(output.chunks.make_mut());
     }
 
     /// Source: `paint_controller.cc:111-124`.
     pub(crate) fn PrepareNewArtifact(&self, output: &mut PaintRecording) {
         const DEFAULT_DISPLAY_ITEM_LIST_CAPACITY: usize = 16;
-        let display_items =
-            self.previous
-                .as_ref()
-                .map_or(DEFAULT_DISPLAY_ITEM_LIST_CAPACITY, |previous| {
-                    let current_size = previous.display_items.len();
-                    if current_size == 0 {
-                        DEFAULT_DISPLAY_ITEM_LIST_CAPACITY
-                    } else {
-                        current_size
-                    }
-                });
-        output.display_items.reserve(display_items);
-        if let Some(previous) = &self.previous {
-            // Source: paint_controller.cc:116-124 reserves the chunk and
-            // display-item lists only. Cached drawings keep their own
-            // PaintRecord allocations, so the op backing is not reserved.
-            output.chunks.reserve(previous.chunks.len());
-        }
+        let (display_items, chunks) = {
+            let access = artifact_access();
+            self.previous.as_ref().map_or(
+                (DEFAULT_DISPLAY_ITEM_LIST_CAPACITY, 0),
+                |previous| {
+                    let current_size = previous.display_items.get(&access).len();
+                    (
+                        if current_size == 0 {
+                            DEFAULT_DISPLAY_ITEM_LIST_CAPACITY
+                        } else {
+                            current_size
+                        },
+                        previous.chunks.get(&access).len(),
+                    )
+                },
+            )
+        };
+        output.display_items.make_mut().reserve(display_items);
+        // Source: paint_controller.cc:116-124 reserves the chunk and
+        // display-item lists only. Cached drawings keep their own PaintRecord
+        // allocations, so the op backing is not reserved.
+        output.chunks.make_mut().reserve(chunks);
     }
 
     fn FindItemFromIdIndexMap(&self, id: DisplayItemId) -> Option<usize> {
         let index = *self.out_of_order_item_id_index_map.get(&id)?;
         let previous = self.previous.as_ref()?;
-        let item = &previous.display_items[index];
+        let access = artifact_access();
+        let item = &previous.display_items.get(&access)[index];
         if item.is_tombstone || self.PreviousItemIsTombstone(index) {
             return None;
         }
@@ -515,10 +525,11 @@ impl PaintController {
     }
 
     fn FindOutOfOrderCachedItemForward(&mut self, id: DisplayItemId) -> Option<usize> {
-        let item_count = self.previous.as_ref()?.display_items.len();
+        let access = artifact_access();
+        let item_count = self.previous.as_ref()?.display_items.get(&access).len();
         for index in self.next_item_to_index..item_count {
             let (item_id, is_tombstone, is_cacheable) = {
-                let item = &self.previous.as_ref().unwrap().display_items[index];
+                let item = &self.previous.as_ref().unwrap().display_items.get(&access)[index];
                 (item.id, item.is_tombstone, item.is_cacheable)
             };
             if is_tombstone || self.PreviousItemIsTombstone(index) {
@@ -538,8 +549,10 @@ impl PaintController {
     /// Source: `paint_controller.cc:640-735`.
     fn FindCachedItem(&mut self, id: DisplayItemId) -> Option<usize> {
         if let Some(previous) = self.previous.as_ref() {
-            if self.next_item_to_match < previous.display_items.len() {
-                let item = &previous.display_items[self.next_item_to_match];
+            let access = artifact_access();
+            let items = previous.display_items.get(&access);
+            if self.next_item_to_match < items.len() {
+                let item = &items[self.next_item_to_match];
                 if !self.PreviousItemIsTombstone(self.next_item_to_match) && item.id == id {
                     return Some(self.next_item_to_match);
                 }
@@ -587,7 +600,7 @@ impl PaintController {
         // state still holding it: the item takes a share of its record
         // allocation (no op copy) and the tombstone is noted locally.
         let previous = self.previous.as_ref().unwrap();
-        let mut item = previous.display_items[index].clone();
+        let mut item = previous.display_items.get(&artifact_access())[index].clone();
         item.MoveRecordFrom(previous, position);
         self.moved_previous_items[index] = MovedItem::Item;
         Some(item)
@@ -633,7 +646,7 @@ impl PaintController {
         }
         let previous = self.previous.as_ref().unwrap();
         debug_assert_eq!(
-            previous.display_items[index].kind,
+            previous.display_items.get(&artifact_access())[index].kind,
             RecordedDisplayItemKind::Drawing
         );
         self.metrics.reused += 1;
@@ -671,8 +684,14 @@ impl PaintController {
         let markers = self.previous_subsequences.tree[subsequence_index];
         debug_assert_eq!(markers.client_id, client_id);
         let previous = self.previous.as_ref().unwrap();
-        let start_item_index = previous.chunks[markers.start_chunk_index].begin_index as usize;
-        let end_item_index = previous.chunks[markers.end_chunk_index - 1].end_index as usize;
+        let (start_item_index, end_item_index) = {
+            let access = artifact_access();
+            let chunks = previous.chunks.get(&access);
+            (
+                chunks[markers.start_chunk_index].begin_index as usize,
+                chunks[markers.end_chunk_index - 1].end_index as usize,
+            )
+        };
         if end_item_index > start_item_index
             && self.PreviousItemIsTombstone(start_item_index)
         {
@@ -713,7 +732,7 @@ impl PaintController {
         self.paint_chunker.force_new_chunk();
         self.new_subsequences.tree.push(SubsequenceMarkers {
             client_id,
-            start_chunk_index: output.chunks.len(),
+            start_chunk_index: output.chunks.get(&artifact_access()).len(),
             end_chunk_index: 0,
             is_moved_from_cached_subsequence: false,
             paint_result: PaintResult::kFullyPainted,
@@ -752,7 +771,7 @@ impl PaintController {
             );
         }
 
-        let end_chunk_index = output.chunks.len();
+        let end_chunk_index = output.chunks.get(&artifact_access()).len();
         if start_chunk_index == end_chunk_index {
             debug_assert_eq!(subsequence_index + 1, self.new_subsequences.tree.len());
             self.new_subsequences.tree.pop();
@@ -786,14 +805,15 @@ impl PaintController {
         end_chunk_index: usize,
     ) {
         debug_assert!(end_chunk_index > start_chunk_index);
-        let new_start_chunk_index = output.chunks.len();
+        let new_start_chunk_index = output.chunks.get(&artifact_access()).len();
         let client_id = self.previous_subsequences.tree[subsequence_index].client_id;
         let new_subsequence_index = self.BeginSubsequence(client_id, output);
         let (start_item_index, end_item_index) = {
-            let previous = self.previous.as_ref().unwrap();
+            let access = artifact_access();
+            let chunks = self.previous.as_ref().unwrap().chunks.get(&access);
             (
-                previous.chunks[start_chunk_index].begin_index as usize,
-                previous.chunks[end_chunk_index - 1].end_index as usize,
+                chunks[start_chunk_index].begin_index as usize,
+                chunks[end_chunk_index - 1].end_index as usize,
             )
         };
 
@@ -808,17 +828,22 @@ impl PaintController {
         // PaintController::RecordDebugInfo is gated on PaintDebugInfoEnabled
         // (paint_controller.cc:609-611); moved items look up no names otherwise.
         let debug_info_enabled = output.DebugInfoEnabled();
+        let access = artifact_access();
+        let (new_items, new_chunks) = output.ListsMut();
         for chunk_index in start_chunk_index..end_chunk_index {
-            self.paint_chunker
-                .AppendByMoving(&mut output.chunks, previous.chunks[chunk_index].clone());
+            self.paint_chunker.AppendByMoving(
+                new_chunks,
+                previous.chunks.get(&access)[chunk_index].clone(),
+            );
         }
 
-        let new_item_start_index = output.display_items.len();
-        output.display_items.AppendSubsequenceByCopying(
-            &previous.display_items,
+        let new_item_start_index = new_items.len();
+        new_items.AppendSubsequenceByCopying(
+            previous.display_items.get(&access),
             start_item_index,
             end_item_index,
         );
+        drop(access);
         for moved in &mut self.moved_previous_items[start_item_index..end_item_index] {
             *moved = MovedItem::Subsequence;
         }
@@ -826,7 +851,7 @@ impl PaintController {
             let item_index = new_item_start_index + offset;
             let position = output.items.len();
             let client_id = {
-                let item = &mut output.display_items[item_index];
+                let item = &mut output.display_items.make_mut()[item_index];
                 item.MoveRecordFrom(&previous, position);
                 // A moved ScrollbarDisplayItem names the same Scrollbar, whose
                 // NeedsUpdateDisplay its first paint already consumed
@@ -936,19 +961,27 @@ impl PaintController {
     /// Chromium DisplayItemClients are validated by Layout's reciprocal commit
     /// adapter after this returns the exact used-client receipt.
     pub fn ValidateForCommittedPaint(artifact: &mut PaintRecording) -> HashSet<u64> {
-        let clients = artifact
-            .display_items
-            .iter()
-            .map(|item| item.id)
-            .chain(artifact.chunks.iter().map(|chunk| chunk.id))
-            .map(|id| id.client_id)
-            .collect();
+        let (clients, any_just_created) = {
+            let access = artifact_access();
+            let chunks = artifact.chunks.get(&access);
+            let clients: HashSet<u64> = artifact
+                .display_items
+                .get(&access)
+                .iter()
+                .map(|item| item.id)
+                .chain(chunks.iter().map(|chunk| chunk.id))
+                .map(|id| id.client_id)
+                .collect();
+            (
+                clients,
+                chunks.iter().any(|chunk| chunk.client_is_just_created),
+            )
+        };
         // The flag lives on the chunk as in Chromium (paint_controller.cc:
-        // 141-143). A chunk list moved in whole from the previous artifact
-        // still shares its backing with it; read first so that list is
-        // written (and so copied) only when a chunk really is just created.
-        if artifact.chunks.iter().any(|chunk| chunk.client_is_just_created) {
-            for chunk in &mut artifact.chunks {
+        // 141-143). A chunk list shared with another header of the recording
+        // is written (and so copied) only when a chunk really is just created.
+        if any_just_created {
+            for chunk in artifact.chunks.make_mut() {
                 chunk.client_is_just_created = false;
             }
         }
@@ -959,6 +992,7 @@ impl PaintController {
 #[cfg(test)]
 mod tests {
     use super::{PaintController, SubsequencesData};
+    use crate::artifact_access::artifact_access;
     use crate::{PaintRecording, RasterEffectOutset, RecordedDisplayItem, RecordedDisplayItemKind};
     use paint_chunk::{DisplayItemClientInfo, PaintChunk, PaintChunkCompositorData};
     use paint_model::display_item_id::{DisplayItemId, DisplayItemIdType};
@@ -1029,7 +1063,7 @@ mod tests {
     fn cached_item_lookup_prefers_paint_order_and_indexes_only_skipped_items() {
         let mut previous = PaintRecording::default();
         previous.display_items = vec![drawing(1), drawing(2), drawing(3)].into();
-        let ids: Vec<_> = previous.display_items.iter().map(|item| item.id).collect();
+        let ids: Vec<_> = previous.display_items.get(&artifact_access()).iter().map(|item| item.id).collect();
         let mut controller = PaintController::WithPrevious(Some(Arc::new(previous)));
         let valid = DisplayItemClientInfo {
             invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
@@ -1069,7 +1103,7 @@ mod tests {
     fn controller_forces_repaint_then_moves_matching_cached_item() {
         let mut previous = PaintRecording::default();
         previous.display_items = vec![drawing(7)].into();
-        let id = previous.display_items[0].id;
+        let id = previous.display_items.get(&artifact_access())[0].id;
         let mut controller = PaintController::WithPrevious(Some(Arc::new(previous)));
         let valid = DisplayItemClientInfo {
             invalidation_reason: Some(foundation::PaintInvalidationReason::kNone),
@@ -1083,13 +1117,13 @@ mod tests {
         let mut repainted = drawing(7);
         repainted.paint_invalidation_reason = Some(foundation::PaintInvalidationReason::kLayout);
         let mut output = PaintRecording::default();
-        output.display_items.push(repainted);
+        output.display_items.make_mut().push(repainted);
         controller.CheckNewItem(&mut output, false);
 
         assert!(!controller.under_invalidation_checker.IsChecking());
         assert!(controller.PreviousItemIsTombstone(0));
         assert_eq!(
-            output.display_items[0].GetPaintInvalidationReason(),
+            output.display_items.get(&artifact_access())[0].GetPaintInvalidationReason(),
             Some(foundation::PaintInvalidationReason::kNone)
         );
     }
@@ -1099,8 +1133,8 @@ mod tests {
         let mut previous = PaintRecording::default();
         previous.display_items = vec![drawing(7), drawing(8)].into();
         previous.chunks = vec![
-            chunk(&previous.display_items[0], 0),
-            chunk(&previous.display_items[1], 1),
+            chunk(&previous.display_items.get(&artifact_access())[0], 0),
+            chunk(&previous.display_items.get(&artifact_access())[1], 1),
         ]
         .into();
         let client = DisplayItemClientInfo {
@@ -1116,9 +1150,10 @@ mod tests {
             controller.UseCachedSubsequenceIfPossible(&mut output, 7, client, false),
             Some(PaintResult::kFullyPainted)
         );
-        assert_eq!(output.display_items.len(), 2);
+        assert_eq!(output.display_items.get(&artifact_access()).len(), 2);
         assert!(output
             .chunks
+            .get(&artifact_access())
             .iter()
             .all(|chunk| chunk.is_moved_from_cached_subsequence));
         assert!(controller
@@ -1126,6 +1161,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .display_items
+            .get(&artifact_access())
             .iter()
             .all(RecordedDisplayItem::IsSubsequenceTombstone));
         let committed = controller.Finish(&mut output);
@@ -1149,8 +1185,8 @@ mod tests {
         let mut previous = PaintRecording::default();
         previous.display_items = vec![drawing(7), drawing(8)].into();
         previous.chunks = vec![
-            chunk(&previous.display_items[0], 0),
-            chunk(&previous.display_items[1], 1),
+            chunk(&previous.display_items.get(&artifact_access())[0], 0),
+            chunk(&previous.display_items.get(&artifact_access())[1], 1),
         ]
         .into();
         let mut previous_subsequences = subsequences(7);
@@ -1182,7 +1218,7 @@ mod tests {
         let mut controller = PaintController::default();
         let mut output = PaintRecording::default();
         let index = controller.BeginSubsequence(7, &output);
-        output.chunks.push(PaintChunk::default());
+        output.chunks.make_mut().push(PaintChunk::default());
         controller.SetSubsequencePaintResult(index, PaintResult::kMayBeClippedByCullRect);
         controller.EndSubsequence(index, &output);
         assert_eq!(
@@ -1200,8 +1236,8 @@ mod tests {
         let mut previous = PaintRecording::default();
         previous.display_items = vec![drawing(7), drawing(8)].into();
         previous.chunks = vec![
-            chunk(&previous.display_items[0], 0),
-            chunk(&previous.display_items[1], 1),
+            chunk(&previous.display_items.get(&artifact_access())[0], 0),
+            chunk(&previous.display_items.get(&artifact_access())[1], 1),
         ]
         .into();
         let client = DisplayItemClientInfo {
@@ -1231,14 +1267,14 @@ mod tests {
                 item.record_background,
                 item.record_has_text,
             );
-            output.display_items.push(item);
+            output.display_items.make_mut().push(item);
             controller.CheckNewItem(&mut output, false);
             controller.paint_chunker.force_new_chunk();
         }
         controller.EndSubsequence(subsequence, &output);
 
         assert!(!controller.under_invalidation_checker.IsChecking());
-        let count = controller.previous.as_ref().unwrap().display_items.len();
+        let count = controller.previous.as_ref().unwrap().display_items.get(&artifact_access()).len();
         assert!((0..count).all(|index| controller.PreviousItemIsTombstone(index)));
     }
 }

@@ -33,6 +33,7 @@ pub use prepaint::{clip_path_clipper, resident_hit_test, resident_layer_clipper}
 
 pub use layout_object_counter::LayoutObjectCounter;
 pub use paint_engine::PaintRect;
+pub use paint_engine::{artifact_access, ArtifactAccess, ArtifactAccessScope};
 pub use paint_engine::{
     CompositedAnimationPropertyUpdate, ForeignLayer, LocalFrameViewPaintInput, PaintArtifact,
     PaintLayerQueries, PaintLifecycle, PaintPropertyUpdates, PaintResourceUpdates,

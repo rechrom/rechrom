@@ -925,10 +925,11 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
         state: &B::PropertyTreeState,
         single_record: &mut Option<B::PaintRecord>,
     ) -> bool {
+        let access = ::paint::artifact_access();
         if state.EffectNode() != self.current_effect_ {
             return true;
         }
-        let mut items = artifact.DisplayItemsForChunk(chunk);
+        let mut items = artifact.DisplayItemsForChunk(&access, chunk);
         if items.len() == 0 {
             return false;
         }
@@ -957,11 +958,12 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
         end: usize,
         cull: Option<&Rect>,
     ) {
+        let access = ::paint::artifact_access();
         // index is the native resident subset iterator position. The Start
         // branch deliberately leaves it unchanged after nested return, exactly
         // canceling native --chunk_it/for-loop ++chunk_it without unsigned wrap.
         while *index != end {
-            let chunk = chunks.chunk(*index);
+            let chunk = chunks.chunk(&access, *index);
             if chunk.effectively_invisible() {
                 *index += 1;
                 continue;
@@ -1004,7 +1006,7 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
                 ScrollTranslationAction::End if self.outer_state_stack_.is_some() => return,
                 _ => {}
             }
-            for item in chunks.artifact().DisplayItemsForChunk(chunk) {
+            for item in chunks.artifact().DisplayItemsForChunk(&access, chunk) {
                 let record = if item.IsScrollbar() {
                     item.PaintScrollbar(chunks.artifact(),self.services)
                 } else if item.IsDrawing() {
@@ -1471,13 +1473,15 @@ impl<'a, 'c, B: PaintChunksTypes> LayerPropertiesUpdater<'a, 'c, B> {
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.cc:1718-1800.
     fn Update(&mut self) {
+        let access = ::paint::artifact_access();
         let mut any_selection_was_painted = false;
         // Copying this borrowed subset reference splits the immutable source
         // input from this updater's mutable state; no chunk/item copy occurs.
         let chunks = self.chunks_;
         for index in 0..chunks.len() {
-            let chunk = chunks.chunk(index);
+            let chunk = chunks.chunk(&access, index);
             let scrollbar = NonCompositedScrollbarDisplayItem::<B>(
+                &access,
                 chunks.artifact(),
                 chunk,
                 self.layer_,
@@ -1567,6 +1571,7 @@ impl<'a, 'c, B: PaintChunksTypes> LayerPropertiesUpdater<'a, 'c, B> {
 }
 // Source: third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.cc:1606-1622.
 fn NonCompositedScrollbarDisplayItem<'a, B: PaintChunksTypes>(
+    access: &'a ::paint::ArtifactAccess,
     artifact: &'a B::PaintArtifact,
     chunk: &'a B::PaintChunk,
     layer: &LayerRef<B>,
@@ -1575,7 +1580,7 @@ fn NonCompositedScrollbarDisplayItem<'a, B: PaintChunksTypes>(
     if chunk.display_item_count() != 1 {
         return None;
     }
-    let item = artifact.DisplayItemsForChunk(chunk).next().unwrap();
+    let item = artifact.DisplayItemsForChunk(access, chunk).next().unwrap();
     if !item.IsScrollbar() {
         return None;
     }

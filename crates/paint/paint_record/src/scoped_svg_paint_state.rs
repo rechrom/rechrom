@@ -243,7 +243,7 @@ mod tests {
         }
 
         assert!(output
-            .display_items
+            .display_items.get(&crate::artifact_access::artifact_access())
             .iter()
             .any(|item| item.id.r#type == DisplayItemIdType::kSVGMask));
         assert!(output.items.iter().any(|item| {

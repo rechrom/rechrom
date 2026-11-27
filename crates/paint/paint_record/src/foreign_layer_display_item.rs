@@ -411,12 +411,12 @@ mod tests {
             context.Finish();
         }
         assert!(output.items.is_empty());
-        assert_eq!(output.display_items.len(), 1);
-        assert_eq!(output.chunks.len(), 1);
-        assert_eq!(output.chunks[0].begin_index, 0);
-        assert_eq!(output.chunks[0].end_index, 1);
-        assert_eq!(output.display_items[0].record_begin, 0);
-        assert_eq!(output.display_items[0].record_end, 0);
-        assert_eq!(output.display_items[0].GetForeignLayer().LayerId(), 29);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
+        assert_eq!(output.chunks.get(&crate::artifact_access::artifact_access()).len(), 1);
+        assert_eq!(output.chunks.get(&crate::artifact_access::artifact_access())[0].begin_index, 0);
+        assert_eq!(output.chunks.get(&crate::artifact_access::artifact_access())[0].end_index, 1);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access())[0].record_begin, 0);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access())[0].record_end, 0);
+        assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access())[0].GetForeignLayer().LayerId(), 29);
     }
 }

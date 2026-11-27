@@ -441,6 +441,7 @@ impl RetainedScrollPaintState {
             HashMap::new();
         let recorded_clients: HashSet<(u64, u32)> = artifact
             .display_items
+            .get(&paint_record::artifact_access())
             .iter()
             .filter(|item| !item.is_tombstone && item.draws_content)
             .map(|item| (item.id.client_id, item.id.fragment))
@@ -930,6 +931,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     let retained = retained_scroll_state.as_ref().ok_or(MissingCoverage)?;
     if let Some((index, chunk)) = artifact
         .chunks
+        .get(&paint_record::artifact_access())
         .iter()
         .enumerate()
         .find(|(_, chunk)| !chunk.CanMatchOldChunk())
@@ -1180,11 +1182,13 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         scrollable_area_painter::ScrollableAreaPainter::new(&node, &context)
             .PaintOverflowControls(&paint_info::PaintInfo::new(&context, geometry.phase));
         drop(context);
-        for record in &controls.display_items {
+        let access = paint_record::artifact_access();
+        for record in controls.display_items.get(&access) {
             let key = (record.id.client_id, record.id.fragment, record.id.r#type.0);
             let indices = old_record_indices.get_or_insert_with(|| {
                 artifact
                     .display_items
+                    .get(&access)
                     .iter()
                     .enumerate()
                     .filter(|(_, record)| {
@@ -1229,7 +1233,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                 }
                 continue;
             };
-            let before = &artifact.display_items[index];
+            let before = &artifact.display_items.get(&access)[index];
             let before_ops = before.RecordOps(artifact);
             if record.RecordOps(&controls).len() != before_ops.len() {
                 return Err(ScrollbarChanged);
@@ -1261,27 +1265,29 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     // instead of copying the whole list on each scroll step.
     if artifact
         .chunks
+        .get(&paint_record::artifact_access())
         .iter()
         .any(|chunk| !chunk.is_moved_from_cached_subsequence)
     {
-        for chunk in artifact.chunks.iter_mut() {
+        for chunk in artifact.chunks.make_mut().iter_mut() {
             chunk.is_moved_from_cached_subsequence = true;
         }
     }
     for (index, ops, scrollbar) in replacements {
-        let record = &mut artifact.display_items[index];
+        let record = &mut artifact.display_items.make_mut()[index];
         let mut changed = false;
         if record.scrollbar != scrollbar {
             record.scrollbar = scrollbar;
             changed = true;
         }
-        let record = &artifact.display_items[index];
+        let access = paint_record::artifact_access();
+        let record = &artifact.display_items.get(&access)[index];
         if record.RecordOps(artifact) != ops.as_slice() {
             if record.record_source.is_some() {
                 // A drawing moved in from the cache shares its record
                 // allocation with earlier recordings: give it its own record.
                 let range = 0..ops.len();
-                artifact.display_items[index].record_source = Some(paint_record::RecordSource {
+                artifact.display_items.make_mut()[index].record_source = Some(paint_record::RecordSource {
                     ops: std::sync::Arc::new(ops),
                     range,
                 });

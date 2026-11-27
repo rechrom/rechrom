@@ -121,23 +121,33 @@ impl PaintInput {
     pub fn artifact(&self) -> &Arc<PaintArtifact> {
         &self.artifact
     }
-    pub fn chunks(&self) -> &[PaintChunk] {
-        &self.artifact.chunks
+    pub fn chunks<'a>(&'a self, access: &'a ::paint::ArtifactAccess) -> &'a [PaintChunk] {
+        self.artifact.chunks.get(access)
     }
-    pub fn display_items(&self) -> &[DisplayItem] {
-        &self.artifact.display_items
+    pub fn display_items<'a>(&'a self, access: &'a ::paint::ArtifactAccess) -> &'a [DisplayItem] {
+        self.artifact.display_items.get(access)
     }
-    pub fn chunk(&self, index: usize) -> Option<&PaintChunk> {
-        self.artifact.chunks.get(index)
+    pub fn chunk<'a>(
+        &'a self,
+        access: &'a ::paint::ArtifactAccess,
+        index: usize,
+    ) -> Option<&'a PaintChunk> {
+        self.artifact.chunks.get(access).get(index)
     }
-    pub fn items_for_chunk(&self, index: usize) -> Option<&[DisplayItem]> {
-        let chunk = self.chunk(index)?;
+    pub fn items_for_chunk<'a>(
+        &'a self,
+        access: &'a ::paint::ArtifactAccess,
+        index: usize,
+    ) -> Option<&'a [DisplayItem]> {
+        let chunk = self.chunk(access, index)?;
         self.artifact
             .display_items
+            .get(access)
             .get(chunk.begin_index as usize..chunk.end_index as usize)
     }
     pub fn record(&self, index: usize) -> Option<PaintRecord> {
-        let item = self.artifact.display_items.get(index)?;
+        let access = ::paint::artifact_access();
+        let item = self.artifact.display_items.get(&access).get(index)?;
         paint::paint_engine::PaintRecordForItem(&self.artifact, item)
     }
 }
@@ -424,9 +434,10 @@ where
 {
     fn DisplayItemsForChunk<'a>(
         &'a self,
+        access: &'a ::paint::ArtifactAccess,
         chunk: &'a B::PaintChunk,
     ) -> impl ExactSizeIterator<Item = &'a B::DisplayItem> {
-        self.display_items[chunk.begin_index as usize..chunk.end_index as usize].iter()
+        self.display_items.get(access)[chunk.begin_index as usize..chunk.end_index as usize].iter()
     }
 }
 

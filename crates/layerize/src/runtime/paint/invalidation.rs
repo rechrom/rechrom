@@ -179,11 +179,15 @@ impl<R: PaintSkiaBackend> RasterInvalidationChunk<CpuGeometryMapper<R>> for Pain
     }
 }
 impl<R: PaintSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for PaintArtifact {
-    fn Chunk(&self, index: usize) -> &PaintChunk {
-        &self.chunks[index]
+    fn Chunk<'a>(&'a self, access: &'a ::paint::ArtifactAccess, index: usize) -> &'a PaintChunk {
+        &self.chunks.get(access)[index]
     }
-    fn DisplayItemsInChunk(&self, index: usize) -> &[DisplayItem] {
-        self.DisplayItemsInChunk(index)
+    fn DisplayItemsInChunk<'a>(
+        &'a self,
+        access: &'a ::paint::ArtifactAccess,
+        index: usize,
+    ) -> &'a [DisplayItem] {
+        PaintArtifact::DisplayItemsInChunk(self, access, index)
     }
     fn ImageContentRevisionsInChunk(&self, index: usize) -> &[Vec<(u64, u64)>] {
         self.ImageContentRevisionsInChunk(index)
@@ -198,8 +202,13 @@ impl<R: PaintSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for P
     fn RecordingRevision(&self) -> u64 {
         self.recording_revision
     }
-    fn OldDisplayItemsMovedFromCacheInChunk(&self, old: &Self, old_chunk_index: usize) -> &[bool] {
-        self.PreviousItemsMovedFromCacheInChunk(old, old_chunk_index)
+    fn OldDisplayItemsMovedFromCacheInChunk<'a>(
+        &'a self,
+        access: &::paint::ArtifactAccess,
+        old: &Self,
+        old_chunk_index: usize,
+    ) -> &'a [bool] {
+        self.PreviousItemsMovedFromCacheInChunk(access, old, old_chunk_index)
     }
 }
 impl<R: PaintSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for PaintChunkSubset {
