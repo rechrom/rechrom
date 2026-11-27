@@ -265,7 +265,8 @@ impl PersistentDocument {
             namespace: node.namespace,
             name: node.name.clone(),
             data: node.data.clone(),
-            attributes: node.attributes.clone(),
+            // SVGElement::CloneAttributesFrom reads synchronized attributes.
+            attributes: node.Attributes().to_vec(),
             children,
             instance,
         })

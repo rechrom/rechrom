@@ -521,7 +521,7 @@ impl RuleCandidateBuckets {
                 }
             }
         }
-        for attribute in node.Attributes() {
+        for attribute in node.AttributesWithoutUpdate() {
             if let Some(rules) = self.attributes.get(&attribute.local_name) {
                 result.extend_from_slice(rules);
             }

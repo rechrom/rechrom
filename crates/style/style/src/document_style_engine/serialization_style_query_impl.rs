@@ -205,7 +205,7 @@ impl DocumentStyleEngine {
             return Err(DocumentStyleError::WrongDocument);
         }
         let node = document.Node(index);
-        if node.FindAttribute("style").is_none() {
+        if node.FindAttributeWithoutUpdate("style").is_none() {
             return Ok(None);
         }
         let inline = node.InlineStyle();

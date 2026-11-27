@@ -372,6 +372,26 @@ pub(crate) fn RetainInlineProperties(
     parsed
 }
 
+/// Retain an edited inline property set as the declaration owner. Its text is
+/// serialized (StylePropertySerializer::AsText) only when the DOM synchronizes
+/// the style attribute for a reader: Element::SynchronizeStyleAttributeInternal
+/// (core/dom/element.cc at
+/// 6c1d401fcca5e1b0030563a90c2f2bba168e0c15), reached from getAttribute,
+/// attribute iteration, serialization, cloning and [style] selector checks.
+fn RetainLazyInlineProperties(
+    properties: Rc<CSSPropertyValueSet<ProductionCSSValueDispatch>>,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+) -> cssom::CSSInlineStyle {
+    let serialized = properties.clone();
+    let style = cssom::CSSInlineStyle::FromLazySource(move || {
+        let mut serialize = browser_tracing::span("style", "CSSOM.SerializeInlineStyle");
+        serialize.set("properties", serialized.PropertyCount() as f64);
+        crate::production_style_sheet::SerializeProperties(&serialized)
+    });
+    RetainInlineProperties(&style, properties, mode);
+    style
+}
+
 pub(crate) fn ResolveInlineStyle(
     style: &cssom::CSSInlineStyle,
     mode: crate::parser::css_parser_mode::CSSParserMode,
@@ -665,18 +685,13 @@ fn SetInlineCSSPropertyInternal(
         },
     );
     if result >= SetResult::kModifiedExisting {
-        // Attribute text is still required by the current DOM mutation input.
-        // It is a projection of this property set, never its replacement owner.
-        let mut serialize = browser_tracing::span("style", "CSSOM.SerializeInlineStyle");
-        serialize.set("properties", properties.PropertyCount() as f64);
-        let text = crate::production_style_sheet::SerializeProperties(&properties);
-        drop(serialize);
-        let next = cssom::CSSInlineStyle::FromString(text);
         // The edited copy-on-write set becomes the retained declaration
-        // directly (no second per-property copy).
+        // directly (no second per-property copy). InlineCSSStyleDeclaration::
+        // DidMutate only marks the style attribute dirty; its text is produced
+        // by Element::SynchronizeStyleAttributeInternal when it is read.
         let immutable =
             ImmutableCSSPropertyValueSet::CreateFromVector(properties.IntoProperties(), mode, false);
-        RetainInlineProperties(&next, immutable, mode);
+        let next = RetainLazyInlineProperties(immutable, mode);
         if result == SetResult::kModifiedExisting
             && crate::properties::css_property::CSSProperty::Get(
                 crate::css_property_names::ResolveCSSPropertyID(id),
@@ -712,14 +727,12 @@ pub fn SetInlineCSSPropertyValue(
         return CSSInlineDeclarationMutation::Unchanged;
     }
     properties.SetLonghandPropertyValue(id, value);
-    let text = crate::production_style_sheet::SerializeProperties(&properties);
-    let next = cssom::CSSInlineStyle::FromString(text);
     let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::CreateFromVector(
         properties.IntoProperties(),
         mode,
         false,
     );
-    RetainInlineProperties(&next, immutable, mode);
+    let next = RetainLazyInlineProperties(immutable, mode);
     if crate::properties::css_property::CSSProperty::Get(id).SupportsIncrementalStyle() {
         CSSInlineDeclarationMutation::ChangedIndependent(next)
     } else {
@@ -739,14 +752,12 @@ pub fn RemoveInlineCSSPropertyValue(
     if !properties.RemoveProperty(id, None) {
         return CSSInlineDeclarationMutation::Unchanged;
     }
-    let text = crate::production_style_sheet::SerializeProperties(&properties);
-    let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
     let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::CreateFromVector(
         properties.IntoProperties(),
         mode,
         false,
     );
-    RetainInlineProperties(&next, immutable, mode);
+    let next = RetainLazyInlineProperties(immutable, mode);
     if crate::properties::css_property::CSSProperty::Get(id).SupportsIncrementalStyle() {
         CSSInlineDeclarationMutation::ChangedIndependent(next)
     } else {

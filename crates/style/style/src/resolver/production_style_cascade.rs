@@ -451,7 +451,7 @@ fn ParseHTMLNonNegativeInteger(value: &str) -> Option<u32> {
 }
 
 fn HasNullNamespaceHTMLAttribute(node: &dom::persistent_document::DOMNode, name: &str) -> bool {
-    node.Attributes()
+    node.AttributesWithoutUpdate()
         .iter()
         .any(|attribute| attribute.namespace_uri.is_empty() && attribute.local_name == name)
 }
@@ -460,7 +460,7 @@ fn HasNullNamespaceHTMLAttribute(node: &dom::persistent_document::DOMNode, name:
 fn SelectUsesMenuList(node: &dom::persistent_document::DOMNode) -> bool {
     let multiple = HasNullNamespaceHTMLAttribute(node, "multiple");
     let size = node
-        .Attributes()
+        .AttributesWithoutUpdate()
         .iter()
         .find(|attribute| attribute.namespace_uri.is_empty() && attribute.local_name == "size")
         .and_then(|attribute| ParseHTMLNonNegativeInteger(&attribute.value))

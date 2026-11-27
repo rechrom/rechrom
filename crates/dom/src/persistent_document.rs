@@ -626,6 +626,18 @@ pub struct DOMNode {
     html_image_layout_disposition: Cell<html_image_element::HTMLImageLayoutDisposition>,
     html_image_is_lcp_element: Cell<bool>,
     inline_style: RefCell<Option<cssom::CSSInlineStyle>>,
+    // ElementData::style_attribute_is_dirty_ (core/dom/element_data.h,
+    // element.cc SetInlineStyleNeedsSync at
+    // 6c1d401fcca5e1b0030563a90c2f2bba168e0c15). Set by a CSSOM write: the
+    // retained `inline_style` owner is the truth and the null-namespace style
+    // entry in `attributes` holds its last synchronized (stale) text. Changed
+    // only under `&mut`.
+    style_attribute_needs_sync: bool,
+    // The synchronized attribute view built by a `&self` reader while the
+    // style attribute is dirty (Element::SynchronizeStyleAttributeInternal
+    // run from a const accessor). Once built it is never mutated through
+    // `&self`; every `&mut` attribute change drops or commits it.
+    synchronized_attributes: std::cell::OnceCell<Box<(Vec<DOMAttribute>, Vec<DOMAttributeUTF16>)>>,
     // SVGAnimatedLength owns the compiled CSS value, retained across unrelated
     // style/layout updates and replaced only by its authored attribute change.
     svg_marker_lengths:
@@ -703,15 +715,30 @@ impl DOMNode {
     pub fn QualifiedNameUTF16(&self) -> &DOMQualifiedNameUTF16 {
         &self.tag_qname_utf16
     }
+    /// Element::Attributes / attributes(): synchronizes a dirty style
+    /// attribute first (element.cc SynchronizeAllAttributes).
     pub fn AttributesUTF16(&self) -> &[DOMAttributeUTF16] {
-        &self.attribute_utf16
+        self.SynchronizedAttributeStorage().1
+    }
+    /// Element::AttributesWithoutUpdate: the current attribute storage. While
+    /// a CSSOM write has left the style attribute dirty and no reader has
+    /// synchronized it, its value is the last synchronized text; presence and
+    /// every other attribute value are exact.
+    pub fn AttributesUTF16WithoutUpdate(&self) -> &[DOMAttributeUTF16] {
+        self.synchronized_attributes
+            .get()
+            .map_or(&self.attribute_utf16, |synced| &synced.1)
     }
     pub fn AttributeValueUTF16(&self, name: &str) -> Option<Rc<[u16]>> {
-        let index = self
-            .attributes
+        let (attributes, utf16) = if name == "style" {
+            self.SynchronizedAttributeStorage()
+        } else {
+            (self.AttributesWithoutUpdate(), self.AttributesUTF16WithoutUpdate())
+        };
+        let index = attributes
             .iter()
             .position(|a| a.namespace_uri.is_empty() && a.local_name == name)?;
-        Some(self.attribute_utf16[index].value.clone())
+        Some(utf16[index].value.clone())
     }
     pub fn Name(&self) -> &str {
         &self.name
@@ -719,8 +746,80 @@ impl DOMNode {
     pub fn Data(&self) -> &str {
         &self.data
     }
+    /// Element::Attributes(): synchronizes a dirty style attribute first.
     pub fn Attributes(&self) -> &[DOMAttribute] {
-        &self.attributes
+        self.SynchronizedAttributeStorage().0
+    }
+    /// Element::AttributesWithoutUpdate(); see AttributesUTF16WithoutUpdate.
+    pub fn AttributesWithoutUpdate(&self) -> &[DOMAttribute] {
+        self.synchronized_attributes
+            .get()
+            .map_or(&self.attributes, |synced| &synced.0)
+    }
+    /// Element::SynchronizeAttribute(local_name) for `&self` readers such as
+    /// SelectorChecker::AttributeMatches (selector_checker.cc): only the
+    /// style attribute is lazily synchronized, and only when it is dirty.
+    pub fn SynchronizeAttribute(&self, local_name: &str) {
+        if self.style_attribute_needs_sync && local_name.eq_ignore_ascii_case("style") {
+            self.SynchronizedAttributeStorage();
+        }
+    }
+    /// True while a CSSOM write has not been projected into the attribute.
+    pub fn StyleAttributeIsDirty(&self) -> bool {
+        self.style_attribute_needs_sync
+    }
+    // Element::SynchronizeStyleAttributeInternal from a const reader
+    // (element.cc): StylePropertySerializer::AsText of the
+    // retained declaration, stored once until the next `&mut` change.
+    fn SynchronizedAttributeStorage(&self) -> (&[DOMAttribute], &[DOMAttributeUTF16]) {
+        if !self.style_attribute_needs_sync {
+            return (&self.attributes, &self.attribute_utf16);
+        }
+        let synced = self.synchronized_attributes.get_or_init(|| {
+            let mut attributes = self.attributes.clone();
+            let mut utf16 = self.attribute_utf16.clone();
+            if let Some(style) = self.inline_style.borrow().as_ref() {
+                if let Some(index) = attributes
+                    .iter()
+                    .position(|a| a.local_name == "style" && a.namespace_uri.is_empty())
+                {
+                    attributes[index].value = style.SourceText().to_owned();
+                    utf16[index].value = Rc::from(style.SourceTextUTF16());
+                }
+            }
+            Box::new((attributes, utf16))
+        });
+        (&synced.0, &synced.1)
+    }
+    /// Element::SynchronizeStyleAttributeInternal under `&mut`: commit the
+    /// dirty style attribute text into the attribute storage.
+    pub(crate) fn CommitStyleAttributeSync(&mut self) {
+        if !self.style_attribute_needs_sync {
+            return;
+        }
+        self.style_attribute_needs_sync = false;
+        if let Some(synced) = self.synchronized_attributes.take() {
+            let (attributes, utf16) = *synced;
+            self.attributes = attributes;
+            self.attribute_utf16 = utf16;
+            return;
+        }
+        let Some(style) = self.inline_style.get_mut().clone() else {
+            return;
+        };
+        if let Some(index) = self
+            .attributes
+            .iter()
+            .position(|a| a.local_name == "style" && a.namespace_uri.is_empty())
+        {
+            self.attributes[index].value = style.SourceText().to_owned();
+            self.attribute_utf16[index].value = Rc::from(style.SourceTextUTF16());
+        }
+    }
+    /// Drop a synchronized view before an `&mut` change to the attribute
+    /// storage; the dirty flag (and the retained declaration) stay.
+    pub(crate) fn AttributeStorageWillChange(&mut self) {
+        self.synchronized_attributes.take();
     }
     pub fn RegionCaptureCropId(&self) -> Option<[u64; 2]> {
         self.region_capture_crop_id
@@ -762,6 +861,14 @@ impl DOMNode {
     /// ElementData retains parsed inline declarations. Initializing their
     /// backing is derived state; it does not create or modify an attribute.
     pub fn InlineStyle(&self) -> cssom::CSSInlineStyle {
+        // ElementData::InlineStyle(): a dirty style attribute means the
+        // retained declaration is the source of truth (element.cc
+        // EnsureMutableInlineStyle / InlineStyle).
+        if self.style_attribute_needs_sync {
+            if let Some(style) = self.inline_style.borrow().as_ref() {
+                return style.clone();
+            }
+        }
         let source = self
             .AttributeValueUTF16("style")
             .unwrap_or_else(|| Rc::from([]));
@@ -802,8 +909,22 @@ impl DOMNode {
     }
 
     // cpp: dom/document.cc:24-28
+    // Element::getAttribute synchronizes only the requested lazy attribute
+    // (element.cc SynchronizeAttribute): other names never serialize style.
     pub fn FindAttribute(&self, local_name: &str) -> Option<&DOMAttribute> {
-        self.attributes
+        let attributes = if local_name == "style" {
+            self.Attributes()
+        } else {
+            self.AttributesWithoutUpdate()
+        };
+        attributes
+            .iter()
+            .find(|attribute| attribute.local_name == local_name)
+    }
+    /// FindAttribute over AttributesWithoutUpdate: exact presence and exact
+    /// values for every attribute except a dirty style attribute's text.
+    pub fn FindAttributeWithoutUpdate(&self, local_name: &str) -> Option<&DOMAttribute> {
+        self.AttributesWithoutUpdate()
             .iter()
             .find(|attribute| attribute.local_name == local_name)
     }
@@ -2951,6 +3072,8 @@ impl PersistentDocument {
                 html_image_element::HTMLImageLayoutDisposition::Primary,
             ),
             inline_style: RefCell::new(None),
+            style_attribute_needs_sync: false,
+            synchronized_attributes: std::cell::OnceCell::new(),
             svg_marker_lengths: RefCell::new(None),
             resolved_style: Default::default(),
             region_capture_crop_id: None,
@@ -3346,6 +3469,9 @@ impl PersistentDocument {
     ) -> usize {
         // Clone the node payload and attributes, never its retained native
         // class state (select slots, selectedcontent membership or caches).
+        // Element::CloneAttributesFrom synchronizes a dirty style attribute
+        // of the source first (element.cc SynchronizeStyleAttributeInternal).
+        self.arena[source].CommitStyleAttributeSync();
         let original = &self.arena[source];
         let (kind, namespace, name, data, attributes, tag) = (
             original.node_type,
@@ -6452,33 +6578,41 @@ impl PersistentDocument {
         if self.arena[element].node_type != DOMNodeType::kElement {
             invalid_argument("attributes require an element");
         }
+        // Presence is exact in the unsynchronized storage: a dirty style
+        // attribute always has its (stale-valued) entry.
         let existing = self.arena[element]
             .attributes
             .iter()
             .position(|candidate| {
                 candidate.local_name == "style" && candidate.namespace_uri.is_empty()
             });
-        let text = style.SourceText().to_owned();
         // StyleAttributeMutationScope: the custom element callback and the
-        // MutationObserver record both observe the old attribute value.
+        // MutationObserver record both observe the old attribute value, read
+        // through getAttribute (abstract_property_set_css_style_declaration.cc
+        // StyleAttributeMutationScope), which synchronizes the old
+        // declaration's text. The new value is read only for the callback.
         if self.HasCustomElementDefinitions()
             && self.CustomElementDefinitionForElement(element).is_some()
         {
-            let old_value =
-                existing.map(|index| self.arena[element].attributes[index].value.clone());
+            let old_value = self.arena[element]
+                .FindAttribute("style")
+                .filter(|attribute| attribute.namespace_uri.is_empty())
+                .map(|attribute| attribute.value.clone());
+            let new_value = style.SourceText().to_owned();
             self.CustomElementAttributeWillChange(
                 element,
                 "style",
                 "",
                 old_value,
-                Some(text.clone()),
+                Some(new_value),
             );
         }
         self.CaptureAttributeMutation(element, "style", "");
         // Element::InvalidateStyleAttribute: SetNeedsStyleRecalc and
-        // StyleEngine::AttributeChangedForElement(kStyleAttr).
+        // StyleEngine::AttributeChangedForElement(kStyleAttr). Only id/class
+        // keys consume the value, so the style text is not needed here.
         self.IncDOMTreeVersion();
-        self.RecordAttributeSelectorKeys(element, "style", "", Some(text.as_str()));
+        self.RecordAttributeSelectorKeys(element, "style", "", None);
         let sibling_sensitive_before = self.NodeMayAffectSiblingSelectors(element);
         let descendant_sensitive_before = self.NodeMayAffectDescendantSelectors(element);
         // InvalidateStyleAttribute never reaches Element::AttributeChanged's
@@ -6503,22 +6637,29 @@ impl PersistentDocument {
         if sibling_sensitive_before && self.ShouldRecordStyleChange(element) {
             self.style_state.sibling_sensitive_nodes.insert(element);
         }
-        // SynchronizeStyleAttributeInternal -> SetSynchronizedLazyAttribute.
-        let value_utf16: Rc<[u16]> = Rc::from(style.SourceTextUTF16());
+        // InlineCSSStyleDeclaration::DidMutate -> SetInlineStyleNeedsSync:
+        // the declaration owner changes and the attribute becomes dirty. The
+        // text is serialized only by a reader (SynchronizeStyleAttributeInternal
+        // -> SetSynchronizedLazyAttribute). A source text value that already
+        // exists (a typed text adapter) is projected immediately.
         let node = &mut self.arena[element];
-        if let Some(index) = existing {
-            node.attributes[index].value = text;
-            node.attribute_utf16[index].value = value_utf16;
-        } else {
+        node.AttributeStorageWillChange();
+        let index = existing.unwrap_or_else(|| {
             let attribute = DOMAttribute {
                 local_name: "style".into(),
-                value: text,
                 ..DOMAttribute::default()
             };
-            let mut utf16_attribute = DOMAttributeUTF16::FromAttribute(&attribute);
-            utf16_attribute.value = value_utf16;
+            let utf16_attribute = DOMAttributeUTF16::FromAttribute(&attribute);
             node.attributes.push(attribute);
             node.attribute_utf16.push(utf16_attribute);
+            node.attributes.len() - 1
+        });
+        if style.IsSourceSynchronized() {
+            node.attributes[index].value = style.SourceText().to_owned();
+            node.attribute_utf16[index].value = Rc::from(style.SourceTextUTF16());
+            node.style_attribute_needs_sync = false;
+        } else {
+            node.style_attribute_needs_sync = true;
         }
         *node.inline_style.get_mut() = Some(style);
         self.RecordSiblingSensitivity(element, false);
@@ -6535,6 +6676,12 @@ impl PersistentDocument {
     ) {
         if self.arena[element].node_type != DOMNodeType::kElement {
             invalid_argument("attributes require an element");
+        }
+        // Element::setAttribute -> SynchronizeAttribute(name) (element.cc):
+        // replacing the style attribute first projects a dirty declaration,
+        // so old values, equality and observers see its synchronized text.
+        if attribute.namespace_uri.is_empty() && attribute.local_name == "style" {
+            self.arena[element].CommitStyleAttributeSync();
         }
         // HTMLMediaElement::ParseAttribute, cc:841-845. Parser initialization
         // affects legacy muted_ only; subsequent script content attributes do
@@ -6858,6 +7005,7 @@ impl PersistentDocument {
                 .get_mut()
                 .take();
         }
+        self.arena[element].AttributeStorageWillChange();
         if let Some(index) = existing {
             self.arena[element].attributes[index] = attribute;
             self.arena[element].attribute_utf16[index] = utf16_attribute;
@@ -7141,6 +7289,11 @@ impl PersistentDocument {
             self.explicitly_set_element_attributes
                 .remove(&(element, local_name.to_owned()));
         }
+        // Element::removeAttribute -> SynchronizeAttribute(name): observers
+        // and the attribute lifecycle see the declaration's current text.
+        if namespace_uri.is_empty() && local_name == "style" {
+            self.arena[element].CommitStyleAttributeSync();
+        }
         let index = if let Some(name) = exact_name {
             self.arena[element]
                 .attribute_utf16
@@ -7299,6 +7452,7 @@ impl PersistentDocument {
             reason,
             was_connected: self.IsConnectedToDocument(element),
         };
+        self.arena[element].AttributeStorageWillChange();
         self.arena[element].attributes.remove(attribute_index);
         self.arena[element].attribute_utf16.remove(attribute_index);
         if namespace_uri.is_empty()

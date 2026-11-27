@@ -145,7 +145,7 @@ impl InvalidationDom for PersistentInvalidationDom<'_> {
                     .map(|a| a.value.split_ascii_whitespace().map(atom).collect())
                     .unwrap_or_default(),
                 attributes: node
-                    .Attributes()
+                    .AttributesWithoutUpdate()
                     .iter()
                     .map(|a| AtomicString::from_str(&a.local_name))
                     .collect(),

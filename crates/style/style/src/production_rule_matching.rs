@@ -148,7 +148,7 @@ impl ProductionSelectorBucket {
                 })
             }),
             Self::Attribute(expected) => node
-                .Attributes()
+                .AttributesWithoutUpdate()
                 .iter()
                 .any(|attribute| attribute.local_name == *expected),
             Self::Tag(expected) => {
@@ -487,7 +487,7 @@ fn PartAttributeNames(document: &Document, element: usize) -> Option<PersistentP
     }
     let value = &document
         .Node(element)
-        .Attributes()
+        .AttributesWithoutUpdate()
         .iter()
         .find(|attribute| attribute.local_name == "part" && attribute.namespace_uri.is_empty())?
         .value;
