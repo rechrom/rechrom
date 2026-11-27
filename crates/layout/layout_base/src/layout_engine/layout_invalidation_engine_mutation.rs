@@ -405,7 +405,7 @@ impl EngineMutation for LayoutEngine {
                 let update = self
                     .tree_
                     .as_mut()
-                    .and_then(|tree| tree.UpdateNodeInput(node_id, &input, element));
+                    .and_then(|tree| tree.UpdateNodeInput(node_id, input, element));
                 if let Some(update) = update.as_ref() {
                     RefreshCompatibleNodeInputCache(&mut self.boundary_cache_, update);
                     self.tree_facts_ = None;

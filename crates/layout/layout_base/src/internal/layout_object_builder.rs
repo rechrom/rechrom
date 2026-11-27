@@ -641,13 +641,16 @@ impl LayoutObjectTree {
 
     /// Element::RecalcOwnStyle updates an attached LayoutObject through
     /// SetStyle; ordinary geometry changes do not reattach every sibling.
-    /// Reuse Create's style/metadata implementation after proving the source
-    /// object kind and attachment are unchanged. Complex generated sources
-    /// retain the ordinary attachment transaction.
+    /// A retained object with unchanged element metadata is restyled in place
+    /// (one style diff, dirty bits from it); changed metadata reuses Create's
+    /// style/metadata implementation after proving the source object kind and
+    /// attachment are unchanged. Complex generated sources retain the
+    /// ordinary attachment transaction. `style` becomes the restyle's shared
+    /// envelope owner.
     pub fn UpdateNodeInput(
         &mut self,
         id: u64,
-        style: &ComputedStyle,
+        style: ComputedStyle,
         element: Option<ElementData>,
     ) -> Option<NodeInputUpdate> {
         layout_invalidation_node_input::update_node_input(self, id, style, element)
@@ -670,7 +673,7 @@ impl LayoutObjectTree {
         style: &StyleComputedStyle,
         resources: &crate::style_projection::StyleResourceBindings<'_>,
         element: &Option<ElementData>,
-    ) -> Option<(std::collections::HashSet<u64>, Vec<u64>)> {
+    ) -> Option<layout_fragment_paint_input::PaintInputAdmission> {
         layout_fragment_paint_input::paint_input_plan(self, id, style, resources, element)
     }
 
