@@ -966,7 +966,7 @@ fn NeedsFullUpdateAfterPaintingChunk<B: PaintArtifactCompositorTypes>(
     repainted: &B::PaintChunk,
     repainted_artifact: &B::PaintArtifact,
     services: &dyn PaintArtifactCompositorServices<B>,
-) -> bool {
+) -> compositor_layerize::repaint_policy::RepaintLayerizationDecision {
     if repainted.Matches(previous) && repainted.is_moved_from_cached_subsequence() {
         debug_assert_eq!(previous.bounds_rect(), repainted.bounds_rect());
         debug_assert_eq!(previous.DrawsContent(), repainted.DrawsContent());
@@ -987,7 +987,7 @@ fn NeedsFullUpdateAfterPaintingChunk<B: PaintArtifactCompositorTypes>(
     if decision.RawPropertiesDiffer() {
         DumpWithDifferingPaintPropertiesIncluded::<B>(previous, repainted, services);
     }
-    decision.NeedsFullUpdate()
+    decision
 }
 // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:617-629.
 fn GetPropertyTreeStateForPaint<B: PaintArtifactCompositorTypes>(
@@ -1015,17 +1015,35 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
             return;
         }
         if previous.PaintChunkCount() != repainted.PaintChunkCount() {
+            browser_tracing::instant(
+                "compositor.layerize",
+                "Compositor.Layerize.RepaintNeedsFullUpdate",
+                &[
+                    ("previous_chunks", previous.PaintChunkCount() as f64),
+                    ("repainted_chunks", repainted.PaintChunkCount() as f64),
+                ],
+            );
             self.SetNeedsUpdate();
             return;
         }
         for index in 0..previous.PaintChunkCount() {
-            if NeedsFullUpdateAfterPaintingChunk::<B>(
+            let decision = NeedsFullUpdateAfterPaintingChunk::<B>(
                 previous.PaintChunk(index).unwrap(),
                 previous,
                 repainted.PaintChunk(index).unwrap(),
                 repainted,
                 services,
-            ) {
+            );
+            if decision.NeedsFullUpdate() {
+                // Attribution only: which chunk and which condition of
+                // paint_artifact_compositor.cc:520-616 forced the full update
+                // (RepaintLayerizationDecision discriminant, e.g. 2 =
+                // BoundsChanged).
+                browser_tracing::instant(
+                    "compositor.layerize",
+                    "Compositor.Layerize.RepaintNeedsFullUpdate",
+                    &[("chunk", index as f64), ("decision", decision as u8 as f64)],
+                );
                 self.SetNeedsUpdate();
                 return;
             }
