@@ -903,13 +903,13 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         let contents_paint_info = contents_paint_state
             .as_ref()
             .map_or(*paint_info, |state| *state.GetPaintInfo());
-        // PaintLineBoxes paints no line in the block-background phases except
-        // the block-in-inline boxes of block-in-inline lines
-        // (box_fragment_painter.cc, PaintLineBoxes /
-        // PaintBoxDecorationBackgroundForBlockInInline): an ordinary line and
-        // its items are not visited for those phases.
-        let skips_ordinary_lines =
-            paint_model::paint_phase::ShouldPaintDescendantBlockBackgrounds(phase);
+        // Chromium's PaintLineBoxes visits no ordinary line in the
+        // block-background phases because atomic inlines paint all their
+        // phases from the foreground pass (PaintAtomicInlineChild). This walk
+        // still paints atomic-inline decorations (inline-block, replaced
+        // borders/backgrounds) from the background phases, so lines must stay
+        // visited there until atomic inlines paint atomically.
+        let skips_ordinary_lines = false && paint_model::paint_phase::ShouldPaintDescendantBlockBackgrounds(phase);
         // MathML operators suppress their inline children; read once per
         // visit, on the first fragment-item child.
         let mut suppresses_fragment_items: Option<bool> = None;
