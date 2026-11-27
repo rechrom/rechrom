@@ -975,11 +975,16 @@ impl BlockNode {
             return std::ptr::null();
         }
         let callback = unsafe { &*algorithms }.simplified_support.layout;
-        if let Some(callback) = callback {
+        let mut trace = browser_tracing::span("layout", "LayoutEngine.SimplifiedLayout");
+        let result = if let Some(callback) = callback {
             callback(params, previous_result)
         } else {
             std::ptr::null()
-        }
+        };
+        // 0: declined or failed; BlockNode::Layout then runs the full
+        // algorithm (block_node.cc:527-545).
+        trace.set("succeeded", (!result.is_null()) as u8 as f64);
+        result
     }
 
     // cpp: layoutng/internal/block_node.cc:1202-1219

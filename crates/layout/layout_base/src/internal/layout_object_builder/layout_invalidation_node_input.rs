@@ -20,6 +20,10 @@ pub(super) fn update_node_input(
     if keys.is_empty() {
         return None;
     }
+    // Sub-phase attribution of this targeted SetStyle transaction: input
+    // admission (validation, no mutation), then in-place application.
+    let admission_trace =
+        browser_tracing::span("layout", "layout_invalidation.NodeInput.Admission");
     // cpp: core/layout/layout_object.cc:2991-2995 (LayoutObject::SetStyle).
     // Element::RecalcOwnStyle hands every LayoutObject of the element the
     // same ComputedStyle, and Text::RecalcTextStyle gives its LayoutText the
@@ -159,6 +163,8 @@ pub(super) fn update_node_input(
             }
         }
     }
+    drop(admission_trace);
+    let _apply_trace = browser_tracing::span("layout", "layout_invalidation.NodeInput.Apply");
     // Input comparisons and validation finish before any mutation. No sibling
     // topology or partial document transaction is exposed here.
     let mut objects = Vec::with_capacity(inputs.len());
