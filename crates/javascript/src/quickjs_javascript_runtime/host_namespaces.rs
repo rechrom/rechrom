@@ -293,6 +293,14 @@ pub(super) fn Localize(value: &mut HostValue, state: &Rc<RefCell<State>>) {
         _ => {}
     }
 }
+/// The `index`th state of States() (0 is the Context root), without
+/// collecting the registry: the per-host-call graph sync walks it in place.
+pub(super) fn StateAt(registry: &NamespaceRegistry, index: usize) -> Option<Rc<RefCell<State>>> {
+    if index == 0 {
+        return registry.root.borrow().upgrade();
+    }
+    registry.states.borrow().get(index - 1).cloned()
+}
 pub(super) fn States(state: &Rc<RefCell<State>>) -> Vec<Rc<RefCell<State>>> {
     let registry = state.borrow().namespaces.clone();
     let mut states = vec![registry.root.borrow().upgrade().expect("live Context root")];

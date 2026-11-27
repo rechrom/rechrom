@@ -459,9 +459,19 @@ pub(super) fn SynchronizeHostGraph(
     ctx: &mut Context,
     state: &Rc<RefCell<State>>,
 ) -> JsResult<Vec<JsObject>> {
+    // Walk the registry in place (no per-call Vec of namespace handles);
+    // an empty drain returns an unallocated Vec.
+    let registry = state.borrow().namespaces.clone();
     let mut roots = Vec::new();
-    for namespace in host_namespaces::States(state) {
-        roots.extend(SynchronizeNamespaceGraph(ctx, &namespace)?);
+    let mut index = 0;
+    while let Some(namespace) = host_namespaces::StateAt(&registry, index) {
+        let synchronized = SynchronizeNamespaceGraph(ctx, &namespace)?;
+        if roots.is_empty() {
+            roots = synchronized;
+        } else {
+            roots.extend(synchronized);
+        }
+        index += 1;
     }
     Ok(roots)
 }
