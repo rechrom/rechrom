@@ -113,6 +113,7 @@ pub(super) fn Create(
         wrapper_ids: HashMap::new(),
         fallbacks: HashMap::new(),
         methods: HashMap::new(),
+        same_object_attributes: HashMap::new(),
         reflect_get: root.reflect_get.clone(),
         reflect_set: root.reflect_set.clone(),
         hooks: root.hooks.clone(),

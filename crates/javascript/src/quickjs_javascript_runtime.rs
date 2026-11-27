@@ -117,6 +117,9 @@ struct State {
     // Window and its realm-lifetime singletons (receiver 0 and global host
     // objects): one function per (receiver, operation) in this context.
     methods: HashMap<HostObjectId, HashMap<String, Value>>,
+    // The one wrapper returned by each IsGlobalSameObjectAttribute getter
+    // (the DOMDataStore entry of the LocalDOMWindow member it reads).
+    same_object_attributes: HashMap<String, Value>,
     reflect_get: Value,
     reflect_set: Value,
     hooks: Rc<Hooks>,
@@ -174,6 +177,7 @@ impl Drop for QuickJsRealm {
             namespace.host_graph.Clear();
             namespace.fallbacks.clear();
             namespace.methods.clear();
+            namespace.same_object_attributes.clear();
             namespace.global = Value::Undefined;
             namespace.reflect_get = Value::Undefined;
             namespace.reflect_set = Value::Undefined;
@@ -185,6 +189,7 @@ impl Drop for QuickJsRealm {
         state.host_graph.Clear();
         state.fallbacks.clear();
         state.methods.clear();
+        state.same_object_attributes.clear();
         state.global = Value::Undefined;
         state.reflect_get = Value::Undefined;
         state.reflect_set = Value::Undefined;
@@ -394,10 +399,15 @@ fn host_arguments(
             member,
             arguments: start,
         } => {
+            // The forwarded receiver/member prefix only selects the operation
+            // and its wrapper's namespace (invoke() resolves it again, and
+            // Localize strips a lent owner of the entered namespace). Like a
+            // V8 holder check, a wrapper of this namespace crosses as its id;
+            // no native owner reference or traced handle is allocated for it.
             let prefix: Vec<_> = arguments
                 .iter()
                 .take(start)
-                .map(|value| from_js_argument(value, ctx, state, true))
+                .map(|value| from_js_identity(value, ctx, state))
                 .collect();
             let policy = match (prefix.get(receiver), prefix.get(member)) {
                 (Some(receiver), Some(HostValue::String(member))) => {
@@ -717,6 +727,10 @@ impl HostCallable for HostFunction {
                 host_result(ctx, state, answer)
             }
             Action::GlobalGet(name) => {
+                let cached = state.borrow().same_object_attributes.get(name).cloned();
+                if let Some(cached) = cached {
+                    return Ok(cached);
+                }
                 let answer = invoke(
                     ctx,
                     state,
@@ -731,7 +745,26 @@ impl HostCallable for HostFunction {
                     None,
                 );
                 if answer.handled || answer.exception.is_some() {
-                    host_result(ctx, state, answer)
+                    let same_object = answer.exception.is_none()
+                        && answer.thrown.is_none()
+                        && matches!(
+                            answer.value,
+                            HostValue::Object(_) | HostValue::Retained(..)
+                        );
+                    let value = host_result(ctx, state, answer)?;
+                    if same_object && value.is_object() {
+                        let host = state.borrow().global_host.clone();
+                        let same_object = host
+                            .try_borrow()
+                            .is_ok_and(|host| host.IsGlobalSameObjectAttribute(name));
+                        if same_object {
+                            state
+                                .borrow_mut()
+                                .same_object_attributes
+                                .insert(name.clone(), value.clone());
+                        }
+                    }
+                    Ok(value)
                 } else {
                     let _host_roots = SynchronizeHostGraph(ctx, state)?;
                     Ok(state
@@ -1242,6 +1275,7 @@ fn create_realm(
         wrapper_ids: HashMap::new(),
         fallbacks: HashMap::new(),
         methods: HashMap::new(),
+        same_object_attributes: HashMap::new(),
         reflect_get,
         reflect_set,
         hooks,

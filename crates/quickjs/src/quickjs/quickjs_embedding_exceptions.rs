@@ -254,6 +254,12 @@ pub unsafe fn JS_EnableExceptionMetadata(rt: *mut JSRuntime, enabled: bool) {
         );
     }
     drop(states);
+    if let Some(retired) = &retired {
+        let suspended = retired.lock().unwrap_or_else(|e| e.into_inner()).suspended.len();
+        if suspended != 0 {
+            SUSPENDED_DIAGNOSTICS.fetch_sub(suspended, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
     // Destroy potentially large source tables outside the lifetime registry.
     drop(retired);
 }
@@ -303,9 +309,23 @@ pub(crate) unsafe fn js_host_free_bytecode_diagnostics(rt: *mut JSRuntime, bytec
 pub(crate) unsafe fn js_host_free_object_diagnostics(rt: *mut JSRuntime, object: *mut JSObject) {
     with_exception_diagnostics(rt, |state| { state.creations.remove(&(object as usize)); });
 }
+// Live `suspended` entries over every runtime. Every JS frame exit frees its
+// frame diagnostics; while no caught exception is suspended anywhere (the
+// common case) that exit skips the registry lookup, lock and map scan.
+// Errors only over-count, which keeps the original scan.
+static SUSPENDED_DIAGNOSTICS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 pub(crate) unsafe fn js_host_free_frame_diagnostics(rt: *mut JSRuntime, frame: *mut JSStackFrame) {
+    if SUSPENDED_DIAGNOSTICS.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        return;
+    }
     with_exception_diagnostics(rt, |state| {
+        let before = state.suspended.len();
         state.suspended.retain(|(owner, _), _| *owner != frame as usize);
+        let removed = before - state.suspended.len();
+        if removed != 0 {
+            SUSPENDED_DIAGNOSTICS.fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
+        }
     });
 }
 pub(crate) struct JSHostSourceScope {
@@ -577,7 +597,9 @@ pub(crate) unsafe fn js_host_catch_exception(
     with_exception_diagnostics(rt, |state| {
         let location = state.pending.take();
         state.captured = false;
-        state.suspended.insert((frame as usize, slot as usize), location);
+        if state.suspended.insert((frame as usize, slot as usize), location).is_none() {
+            SUSPENDED_DIAGNOSTICS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     });
 }
 pub(crate) unsafe fn js_host_is_finally_rethrow(b: *mut JSFunctionBytecode, pc: *const u8) -> bool {
@@ -601,7 +623,11 @@ pub(crate) unsafe fn js_host_vm_throw(
     let rt = (*ctx).rt;
     let saved = if js_host_diagnostics_enabled(rt) && js_host_is_finally_rethrow(b, pc) {
         with_exception_diagnostics(rt, |state| {
-            state.suspended.remove(&(frame as usize, slot as usize))
+            let removed = state.suspended.remove(&(frame as usize, slot as usize));
+            if removed.is_some() {
+                SUSPENDED_DIAGNOSTICS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            removed
         }).flatten()
     } else { None };
     let result = JS_Throw(ctx, value);

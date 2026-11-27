@@ -623,6 +623,15 @@ pub trait JavaScriptHostBindings {
     fn IsGlobalOperation(&self, _name: &str) -> bool {
         false
     }
+    /// A readonly attribute of the [Global] interface whose getter returns
+    /// the one platform object this realm's global owns for its lifetime
+    /// (for example window.idl `performance`, `navigator`, `screen`). V8 runs
+    /// the native getter, which reads that LocalDOMWindow member and returns
+    /// its one wrapper from the DOMDataStore; a backend may keep that
+    /// converted wrapper instead of re-entering the host for each read.
+    fn IsGlobalSameObjectAttribute(&self, _name: &str) -> bool {
+        false
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult;
     // Rust reborrow adapter for a host calling its bound engine while that
     // engine is already executing a host call. Avoids aliasing a runtime or
