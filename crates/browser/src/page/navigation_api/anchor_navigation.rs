@@ -810,6 +810,9 @@ impl interaction::default::core::frame::local_frame_navigation::LocalFrameNaviga
         &self,
         reason: interaction::default::core::frame::local_frame_navigation::NavigationBlockedReason,
     ) {
+        if !browser_tracing::enabled() {
+            return;
+        }
         browser_tracing::instant_with_text(
             "navigation",
             "DidBlockNavigation",

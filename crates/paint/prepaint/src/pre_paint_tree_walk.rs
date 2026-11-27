@@ -654,6 +654,21 @@ impl<'a> Default for PaintTreeNode<'a> {
 }
 
 impl<'a> PaintTreeNode<'a> {
+    /// PaintLayer::SelfOrDescendantNeedsRepaint() as PaintLayerPainter reads
+    /// it at paint time: the live bits on the source PaintLayer, which
+    /// SetNeedsRepaint / MarkPaintingContainerChainForNeedsRepaint set when a
+    /// client was invalidated and the committed Paint clears. A fragment
+    /// without a source layer always repaints; a hand-built node without a
+    /// fragment keeps its own bit.
+    // cpp: third_party/blink/renderer/core/paint/paint_layer.h:451-457
+    // cpp: third_party/blink/renderer/core/paint/paint_layer_painter.cc:412-424
+    pub fn SelfOrDescendantNeedsRepaint(&self) -> bool {
+        match self.fragment.as_deref() {
+            Some(fragment) => fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint(),
+            None => self.self_or_descendant_needs_repaint,
+        }
+    }
+
     /// A node whose property slots start at `properties`. PrePaint seeds a
     /// built node with its parent's state instead of referencing the shared
     /// root sentinels and replacing them moments later, which cost contended
@@ -1238,9 +1253,6 @@ pub struct PrePaintTreeWalk {
     /// that count when Paint last recorded an artifact.
     consuming_walks: u64,
     recorded_consuming_walks: u64,
-    /// PaintLayer::SelfOrDescendantNeedsRepaint folded by a walk whose result
-    /// Paint has not recorded yet.
-    unrecorded_repaint: bool,
     /// Slots this walk released: an object rebuilt without a slot it had,
     /// or an object whose node left the tree. Chromium destroys them with
     /// the ObjectPaintProperties entry or the FragmentData
@@ -1312,7 +1324,6 @@ impl Default for PrePaintTreeWalk {
             resource_memo: Vec::new(),
             consuming_walks: 0,
             recorded_consuming_walks: 0,
-            unrecorded_repaint: false,
             released_property_keys: Vec::new(),
             full_slot_sweep: true,
             slot_sweep_pending: false,
@@ -4952,77 +4963,6 @@ fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
     }
 }
 
-/// Propagates the invalidation results produced by this PrePaint pass to the
-/// PaintLayer subsequence admission bit consumed by PaintLayerPainter.
-///
-/// Chromium mutates PaintLayer::needs_repaint_ while ObjectPaintInvalidator
-/// walks LayoutObjects, then PaintLayer::SelfOrDescendantNeedsRepaint() folds
-/// that state through the layer tree before cached-subsequence lookup.  The
-/// immutable Rechrom boundary snapshots the Layout-owned bit before PrePaint
-/// computes fragment-client invalidation, so a newly attached LayoutText could
-/// otherwise remain hidden behind its ancestor's cached subsequence.  Fold the
-/// resident client results back into the same per-layer admission fact after
-/// the complete child walk.
-// cpp: core/paint/paint_invalidator.cc:230-269
-// cpp: core/paint/paint_layer.h:451-457
-fn PropagateSubsequenceRepaint(node: &mut PaintTreeNode<'_>) -> bool {
-    PropagateSubsequenceRepaintCounting(node, &mut [0; 3])
-}
-
-/// `counts`: [paint layers, layers already flagged by the source PaintLayer,
-/// layers newly flagged from invalidated clients].
-fn PropagateSubsequenceRepaintCounting(
-    node: &mut PaintTreeNode<'_>,
-    counts: &mut [usize; 3],
-) -> bool {
-    if node.is_paint_layer {
-        // PaintLayerPainter reads PaintLayer::SelfOrDescendantNeedsRepaint()
-        // at paint time (paint_layer_painter.cc:412-424); the bit is cleared
-        // after each committed paint. A retained PrePaint node must not keep
-        // the value captured when it was last built, or a layer flagged once
-        // (e.g. at first paint) never reuses its subsequence again.
-        if let Some(fragment) = node.fragment.as_deref() {
-            node.self_or_descendant_needs_repaint =
-                fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint();
-        }
-        counts[0] += 1;
-        counts[1] += node.self_or_descendant_needs_repaint as usize;
-    }
-    let client_needs_repaint = node.fragment.as_deref().is_some_and(|fragment| {
-        [
-            fragment.paint.DisplayItemClientState().invalidation_reason,
-            fragment.paint.SelectionClientState().invalidation_reason,
-            fragment.paint.PaintLayerClientState().invalidation_reason,
-        ]
-        .into_iter()
-        .flatten()
-        // A client stays kJustCreated until it first produces a display item
-        // (paint_controller.cc:127-143 validates only used clients). Chromium
-        // never consults that state for subsequence admission: the object's
-        // first PrePaint invalidation (kAppeared on insertion) marked its
-        // painting layer in InvalidatePaintWithComputedReason. Counting it
-        // here would keep every ancestor layer of a non-painting object out
-        // of subsequence reuse on every frame.
-        .any(|reason| {
-            reason != PaintInvalidationReason::kNone
-                && reason != PaintInvalidationReason::kJustCreated
-        })
-    });
-    // Every descendant PaintLayer needs its own admission bit updated. `any`
-    // would stop after the first dirty sibling and leave later layers eligible
-    // to reuse stale subsequences even though their clients were invalidated.
-    let mut descendant_needs_repaint = false;
-    for child in &mut node.children {
-        descendant_needs_repaint |= PropagateSubsequenceRepaintCounting(child, counts);
-    }
-    let subtree_needs_repaint = client_needs_repaint || descendant_needs_repaint;
-    if node.is_paint_layer && subtree_needs_repaint {
-        counts[2] += !node.self_or_descendant_needs_repaint as usize;
-        node.self_or_descendant_needs_repaint = true;
-    }
-    subtree_needs_repaint
-}
-
 fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     a.ViewNodeId() == b.ViewNodeId()
         && a.ViewFragmentInstanceId() == b.ViewFragmentInstanceId()
@@ -5170,7 +5110,13 @@ struct PrePaintPrevious {
     scrolling_background_client_id: u64,
 }
 
-fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPrevious {
+/// `clients` is ClientDirectoryIds(f), computed once per visit
+/// (VisitIdentity::CurrentClients).
+fn PrePaintPreviousOf(
+    f: &FragmentPaintData,
+    link_offset: Offset,
+    clients: ClientIds,
+) -> PrePaintPrevious {
     let p = &f.paint;
     let (visible, outline_style, outline_width, outline_alpha) = p.style.PhaseStyleValues();
     let phase_flags = u32::from(p.HasSource())
@@ -5201,7 +5147,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         position: p.Position() as i32,
         logical_parent_node_id: p.LogicalParentNodeId(),
         logical_tree_order: p.LogicalTreeOrder(),
-        clients: ClientDirectoryIds(f),
+        clients,
         selection_client_id: p.SelectionClientId(),
         scrolling_background_client_id: f
             .ViewScrollingBackgroundClient()
@@ -6157,12 +6103,71 @@ fn RecordOf(node: &PaintTreeNode<'_>) -> PrePaintPrevious {
 /// sequence) is already the same, as in PrePaintTreeWalk's
 /// `fragmentainer_idx` context.
 fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
-    let recorded = RecordOf(previous);
-    recorded.kind == Some(new.ViewKind())
-        && recorded.node_id == new.ViewNodeId()
-        && recorded.fragment_instance_id == new.ViewFragmentInstanceId()
-        && recorded.display_item_client_id == new.paint.DisplayItemClientId()
-        && recorded.display_item_fragment == new.ViewDisplayItemFragment()
+    // Without a record, `kind` is None and never equals a fragment's kind.
+    previous.cache.as_ref().is_some_and(|cache| {
+        let recorded = &cache.record;
+        recorded.kind == Some(new.ViewKind())
+            && recorded.node_id == new.ViewNodeId()
+            && recorded.fragment_instance_id == new.ViewFragmentInstanceId()
+            && recorded.display_item_client_id == new.paint.DisplayItemClientId()
+            && recorded.display_item_fragment == new.ViewDisplayItemFragment()
+    })
+}
+
+/// SamePreviousSourceIdentity between two records: the retained node's and
+/// the one this visit computed for its fragment (PrePaintPreviousOf), so a
+/// proof after the rebuild reads no fragment identity again.
+fn SameRecordedSourceIdentity(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
+    recorded.kind.is_some()
+        && recorded.kind == current.kind
+        && recorded.node_id == current.node_id
+        && recorded.fragment_instance_id == current.fragment_instance_id
+        && recorded.display_item_client_id == current.display_item_client_id
+        && recorded.display_item_fragment == current.display_item_fragment
+}
+
+/// One visit's admission identity facts for the pair (retained `previous`,
+/// current fragment), each computed at most once per UpdateNode visit:
+/// RetainedSelfChange, the invalidation-only refresh and the offset-only
+/// shift all consult the same source identity and client directory.
+/// Chromium reads these off the one retained LayoutObject/FragmentData and
+/// never re-derives them (pre_paint_tree_walk.cc:418-437); callers must pass
+/// the same pair on every query.
+#[derive(Default)]
+struct VisitIdentity {
+    same_source: std::cell::Cell<Option<bool>>,
+    current_clients: std::cell::Cell<Option<ClientIds>>,
+    same_clients: std::cell::Cell<Option<bool>>,
+}
+
+impl VisitIdentity {
+    fn SameSource(&self, previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
+        if let Some(same) = self.same_source.get() {
+            return same;
+        }
+        let same = SamePreviousSourceIdentity(previous, new);
+        self.same_source.set(Some(same));
+        same
+    }
+
+    /// ClientDirectoryIds of the current fragment.
+    fn CurrentClients(&self, new: &FragmentPaintData) -> ClientIds {
+        if let Some(clients) = self.current_clients.get() {
+            return clients;
+        }
+        let clients = ClientDirectoryIds(new);
+        self.current_clients.set(Some(clients));
+        clients
+    }
+
+    fn SameClients(&self, previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
+        if let Some(same) = self.same_clients.get() {
+            return same;
+        }
+        let same = SameClientDirectory(previous, new, self.CurrentClients(new));
+        self.same_clients.set(Some(same));
+        same
+    }
 }
 
 /// SamePhaseInputs against the recorded previous values.
@@ -6212,18 +6217,18 @@ fn LocalGeometryChange(
     ) else {
         return false;
     };
-    let recorded = old_cache.record;
+    let recorded = &old_cache.record;
     if IsNewClient(
-        &RecordedClientIds(&recorded),
-        bf.paint.DisplayItemClientId(),
+        &RecordedClientIds(recorded),
+        current.display_item_client_id,
         bf.paint.DisplayItemClientState().is_just_created,
-    ) || !SamePreviousSourceIdentity(old, bf)
-        || !SameClientDirectory(old, bf)
+    ) || !SameRecordedSourceIdentity(recorded, current)
+        || !SameClientDirectory(old, bf, current.clients)
         // RetainTree's directory also names these two clients.
         || recorded.selection_client_id != current.selection_client_id
         || recorded.scrolling_background_client_id != current.scrolling_background_client_id
-        || !SamePreviousPhaseStructure(&recorded, current)
-        || !SamePreviousLogicalPosition(&recorded, current)
+        || !SamePreviousPhaseStructure(recorded, current)
+        || !SamePreviousLogicalPosition(recorded, current)
         || old_cache.own_keys != new_cache.own_keys
     {
         return false;
@@ -6351,14 +6356,26 @@ fn HasUnrecordedJustCreatedClient(recorded: &PrePaintPrevious, fragment: &Fragme
 /// The previous ids come from the node's record. Equal ids name the same
 /// live DisplayItemClient, so its cacheability is the same object state;
 /// only a just-created client the record does not name is new
-/// (IsNewClient).
-fn SameClientDirectory(previous: &PaintTreeNode<'_>, b: &FragmentPaintData) -> bool {
+/// (IsNewClient). `current_clients` is ClientDirectoryIds(b), computed once
+/// per visit (VisitIdentity::CurrentClients).
+fn SameClientDirectory(
+    previous: &PaintTreeNode<'_>,
+    b: &FragmentPaintData,
+    current_clients: ClientIds,
+) -> bool {
     let y = &b.paint;
-    let recorded = RecordOf(previous);
-    if recorded.clients != ClientDirectoryIds(b) {
+    let default_record;
+    let recorded = match previous.cache.as_ref() {
+        Some(cache) => &cache.record,
+        None => {
+            default_record = PrePaintPrevious::default();
+            &default_record
+        }
+    };
+    if recorded.clients != current_clients {
         return false;
     }
-    let recorded = RecordedClientIds(&recorded);
+    let recorded = RecordedClientIds(recorded);
     let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
     let mut created = IsNewClient(&recorded, y.DisplayItemClientId(), y_item.is_just_created)
         || IsNewClient(&recorded, y.PaintLayerClientId(), y_layer.is_just_created);
@@ -6429,13 +6446,14 @@ fn InvalidationOnlySourceRefresh(
     current: &PrePaintPrevious,
 ) -> Option<bool> {
     let invalidation = new.pre_paint_invalidation;
-    if !invalidation.own()
-        || invalidation.needs_paint_property_update
-        || !SamePreviousSourceIdentity(previous, new)
-    {
+    if !invalidation.own() || invalidation.needs_paint_property_update {
         return None;
     }
-    let recorded = &RecordOf(previous);
+    // `current` already holds this visit's source identity.
+    let recorded = &previous.cache.as_ref()?.record;
+    if !SameRecordedSourceIdentity(recorded, current) {
+        return None;
+    }
     (SamePreviousPhaseInputs(recorded, current)
         && recorded.offset == current.offset
         && recorded.content_size == current.content_size
@@ -6649,17 +6667,18 @@ impl PrePaintTreeWalk {
     ) -> Option<&'static str> {
         let new = b.cache.as_ref().expect("new geometry");
         let bf = b.fragment.as_deref().unwrap();
+        let recorded = RecordOf(a);
         if IsNewClient(
-            &RecordedClientIds(&RecordOf(a)),
-            bf.paint.DisplayItemClientId(),
+            &RecordedClientIds(&recorded),
+            current.display_item_client_id,
             bf.paint.DisplayItemClientState().is_just_created,
         ) {
             return Some("just_created");
         }
-        if !SamePreviousSourceIdentity(a, bf) {
+        // `current` is this visit's record of the same fragment.
+        if !SameRecordedSourceIdentity(&recorded, current) {
             return Some("identity");
         }
-        let recorded = RecordOf(a);
         if !SamePreviousPhaseInputs(&recorded, current) {
             return Some("phase_inputs");
         }
@@ -6787,6 +6806,7 @@ impl PrePaintTreeWalk {
         &mut self,
         node: &PaintTreeNode<'_>,
         fragment: PaintFragmentSource<'_>,
+        identity: &VisitIdentity,
     ) -> Option<usize> {
         let Some(cache) = node.cache.as_ref() else {
             return Some(3);
@@ -6801,12 +6821,12 @@ impl PrePaintTreeWalk {
         if cache.record.size != f.ViewSize() {
             return Some(2);
         }
-        if !SamePreviousSourceIdentity(node, f) {
+        if !identity.SameSource(node, f) {
             return Some(3);
         }
         // Recorded client ids name the same live clients; a client the
         // record does not name must not be newly created.
-        if !SameClientDirectory(node, f) || HasUnrecordedJustCreatedClient(&cache.record, f) {
+        if !identity.SameClients(node, f) || HasUnrecordedJustCreatedClient(&cache.record, f) {
             return Some(4);
         }
         let usage = || {
@@ -6858,7 +6878,8 @@ impl PrePaintTreeWalk {
         node: &PaintTreeNode<'_>,
         fragment: PaintFragmentSource<'_>,
     ) -> bool {
-        self.RetainedSelfChange(node, fragment).is_none()
+        self.RetainedSelfChange(node, fragment, &VisitIdentity::default())
+            .is_none()
     }
 
     fn RetainedDescendantsUnchanged(
@@ -7009,9 +7030,12 @@ impl PrePaintTreeWalk {
         // PrePaint's own admission (RetainedSelfChange /
         // RetainedDescendantChange): the live dirty bits plus this node's
         // records, never a Layout revision.
+        // Source identity and client directory of (previous, fragment), each
+        // computed at most once for this visit and shared by every proof.
+        let identity = VisitIdentity::default();
         let self_change = previous
             .as_deref()
-            .map(|node| self.RetainedSelfChange(node, fragment));
+            .map(|node| self.RetainedSelfChange(node, fragment, &identity));
         let self_unchanged = self_change == Some(None);
         let descendant_change = if self_unchanged {
             previous
@@ -7092,10 +7116,16 @@ impl PrePaintTreeWalk {
         // the borrowed sidecar pointer has to move to the new owner.
         // The values this lifecycle compares and then records on the slot
         // (PrePaintPreviousOf), computed once per visited node.
-        let current_record =
-            PrePaintPreviousOf(&fragment, fragment.Cursor().ViewOffsetInContainer());
-        let previous_display_item_client_id =
-            previous.as_ref().map(|node| RecordOf(node).display_item_client_id);
+        let current_record = PrePaintPreviousOf(
+            &fragment,
+            fragment.Cursor().ViewOffsetInContainer(),
+            identity.CurrentClients(&fragment),
+        );
+        let previous_display_item_client_id = previous.as_ref().map(|node| {
+            node.cache
+                .as_ref()
+                .map_or(0, |cache| cache.record.display_item_client_id)
+        });
         // The previous lifecycle's fragment, as the retained node recorded
         // it, instead of the previous LayoutResult's sidecar copy. Owned
         // here: the rebuild path overwrites the retained node before the
@@ -7127,7 +7157,8 @@ impl PrePaintTreeWalk {
         let invalidation_only_refresh = same_context
             .then(|| {
                 previous.as_ref().and_then(|node| {
-                    SameClientDirectory(node, &fragment)
+                    identity
+                        .SameClients(node, &fragment)
                         .then(|| InvalidationOnlySourceRefresh(node, &fragment, &current_record))
                         .flatten()
                 })
@@ -7156,8 +7187,8 @@ impl PrePaintTreeWalk {
             previous.as_ref().and_then(|node| {
                 let cache = node.cache.as_ref()?;
                 if (self.source_result_changed
-                    && !(SamePreviousSourceIdentity(node, &fragment)
-                        && SameClientDirectory(node, &fragment)))
+                    && !(identity.SameSource(node, &fragment)
+                        && identity.SameClients(node, &fragment)))
                     || !ShiftKeepsSvgPrefix(node, &cache.inherited, &inherited)
                 {
                     return None;
@@ -7187,8 +7218,8 @@ impl PrePaintTreeWalk {
                 }
                 Some((node, _))
                     if self.source_result_changed
-                        && !(SamePreviousSourceIdentity(node, &fragment)
-                            && SameClientDirectory(node, &fragment)) =>
+                        && !(identity.SameSource(node, &fragment)
+                            && identity.SameClients(node, &fragment)) =>
                 {
                     3
                 }
@@ -7392,19 +7423,21 @@ impl PrePaintTreeWalk {
                     }
                     if let Some(field) = mismatch {
                         self.stats.shift_check_mismatches += 1;
-                        let name = built
-                            .fragment
-                            .as_deref()
-                            .map_or_else(
-                                || Arc::<str>::from("?"),
-                                |f| f.paint.DisplayItemClientDebugName(),
+                        if browser_tracing::enabled() {
+                            let name = built
+                                .fragment
+                                .as_deref()
+                                .map_or_else(
+                                    || Arc::<str>::from("?"),
+                                    |f| f.paint.DisplayItemClientDebugName(),
+                                );
+                            browser_tracing::instant_with_text(
+                                "prepaint",
+                                "PrePaint.ShiftMismatch",
+                                &format!("{name}: {field}"),
+                                &[],
                             );
-                        browser_tracing::instant_with_text(
-                            "prepaint",
-                            "PrePaint.ShiftMismatch",
-                            &format!("{name}: {field}"),
-                            &[],
-                        );
+                        }
                     }
                     saved.Restore(&mut old);
                 }
@@ -9177,19 +9210,16 @@ impl PrePaintTreeWalk {
         } else {
             UpdateAutoDarkModeStateOnVisitedPath(&mut tree, false, self.walk_generation);
         }
-        let mut repaint_counts = [0; 3];
-        let subtree_needs_repaint =
-            PropagateSubsequenceRepaintCounting(&mut tree, &mut repaint_counts);
-        self.unrecorded_repaint |= subtree_needs_repaint || tree.self_or_descendant_needs_repaint;
+        // No post-walk repaint fold: each client invalidation already called
+        // PaintLayer::SetNeedsRepaint on its painting layer, which marked the
+        // painting-container chain (MarkPaintingContainerChainForNeedsRepaint),
+        // and PaintLayerPainter reads those live bits at paint time.
+        // cpp: third_party/blink/renderer/core/paint/object_paint_invalidator.cc:95-121
+        // cpp: third_party/blink/renderer/core/paint/paint_layer.cc:2688-2747
         browser_tracing::instant(
             "prepaint",
             "PrePaint.Repaint",
-            &[
-                ("paint_layers", repaint_counts[0] as f64),
-                ("source_needs_repaint", repaint_counts[1] as f64),
-                ("client_propagated", repaint_counts[2] as f64),
-                ("cull_change_repaints", self.stats.cull_change_repaints as f64),
-            ],
+            &[("cull_change_repaints", self.stats.cull_change_repaints as f64)],
         );
         // Source: ObjectPaintProperties::Clear* and FragmentData destruction.
         // A slot dies with the object (or the role) that owned it, which
@@ -9556,18 +9586,17 @@ impl PrePaintTreeWalk {
     /// state. See `PrePaintConsumedSinceRecording`.
     pub fn MarkPrePaintRecorded(&mut self) {
         self.recorded_consuming_walks = self.consuming_walks;
-        self.unrecorded_repaint = false;
     }
 
     /// LayoutView's PaintLayer::SelfOrDescendantNeedsRepaint() as
-    /// LocalFrameView::PaintTree reads it: the live Layout-owned layer bits,
-    /// plus the client invalidations folded by every walk since the last
-    /// recorded Paint. An entirely clean walk retains the previous tree
-    /// without folding, so its stale node bit is not consulted.
+    /// LocalFrameView::PaintTree reads it: the live Layout-owned layer bits.
+    /// Every client invalidation since the last committed Paint marked its
+    /// painting layer's container chain, and only that commit clears them
+    /// (PaintLayer::ClearNeedsRepaintRecursively).
     // cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:3185-3188
+    // cpp: third_party/blink/renderer/core/paint/paint_layer.cc:2688-2785
     pub fn RootNeedsRepaint(&self, root: &PaintTreeNode<'_>) -> bool {
         !root.is_paint_layer
-            || self.unrecorded_repaint
             || root
                 .fragment
                 .as_deref()
@@ -9851,7 +9880,7 @@ mod tests {
         HasPerspective, InvalidateClientsForCullRectChange, MarkPaintPhaseNeeds, NeedsOverflowClip,
         NeedsPaintOffsetTranslation, ObjectRequiresTreeBuilderContext, OwnFilterOriginTainted,
         PaintPropertyRole, PaintPropertyTreeBuilder, PaintRect, PaintTreeNode, PixelSnappedRect,
-        PrePaintTreeWalk, PrepareOutlines, PropagateAutoDarkModeState, PropagateSubsequenceRepaint,
+        PrePaintTreeWalk, PrepareOutlines, PropagateAutoDarkModeState,
         PropertyTreeState, RequiresFullSourceWalk, ResidentFragment, ResolveClipPath,
         ResolveFragmentGeometry, ResolveMaskLayers, RetainImagePaintedRect, SamePhaseInputs,
         SvgTransformToPixelSnappedBorderBox, TransformPropertyRoles,
@@ -9905,64 +9934,6 @@ mod tests {
         assert_eq!(
             fragment.paint.display_item_client_invalidation_reason,
             Some(foundation::PaintInvalidationReason::kJustCreated)
-        );
-    }
-
-    #[test]
-    fn new_descendant_client_invalidates_the_ancestor_layer_subsequence() {
-        let mut layer = PaintTreeNode::default();
-        layer.is_paint_layer = true;
-        layer.self_or_descendant_needs_repaint = false;
-        layer.fragment = Some(ResidentFragment::FromSource(&FragmentPaintData::default()));
-
-        let mut child_fragment = FragmentPaintData::default();
-        child_fragment.paint.display_item_client_invalidation_reason =
-            Some(foundation::PaintInvalidationReason::kJustCreated);
-        let mut child = PaintTreeNode::default();
-        child.self_or_descendant_needs_repaint = false;
-        child.fragment = Some(ResidentFragment::FromSource(&child_fragment));
-        layer.children.push(Box::new(child));
-
-        assert!(PropagateSubsequenceRepaint(&mut layer));
-        assert!(layer.self_or_descendant_needs_repaint);
-    }
-
-    #[test]
-    fn repaint_propagation_visits_dirty_sibling_layers_after_the_first_match() {
-        fn dirty_leaf() -> Box<PaintTreeNode<'static>> {
-            let mut fragment = FragmentPaintData::default();
-            fragment.paint.display_item_client_invalidation_reason =
-                Some(foundation::PaintInvalidationReason::kJustCreated);
-            let mut leaf = PaintTreeNode::default();
-            leaf.fragment = Some(ResidentFragment::FromSource(&fragment));
-            Box::new(leaf)
-        }
-
-        let mut root = PaintTreeNode::default();
-        root.is_paint_layer = true;
-        root.self_or_descendant_needs_repaint = false;
-        root.fragment = Some(ResidentFragment::FromSource(&FragmentPaintData::default()));
-
-        let mut first_layer = PaintTreeNode::default();
-        first_layer.is_paint_layer = true;
-        first_layer.self_or_descendant_needs_repaint = false;
-        first_layer.fragment = Some(ResidentFragment::FromSource(&FragmentPaintData::default()));
-        first_layer.children.push(dirty_leaf());
-
-        let mut later_layer = PaintTreeNode::default();
-        later_layer.is_paint_layer = true;
-        later_layer.self_or_descendant_needs_repaint = false;
-        later_layer.fragment = Some(ResidentFragment::FromSource(&FragmentPaintData::default()));
-        later_layer.children.push(dirty_leaf());
-
-        root.children.push(Box::new(first_layer));
-        root.children.push(Box::new(later_layer));
-
-        assert!(PropagateSubsequenceRepaint(&mut root));
-        assert!(root.children[0].self_or_descendant_needs_repaint);
-        assert!(
-            root.children[1].self_or_descendant_needs_repaint,
-            "later dirty PaintLayers must not retain a stale cached subsequence"
         );
     }
 

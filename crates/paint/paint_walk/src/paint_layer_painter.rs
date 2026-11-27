@@ -467,7 +467,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
                 )
             });
             self.context.borrow_mut().walk_metrics.subsequence_layers += 1;
-            if self.layer.self_or_descendant_needs_repaint {
+            if self.layer.SelfOrDescendantNeedsRepaint() {
                 self.context.borrow_mut().walk_metrics.subsequence_needs_repaint += 1;
             } else {
                 if let Some(cached_result) = SubsequenceRecorder::UseCachedSubsequenceIfPossible(

@@ -1179,6 +1179,10 @@ impl PaintLayer {
         if self.InvisibleForPositionVisibility() != was_invisible {
             self.display_item_client_
                 .Invalidate(PaintInvalidationReason::kStyle);
+            // Source paint_layer.cc:2846-2847: the toggle marks this layer and
+            // its painting-container chain, so PaintLayerPainter does not
+            // reuse a subsequence recorded with the old visibility.
+            self.SetNeedsRepaint();
         }
     }
 

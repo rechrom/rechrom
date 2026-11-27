@@ -789,16 +789,18 @@ impl ErrorReporter {
         }
     }
     fn emit(&self, error: PageError) {
-        browser_tracing::instant_with_text(
-            "error",
-            "PageError",
-            &format!("{}: {}", error.stage, error.message),
-            &[
-                ("view_id", self.document.0 as f64),
-                ("document_generation", self.document.1 as f64),
-                ("terminal", error.terminal as u8 as f64),
-            ],
-        );
+        if browser_tracing::enabled() {
+            browser_tracing::instant_with_text(
+                "error",
+                "PageError",
+                &format!("{}: {}", error.stage, error.message),
+                &[
+                    ("view_id", self.document.0 as f64),
+                    ("document_generation", self.document.1 as f64),
+                    ("terminal", error.terminal as u8 as f64),
+                ],
+            );
+        }
         (self.events)(self.document, Event::Error(error));
     }
     fn terminal(&self, stage: &'static str, error: io::Error) {
@@ -1940,13 +1942,15 @@ fn run_impl(
                 queued_at,
                 samples,
             } => {
-                browser_tracing::interval(
-                    "input",
-                    "InputOwnerQueue",
-                    queued_at,
-                    Instant::now(),
-                    &[("samples", samples as f64)],
-                );
+                if browser_tracing::enabled() {
+                    browser_tracing::interval(
+                        "input",
+                        "InputOwnerQueue",
+                        queued_at,
+                        Instant::now(),
+                        &[("samples", samples as f64)],
+                    );
+                }
                 let now = presentation.input_time(Instant::now());
                 let output = presentation.gestures.PassToFlingController(
                     &gesture,
@@ -2969,17 +2973,19 @@ fn run_document(
                         }
                     }
                 }
-                browser_tracing::interval(
-                    "frame",
-                    "MainFrameCycle",
-                    started,
-                    Instant::now(),
-                    &[
-                        ("view_id", params.document.0 as f64),
-                        ("main_frame_epoch", main_frame_count as f64),
-                        ("committed", committed as u8 as f64),
-                    ],
-                );
+                if browser_tracing::enabled() {
+                    browser_tracing::interval(
+                        "frame",
+                        "MainFrameCycle",
+                        started,
+                        Instant::now(),
+                        &[
+                            ("view_id", params.document.0 as f64),
+                            ("main_frame_epoch", main_frame_count as f64),
+                            ("committed", committed as u8 as f64),
+                        ],
+                    );
+                }
             }
             Ok(Command::BindCompositorPresentationClock(clock)) => {
                 page.BindExternalCompositorPresentationClock(clock)
@@ -3106,13 +3112,15 @@ fn run_document(
                         started,
                         &[("samples", samples as f64), ("frame_aligned", 0.0)],
                     );
-                    browser_tracing::interval(
-                        "input",
-                        "InputDispatch",
-                        started,
-                        Instant::now(),
-                        &[("samples", samples as f64), ("frame_aligned", 0.0)],
-                    );
+                    if browser_tracing::enabled() {
+                        browser_tracing::interval(
+                            "input",
+                            "InputDispatch",
+                            started,
+                            Instant::now(),
+                            &[("samples", samples as f64), ("frame_aligned", 0.0)],
+                        );
+                    }
                 }
             }
             Ok(Command::ExternalWheel {

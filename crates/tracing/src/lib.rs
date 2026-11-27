@@ -34,8 +34,12 @@ pub fn instant_id(t: Instant) -> u64 {
 pub fn next_id() -> u64 {
     IDS.fetch_add(1, Ordering::Relaxed)
 }
+/// One relaxed load. Every producer entry point returns here, before reading
+/// a clock, allocating or formatting, while no recording is active (the
+/// TRACE_EVENT category-enabled check, base/trace_event/trace_event.h).
+#[inline(always)]
 pub fn enabled() -> bool {
-    active_recording_id() != 0
+    ACTIVE.load(Ordering::Relaxed) != 0
 }
 /// The `BROWSER_PROFILE_INPUT` diagnostic switch, read from the process
 /// environment once instead of on every frame.
@@ -332,11 +336,10 @@ pub struct Span {
     thread_cpu_start: Option<u64>,
     _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
+#[inline]
 pub fn span(category: &'static str, name: &'static str) -> Span {
-    let diagnostic = diagnostics::PhaseGuard::enter(category, name);
-    let _allocation = diagnostics::AllocationScope::trace();
-    let mut span = Span {
-        diagnostic,
+    let span = Span {
+        diagnostic: diagnostics::PhaseGuard::enter(category, name),
         record: None,
         previous: 0,
         thread_cpu_start: None,
@@ -345,6 +348,11 @@ pub fn span(category: &'static str, name: &'static str) -> Span {
     if !enabled() {
         return span;
     }
+    begin_span(span, category, name)
+}
+#[inline(never)]
+fn begin_span(mut span: Span, category: &'static str, name: &'static str) -> Span {
+    let _allocation = diagnostics::AllocationScope::trace();
     if let Some((r, b, c, parent, thread)) = attach(category) {
         let id = IDS.fetch_add(1, Ordering::Relaxed);
         let e = Event {
@@ -370,6 +378,13 @@ pub fn span(category: &'static str, name: &'static str) -> Span {
     span
 }
 impl Span {
+    /// Whether this span is being recorded; callers computing an expensive
+    /// field value check this first.
+    #[inline]
+    pub fn is_recording(&self) -> bool {
+        self.record.is_some()
+    }
+    #[inline]
     pub fn set(&mut self, key: &'static str, value: f64) {
         if let Some((_, _, e)) = &mut self.record {
             if !value.is_finite() {
@@ -385,7 +400,19 @@ impl Span {
     }
 }
 impl Drop for Span {
+    #[inline]
     fn drop(&mut self) {
+        if self.record.is_none() {
+            // Not recorded: no clock read; only the diagnostic guard unwinds.
+            drop(self.diagnostic.take());
+            return;
+        }
+        self.end_recorded();
+    }
+}
+impl Span {
+    #[inline(never)]
+    fn end_recorded(&mut self) {
         if let Some(start) = self.thread_cpu_start {
             if let Some(end) = thread_cpu_time() {
                 if let Some((_, _, event)) = &mut self.record {
@@ -454,17 +481,26 @@ fn thread_cpu_time() -> Option<u64> {
     #[cfg(not(any(unix, all(windows, target_arch = "x86_64"))))]
     None
 }
+#[inline]
 pub fn instant(category: &'static str, name: &'static str, fields: &[(&'static str, f64)]) {
-    emit(category, name, Instant::now(), None, fields, None);
+    if !enabled() {
+        return;
+    }
+    emit(category, name, None, None, fields, None);
 }
+#[inline]
 pub fn instant_at(
     category: &'static str,
     name: &'static str,
     at: Instant,
     fields: &[(&'static str, f64)],
 ) {
-    emit(category, name, at, None, fields, None);
+    if !enabled() {
+        return;
+    }
+    emit(category, name, Some(at), None, fields, None);
 }
+#[inline]
 pub fn interval(
     category: &'static str,
     name: &'static str,
@@ -472,7 +508,10 @@ pub fn interval(
     end: Instant,
     fields: &[(&'static str, f64)],
 ) {
-    emit(category, name, start, Some(end), fields, None);
+    if !enabled() {
+        return;
+    }
+    emit(category, name, Some(start), Some(end), fields, None);
 }
 /// Opt-in textual event metadata, such as a request URL. Text is copied only
 /// while a recording is active; engine behavior must never depend on tracing.
@@ -482,12 +521,18 @@ pub fn instant_with_text(
     text: &str,
     fields: &[(&'static str, f64)],
 ) {
-    emit(category, name, Instant::now(), None, fields, Some(text));
+    if !enabled() {
+        return;
+    }
+    emit(category, name, None, None, fields, Some(text));
 }
+// `at: None` reads the clock only after the recording admitted the category
+// and target, so a filtered producer never touches the clock either.
+#[inline(never)]
 fn emit(
     category: &'static str,
     name: &'static str,
-    at: Instant,
+    at: Option<Instant>,
     end: Option<Instant>,
     fields: &[(&'static str, f64)],
     text: Option<&str>,
@@ -501,7 +546,7 @@ fn emit(
             id: IDS.fetch_add(1, Ordering::Relaxed),
             parent,
             thread,
-            at: timestamp(&r, at),
+            at: timestamp(&r, at.unwrap_or_else(Instant::now)),
             category,
             name,
             context: c,

@@ -66,6 +66,7 @@ impl Drop for AllocationScope {
         let _ = ALLOCATION_PHASE.try_with(|p| p.set(self.0));
     }
 }
+#[inline]
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("RECHROM_TASK_DIAGNOSTICS").is_some())
@@ -114,11 +115,16 @@ pub struct PhaseGuard {
     durable: bool,
 }
 impl PhaseGuard {
+    #[inline]
     pub(crate) fn enter(category: &'static str, name: &'static str) -> Option<Self> {
         let durable = enabled();
         if !durable && !cfg!(feature = "allocation_diagnostics") {
             return None;
         }
+        Self::enter_phase(category, name, durable)
+    }
+    #[inline(never)]
+    fn enter_phase(category: &'static str, name: &'static str, durable: bool) -> Option<Self> {
         let phase = phase(category, name)?;
         static IDS: AtomicU64 = AtomicU64::new(1);
         let id = IDS.fetch_add(1, Ordering::Relaxed);
