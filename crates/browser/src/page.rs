@@ -3093,12 +3093,21 @@ impl PageState {
         let mut mutation_trace = browser_tracing::span("dom", "Page.ApplyDOMMutation");
         mutation_trace.set("mutation_type", m.mutation_type as u8 as f64);
         mutation_trace.set("node_id", m.target_node_id as f64);
-        let result = self.document.ApplyDOMMutation(m);
-        self.connected_resources.ProcessRenderBlockingMutations();
+        let result = {
+            let _trace = browser_tracing::span("dom", "Page.DocumentApplyDOMMutation");
+            self.document.ApplyDOMMutation(m)
+        };
+        {
+            let _trace = browser_tracing::span("dom", "Page.ProcessRenderBlockingMutations");
+            self.connected_resources.ProcessRenderBlockingMutations();
+        }
         // Canonical CharacterData/Element removal supplements run even when
         // a throwing compound mutation already changed part of the DOM.
         let effect = result?;
-        dom::attribute_lifecycle::DrainAttributeLifecycle(&self.document.Handle());
+        {
+            let _trace = browser_tracing::span("dom", "Page.DrainAttributeLifecycle");
+            dom::attribute_lifecycle::DrainAttributeLifecycle(&self.document.Handle());
+        }
         // InlineCSSStyleDeclaration::DidMutate -> Element::
         // InvalidateStyleAttribute (inline_css_style_declaration.cc:36-55,
         // element.cc:13195-13203) only marks the element for a local style
@@ -5172,6 +5181,10 @@ pub struct Page {
     active_state_published: bool,
     selection_revision: u64,
     document_selection: Option<DocumentSelection>,
+    // The focused element FrameCaret last resolved its appearance against.
+    // With `selection_revision`, it identifies a caret input change made by
+    // an ordinary task, which must schedule the caret's visual update.
+    caret_focused_node: Option<u64>,
     editing_paint_dirty: bool,
     // ImageResourceObserver::ImageChanged can invalidate native display-item
     // clients without producing a DOM style impact. Keep that lifecycle proof
@@ -5763,6 +5776,7 @@ impl Page {
             active_state_published: false,
             selection_revision: 0,
             document_selection: None,
+            caret_focused_node: None,
             editing_paint_dirty: false,
             document_image_environment_dirty: false,
         }
@@ -6342,6 +6356,7 @@ impl Page {
         *self.wheel_event_regions.borrow_mut() = Default::default();
         self.selection_revision = 0;
         self.document_selection = None;
+        self.caret_focused_node = None;
         self.editing_paint_dirty = false;
         self.document_image_environment_dirty = false;
     }
@@ -6507,6 +6522,7 @@ impl Page {
         let mut trace = browser_tracing::span("lifecycle", "Page.RunTask");
         trace.set("budget_ms", milliseconds);
         trace.set("loading", self.open_engine.IsLoading() as u8 as f64);
+        let prologue_trace = browser_tracing::span("lifecycle", "Page.TaskTurnPrologue");
         self.state.RunTextOverflowLayoutInvalidationTasks();
         self.state.local_frames.get().unwrap().RunIntersectionTask();
         self.state.local_frames.get().unwrap().RunFormStateTask();
@@ -6515,6 +6531,7 @@ impl Page {
             self.FlushFrameInputs()?;
         }
         self.open_engine.BeginTaskTurn(milliseconds);
+        drop(prologue_trace);
         let result = (|| {
             self.state
                 .document
@@ -6539,9 +6556,12 @@ impl Page {
                 // unbounded decode batch.
                 self.ResolveStylesAndLoadResources(1)?;
             }
+            let housekeeping_trace =
+                browser_tracing::span("lifecycle", "Page.TaskTurnHousekeeping");
             self.ProcessFontLoadingEffects();
             let loading_done = started.map(|start| start.elapsed());
             let ran_popup_task = self.RunDuePopupTask(std::time::Instant::now())?;
+            drop(housekeeping_trace);
             let run_host_tasks = if !ran_popup_task {
                 if let Some(scripts) = &mut self.scripts {
                     self.open_engine.RunScriptTaskTurn(
@@ -6573,11 +6593,14 @@ impl Page {
                     scripts.DispatchPendingScrollEvents();
                 }
             }
-            self.state
-                .local_frames
-                .get()
-                .unwrap()
-                .AdvanceNavigations(milliseconds)?;
+            {
+                let _trace = browser_tracing::span("lifecycle", "Page.AdvanceNavigations");
+                self.state
+                    .local_frames
+                    .get()
+                    .unwrap()
+                    .AdvanceNavigations(milliseconds)?;
+            }
             let tasks_done = started.map(|start| start.elapsed());
             self.UpdateFrameAndStartVisibleDeferredImages()?;
             if let Some(start) = started {
@@ -6596,7 +6619,10 @@ impl Page {
         // IO failures must not leave a one-turn allowance attached to later
         // Evaluate/Apply/Dispatch or the explicit synchronous parser adapter.
         self.open_engine.EndTaskTurn();
-        self.UpdateCursor();
+        {
+            let _trace = browser_tracing::span("lifecycle", "Page.UpdateCursor");
+            self.UpdateCursor();
+        }
         result
     }
     /// Earliest ordinary Window task deadline. Document/resource transports
@@ -7041,8 +7067,8 @@ impl Page {
         let has_document_selection = self.state.layout_editing.selections.Document().is_some();
         let has_text_control_selection = self
             .interaction
-            .TextInputState(&self.state.document.Handle())
-            .is_some();
+            .HasTextInputState(&self.state.document.Handle());
+        self.caret_focused_node = focused_node;
         let needs_caret_geometry =
             self.active && (has_text_control_selection || has_document_selection);
         let position = if needs_caret_geometry {
@@ -7773,14 +7799,73 @@ impl Page {
     // cpp: browser/browser.cc:1731-1745
     fn UpdateFrameAndStartVisibleDeferredImages(&mut self) -> io::Result<()> {
         self.UpdateFrameIfNeeded()?;
+        let _trace = browser_tracing::span("lifecycle", "Page.StartVisibleDeferredImages");
         self.StartVisibleDeferredImages()?;
         Ok(())
     }
 
     fn UpdateFrameIfNeeded(&mut self) -> io::Result<()> {
+        // An ordinary task with a BeginFrameSource does not run the document
+        // lifecycle: it only schedules the rendering opportunity
+        // (Document::ScheduleLayoutTreeUpdate -> LocalFrameView::
+        // ScheduleAnimation; third_party/blink/renderer/core/dom/
+        // document.cc, core/frame/local_frame_view.cc). The post-lifecycle
+        // steps below belong to that lifecycle update
+        // (LocalFrameView::RunPostLifecycleSteps -> ComputeIntersections;
+        // ValidationMessageClientImpl::UpdatePrePaint), so a deferred task
+        // turn leaves them to the BeginMainFrame that runs it.
+        let lifecycle_deferred = self.LifecycleDeferredForBeginFrame();
         self.UpdateFrameIfNeededInternal()?;
-        self.state.UpdateValidationMessage();
+        if lifecycle_deferred {
+            self.ScheduleDueIntersectionObservation();
+            return Ok(());
+        }
+        {
+            let _trace = browser_tracing::span("lifecycle", "Page.UpdateValidationMessage");
+            self.state.UpdateValidationMessage();
+        }
+        let _trace = browser_tracing::span("lifecycle", "Page.UpdateIntersections");
         self.state.local_frames.get().unwrap().UpdateIntersections()
+    }
+
+    /// IntersectionObserverController::ScheduleIntersectionObserverForDocument
+    /// and a delayed observer's next update both end in
+    /// LocalFrameView::ScheduleAnimation (intersection_observer_controller.cc,
+    /// local_frame_view.cc). Once the domain's deadline is due and its posted
+    /// observer tasks have run, request that rendering opportunity; the
+    /// BeginMainFrame's post-lifecycle step computes the intersections.
+    fn ScheduleDueIntersectionObservation(&mut self) {
+        let domain = self.state.local_frames.get().unwrap();
+        let Some(deadline) = domain.intersection_deadline.get() else {
+            return;
+        };
+        if deadline > std::time::Instant::now() || !domain.intersection_tasks.borrow().is_empty() {
+            return;
+        }
+        domain.intersection_deadline.set(None);
+        self.state.animation_begin_frame_requested.set(true);
+        self.RequestBeginFrameIfNeeded();
+    }
+
+    /// FrameCaret's appearance inputs changed outside the rendering lifecycle:
+    /// caret_blink_timer_ fired (FrameCaret::CaretBlinkTimerFired), or the
+    /// selection, focused element or drag caret moved
+    /// (FrameSelection::DidSetSelectionDeprecated ->
+    /// ScheduleVisualUpdateForPaintInvalidationIfNeeded;
+    /// third_party/blink/renderer/core/editing/frame_caret.cc,
+    /// frame_selection.cc). Only then does a deferred task turn update the
+    /// caret; every other caret update belongs to the BeginMainFrame.
+    fn CaretAppearanceNeedsUpdate(&self) -> bool {
+        let editing = &self.state.layout_editing;
+        editing
+            .caret
+            .borrow()
+            .NextBlinkDeadline()
+            .is_some_and(|deadline| deadline <= std::time::Instant::now())
+            || editing.selections.Revision() != self.selection_revision
+            || self.state.interaction.borrow().focused_node_id != self.caret_focused_node
+            || editing.drag_caret.borrow().paint_state().is_some()
+            || self.interaction.DragCaretSelection().is_some()
     }
 
     // Blink's CancelAnimationOnCompositor / restart of a changed compositor
@@ -8012,7 +8097,13 @@ impl Page {
         // that caret update until the typed scroll mutation has reached the
         // resident LayoutNG result; ordinary frames keep their existing order.
         let defer_caret_for_scroll = !self.state.scroll_updates.borrow().is_empty();
-        if !defer_caret_for_scroll {
+        // FrameSelection::UpdateAppearance runs in the lifecycle
+        // (LocalFrameView::PerformPostLayoutTasks -> FrameSelection::
+        // DidLayout). A task turn whose lifecycle is deferred only services
+        // the caret's own blink timer and selection/focus scheduling.
+        if !defer_caret_for_scroll
+            && (!self.LifecycleDeferredForBeginFrame() || self.CaretAppearanceNeedsUpdate())
+        {
             let _trace = browser_tracing::span("lifecycle", "Page.UpdateCaret");
             self.UpdateCaret(false);
         }
@@ -8091,13 +8182,16 @@ impl Page {
         // PaintRenderingResultsToCanvas. Snapshot at the rendering-opportunity
         // boundary so Layout/Paint consume one immutable front buffer for the
         // complete lifecycle and never call back into WebAPI during replay.
-        let canvases = self
-            .state
-            .document
-            .borrow()
-            .GetDocument()
-            .SnapshotCanvasPaintResources();
-        self.state.constraints.borrow_mut().canvases = canvases.into();
+        {
+            let _trace = browser_tracing::span("lifecycle", "Page.SnapshotCanvasPaintResources");
+            let canvases = self
+                .state
+                .document
+                .borrow()
+                .GetDocument()
+                .SnapshotCanvasPaintResources();
+            self.state.constraints.borrow_mut().canvases = canvases.into();
+        }
         let profile = browser_tracing::profile_input().then(std::time::Instant::now);
         // Resource completions are separate Page tasks. An offset-only input
         // must not synchronously decode images or dispatch unrelated load
@@ -8466,12 +8560,16 @@ impl Page {
                 .borrow_mut()
                 .RefreshOutputPrePaintInputs(&mut layout_output);
         }
+        let document_image_trace =
+            browser_tracing::span("lifecycle", "Page.ConfigureDocumentImageContainers");
         if self.ConfigureDocumentImageContainers(&mut layout_output)? {
             self.state
                 .layout_engine
                 .borrow_mut()
                 .RefreshOutputPrePaintInputs(&mut layout_output);
         }
+        drop(document_image_trace);
+        let editing_trace = browser_tracing::span("lifecycle", "Page.CommitEditingState");
         // LocalFrameView::RunPrePaintLifecyclePhase commits FrameSelection's
         // pending LayoutSelection after Layout and before fragment Paint input
         // is consumed. Synchronous pointer queries use the same commit as a
@@ -8505,6 +8603,8 @@ impl Page {
                     .ApplyMutation(mutation);
             },
         );
+        drop(editing_trace);
+        let prepare_trace = browser_tracing::span("lifecycle", "Page.PreparePaintInputs");
         self.state
             .paint_engine
             .borrow_mut()
@@ -8518,6 +8618,7 @@ impl Page {
             .get()
             .unwrap()
             .PreparePaint(&self.state.layout_engine.borrow())?;
+        drop(prepare_trace);
         let mut prepared_animation_prepaint = None;
         // Chromium's deferred transform/opacity update is rejected whenever
         // the LayoutObject already needs a full paint-property update. A
@@ -8627,6 +8728,7 @@ impl Page {
             }
             prepared_animation_prepaint = prepared;
         }
+        let candidates_trace = browser_tracing::span("lifecycle", "Page.CompositorAnimationNodes");
         let compositor_animation_nodes = self
             .state
             .animation_engine
@@ -8637,6 +8739,7 @@ impl Page {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        drop(candidates_trace);
         let mut full_paint_animation_bindings = Vec::new();
         let paint_output = {
             trace.set("full_paint", 1.0);
@@ -8686,6 +8789,8 @@ impl Page {
                     );
                 }
             }
+            let paint_document_image_trace =
+                browser_tracing::span("lifecycle", "Page.ConfigurePaintDocumentImageContainers");
             let document_image_requirements = self
                 .state
                 .paint_engine
@@ -8693,10 +8798,12 @@ impl Page {
                 .GetPaintResult()
                 .expect("successful paint has artifact")
                 .DocumentImageContainerRequirements();
-            if self.ConfigurePaintDocumentImageContainers(
+            let rerecord = self.ConfigurePaintDocumentImageContainers(
                 &mut layout_output,
                 document_image_requirements,
-            )? {
+            )?;
+            drop(paint_document_image_trace);
+            if rerecord {
                 self.state
                     .layout_engine
                     .borrow_mut()
@@ -8738,8 +8845,12 @@ impl Page {
                     );
             }
             let mut paint = self.state.paint_engine.borrow_mut();
-            full_paint_animation_bindings =
-                paint.CompositedAnimationPropertyBindings(&compositor_animation_nodes);
+            {
+                let _trace =
+                    browser_tracing::span("lifecycle", "Page.CompositedAnimationBindings");
+                full_paint_animation_bindings =
+                    paint.CompositedAnimationPropertyBindings(&compositor_animation_nodes);
+            }
             paint.CommitPaintResult()
         };
         let commit_trace = browser_tracing::span("lifecycle", "Page.CommitPaintToLayout");
@@ -8793,8 +8904,10 @@ impl Page {
                 layout_output_reused
             );
         }
+        let use_counter_trace = browser_tracing::span("lifecycle", "Page.CountPaintUseCounters");
         let document_image_records_complete = display_items.HasExactDocumentImageContainerRecords();
         self.state.CountPaintUseCounters(&display_items);
+        drop(use_counter_trace);
         let frame = PageFrame {
             compositor_scroll_sequence: self.processed_compositor_scroll_sequence,
             sequence: self
@@ -8818,6 +8931,7 @@ impl Page {
         // synthetic move is deliberately deferred to BeginFrame so script
         // cannot re-enter the layout that just completed.
         self.hover_state_dirty = self.cursor_position.is_some();
+        let commit_trace = browser_tracing::span("lifecycle", "Page.DidCommitPaint");
         self.state.document.borrow_mut().DidCommitPaint();
         self.state.paint_resources_dirty.set(false);
         self.state.pending_paint_mutations.borrow_mut().clear();
@@ -8825,7 +8939,9 @@ impl Page {
             .ApplyAnimationMutation(animation::AnimationMutation::CommitPaint);
         self.state.scroll_only.set(false);
         self.state.dirty.set(false);
+        drop(commit_trace);
         if let Some(scripts) = &mut self.scripts {
+            let _trace = browser_tracing::span("lifecycle", "Page.ScriptsDidPaint");
             scripts.DidPaint();
         }
         {
@@ -8841,6 +8957,7 @@ impl Page {
         // property nodes in this exact artifact, never the retired tree.
         self.InstallCompositorPropertyAnimations(&full_paint_animation_bindings)?;
         trace.set("presented", 1.0);
+        let _cursor_trace = browser_tracing::span("lifecycle", "Page.UpdateCursor");
         self.UpdateCursor();
         Ok(())
     }

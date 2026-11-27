@@ -278,8 +278,13 @@ impl Page {
             }
         }
     }
+    /// Whether this call is outside the rendering opportunity of a Page with
+    /// a BeginFrameSource, so `DeferLifecycleForBeginFrame` will defer it.
+    pub(super) fn LifecycleDeferredForBeginFrame(&self) -> bool {
+        self.begin_frame.source.is_some() && !self.begin_frame.executing
+    }
     pub(super) fn DeferLifecycleForBeginFrame(&mut self) -> bool {
-        if self.begin_frame.source.is_some() && !self.begin_frame.executing {
+        if self.LifecycleDeferredForBeginFrame() {
             self.RequestBeginFrameIfNeeded();
             true
         } else {
@@ -325,10 +330,12 @@ impl Page {
             return Ok(());
         }
         self.begin_frame.last_frame = Some((args.source_id, args.sequence_number));
+        let prologue_trace = browser_tracing::span("lifecycle", "Page.BeginMainFramePrologue");
         let render_start = self.state.InteractionEventClock().Now();
         let performance = self.state.window_performance_timing.EventTimingSource();
         performance.OnBeginMainFrame(args.source_id);
         performance.SetRenderStartTimeForPendingEvents(render_start);
+        drop(prologue_trace);
         self.begin_frame.requested = false;
         self.state.animation_begin_frame_requested.set(false);
         let executing = std::mem::replace(&mut self.begin_frame.executing, true);
@@ -461,6 +468,7 @@ impl Page {
             scroll_trace.set("autoscroll", autoscroll_active as u8 as f64);
             drop(scroll_trace);
             if let Some(scripts) = &mut self.scripts {
+                let _trace = browser_tracing::span("lifecycle", "Page.DispatchPendingScrollEvents");
                 scripts.DispatchPendingScrollEvents();
             }
             let input_done = profile.map(|start| start.elapsed());
