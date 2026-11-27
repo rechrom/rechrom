@@ -419,6 +419,7 @@ impl PageScripts {
         self.owners
             .web_api
             .SetTaskRegistrationFlusher(Rc::new(move || {
+                let _trace = browser_tracing::span("task", "Page.FlushTaskRegistrations");
                 flush_dynamic_scripts();
                 if let Some(window) = weak_window.upgrade() {
                     if let (Some(state), Some(bindings)) =

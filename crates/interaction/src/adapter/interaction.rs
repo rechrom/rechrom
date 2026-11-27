@@ -777,6 +777,25 @@ impl<'a> Interaction<'a> {
             })
         })?
     }
+    /// Presence-only form of `TextInputState`: whether the focused element is
+    /// a text control owning the active selection. FrameSelection's
+    /// UpdateAppearance only asks whether such a selection exists
+    /// (frame_selection.cc ComputeVisibleSelectionInDOMTree().IsCaret());
+    /// the control's value is not read or copied.
+    pub fn HasTextInputState(&self, document: &InteractionDocument) -> bool {
+        let Some(focused) = self.state.borrow().focused_node_id else {
+            return false;
+        };
+        if self.selections.ActiveControl() != Some(focused)
+            || self.selections.Get(focused).is_none()
+        {
+            return false;
+        }
+        ReadNode(document, focused, |_, node, _| {
+            node.IsHTMLElement("input") || node.IsHTMLElement("textarea")
+        })
+        .unwrap_or(false)
+    }
     pub fn DocumentHasFocus(&self, page_active: bool, page_focused: bool) -> bool {
         self.focus_navigation
             .borrow()

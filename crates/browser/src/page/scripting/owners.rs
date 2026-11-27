@@ -153,6 +153,7 @@ impl PageWindowScriptFactory {
                     }
                 }
                 WebApiEffect::AnimationTick { monotonic_time_ms } => {
+                    let _trace = browser_tracing::span("animation", "Page.AnimationFrameTick");
                     if let Some(page) = active {
                         let last_time = page.animation_engine.borrow().LastTime();
                         page.ApplyAnimationMutation(animation::AnimationMutation::Tick(
