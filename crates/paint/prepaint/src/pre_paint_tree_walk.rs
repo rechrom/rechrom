@@ -7226,6 +7226,7 @@ impl PrePaintTreeWalk {
         let mut invalidation_context = parent_invalidation_context;
         let should_run_invalidation =
             PaintInvalidator::UpdateContext(&fragment, &mut invalidation_context);
+        PaintInvalidator::UpdatePaintingLayer(fragment.Cursor(), &mut invalidation_context);
         let same_context = !force
             && previous.as_ref().is_some_and(|node| {
                 node.cache
@@ -7579,6 +7580,13 @@ impl PrePaintTreeWalk {
                 );
             }
             built.previous_paint_result.set(old_previous_paint_result);
+            CullRectUpdater::PaintPropertiesChanged(
+                fragment.Cursor(),
+                &fragment,
+                built.cache.as_ref().map(|cache| cache.own_change).unwrap_or_default(),
+                built.cull_decision_inputs,
+                old_previous_paint_result,
+            );
             if let Some(mut old) = previous.take() {
                 if let Some(delta) = shift_delta.filter(|_| shift_check) {
                     // Verification: the shifted retained node must equal the
@@ -8023,6 +8031,10 @@ impl PrePaintTreeWalk {
         }
         let t_invalidated = checkpoint();
         self.stats.profile_invalidation_ns += ProfileNs(t_built, t_invalidated);
+        // This visit's final cull rects, also on the occurrence's FragmentData.
+        unsafe {
+            CullRectUpdater::SetFragmentCullRects(fragment.Cursor(), node.self_cull_rect, node.cull_rect)
+        };
         // Same opaque retained lifetime as ResidentFragment; the caller keeps
         // this result's PaintFragmentLease until replacement has been rebound.
         node.source_cursor = Some(unsafe {
@@ -9407,6 +9419,8 @@ impl PrePaintTreeWalk {
         // were cleared above; schedule the delayed targets for the next pass.
         self.paint_invalidator
             .ProcessPendingDelayedPaintInvalidations();
+        // Source: cull_rect_updater.cc:279-280,353-354, after the walk.
+        CullRectUpdater::FinishUpdate(root.Cursor());
         self.display_item_fragment_scope = None;
         self.fragmentainer_scope = None;
         let scope_changed = tree

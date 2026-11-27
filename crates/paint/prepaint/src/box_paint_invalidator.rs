@@ -356,11 +356,36 @@ impl BoxPaintInvalidator {
     }
 }
 
+/// The previous box geometry every BoxPaintInvalidator comparison reads.
+///
+/// Chromium reads each value from the LayoutBox, saved by
+/// SavePreviousBoxGeometriesIfNeeded at the end of the box's previous
+/// invalidation (box_paint_invalidator.cc:416-427,512-534):
+/// - `size`: `box_.PreviousSize()` (cc:166-183,290,343; table cells
+///   table_cell_paint_invalidator.cc:41-42);
+/// - `content_box`: `box_.PreviousPhysicalContentBoxRect()` (cc:150,156,303,348);
+/// - `self_visual_overflow`: `box_.PreviousSelfVisualOverflowRect()` (cc:167,174);
+/// - `scrollable_overflow`: `box_.PreviousScrollableOverflowRect()` (cc:296,359,410);
+/// - `replaced_content`: `LayoutReplaced::ReplacedContentRectFrom(
+///   PreviousPhysicalContentBoxRect())` (cc:153-159).
+///
+/// `PaintProperties::PreviousBoxGeometry` already reads exactly these from
+/// the source LayoutBox (LivePreviousBoxGeometry), so a sourced box never
+/// reads the retained `previous` fragment (NodeCache::previous_fragment).
+/// That snapshot is not a previous value in production: it shares the paint
+/// payload and its geometry accessors read the resident owner, so it can
+/// only serve hand-built fixtures. The one sourced fallback is a kBox
+/// fragment whose object is no LayoutBox (a LayoutInline box item), which
+/// Chromium never hands to BoxPaintInvalidator (LayoutInline::InvalidatePaint
+/// runs ObjectPaintInvalidator only); it is reported under the trace switch.
 pub(crate) fn PreviousGeometry(
     fragment: &FragmentPaintData,
     previous: Option<&FragmentPaintData>,
 ) -> Option<PreviousBoxGeometry> {
     fragment.paint.PreviousBoxGeometry().or_else(|| {
+        if fragment.paint.HasSource() && previous.is_some() {
+            browser_tracing::instant("prepaint", "PrePaint.PreviousGeometryWithoutLayoutBox", &[]);
+        }
         // Standalone immutable fixtures have no native LayoutBox owner.
         previous.map(|old| {
             let (offset, size) = PhysicalContentBoxSignature(old);
@@ -399,6 +424,13 @@ fn ComputeViewBackgroundInvalidation(
     context: PaintInvalidatorContext,
     rects: ViewBackgroundRects,
 ) -> BackgroundInvalidationType {
+    // Chromium: `layout_view.PreviousBackgroundRect()` (cc:259), read live
+    // from the source LayoutView by ViewBackgroundRects::Read; the retained
+    // fragment's stored rect serves fixtures only.
+    debug_assert!(
+        rects.previous.is_some() || !fragment.paint.HasSource(),
+        "a sourced LayoutView reads LayoutView::PreviousBackgroundRect"
+    );
     let (old_rect, new_rect) = match (
         rects
             .previous
@@ -441,6 +473,12 @@ fn ComputeViewBackgroundInvalidation(
             .map(|view| view.AsRef()),
     };
     if let Some(new) = view_background.as_ref() {
+        // Chromium: the root LayoutBox's PreviousSize(),
+        // PreviousScrollableOverflowRect() and PreviousPhysicalContentBoxRect()
+        // (cc:283-305), read live by the cursor's ViewBackground(). The
+        // retained `previous_view` (the snapshot's paint payload, shared with
+        // the live fragment) is reached only when the root element has no
+        // LayoutBox, where Chromium skips these comparisons (cc:283).
         let old_geometry = new.previous_document_element_geometry.or_else(|| {
             previous_view.map(|old| PreviousBoxGeometry {
                 size: old.document_element_size,
@@ -555,6 +593,14 @@ fn BackgroundGeometryDependsOnScrollableOverflowRect(fragment: &FragmentPaintDat
 /// boundary retains the resolved rule segments with the previous fragment, so
 /// comparing those segments is equivalent to comparing LayoutBox's saved
 /// per-fragment GapGeometry for the purpose of deciding whether to re-record.
+///
+/// Chromium reads `box_.PreviousGapGeometries()` (cc:486), saved by
+/// SavePreviousGapGeometries (cc:530-534) on the LayoutBox
+/// (layout_base LayoutBox::PreviousGapGeometries). Rechrom's
+/// `previous_rules` is NodeCache::previous_gap_rules, the resolved segments
+/// of the last visit; it is a different value type (rule segments, not
+/// GapGeometry), so no agreement check is possible until the comparison
+/// moves onto the LayoutBox values.
 fn ShouldInvalidateGapDecorations(
     fragment: &FragmentPaintData,
     previous_rules: Option<&GapRulePaintData>,

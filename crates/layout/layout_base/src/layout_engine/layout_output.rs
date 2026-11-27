@@ -24,6 +24,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 // Hit-test family (engine/hit_test), compiled as a LayoutOutput child for LayoutNode access.
 mod hit_test;
+// PaintLayer facts PrePaint reads from the visited object (CullRectUpdater, PaintInvalidator).
+mod pre_paint_layer;
 #[cfg(feature = "translation_in_progress")]
 mod spatial_navigation_geometry;
 pub use hit_test::{

@@ -17,6 +17,21 @@ pub struct ObjectPaintInvalidator;
 impl ObjectPaintInvalidator {
     /// Source: `object_paint_invalidator.cc:49-93`. Every fragment-local
     /// branch is preserved in source order.
+    ///
+    /// Previous values and their Chromium owners:
+    /// - `previous_visibility_visible`: `object_.PreviousVisibilityVisible()`
+    ///   (cc:52), the LayoutObject bit copied into `pre_paint_invalidation`
+    ///   when the walk reaches the object (ReadPrePaintInvalidationForVisit)
+    ///   and saved back by UpdateSourcePreviousVisibilityVisible after this
+    ///   call, as cc:53 does: already the native value.
+    /// - `old_paint_offset`: `context_.old_paint_offset` (cc:68), the
+    ///   FragmentData::PaintOffset() before PaintPropertyTreeBuilder updated
+    ///   it (paint_invalidator.cc:55-75), compared with the updated
+    ///   `fragment_data->PaintOffset()`. Rechrom still passes the retained
+    ///   PaintTreeNode offset, in the flat paint space; the Chromium value is
+    ///   PrePaintFragmentData::PaintOffset, local to its transform node, so
+    ///   the two are not comparable until the builder reads the old local
+    ///   offset before writing the new one.
     pub fn ComputePaintInvalidationReason(
         fragment: &FragmentPaintData,
         old_paint_offset: Option<Offset>,

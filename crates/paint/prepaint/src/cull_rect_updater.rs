@@ -12,12 +12,15 @@
 //! absent rather than being approximated here.
 
 use layout::fragment::ResidentBoxGeometry as _;
-use layout::paint::FragmentPaintData;
+use layout::paint::{FragmentPaintData, PaintFragmentCursor};
+use layout::views::paint_layer::PaintLayer;
 use paint_input_types::PaintResources;
 use paint_input_types::layout_input::Offset;
 use paint_model::cull_rect::{ApplyScrollExpansion, IsSmallScroller, LocalPixelDistanceToExpand};
-use paint_model::paint_property_tree::PropertyTreeState;
+use paint_model::paint_property_tree::{PaintPropertyChangeType, PropertyTreeState};
 use paint_model::{CullRect, PaintRect, PaintResult};
+
+use crate::fragment_data::PrePaintFragmentData;
 
 /// Source: `cull_rect_updater.cc:31-36`.
 ///
@@ -195,8 +198,9 @@ pub(super) fn ShouldUseInfiniteCullRect(
 
 /// PrePaint cull updater.
 ///
-/// Blink stores retained cull rectangles on `FragmentData`; Rechrom's
-/// `PaintTreeNode` is that retained fragment-local owner.
+/// Blink stores retained cull rectangles on `FragmentData`. Rechrom's
+/// `PaintTreeNode` still holds the rects Paint reads; `SetFragmentCullRects`
+/// also stores them on the occurrence's `PrePaintFragmentData`.
 #[derive(Default)]
 pub struct CullRectUpdater;
 
@@ -270,6 +274,152 @@ impl CullRectUpdater {
         }
         (contents_cull.Rect(), expanded)
     }
+
+    /// Source: `cull_rect_updater.cc:51-90` (SetFragmentCullRect,
+    /// SetFragmentContentsCullRect) as `UpdateForSelf` (cc:393-435) applies
+    /// them to each FragmentData of a PaintLayer's object. Returns whether
+    /// the contents cull rect changed (UpdateForSelf's
+    /// `force_update_children`).
+    ///
+    /// Dual write: the walk still computes the rects (PaintPropertyTreeBuilder,
+    /// ShiftRetainedNode) and keeps them on PaintTreeNode, which Paint reads;
+    /// this stores the same values (`None` is infinite) on the occurrence's
+    /// FragmentData. As in Chromium only PaintLayer objects get cull rects
+    /// here; every other FragmentData keeps its default empty CullRect
+    /// (cull_rect.h). Not repeated here, so behaviour stays the walk's:
+    /// SetLayerNeedsRepaintOnCullRectChange (cc:44-49), raised by the walk's
+    /// CullRectChangeNeedsRepaint against the node's own retained rects, and
+    /// PaintLayerScrollableArea::DidUpdateCullRect (cc:84-86). The
+    /// OverriddenCullRectScope save/restore branch (`g_original_cull_rects`)
+    /// belongs to special painting (special_paint.rs), which does not store.
+    ///
+    /// # Safety
+    /// PrePaint is the single writer of the occurrence's PrePaint state
+    /// (`PaintFragmentCursor::PrePaintDataMut`); no other reference to it may
+    /// be live.
+    pub(crate) unsafe fn SetFragmentCullRects(
+        cursor: PaintFragmentCursor<'_>,
+        cull_rect: Option<PaintRect>,
+        contents_cull_rect: Option<PaintRect>,
+    ) -> bool {
+        // Hand-built fixtures have no result state and so no FragmentData.
+        if cursor.PrePaintSlot().is_none() || cursor.OwnPaintLayer().is_none() {
+            return false;
+        }
+        let fragment = unsafe { cursor.PrePaintDataMut::<PrePaintFragmentData>() };
+        // cc:51-65 SetFragmentCullRect.
+        let cull_rect = RetainedCullRect(cull_rect);
+        if cull_rect != fragment.GetCullRect() {
+            fragment.SetCullRect(cull_rect);
+        }
+        // cc:67-90 SetFragmentContentsCullRect.
+        let contents_cull_rect = RetainedCullRect(contents_cull_rect);
+        if contents_cull_rect == fragment.GetContentsCullRect() {
+            return false;
+        }
+        fragment.SetContentsCullRect(contents_cull_rect);
+        true
+    }
+
+    /// Source: `cull_rect_updater.cc:558-656` PaintPropertiesChanged: the
+    /// PaintLayer cull-rect bits a property change of `cursor`'s object sets.
+    ///
+    /// `change` is the maximum change of this object's own property nodes
+    /// (PaintPropertyTreeBuilder's `properties_changed_`); Rechrom keeps no
+    /// per-tree split, so an effect-only change also counts, where Chromium
+    /// reads only transform, clip and scroll (cc:589-596). Not translated
+    /// yet: the HasScrolledEnough term (cc:596, still decided by the walk's
+    /// retained scroll state), the scroll-change SetNeedsRepaint (cc:619-622,
+    /// a repaint the walk does not issue today) and the LayoutView
+    /// fixed-position children branch (cc:624-645). Nothing reads the bits
+    /// for scheduling yet; FinishUpdate clears them after the walk.
+    pub(crate) fn PaintPropertiesChanged(
+        cursor: PaintFragmentCursor<'_>,
+        fragment: &FragmentPaintData,
+        change: PaintPropertyChangeType,
+        inputs: CullRectDecisionInputs,
+        previous_paint_result: PaintResult,
+    ) {
+        let layer = cursor.OwnPaintLayer();
+        // cc:573-587: an infinite layer whose stored rects are already
+        // infinite needs no update.
+        if layer.is_some()
+            && ShouldUseInfiniteCullRect(
+                fragment,
+                false,
+                inputs.has_filter_that_moves_pixels,
+                inputs.has_perspective,
+                inputs.has_active_transform_animation,
+                inputs.has_non_composited_transform,
+                previous_paint_result,
+            )
+            .use_infinite
+            && cursor
+                .PrePaintData::<PrePaintFragmentData>()
+                .is_some_and(|stored| {
+                    stored.GetCullRect().IsInfinite() && stored.GetContentsCullRect().IsInfinite()
+                })
+        {
+            return;
+        }
+        // cc:589-607.
+        if change < PaintPropertyChangeType::ChangedOnlySimpleValues {
+            return;
+        }
+        // cc:609-646.
+        if let Some(layer) = layer {
+            layer.SetNeedsCullRectUpdate();
+            return;
+        }
+        // cc:649-655.
+        if cursor.SourceHasChildren() {
+            if let Some(enclosing) = cursor.EnclosingPaintLayer() {
+                enclosing.SetForcesChildrenCullRectUpdate();
+            }
+        }
+    }
+
+    /// Source: `cull_rect_updater.cc:279-280,353-354`: CullRectUpdater::Update
+    /// (run after PrePaintTreeWalk, LocalFrameView::RunPrePaintLifecyclePhase)
+    /// clears each updated layer's bits after its subtree. Rechrom updated the
+    /// cull rects during the walk itself, so this pass follows
+    /// UpdateRecursively's traversal (cc:291-390) over the dirty bits only to
+    /// clear them. `root` is the walk's LayoutView fragment.
+    pub(crate) fn FinishUpdate(root: PaintFragmentCursor<'_>) {
+        if let Some(layer) = root.OwnPaintLayer() {
+            ClearCullRectUpdateRecursively(layer);
+        }
+    }
+}
+
+/// Rechrom's retained cull value (`None` is infinite) as FragmentData's
+/// CullRect.
+#[inline]
+fn RetainedCullRect(rect: Option<PaintRect>) -> CullRect {
+    rect.map_or_else(CullRect::Infinite, CullRect::FromRect)
+}
+
+/// UpdateRecursively / UpdateForDescendants reduced to their bit clearing.
+fn ClearCullRectUpdateRecursively(layer: &PaintLayer) {
+    // cc:293-294 returns before clearing.
+    if layer.IsUnderSVGHiddenContainer() {
+        return;
+    }
+    // cc:332-339 (the forced-children propagation only reaches layers whose
+    // own bits are already covered by DescendantNeedsCullRectUpdate).
+    if layer.ForcesChildrenCullRectUpdate() || layer.DescendantNeedsCullRectUpdate() {
+        // cc:363-366: DisplayLockContext forces the update on unlock, so a
+        // locked subtree keeps its bits.
+        if !layer.GetLayoutObject().ChildPaintBlockedByDisplayLock() {
+            let mut child = layer.FirstChild();
+            while let Some(current) = unsafe { child.as_ref() } {
+                ClearCullRectUpdateRecursively(current);
+                child = current.NextSibling();
+            }
+        }
+    }
+    // cc:353-354.
+    layer.ClearNeedsCullRectUpdate();
 }
 
 #[cfg(test)]
