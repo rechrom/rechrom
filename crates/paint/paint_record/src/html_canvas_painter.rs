@@ -7,6 +7,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::box_fragment_painter::IsVisible;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
@@ -63,8 +64,8 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
         // html_canvas_painter.cc:40-41 keeps the unaccelerated paint rect in
         // physical coordinates. Only the foreign-layer branch pixel-snaps.
         let destination = PaintRect {
-            x: self.node.paint_offset.x + replaced.offset.x,
-            y: self.node.paint_offset.y + replaced.offset.y,
+            x: FragmentPaintOffset(self.node).x + replaced.offset.x,
+            y: FragmentPaintOffset(self.node).y + replaced.offset.y,
             width: replaced.size.width,
             height: replaced.size.height,
         };

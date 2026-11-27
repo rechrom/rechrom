@@ -18,6 +18,7 @@ use paint_input_types::paint_input::SvgPaintComponent;
 use layout::paint::{CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness};
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::box_fragment_painter::{IsVisible, TextPaintOrigin};
 use crate::decoration_line_painter::{
     Bounds as DecorationBounds, DecorationGeometry, DecorationLinePainter, StrokeStyle,
@@ -160,7 +161,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                     .expect("text fragment has source ink overflow");
                 PaintRect {
                     x: rect.x,
-                    y: self.node.paint_offset.y + ink_overflow.offset.y,
+                    y: FragmentPaintOffset(self.node).y + ink_overflow.offset.y,
                     width: rect.width,
                     height: ink_overflow.size.height,
                 }

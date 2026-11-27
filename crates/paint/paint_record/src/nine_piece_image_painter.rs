@@ -7,6 +7,7 @@ use layout::input::{BoxDecorationBreak, Display};
 use paint_input_types::layout_input::{Offset, PaintImage, Size, TransformMatrix};
 use paint_input_types::paint_input::{NinePieceImagePaint, PaintImageTileRule, PaintShader};
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::geometry_mapper::{MultiplyTransforms, TranslationTransform};
 use crate::nine_piece_image_grid::{NinePiece, NinePieceDrawInfo, NinePieceImageGrid};
 use crate::paint_context::PaintContext;
@@ -308,8 +309,8 @@ impl NinePieceImagePainter {
             .as_deref()
             .expect("paint tree node has a fragment");
         let mut decoration_area = PaintRect {
-            x: node.paint_offset.x,
-            y: node.paint_offset.y,
+            x: FragmentPaintOffset(node).x,
+            y: FragmentPaintOffset(node).y,
             width: fragment.ViewSize().width,
             height: fragment.ViewSize().height,
         };
@@ -319,8 +320,8 @@ impl NinePieceImagePainter {
         {
             let stitched = fragment.ViewStitchedDecoration().unwrap();
             decoration_area = PaintRect {
-                x: node.paint_offset.x + stitched.fragment_origin.x - stitched.fragment_offset.x,
-                y: node.paint_offset.y + stitched.fragment_origin.y - stitched.fragment_offset.y,
+                x: FragmentPaintOffset(node).x + stitched.fragment_origin.x - stitched.fragment_offset.x,
+                y: FragmentPaintOffset(node).y + stitched.fragment_origin.y - stitched.fragment_offset.y,
                 width: stitched.size.width,
                 height: stitched.size.height,
             };
@@ -489,8 +490,8 @@ impl NinePieceImagePainter {
         if sliced_inline_strip {
             let sides = &fragment.BorderSides();
             let clip = PaintRect {
-                x: node.paint_offset.x - if sides.left { outsets.left } else { 0.0 },
-                y: node.paint_offset.y - if sides.top { outsets.top } else { 0.0 },
+                x: FragmentPaintOffset(node).x - if sides.left { outsets.left } else { 0.0 },
+                y: FragmentPaintOffset(node).y - if sides.top { outsets.top } else { 0.0 },
                 width: fragment.ViewSize().width
                     + if sides.left { outsets.left } else { 0.0 }
                     + if sides.right { outsets.right } else { 0.0 },

@@ -9,7 +9,33 @@ use crate::box_fragment_painter::{BackgroundLayerOccludesFollowingLayers, Backgr
 use crate::contoured_border_geometry::IncludedBorderEdges;
 use crate::paint_info::PaintInfo;
 use crate::pre_paint_tree_walk::PaintTreeNode;
+use paint_input_types::layout_input::Offset;
 use paint_input_types::paint_input::BackgroundBox;
+
+/// Source: core/paint/fragment_data.h:32-38 `FragmentData::PaintOffset()`,
+/// the value ScopedPaintState (scoped_paint_state.h, constructed from the
+/// FragmentData to paint) hands the box painters as `PaintOffset()` (BoxFragmentPainter, TablePainter, FieldsetPainter,
+/// FrameSetPainter, MathMLPainter, ThemePainter, ReplacedPainter children,
+/// ScrollableAreaPainter, InlineBoxFragmentPainter, NinePieceImagePainter):
+/// the fragment's border box origin in the LOCAL space of its
+/// LocalBorderBoxProperties transform, read from the occurrence's PrePaint
+/// FragmentData. A hand-built fixture node without a FragmentData uses the
+/// same local value from its own fields.
+pub(crate) fn FragmentPaintOffset(node: &PaintTreeNode<'_>) -> Offset {
+    match node.FragmentData() {
+        Some(data) => {
+            let offset = data.PaintOffset();
+            Offset {
+                x: offset.left.ToDouble(),
+                y: offset.top.ToDouble(),
+            }
+        }
+        None => Offset {
+            x: node.paint_offset.x + node.paint_snap_offset.x,
+            y: node.paint_offset.y + node.paint_snap_offset.y,
+        },
+    }
+}
 
 // Chromium: core/paint/box_decoration_data.h:21-173 and
 // core/paint/box_decoration_data.cc:11-70.

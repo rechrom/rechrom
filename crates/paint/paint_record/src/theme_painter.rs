@@ -9,6 +9,7 @@ use paint_input_types::layout_input::{
 use paint_input_types::layout_input_types::Color;
 use layout_style::style::appearance::AppearanceValue;
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::contoured_border_geometry::UniformCornerRadii;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
@@ -42,10 +43,11 @@ fn ControlBox(node: &PaintTreeNode<'_>) -> PaintRect {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let left = (node.paint_offset.x + 0.5).floor();
-    let top = (node.paint_offset.y + 0.5).floor();
-    let right = (node.paint_offset.x + fragment.ViewSize().width + 0.5).floor();
-    let bottom = (node.paint_offset.y + fragment.ViewSize().height + 0.5).floor();
+    let paint_offset = FragmentPaintOffset(node);
+    let left = (paint_offset.x + 0.5).floor();
+    let top = (paint_offset.y + 0.5).floor();
+    let right = (paint_offset.x + fragment.ViewSize().width + 0.5).floor();
+    let bottom = (paint_offset.y + fragment.ViewSize().height + 0.5).floor();
     PaintRect {
         x: left,
         y: top,

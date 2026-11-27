@@ -2,11 +2,15 @@
 
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
+use std::sync::Arc;
+
+use paint_model::paint_property_tree::{PropertyTreeState, TransformPaintPropertyNode};
 
 use layout::paint::{ScrollbarPaintAxis, ScrollbarPaintData};
 use paint_input_types::layout_input::{Offset, PaintPathCommand, PaintPathVerb, Size};
 use paint_input_types::layout_input_types::Color;
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::box_fragment_painter::{GetHitTestOpaqueness, IsVisible};
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
@@ -49,10 +53,57 @@ fn ShouldPaintOverflowControls(
 // Chromium's current TODO explicitly requires.
 fn AbsoluteRoundedRect(node: &PaintTreeNode<'_>, offset: Offset, size: Size) -> PaintRect {
     PaintRect {
-        x: node.paint_offset.x.round() + offset.x,
-        y: node.paint_offset.y.round() + offset.y,
+        x: FragmentPaintOffset(node).x.round() + offset.x,
+        y: FragmentPaintOffset(node).y.round() + offset.y,
         width: size.width,
         height: size.height,
+    }
+}
+
+// Source: core/paint/scrollable_area_painter.cc PaintOverflowControls: the
+// FragmentData's ObjectPaintProperties::OverflowControlsClip, entered over
+// the box's LocalBorderBoxProperties. `None` when the box has no such clip.
+fn OverflowControlsProperties(node: &PaintTreeNode<'_>) -> Option<PropertyTreeState> {
+    let Some(data) = node.FragmentData() else {
+        return node.overflow_controls_properties.clone();
+    };
+    let clip = data.PaintProperties()?.OverflowControlsClip()?.clone();
+    let mut state = data.LocalBorderBoxProperties();
+    state.clip = clip;
+    Some(state)
+}
+
+// Source: core/paint/scrollable_area_painter.cc PaintScrollbar: the
+// FragmentData's Horizontal/VerticalScrollbarEffect, entered inside the
+// overflow-controls clip scope. `None` when the axis has no effect node.
+fn ScrollbarProperties(node: &PaintTreeNode<'_>, horizontal: bool) -> Option<PropertyTreeState> {
+    let Some(data) = node.FragmentData() else {
+        return if horizontal {
+            node.horizontal_scrollbar_properties.clone()
+        } else {
+            node.vertical_scrollbar_properties.clone()
+        };
+    };
+    let properties = data.PaintProperties()?;
+    let effect = if horizontal {
+        properties.HorizontalScrollbarEffect()
+    } else {
+        properties.VerticalScrollbarEffect()
+    }?
+    .clone();
+    let mut state = data.LocalBorderBoxProperties();
+    if let Some(clip) = properties.OverflowControlsClip() {
+        state.clip = clip.clone();
+    }
+    state.effect = effect;
+    Some(state)
+}
+
+// Source: core/paint/fragment_data.cc:67-87 ContentsTransform.
+fn ContentsTransform(node: &PaintTreeNode<'_>) -> Arc<TransformPaintPropertyNode> {
+    match node.FragmentData() {
+        Some(data) => data.ContentsTransform(),
+        None => node.contents_properties.nodes.transform.clone(),
     }
 }
 
@@ -221,10 +272,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
         let Some(data) = self.Scrollbars(scrollbars) else {
             return;
         };
-        let _border_properties = self
-            .node
-            .overflow_controls_properties
-            .clone()
+        let _border_properties = OverflowControlsProperties(self.node)
             .map(|state| ScopedPaintChunkProperties::state(self.context, state))
             .or_else(|| {
                 Some(ScopedPaintChunkProperties::properties_only(
@@ -232,6 +280,11 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     self.node,
                 ))
             });
+        // Source: scrollable_area_painter.cc PaintScrollbar: the scrollbar
+        // display item names the box's scroll translation; Rechrom passes
+        // FragmentData::ContentsTransform (fragment_data.cc:67-87), which is
+        // that ScrollTranslation for a scroller.
+        let scroll_translation = ContentsTransform(self.node);
         let paint_axis = |axis: &ScrollbarPaintAxis| {
             // Source: scrollable_area_painter.cc:312-324. Overlay scrollbars
             // are suppressed while printing, and every control is culled in
@@ -243,13 +296,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             if !IsVisible(self.node, &visual_rect) {
                 return;
             }
-            let scrollbar_properties = if axis.horizontal {
-                self.node.horizontal_scrollbar_properties.as_ref()
-            } else {
-                self.node.vertical_scrollbar_properties.as_ref()
-            };
-            let _scrollbar_effect = scrollbar_properties
-                .cloned()
+            let _scrollbar_effect = ScrollbarProperties(self.node, axis.horizontal)
                 .map(|state| ScopedPaintChunkProperties::state(self.context, state));
             self.context.borrow_mut().BeginScrollbarDisplayItem(
                 DisplayItemId {
@@ -275,7 +322,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     }
                 },
                 visual_rect,
-                Some(self.node.contents_properties.nodes.transform.clone()),
+                Some(scroll_translation.clone()),
                 crate::paint_engine::ScrollbarDisplayItemData {
                     element_id: axis.compositor_element_id,
                     track_rect: PaintRect {
@@ -312,7 +359,9 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     ),
                 },
                 fragment.paint.DisplayItemRasterEffectOutset(),
-                self.node.paint_snap_offset,
+                // The control rects are built from the LOCAL FragmentData
+                // PaintOffset, already in the property transform's space.
+                Offset::default(),
             );
             self.context.borrow_mut().Append(
                 DisplayItem {

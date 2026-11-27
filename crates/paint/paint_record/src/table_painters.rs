@@ -11,6 +11,7 @@ use paint_input_types::layout_input::{
 use paint_input_types::layout_input_types::Color;
 use paint_input_types::paint_input::{BackgroundImageLayer, PaintBlendMode};
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::box_fragment_painter::BackgroundForPainting;
 use crate::display_item_id::DisplayItemIdType;
@@ -890,15 +891,15 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             .expect("paint tree node has a fragment");
         let Some(data) = fragment.ViewTable() else {
             return PaintRect {
-                x: node.paint_offset.x,
-                y: node.paint_offset.y,
+                x: FragmentPaintOffset(node).x,
+                y: FragmentPaintOffset(node).y,
                 width: fragment.ViewSize().width,
                 height: fragment.ViewSize().height,
             };
         };
         PaintRect {
-            x: node.paint_offset.x + data.grid_offset.x,
-            y: node.paint_offset.y + data.grid_offset.y,
+            x: FragmentPaintOffset(node).x + data.grid_offset.x,
+            y: FragmentPaintOffset(node).y + data.grid_offset.y,
             width: data.grid_size.width,
             height: data.grid_size.height,
         }
@@ -939,8 +940,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             return;
         }
         let columns_rect = PaintRect {
-            x: self.node.paint_offset.x + data.columns_offset.x,
-            y: self.node.paint_offset.y + data.columns_offset.y,
+            x: FragmentPaintOffset(self.node).x + data.columns_offset.x,
+            y: FragmentPaintOffset(self.node).y + data.columns_offset.y,
             width: data.columns_size.width,
             height: data.columns_size.height,
         };
@@ -984,8 +985,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
                     continue;
                 }
                 let cell_clip = PaintRect {
-                    x: cell.paint_offset.x,
-                    y: cell.paint_offset.y,
+                    x: FragmentPaintOffset(cell).x,
+                    y: FragmentPaintOffset(cell).y,
                     width: cell_fragment.ViewSize().width,
                     height: cell_fragment.ViewSize().height,
                 };
@@ -1020,6 +1021,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
+        let paint_offset = FragmentPaintOffset(self.node);
         // TablePainter::PaintCollapsedBorders (.cc:532): one LayoutTable
         // drawing for the phase, containing all edges and section fragments.
         // The specialized kTableCollapsedBorders type is not used here.
@@ -1173,8 +1175,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
                     fragment.paint.WritingMode(),
                     fragment.paint.Direction(),
                 );
-                rect.x += self.node.paint_offset.x + section.offset.x;
-                rect.y += self.node.paint_offset.y + section.offset.y;
+                rect.x += paint_offset.x + section.offset.x;
+                rect.y += paint_offset.y + section.offset.y;
                 DrawEdge(self.node, self.context, info, edge, rect);
                 edge.Advance();
             }

@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use layout::paint::MathMLPaintKind;
 use paint_input_types::layout_input::{Offset, TextDirection};
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::box_fragment_painter::DecorationVisualRect;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
@@ -150,8 +151,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         self.PaintBar(
             info,
             PaintRect {
-                x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
-                y: self.node.paint_offset.y + first_baseline - math.axis_height,
+                x: FragmentPaintOffset(self.node).x + fragment.Borders().left + fragment.Padding().left,
+                y: FragmentPaintOffset(self.node).y + first_baseline - math.axis_height,
                 width,
                 height: math.rule_thickness,
             },
@@ -188,14 +189,15 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             fragment.paint.style.color(),
             ElementRole::kForeground,
         );
+        let paint_offset = FragmentPaintOffset(self.node);
         for input_run in &math.operator_glyph_runs {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kDrawGlyphRun,
                 phase: info.phase,
                 node_id: fragment.ViewNodeId(),
                 rect: PaintRect {
-                    x: self.node.paint_offset.x,
-                    y: self.node.paint_offset.y,
+                    x: paint_offset.x,
+                    y: paint_offset.y,
                     width: fragment.ViewSize().width,
                     height: fragment.ViewSize().height,
                 },
@@ -214,8 +216,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                 ..Default::default()
             };
             for glyph in std::sync::Arc::make_mut(&mut item.glyphs) {
-                glyph.offset.x += self.node.paint_offset.x + baseline_origin.x;
-                glyph.offset.y += self.node.paint_offset.y + baseline_origin.y;
+                glyph.offset.x += paint_offset.x + baseline_origin.x;
+                glyph.offset.y += paint_offset.y + baseline_origin.y;
             }
             if IsVisible(self.node, &item.rect) {
                 self.context.borrow_mut().Append(item, self.node);
@@ -295,8 +297,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         self.PaintBar(
             info,
             PaintRect {
-                x: self.node.paint_offset.x + bar_x,
-                y: self.node.paint_offset.y + block_offset,
+                x: FragmentPaintOffset(self.node).x + bar_x,
+                y: FragmentPaintOffset(self.node).y + block_offset,
                 width: bar_width,
                 height: math.rule_thickness,
             },

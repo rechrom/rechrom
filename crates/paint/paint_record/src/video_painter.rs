@@ -9,6 +9,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
+use crate::box_decoration_data::FragmentPaintOffset;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
 use crate::foreign_layer_display_item::{RecordVideoForeignLayer, VideoPresentationStyle};
@@ -60,8 +61,8 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let replaced_rect = PaintRect {
-            x: self.node.paint_offset.x + replaced.offset.x,
-            y: self.node.paint_offset.y + replaced.offset.y,
+            x: FragmentPaintOffset(self.node).x + replaced.offset.x,
+            y: FragmentPaintOffset(self.node).y + replaced.offset.y,
             width: replaced.size.width,
             height: replaced.size.height,
         };
@@ -147,8 +148,8 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
         // the replaced-content rect, while the recorder bounds follow the
         // content box when LayoutReplaced clips there.
         let content_box_rect = PaintRect {
-            x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
-            y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
+            x: FragmentPaintOffset(self.node).x + fragment.Borders().left + fragment.Padding().left,
+            y: FragmentPaintOffset(self.node).y + fragment.Borders().top + fragment.Padding().top,
             width: fragment.ViewContentSize().width,
             height: fragment.ViewContentSize().height,
         };

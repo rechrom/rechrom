@@ -3,7 +3,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use crate::box_decoration_data::BoxDecorationData;
+use crate::box_decoration_data::{BoxDecorationData, FragmentPaintOffset};
 use crate::box_fragment_painter::{BoxFragmentPainter, DecorationVisualRect};
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
@@ -46,8 +46,8 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
         // input forces a real inline box fragment instead of a culled inline.
         if !fragment.paint.TrackedElementSubRects().is_empty() {
             let paint_rect = self.node.EnclosingRect(PaintRect {
-                x: self.node.paint_offset.x,
-                y: self.node.paint_offset.y,
+                x: FragmentPaintOffset(self.node).x,
+                y: FragmentPaintOffset(self.node).y,
                 width: fragment.ViewSize().width,
                 height: fragment.ViewSize().height,
             });
