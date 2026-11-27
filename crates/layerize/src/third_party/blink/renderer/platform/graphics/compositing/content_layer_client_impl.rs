@@ -207,6 +207,11 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
         debug_assert_eq!(old_bounds, *self.Layer().bounds(c));
         self.has_empty_invalidations_ = false;
         {
+            let mut generate_trace = browser_tracing::span(
+                "compositor.layerize",
+                "Compositor.Layerize.RasterInvalidator.Generate",
+            );
+            generate_trace.set("chunks", chunks.len() as f64);
             // Borrow split for RasterInvalidator::AddRasterInvalidation ->
             // Callback::InvalidateRect. The same synchronous source body below
             // receives only the three resident fields it actually mutates.
@@ -260,6 +265,11 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
         let had_raster_inducing_scroll =
             Self::ListHasRasterInducingScroll(&self.cc_display_item_list_);
         let previous = self.cc_display_item_list_.take();
+        let mut convert_trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.PaintChunksToCcLayer.Convert",
+        );
+        convert_trace.set("chunks", chunks.len() as f64);
         self.cc_display_item_list_ = Some(Arc::new(services.CreateDisplayItemList()));
         ConvertInto::<B>(
             chunks,
@@ -270,6 +280,7 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
                 .expect("new unshared display list"),
             services,
         );
+        drop(convert_trace);
         if services.RasterInducingScrollEnabled() {
             if (had_raster_inducing_scroll || self.HasRasterInducingScroll())
                 && only_empty_invalidations
