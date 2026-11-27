@@ -231,11 +231,44 @@ impl<T: PropertyTransform> Default for DrawTransformData<T> {
     }
 }
 
+// Source: cc/trees/property_tree.h:859 (`std::vector<std::vector<
+// DrawTransformData>> draw_transforms`). The per-node list keeps the source
+// order and lookup rule, but its first entry lives inline: every node caches
+// at least that one (target) entry, so ResetCachedData
+// (cc/trees/property_tree.cc:3038-3052) and the main -> pending deep copy
+// (cc/trees/layer_tree_host.cc:509-511 -> PropertyTrees::operator=) allocate
+// one vector for the whole tree instead of one per transform node. Further
+// entries (the same node drawn into several targets) use the overflow vector,
+// whose capacity survives the reset.
+struct DrawTransformEntries<T: PropertyTransform> {
+    first: DrawTransformData<T>,
+    more: Vec<DrawTransformData<T>>,
+}
+
+impl<T: PropertyTransform> Default for DrawTransformEntries<T> {
+    fn default() -> Self {
+        Self {
+            first: DrawTransformData::default(),
+            more: Vec::new(),
+        }
+    }
+}
+
+impl<T: PropertyTransform> DrawTransformEntries<T> {
+    fn get_mut(&mut self, index: usize) -> &mut DrawTransformData<T> {
+        if index == 0 {
+            &mut self.first
+        } else {
+            &mut self.more[index - 1]
+        }
+    }
+}
+
 // Source: cc/trees/property_tree.h:854-861; cc/trees/property_tree.cc:2429-2434.
 pub struct PropertyTreesCachedData<T: PropertyTransform> {
     transform_tree_update_number: i32,
     animation_scales: Vec<AnimationScaleData>,
-    draw_transforms: RefCell<Vec<Vec<DrawTransformData<T>>>>,
+    draw_transforms: RefCell<Vec<DrawTransformEntries<T>>>,
 }
 
 impl<T: PropertyTransform> Default for PropertyTreesCachedData<T> {
@@ -278,11 +311,13 @@ impl<T: PropertyTransform> PropertyTreesCachedData<T> {
             scale.update_number = kInvalidUpdateNumber;
         }
         let entries = self.draw_transforms.get_mut();
-        entries.resize_with(count, || vec![DrawTransformData::default()]);
+        entries.resize_with(count, DrawTransformEntries::default);
         for values in entries {
-            values.resize_with(1, DrawTransformData::default);
-            values[0].update_number = kInvalidUpdateNumber;
-            values[0].effect_id = kInvalidPropertyNodeId;
+            // Source `draw_transforms_for_id.resize(1)`: keep entry 0 and drop
+            // the rest without releasing the overflow capacity.
+            values.more.clear();
+            values.first.update_number = kInvalidUpdateNumber;
+            values.first.effect_id = kInvalidPropertyNodeId;
         }
     }
 
@@ -294,18 +329,21 @@ impl<T: PropertyTransform> PropertyTreesCachedData<T> {
         let mut all = self.draw_transforms.borrow_mut();
         assert!(transform_id >= 0 && (transform_id as usize) < all.len());
         let entries = &mut all[transform_id as usize];
-        let index = if let Some(index) = entries.iter().position(|data| {
+        let matches = |data: &DrawTransformData<T>| {
             data.effect_id == effect_id || data.effect_id == kInvalidPropertyNodeId
-        }) {
-            index
-        } else {
-            entries.push(DrawTransformData::default());
-            let index = entries.len() - 1;
-            entries[index].update_number = kInvalidUpdateNumber;
-            entries[index].effect_id = effect_id;
-            index
         };
-        RefMut::map(all, |all| &mut all[transform_id as usize][index])
+        let index = if matches(&entries.first) {
+            0
+        } else if let Some(index) = entries.more.iter().position(matches) {
+            index + 1
+        } else {
+            let mut data = DrawTransformData::default();
+            data.update_number = kInvalidUpdateNumber;
+            data.effect_id = effect_id;
+            entries.more.push(data);
+            entries.more.len()
+        };
+        RefMut::map(all, |all| all[transform_id as usize].get_mut(index))
     }
 }
 

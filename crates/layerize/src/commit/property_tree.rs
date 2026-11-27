@@ -1688,9 +1688,10 @@ impl ScrollTree {
     // Source: cc/trees/property_tree.cc:1736-1765.
     pub fn AssignFrom(&mut self, from: &Self, from_state: &PropertyTreesState) -> &mut Self {
         self.base_.AssignFrom(&from.base_);
-        self.scrolling_contents_cull_rects_ = from.scrolling_contents_cull_rects_.clone();
+        self.scrolling_contents_cull_rects_
+            .clone_from(&from.scrolling_contents_cull_rects_);
         if from_state.is_main_thread_ {
-            self.scroll_offset_map_ = from.scroll_offset_map_.clone();
+            self.scroll_offset_map_.clone_from(&from.scroll_offset_map_);
         }
         self.currently_scrolling_node_id_ = kInvalidPropertyNodeId;
         let mut overscroll = std::mem::take(&mut self.elastic_overscroll_);
@@ -2648,9 +2649,14 @@ impl<
         self.SetTransformDeltaBySafeAreaInsetBottom(
             from.transform_delta_by_safe_area_inset_bottom(),
         );
-        self.changed_effect_nodes_ = from.changed_effect_nodes_.clone();
-        self.changed_transform_nodes_ = from.changed_transform_nodes_.clone();
-        self.surface_property_changed_flags_ = from.surface_property_changed_flags_.clone();
+        // Source vector assignment: copy into the destination's existing
+        // storage instead of replacing it with a fresh allocation.
+        self.changed_effect_nodes_
+            .clone_from(&from.changed_effect_nodes_);
+        self.changed_transform_nodes_
+            .clone_from(&from.changed_transform_nodes_);
+        self.surface_property_changed_flags_
+            .clone_from(&from.surface_property_changed_flags_);
         self.transform_tree_.SetPropertyTrees(Some(self.owner_));
         self.effect_tree_.SetPropertyTrees(Some(self.owner_));
         self.clip_tree_.SetPropertyTrees(Some(self.owner_));
