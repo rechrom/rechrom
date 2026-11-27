@@ -517,23 +517,48 @@ impl LayoutPaintState {
         object: &LayoutObject,
         visit: &mut dyn FnMut(&mut FragmentPaintData),
     ) -> bool {
-        if self.superseded.get() {
-            return false;
-        }
         let publication = self.publication.get();
-        let mut visit_sidecar = |sidecar: &FragmentPaintSidecar| {
+        self.VisitObjectPaintSidecars(object, &mut |sidecar| {
             if sidecar.Binding().publication == publication {
                 visit(unsafe { &mut *sidecar.Data() });
             }
-        };
+        })
+    }
+
+    /// Visit every sidecar on `object`'s FragmentData (each entry's own
+    /// sidecar and the first entry's keyed occurrence sidecars) whichever
+    /// publication of this state last bound it. A publication rebinds a
+    /// sidecar only when a cursor reaches it, so an object no walk visited
+    /// since a Layout publication keeps the binding of an earlier one while
+    /// a retained PrePaint node still reads it; Chromium's FragmentData has
+    /// no such binding and always reads its LayoutObject's current style.
+    /// Returns false for a superseded state.
+    pub(crate) fn VisitObjectPaintData(
+        &self,
+        object: &LayoutObject,
+        visit: &mut dyn FnMut(&mut FragmentPaintData),
+    ) -> bool {
+        self.VisitObjectPaintSidecars(object, &mut |sidecar| {
+            visit(unsafe { &mut *sidecar.Data() })
+        })
+    }
+
+    fn VisitObjectPaintSidecars(
+        &self,
+        object: &LayoutObject,
+        visit_sidecar: &mut dyn FnMut(&FragmentPaintSidecar),
+    ) -> bool {
+        if self.superseded.get() {
+            return false;
+        }
         let list = object.PaintSidecarFragments();
         for index in 0..list.size() {
             if let Some(sidecar) = list.at(index).ExistingOwnPaintSidecar() {
-                visit_sidecar(sidecar);
+                visit_sidecar(&**sidecar);
             }
         }
         list.front()
-            .VisitKeyedPaintSidecars(|sidecar| visit_sidecar(sidecar));
+            .VisitKeyedPaintSidecars(|sidecar| visit_sidecar(&**sidecar));
         true
     }
 
@@ -1203,7 +1228,10 @@ impl<'a> PaintFragmentCursor<'a> {
     /// after its walk (pre_paint_tree_walk.cc:109). Hands PrePaint the
     /// DisplayItemClient identities of the LayoutObjects scheduled by
     /// PaintPropertyTreeBuilder::ScheduleDeferredTransformNodeUpdate and
-    /// clears the frame view's pending set.
+    /// clears the frame view's pending set. Chromium's
+    /// DirectlyUpdateTransformMatrix reads each object's current style;
+    /// the hand-off makes that style current on the object's sidecars, which
+    /// PrePaint's retained nodes read (no walk rebinds a deferred object).
     pub fn TakePendingTransformUpdateClients(self) -> Vec<u64> {
         use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
         let Some(object) = (unsafe { self.source.GetLayoutObject().as_ref() }) else {
@@ -1212,13 +1240,20 @@ impl<'a> PaintFragmentCursor<'a> {
         let Some(view) = (unsafe { object.View().as_ref() }) else {
             return Vec::new();
         };
+        let state = self.state;
         view.TakePendingTransformUpdates()
             .into_iter()
             .map(|member| {
                 // The member keeps the LayoutObject alive; a destroyed object
                 // removed itself from the set (LayoutObject::WillBeDestroyed).
-                unsafe { &*(member.Get() as *const LayoutObject as *const DisplayItemClient) }
-                    .Id() as u64
+                let object = unsafe { &*(member.Get() as *const LayoutObject) };
+                if let Some(state) = state {
+                    crate::internal::boundary::layout_boundary::RefreshDeferredTransformPaintStyle(
+                        state, object,
+                    );
+                }
+                unsafe { &*(object as *const LayoutObject as *const DisplayItemClient) }.Id()
+                    as u64
             })
             .collect()
     }
