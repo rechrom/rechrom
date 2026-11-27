@@ -813,6 +813,16 @@ impl PaintTreeNode<'_> {
         self.source_cursor
     }
 
+    /// The paint side of Chromium's FragmentData for this node's occurrence
+    /// (core/paint/fragment_data.h), which PrePaint keeps current for every
+    /// visited and retained node. Painters read paint offset, paint
+    /// properties, local border box / contents properties and cull rects
+    /// from here instead of the node's copies. None for fixture nodes
+    /// without a result state.
+    pub fn FragmentData(&self) -> Option<&PrePaintFragmentData> {
+        self.source_cursor?.PrePaintData::<PrePaintFragmentData>()
+    }
+
     /// The active ScopedDisplayItemFragment of this node's display items.
     /// Chromium keeps it as paint traversal state: a fragmentainer opens its
     /// break token's SequenceNumber()+1 (box_fragment_painter.cc:394-403), a
