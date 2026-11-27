@@ -1431,7 +1431,7 @@ pub(crate) fn ApplyInlineProperties(
 ) -> Result<u32, Vec<ProductionCascadeFallback>> {
     let backend = ProductionStyleCascadeBackend::new(
         inputs.document,
-        inputs.media.clone(),
+        inputs.media,
         inputs.root_font_size,
         inputs.color_scheme_settings,
         inputs.system_colors,

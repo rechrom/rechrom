@@ -1020,6 +1020,17 @@ impl ProductionMatchedPropertiesCache {
         });
         self.0.borrow_mut().CleanMatchedPropertiesCache();
     }
+
+    /// cpp: MatchedPropertiesCache::RemoveCachedMatchedPropertiesWithDeadEntries
+    /// runs from Oilpan weak processing, not from every style update. Its
+    /// Rust equivalent runs when matched declaration owners were released
+    /// (the active RuleSets changed) or the cache exceeds its size limit;
+    /// lookups already reject an entry whose declarations died or mutated.
+    pub(crate) fn CleanAtWeakProcessingPoint(&self, owners_released: bool) {
+        if owners_released || self.0.borrow().ExceedsCacheLimit() {
+            self.Clean();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -4012,6 +4023,16 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 "StyleResolver.ApplyInlineStyleIncrementally",
             );
             let properties = std::mem::take(&mut state.incremental_properties);
+            // cpp: StyleResolver::ApplyBaseStyle (style_resolver.cc:1958-2095)
+            // clones the element's current ComputedStyle, variables included,
+            // and applies only the inline declarations on top of it. The
+            // previous custom-property owner is that cloned variable state;
+            // it is not recomputed from the parent.
+            let previous_custom_properties = self
+                .cascade
+                .incremental_style
+                .as_ref()
+                .map(|old| &*old.custom_properties);
             let result = crate::resolver::production_style_cascade::ApplyInlineProperties(
                 ProductionCascadeInputs {
                     document: Some(self.document),
@@ -4032,7 +4053,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                     originating_style: self.cascade.originating_style.clone(),
                     subject_node: self.cascade.subject_node,
                     container_runtime: self.cascade.container_runtime,
-                    custom_properties: None,
+                    custom_properties: previous_custom_properties,
                     parent_custom_properties: self.cascade.parent_custom_properties,
                     substitution_context: self.cascade.substitution_context,
                     image_resolver: self.cascade.image_resolver,
