@@ -169,10 +169,25 @@ impl PaintStyle {
         unsafe { self.SourcePtr().as_ref() }
     }
 
+    /// Inside a `ResidentPaintSourceScope` (the paint tree walk) a non-zero
+    /// source is the managed ComputedStyle of a fragment in the leased
+    /// resident result (every constructor records only a managed address,
+    /// and PrePaint re-exports a projection whose owner changed style), so
+    /// it is read directly, as Chromium's painters read
+    /// `PhysicalFragment::Style()` (core/layout/physical_fragment.h). Outside
+    /// the walk the heap membership query still guards retained payloads.
+    #[inline]
     fn SourcePtr(&self) -> *mut layout_style::style::computed_style::ComputedStyle {
         let pointer =
             self.source_address as *mut layout_style::style::computed_style::ComputedStyle;
-        if pointer.is_null() || !foundation::IsManagedLayoutAddress(pointer) {
+        if pointer.is_null() {
+            return std::ptr::null_mut();
+        }
+        if crate::fragment_tree::ResidentPaintSourceScope::IsActive() {
+            debug_assert!(foundation::IsManagedLayoutAddress(pointer));
+            return pointer;
+        }
+        if !foundation::IsManagedLayoutAddress(pointer) {
             std::ptr::null_mut()
         } else {
             pointer
