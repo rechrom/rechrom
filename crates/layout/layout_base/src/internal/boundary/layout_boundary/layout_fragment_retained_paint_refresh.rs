@@ -101,3 +101,31 @@ pub(super) fn refresh_retained_paint_inputs(
     }
     true
 }
+
+/// Make the style a deferred transform update reads current on every
+/// sidecar of `object`'s FragmentData.
+///
+/// Source: paint_property_tree_builder.cc:4842-4888
+/// (PaintPropertyTreeBuilder::DirectlyUpdateTransformMatrix reads
+/// `object.StyleRef()`). PaintLayer::StyleDidChange deferred this object's
+/// transform change (paint_layer.cc:2463-2473), so no PrePaint visit rebinds
+/// its sidecar through the current publication: after a Layout publication
+/// the sidecar keeps an earlier publication's binding, which the paint-only
+/// refresh above skips, and the retained PrePaint node would keep resolving
+/// the matrix from the previous ComputedStyle.
+pub(super) fn refresh_deferred_transform_paint_style(
+    state: &crate::layout_engine::LayoutPaintState,
+    object: &LayoutObject,
+) {
+    let client_id = unsafe { &*(object as *const LayoutObject as *const DisplayItemClient) }.Id() as u64;
+    let current = ExportRetainedPaintStyle(object);
+    let live_style_facts = current.live_style_facts;
+    state.VisitObjectPaintData(object, &mut |node| {
+        if node.paint.DisplayItemClientId() != client_id {
+            return;
+        }
+        node.paint.BindSourceObject(object);
+        node.paint.style = current.style.clone();
+        node.paint.BindLiveStyleFacts(live_style_facts);
+    });
+}

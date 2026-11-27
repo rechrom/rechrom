@@ -286,6 +286,14 @@ pub(crate) fn RefreshRetainedPaintInputs(
         inline_ink_changes,
     )
 }
+/// Refresh the style a deferred transform node update of `object` reads
+/// (LocalFrameView::ExecuteAllPendingUpdates hand-off).
+pub(crate) fn RefreshDeferredTransformPaintStyle(
+    state: &crate::layout_engine::LayoutPaintState,
+    object: &crate::internal::layout_object::LayoutObject,
+) {
+    layout_fragment_retained_paint_refresh::refresh_deferred_transform_paint_style(state, object)
+}
 // cpp: layoutng/internal/boundary/layout_boundary.h:41-43
 // cpp: layoutng/internal/boundary/layout_boundary.cc:2822-2858
 pub fn PublishLayoutResult(
