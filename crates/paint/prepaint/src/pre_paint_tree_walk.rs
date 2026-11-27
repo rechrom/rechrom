@@ -5357,7 +5357,37 @@ fn ReplaceFlatTransformInSubtree(
     old: &TransformMatrix,
     new: &TransformMatrix,
 ) {
-    type Memo = std::collections::HashMap<usize, FlatTransforms>;
+    // Old list address -> its replacement. Most updates touch a handful of
+    // distinct lists (each object that adds own entries starts a new one),
+    // so a short linear memo avoids hashing and the map allocation; a large
+    // subtree with many such objects moves to the map.
+    const LINEAR_MEMO: usize = 16;
+    #[derive(Default)]
+    struct Memo {
+        linear: Vec<(usize, FlatTransforms)>,
+        // Keyed by aligned addresses: the SipHash map, not the identity one.
+        map: std::collections::HashMap<usize, FlatTransforms>,
+    }
+    impl Memo {
+        fn get(&self, key: usize) -> Option<&FlatTransforms> {
+            if self.map.is_empty() {
+                self.linear
+                    .iter()
+                    .find(|(old_key, _)| *old_key == key)
+                    .map(|(_, list)| list)
+            } else {
+                self.map.get(&key)
+            }
+        }
+        fn insert(&mut self, key: usize, list: FlatTransforms) {
+            if self.map.is_empty() && self.linear.len() < LINEAR_MEMO {
+                self.linear.push((key, list));
+                return;
+            }
+            self.map.extend(self.linear.drain(..));
+            self.map.insert(key, list);
+        }
+    }
     fn replace(
         list: &mut FlatTransforms,
         index: usize,
@@ -5369,14 +5399,15 @@ fn ReplaceFlatTransformInSubtree(
             return;
         }
         let key = Arc::as_ptr(list).cast::<TransformMatrix>() as usize;
-        *list = memo
-            .entry(key)
-            .or_insert_with(|| {
-                let mut values = list.to_vec();
-                values[index] = *new;
-                FlatTransforms::from(values)
-            })
-            .clone();
+        if let Some(replaced) = memo.get(key) {
+            *list = replaced.clone();
+            return;
+        }
+        let mut values = list.to_vec();
+        values[index] = *new;
+        let replaced = FlatTransforms::from(values);
+        memo.insert(key, replaced.clone());
+        *list = replaced;
     }
     fn visit(
         node: &mut PaintTreeNode<'_>,
@@ -5402,7 +5433,7 @@ fn ReplaceFlatTransformInSubtree(
             visit(child, index, old, new, memo, false);
         }
     }
-    visit(node, index, old, new, &mut Memo::new(), true);
+    visit(node, index, old, new, &mut Memo::default(), true);
 }
 
 /// A node retained under the same property-slot structure while an
@@ -8497,44 +8528,52 @@ impl PrePaintTreeWalk {
         // flat-list refresh, cull rect.
         let mut phase_ns = [0u64; 4];
         for &client in pending {
-            let mut nodes: Vec<*mut PaintTreeNode<'static>> = Vec::new();
+            // The first matching node and the match count (none, one, or
+            // fragmented) decide the outcome; no per-client list is built.
+            let mut first: Option<*mut PaintTreeNode<'static>> = None;
+            let mut matches = 0usize;
             if use_directory {
                 if let Some(entries) = self.client_nodes.get(&client) {
                     // The directory is owned by the retained tree that this
                     // walk returned; its boxes did not move.
-                    let names_client = |pointer: &*mut PaintTreeNode<'static>| {
-                        unsafe { &**pointer }
+                    for &pointer in entries {
+                        if unsafe { &*pointer }
                             .fragment
                             .as_deref()
                             .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
-                    };
-                    nodes.extend(entries.iter().copied().filter(names_client));
+                        {
+                            first.get_or_insert(pointer);
+                            matches += 1;
+                        }
+                    }
                 }
             } else {
                 fn find(
                     node: &mut PaintTreeNode<'static>,
                     client: u64,
-                    out: &mut Vec<*mut PaintTreeNode<'static>>,
+                    first: &mut Option<*mut PaintTreeNode<'static>>,
+                    matches: &mut usize,
                 ) {
                     if node
                         .fragment
                         .as_deref()
                         .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
                     {
-                        out.push(node as *mut _);
+                        first.get_or_insert(node as *mut _);
+                        *matches += 1;
                     }
                     for child in &mut node.children {
-                        find(child, client, out);
+                        find(child, client, first, matches);
                     }
                 }
-                find(tree, client, &mut nodes);
+                find(tree, client, &mut first, &mut matches);
             }
-            match nodes.as_slice() {
+            match (first, matches) {
                 // A display:none or not-yet-painted object has no
                 // properties to update; its next build reads the style.
-                [] => continue,
-                [pointer] => {
-                    let node = unsafe { &mut **pointer };
+                (None, _) => continue,
+                (Some(pointer), 1) => {
+                    let node = unsafe { &mut *pointer };
                     match self.DirectlyUpdateTransformMatrix(node, &mut phase_ns) {
                         Ok(true) => updated += 1,
                         Ok(false) => {}
@@ -8572,10 +8611,6 @@ impl PrePaintTreeWalk {
         let profile = browser_tracing::enabled();
         let checkpoint = || profile.then(std::time::Instant::now);
         let t_start = checkpoint();
-        // paint_property_tree_builder.cc stores the object's direct
-        // compositing reasons once (full_context_.direct_compositing_reasons);
-        // the role and Effect checks below read that one value.
-        let _direct_reasons = CompositingReasonFinder::DirectReasonsScope();
         let Some(cache) = node.cache.as_ref() else {
             return Err(2);
         };
@@ -8594,13 +8629,6 @@ impl PrePaintTreeWalk {
         {
             return Err(3);
         }
-        let roles = TransformPropertyRoles(fragment, style);
-        let Some(role_index) = roles
-            .iter()
-            .position(|role| *role == PaintPropertyRole::Transform)
-        else {
-            return Err(4);
-        };
         if !node.applies_transform {
             return Err(4);
         }
@@ -8609,6 +8637,50 @@ impl PrePaintTreeWalk {
             client,
             fragment: node.DisplayItemFragment(),
         };
+        // Chromium reads the existing ObjectPaintProperties slots here
+        // (properties->Transform(), 4980-4983), not the style-derived role
+        // set. The object's own transform-space slots were created in
+        // builder order (PaintOffsetTranslation, StickyTranslation, then
+        // Translate, Rotate, Scale, Offset, Transform; paint_property_tree_
+        // builder.cc:4280-4296), and each pushed one entry of the
+        // flat matrix list, so the number of own slots before Transform is
+        // its position after the inherited prefix. Only `transform` changed
+        // since they were built (Layout schedules the deferred update for
+        // OnlyTransformPropertyChanged), and none of the preceding roles
+        // depends on its value, so recomputing them from style and the
+        // direct compositing reasons would only re-derive the same slots.
+        let mut own_preceding = 0usize;
+        let mut has_transform_slot = false;
+        for (_, key) in &cache.own_keys {
+            if key.owner != owner {
+                continue;
+            }
+            match key.role {
+                PaintPropertyRole::PaintOffsetTranslation
+                | PaintPropertyRole::StickyTranslation
+                | PaintPropertyRole::Translate
+                | PaintPropertyRole::Rotate
+                | PaintPropertyRole::Scale
+                | PaintPropertyRole::Offset => own_preceding += 1,
+                PaintPropertyRole::Transform => has_transform_slot = true,
+                _ => {}
+            }
+        }
+        if !has_transform_slot {
+            return Err(4);
+        }
+        // `transform: none` keeps the Transform slot only for an animation,
+        // 3D context, backface or direct compositing reason
+        // (NeedsTransform, paint_property_tree_builder.cc:1388-1410); the
+        // full build would remove it otherwise. Only that case needs the
+        // style-derived roles and the direct reasons
+        // (full_context_.direct_compositing_reasons, computed once).
+        if !style.has_transform() {
+            let _direct_reasons = CompositingReasonFinder::DirectReasonsScope();
+            if !TransformPropertyRoles(fragment, style).contains(&PaintPropertyRole::Transform) {
+                return Err(4);
+            }
+        }
         let key = PaintPropertyKey {
             owner,
             role: PaintPropertyRole::Transform,
@@ -8645,14 +8717,8 @@ impl PrePaintTreeWalk {
             return Err(6);
         }
         // The flat matrix list mirrors the property chain: this object's
-        // own entries follow the inherited ones in builder order
-        // (PaintOffsetTranslation, StickyTranslation, then the individual
-        // transform roles).
-        let has_own = |role| cache.own_keys.iter().any(|(_, key)| key.role == role);
-        let flat_index = cache.inherited.transforms.len()
-            + has_own(PaintPropertyRole::PaintOffsetTranslation) as usize
-            + has_own(PaintPropertyRole::StickyTranslation) as usize
-            + role_index;
+        // own entries follow the inherited ones in builder order.
+        let flat_index = cache.inherited.transforms.len() + own_preceding;
         if node.transforms.get(flat_index) != Some(&old_matrix)
             || cache.children.transforms.get(flat_index) != Some(&old_matrix)
         {
@@ -8664,13 +8730,19 @@ impl PrePaintTreeWalk {
         // ComputedStyle::ApplyTransform with kIncludeTransformOperations,
         // kExcludeTransformOrigin, kExcludeMotionPath and
         // kExcludeIndependentTransformProperties, around the reference box,
-        // as UpdateIndividualTransform resolves it in the builder.
-        let reference_rect = ResolveTransformReferenceRect(
-            style.transform_reference_box(),
-            fragment.ViewSize(),
-            fragment.Borders(),
-            fragment.Padding(),
-        );
+        // as UpdateIndividualTransform resolves it in the builder
+        // (ComputeReferenceBox, 4849). The border box needs no border or
+        // padding edges (transform_utils.cc:17-34), so only a content-box
+        // reference reads them from the fragment.
+        let reference_box = style.transform_reference_box();
+        let (borders, padding) = match reference_box {
+            paint_input_types::paint_input::PaintTransformReferenceBox::kBorderBox => {
+                (Edges::default(), Edges::default())
+            }
+            _ => (fragment.Borders(), fragment.Padding()),
+        };
+        let reference_rect =
+            ResolveTransformReferenceRect(reference_box, fragment.ViewSize(), borders, padding);
         let transform_origin = style.transform_origin();
         let resolved = TransformPayloadForRole(style, PaintPropertyRole::Transform)
             .as_ref()

@@ -472,11 +472,10 @@ impl TransformPaintPropertyNode {
         origin: [f64; 3],
         animation_state: TransformAnimationState,
     ) -> PaintPropertyChangeType {
-        let old = self.state(access);
-        let mut state = old.clone();
-        state.matrix = matrix;
-        state.origin = origin;
-        compute_transform_change(old, &state, animation_state)
+        // Only the matrix and origin differ from the resident state
+        // (transform_paint_property_node.cc:124-134 updates just those), so
+        // the change is computed from the two values without a state copy.
+        compute_transform_change(self.state(access), &matrix, origin, animation_state)
     }
 
     /// Source: transform_paint_property_node.cc:124-134, on this resident
@@ -3407,15 +3406,18 @@ fn same_optional<T>(
         _ => false,
     }
 }
-/// Source: transform_paint_property_node.cc:18-70.
+/// Source: transform_paint_property_node.cc:18-70. `b_matrix` and
+/// `b_origin` are the new state's values; the sticky / anchor compositing
+/// facts are read from the old state `a`, as the source reads them.
 fn compute_transform_change(
     a: &TransformPaintPropertyNodeState,
-    b: &TransformPaintPropertyNodeState,
+    b_matrix: &TransformMatrix,
+    b_origin: [f64; 3],
     animation_state: TransformAnimationState,
 ) -> PaintPropertyChangeType {
     use PaintPropertyChangeType::*;
-    let matrix_changed = a.matrix != b.matrix;
-    let origin_changed = a.origin != b.origin;
+    let matrix_changed = a.matrix != *b_matrix;
+    let origin_changed = a.origin != b_origin;
     if !matrix_changed && !origin_changed {
         return Unchanged;
     }
@@ -3428,12 +3430,14 @@ fn compute_transform_change(
     }
     if a.RequiresCompositingForStickyPosition() || a.RequiresCompositingForAnchorPosition() {
         debug_assert!(a.ResolvedMatrix().Preserves2dAxisAlignment());
-        debug_assert!(b.ResolvedMatrix().Preserves2dAxisAlignment());
+        debug_assert!(
+            foundation::gfx::Transform::ColMajor(&b_matrix.values).Preserves2dAxisAlignment()
+        );
         return ChangedOnlyCompositedValues;
     }
     if matrix_changed {
         let a_matrix = a.ResolvedMatrix();
-        let b_matrix = b.ResolvedMatrix();
+        let b_matrix = foundation::gfx::Transform::ColMajor(&b_matrix.values);
         let keeps_axis_alignment = (a_matrix.Preserves2dAxisAlignment()
             && b_matrix.Preserves2dAxisAlignment())
             || (a_matrix.InverseOrIdentity() * b_matrix).Preserves2dAxisAlignment();
@@ -3486,7 +3490,7 @@ fn transform_node_state_change(
     {
         return ChangedOnlyValues;
     }
-    compute_transform_change(a, b, animation_state)
+    compute_transform_change(a, &b.matrix, b.origin, animation_state)
 }
 
 #[cfg(test)]
