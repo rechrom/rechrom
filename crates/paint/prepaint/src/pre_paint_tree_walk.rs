@@ -4592,7 +4592,8 @@ fn ReplayLogicalTree(
             .expect("checked above");
         let mut node = physical_parent.children.remove(index);
         node.escapes_ancestor_geometry = true;
-        node.physical_ancestors = entry.physical_ancestors.clone();
+        // RestorePhysicalFromRecord cleared the list and kept its buffer.
+        node.physical_ancestors.clone_from(&entry.physical_ancestors);
         let logical_parent = unsafe { &mut *entry.logical_parent };
         let built_logically = node.cache.as_ref().is_some_and(|cache| {
             Arc::ptr_eq(
@@ -6176,6 +6177,18 @@ struct VisitIdentity {
 }
 
 impl VisitIdentity {
+    /// The identity facts of a child the parent's visit paired by position
+    /// after proving SamePreviousSourceIdentity for every child of an
+    /// unchanged child list (UpdateNode's `same_children`): the same pair is
+    /// not compared again.
+    fn WithProvenSource(source_identity_proven: bool) -> Self {
+        let identity = Self::default();
+        if source_identity_proven {
+            identity.same_source.set(Some(true));
+        }
+        identity
+    }
+
     fn SameSource(&self, previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
         if let Some(same) = self.same_source.get() {
             return same;
@@ -6358,33 +6371,29 @@ fn IsNewClient(recorded: &[u64; 7], id: u64, just_created: bool) -> bool {
     just_created && !recorded.contains(&id)
 }
 
-/// Whether any live DisplayItemClient of `fragment` (object, selection,
-/// PaintLayer, scrolling background, scroll corner and scrollbars) is just
-/// created and absent from the retained node's `recorded` client ids.
-fn HasUnrecordedJustCreatedClient(recorded: &PrePaintPrevious, fragment: &FragmentPaintData) -> bool {
+/// IsNewClient reading the client's live just-created state only for an id
+/// the record does not name: a recorded id is the same client lifetime
+/// whatever its state, so its state is not read.
+fn IsNewClientWith(recorded: &[u64; 7], id: u64, just_created: impl FnOnce() -> bool) -> bool {
+    !recorded.contains(&id) && just_created()
+}
+
+/// Whether the selection or scrolling-background DisplayItemClient of
+/// `fragment` is just created and absent from the retained node's `recorded`
+/// client ids. The other live clients (object, PaintLayer, scroll corner and
+/// scrollbars) are the client directory; once SameClientDirectory holds, its
+/// current ids equal the recorded ones, so none of them is new.
+fn HasUnrecordedJustCreatedClientOutsideDirectory(
+    recorded: &PrePaintPrevious,
+    fragment: &FragmentPaintData,
+) -> bool {
     let recorded = RecordedClientIds(recorded);
     let paint = &fragment.paint;
-    IsNewClient(
-        &recorded,
-        paint.DisplayItemClientId(),
-        paint.DisplayItemClientState().is_just_created,
-    ) || IsNewClient(
-        &recorded,
-        paint.SelectionClientId(),
-        paint.SelectionClientState().is_just_created,
-    ) || IsNewClient(
-        &recorded,
-        paint.PaintLayerClientId(),
-        paint.PaintLayerClientState().is_just_created,
-    ) || fragment
+    IsNewClientWith(&recorded, paint.SelectionClientId(), || {
+        paint.SelectionClientState().is_just_created
+    }) || fragment
         .ViewScrollingBackgroundClient()
         .is_some_and(|(id, state)| IsNewClient(&recorded, id, state.is_just_created))
-        || fragment.ViewScrollbarClients().is_some_and(|bars| {
-            [bars.corner, bars.horizontal, bars.vertical]
-                .into_iter()
-                .flatten()
-                .any(|(id, state)| IsNewClient(&recorded, id, state.is_just_created))
-        })
 }
 
 /// Whether `b` keeps the client directory of the retained node `previous`.
@@ -6410,34 +6419,34 @@ fn SameClientDirectory(
     if recorded.clients != current_clients {
         return false;
     }
+    // Each live state is read only for an id the record does not name
+    // (IsNewClientWith); the ids equal to recorded ones need none.
     let recorded = RecordedClientIds(recorded);
-    let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
-    let mut created = IsNewClient(&recorded, y.DisplayItemClientId(), y_item.is_just_created)
-        || IsNewClient(&recorded, y.PaintLayerClientId(), y_layer.is_just_created);
+    let mut created = IsNewClientWith(&recorded, y.DisplayItemClientId(), || {
+        y.DisplayItemClientState().is_just_created
+    }) || IsNewClientWith(&recorded, y.PaintLayerClientId(), || {
+        y.PaintLayerClientState().is_just_created
+    });
     if let Some(bars) = &y.scrollbars {
-        created |= IsNewClient(
-            &recorded,
-            bars.corner_client_id,
+        created |= IsNewClientWith(&recorded, bars.corner_client_id, || {
             y.ScrollClientState(
                 bars.corner_client_id,
                 bars.corner_client_invalidation_reason,
                 bars.corner_client_is_cacheable,
                 bars.corner_client_is_just_created.get(),
             )
-            .is_just_created,
-        );
+            .is_just_created
+        });
         for axis in [&bars.horizontal, &bars.vertical].into_iter().flatten() {
-            created |= IsNewClient(
-                &recorded,
-                axis.display_item_client_id,
+            created |= IsNewClientWith(&recorded, axis.display_item_client_id, || {
                 y.ScrollClientState(
                     axis.display_item_client_id,
                     axis.display_item_client_invalidation_reason,
                     axis.display_item_client_is_cacheable,
                     axis.display_item_client_is_just_created.get(),
                 )
-                .is_just_created,
-            );
+                .is_just_created
+            });
         }
     }
     !created
@@ -6860,8 +6869,11 @@ impl PrePaintTreeWalk {
             return Some(3);
         }
         // Recorded client ids name the same live clients; a client the
-        // record does not name must not be newly created.
-        if !identity.SameClients(node, f) || HasUnrecordedJustCreatedClient(&cache.record, f) {
+        // record does not name must not be newly created. SameClients
+        // proves that for the client directory itself.
+        if !identity.SameClients(node, f)
+            || HasUnrecordedJustCreatedClientOutsideDirectory(&cache.record, f)
+        {
             return Some(4);
         }
         let usage = || {
@@ -6925,6 +6937,187 @@ impl PrePaintTreeWalk {
         self.RetainedDescendantChange(node, fragment).is_none()
     }
 
+    /// Source: PrePaintTreeWalk::Walk (pre_paint_tree_walk.cc:1477-1482).
+    /// Chromium returns from an object's walk before it constructs the
+    /// object's PrePaintTreeWalkContext when NeedsTreeBuilderContextUpdate,
+    /// ObjectRequiresPrePaint and ContextRequiresChildPrePaint
+    /// (pre_paint_tree_walk.cc:411-450) are all false: the parent's context
+    /// forces nothing and the object and its descendants carry no dirty bit.
+    ///
+    /// UpdateNode retains such a child's subtree only after ContextForChild
+    /// has built a context (cloning its property-node and transform owners)
+    /// that its admission then compares with the retained one. This takes the
+    /// same admission from the parent's ChildContext without building that
+    /// context. It accepts exactly when UpdateNode would return `previous`
+    /// from its clean-subtree path, with every write of that path storing the
+    /// value already there:
+    ///
+    /// - no forced or local-frame walk, the same source owner and either the
+    ///   same LayoutResult or a replacement that reaches the child through
+    ///   its reused fragment (no rebind), no change of the blocking
+    ///   wheel-handler bit and no paint-invalidation subtree walk
+    ///   (UpdateContext returns false);
+    /// - an ordinary child (ContextForChild's last branch) whose retained
+    ///   inherited context equals, field by field and with the same
+    ///   property-node and transform owners, the context ContextForChild and
+    ///   the logical out-of-flow effect would give it now, and passes
+    ///   SameContext against it (so RefreshRetainedFlatTransforms and the
+    ///   cache's inherited context keep their values);
+    /// - RetainedSelfChange and RetainedDescendantChange find nothing.
+    ///
+    /// Any other case returns `previous` for UpdateNode.
+    fn RetainCleanChild(
+        &mut self,
+        child: PaintFragmentSource<'_>,
+        base: &ChildContext,
+        previous: Option<Box<PaintTreeNode<'static>>>,
+        source_identity_proven: bool,
+        force: bool,
+        parent_invalidation_context: PaintInvalidatorContext,
+    ) -> Result<Box<PaintTreeNode<'static>>, Option<Box<PaintTreeNode<'static>>>> {
+        let Some(node) = previous else {
+            return Err(None);
+        };
+        // ContextRequiresChildTreeBuilderContext and
+        // ContextRequiresChildPrePaint (pre_paint_tree_walk.cc:424-450) of
+        // the parent's context, and the walk-wide inputs of UpdateNode's
+        // admission (source rebinding, wheel-handler update).
+        if force
+            || self.source_owner_changed
+            || base.blocking_wheel_event_handler_changed
+            || base.canvas_contents.is_some()
+            || parent_invalidation_context.NeedsSubtreeWalk()
+        {
+            return Err(Some(node));
+        }
+        let profile = browser_tracing::enabled();
+        let t_start = profile.then(std::time::Instant::now);
+        // The dirty bits as UpdateNode reads them for this visit.
+        let fragment = unsafe { child.ReadPrePaintInvalidationForVisit() };
+        let retained = {
+            let invalidation = fragment.pre_paint_invalidation;
+            match node.cache.as_ref() {
+                None => false,
+                Some(_)
+                    if invalidation.own()
+                        || invalidation.descendants()
+                        || fragment.paint.IsSVGHiddenContainer()
+                        || (fragment.paint.FixedToView()
+                            && fragment.ViewEstablishesPaintState()) =>
+                {
+                    false
+                }
+                Some(cache) => {
+                    // UpdateNode's `inside`, which must equal the stored bit
+                    // (no new bit, no InvalidatePaintForHitTest): a
+                    // replacement LayoutResult re-reads the handler registry,
+                    // otherwise the parent's bit or the stored one stands.
+                    let stored_inside = fragment.paint.InsideBlockingWheelEventHandler();
+                    let should_update = self.source_result_changed
+                        && (fragment.paint.LayoutObjectIdentity().is_some()
+                            || !self.active_blocking_wheel_targets.is_empty());
+                    let inside = base.inside_blocking_wheel_event_handler
+                        || if should_update {
+                            self.active_blocking_wheel_targets
+                                .binary_search(&fragment.ViewNodeId())
+                                .is_ok()
+                                || (fragment.paint.IsLayoutView()
+                                    && self.active_blocking_wheel_targets.binary_search(&0).is_ok())
+                        } else {
+                            stored_inside
+                        };
+                    let logical = self.LogicalOutOfFlowEffectContext(&fragment);
+                    let (effect, effect_id, opacity) = match logical.as_ref() {
+                        Some(logical) => (&logical.effect, logical.effect_id, logical.opacity),
+                        None => (
+                            &base.properties.nodes.effect,
+                            base.properties.effect_id,
+                            base.opacity,
+                        ),
+                    };
+                    let offset = ResolveChildGeometryOrigin(
+                        &fragment,
+                        fragment.Cursor().ViewOffsetInContainer(),
+                        base.origin,
+                        base.paint_space,
+                    );
+                    let c = &cache.inherited;
+                    let cull_covers = Self::CullContextCovers(&c.cull, &base.cull);
+                    inside == stored_inside
+                        // A replacement LayoutResult reaches this clean child
+                        // only through its reused fragment (UpdateNode's
+                        // source_tree_compatible, no RebindCleanSubtree).
+                        && (!self.source_result_changed || WalkedSameSourceOwner(&node, fragment))
+                        && !cache.contains_local_frames
+                        && !self
+                            .local_frame_views
+                            .contains_key(&fragment.paint.DisplayItemClientId())
+                        // The context ContextForChild would build, compared
+                        // as stored (no field of it would change)...
+                        && c.inside_blocking_wheel_event_handler
+                            == base.inside_blocking_wheel_event_handler
+                        && !c.blocking_wheel_event_handler_changed
+                        && c.offset == offset
+                        && c.paint_space == base.paint_space
+                        && c.clip == base.clip
+                        && c.cull == base.cull
+                        && Arc::ptr_eq(&c.transforms, &base.transforms)
+                        && c.opacity == opacity
+                        && c.scroll == base.scroll
+                        && c.fixed_background_acts_as_scroll == base.fixed_background_acts_as_scroll
+                        && c.properties.transform_id == base.properties.transform_id
+                        && c.properties.clip_id == base.properties.clip_id
+                        && c.properties.effect_id == effect_id
+                        && c.properties.scroll_id == base.properties.scroll_id
+                        && Arc::ptr_eq(&c.properties.nodes.transform, &base.properties.nodes.transform)
+                        && Arc::ptr_eq(&c.properties.nodes.clip, &base.properties.nodes.clip)
+                        && Arc::ptr_eq(&c.properties.nodes.effect, effect)
+                        && c.canvas_contents.is_none()
+                        && c.rendering_context_id == base.rendering_context_id
+                        && c.should_flatten_inherited_transform
+                            == base.should_flatten_inherited_transform
+                        && c.can_inherit_backface_visibility == base.can_inherit_backface_visibility
+                        && c.directly_composited_container_paint_offset_subpixel_delta
+                            == base.directly_composited_container_paint_offset_subpixel_delta
+                        && c.subtree_should_use_infinite_cull_rect
+                            == base.subtree_should_use_infinite_cull_rect
+                        && !c.root
+                        && c.flex_or_grid_item == base.flex_or_grid_items
+                        // ...and SameContext's coverage and slot predicates
+                        // over those same values (the owners are identical,
+                        // so the stored state stands for the built one).
+                        && (Self::ClipContextCovers(&c.clip, &base.clip) || cull_covers)
+                        && cull_covers
+                        && state_compare::SameBuilderStructure(
+                            &c.properties.nodes,
+                            &c.properties.nodes,
+                        )
+                        && self
+                            .RetainedSelfChange(
+                                &node,
+                                fragment,
+                                &VisitIdentity::WithProvenSource(source_identity_proven),
+                            )
+                            .is_none()
+                        && self.RetainedDescendantChange(&node, fragment).is_none()
+                }
+            }
+        };
+        if !retained {
+            return Err(Some(node));
+        }
+        // UpdateNode's counters for a clean subtree under the same context.
+        self.stats.same_context_nodes += 1;
+        self.stats.self_unchanged_nodes += 1;
+        self.stats.subtree_unchanged_nodes += 1;
+        self.stats.source_tree_compatible_nodes += 1;
+        self.stats.reused_nodes += node.cache.as_ref().map_or(0, |cache| cache.nodes);
+        self.stats.skipped_subtrees += 1;
+        self.stats.profile_admission_ns +=
+            ProfileNs(t_start, profile.then(std::time::Instant::now));
+        Ok(node)
+    }
+
     /// Whether a fragment last proven against `recorded` document paint
     /// resources paints the same under `current`, for its resource `usage`
     /// (evaluated only when the two values are different allocations).
@@ -6961,6 +7154,9 @@ impl PrePaintTreeWalk {
         parent_invalidation_context: PaintInvalidatorContext,
         mut previous: Option<Box<PaintTreeNode<'static>>>,
         force: bool,
+        // The parent proved SamePreviousSourceIdentity of (previous, fragment)
+        // while pairing its unchanged child list.
+        source_identity_proven: bool,
     ) -> Box<PaintTreeNode<'static>> {
         let profile = browser_tracing::enabled();
         let checkpoint = || profile.then(std::time::Instant::now);
@@ -7067,7 +7263,7 @@ impl PrePaintTreeWalk {
         // records, never a Layout revision.
         // Source identity and client directory of (previous, fragment), each
         // computed at most once for this visit and shared by every proof.
-        let identity = VisitIdentity::default();
+        let identity = VisitIdentity::WithProvenSource(source_identity_proven);
         let self_change = previous
             .as_deref()
             .map(|node| self.RetainedSelfChange(node, fragment, &identity));
@@ -7938,13 +8134,25 @@ impl PrePaintTreeWalk {
             }
             node.children.reserve_exact(source_children);
         }
+        // The FragmentData sidecars the pairing check reaches, kept for the
+        // child loop below: FragmentDataIterator reaches each child's
+        // FragmentData once per visit, and the sidecar address is stable for
+        // the publication (PaintFragmentSource::Resolved).
+        let mut resolved_children: [Option<*const FragmentPaintData>; 8] = [None; 8];
         let same_children = old_children.len() == source_children
             && old_children
                 .iter()
                 .zip(OrdinaryPaintSourceChildren(fragment).chain(embedded_source))
+                .enumerate()
                 // Reach each child's FragmentData once for the identity
                 // reads below (FragmentDataIterator), not once per read.
-                .all(|(old, source)| SamePreviousSourceIdentity(old, &source.Resolved()));
+                .all(|(index, (old, source))| {
+                    let source = source.Resolved();
+                    if let Some(slot) = resolved_children.get_mut(index) {
+                        *slot = source.1;
+                    }
+                    SamePreviousSourceIdentity(old, &source)
+                });
         if !same_children {
             self.needs_post_update = true;
         }
@@ -7997,11 +8205,17 @@ impl PrePaintTreeWalk {
         // Borrowed for the child loop; the loop changes only this node's
         // children, fragment and table-cell flag, never its cache.
         let base: &ChildContext = &node.cache.as_ref().unwrap().children;
+        // Positional pairing happens only for an unchanged child list, whose
+        // every pair the check above proved SamePreviousSourceIdentity.
+        let children_identity_proven = positional_children.is_some();
         for (index, child) in OrdinaryPaintSourceChildren(fragment)
             .chain(embedded_source)
             .enumerate()
         {
-            let child = child.Resolved();
+            let child = match resolved_children.get(index) {
+                Some(&Some(data)) => PaintFragmentSource(child.0, Some(data)),
+                _ => child.Resolved(),
+            };
             let previous = if let Some(children) = positional_children.as_mut() {
                 children.next()
             } else {
@@ -8015,11 +8229,10 @@ impl PrePaintTreeWalk {
                 }
             };
             let is_local_frame = index == ordinary_children && embedded_view.is_some();
-            let child_context = if is_local_frame {
-                self.ContextForFrame(&node, base, embedded_view.as_ref().unwrap())
-            } else {
-                self.ContextForChild(&child, base)
-            };
+            // An ordinary child's context is built only when RetainCleanChild
+            // below cannot retain it from the parent's ChildContext.
+            let frame_context = is_local_frame
+                .then(|| self.ContextForFrame(&node, base, embedded_view.as_ref().unwrap()));
             let frame_fixed_context = is_local_frame.then(|| self.root_fixed_position.take());
             let previous_wheel_targets = is_local_frame.then(|| {
                 std::mem::replace(
@@ -8045,13 +8258,37 @@ impl PrePaintTreeWalk {
                 .unwrap_or(if is_local_frame { 0 } else { fragmentainer });
             self.fragmentainer_scope = Some(child_fragmentainer);
             let t_child = checkpoint();
-            let mut child_node = self.UpdateNode(
-                child,
-                child_context,
-                invalidation_context,
-                previous,
-                force_descendants,
-            );
+            let mut child_node = match frame_context {
+                Some(child_context) => self.UpdateNode(
+                    child,
+                    child_context,
+                    invalidation_context,
+                    previous,
+                    force_descendants,
+                    children_identity_proven,
+                ),
+                None => match self.RetainCleanChild(
+                    child,
+                    base,
+                    previous,
+                    children_identity_proven,
+                    force_descendants,
+                    invalidation_context,
+                ) {
+                    Ok(retained) => retained,
+                    Err(previous) => {
+                        let child_context = self.ContextForChild(&child, base);
+                        self.UpdateNode(
+                            child,
+                            child_context,
+                            invalidation_context,
+                            previous,
+                            force_descendants,
+                            children_identity_proven,
+                        )
+                    }
+                },
+            };
             recursion_ns += ProfileNs(t_child, checkpoint());
             self.local_frame_depth -= u32::from(is_local_frame);
             if let Some(previous) = previous_wheel_targets {
@@ -9156,6 +9393,7 @@ impl PrePaintTreeWalk {
             PaintInvalidatorContext::default(),
             previous,
             force,
+            false,
         );
         self.view_background_rects = None;
         // Source: pre_paint_tree_walk.cc:1584-1585. Clear each visited
