@@ -32,8 +32,22 @@ impl layout_commit::PaintCommitBackend for PaintCommit<'_, '_> {
     #[inline(never)]
     fn CommitClients(&mut self, commit: &PaintClientCommit, layout: &mut LayoutPaintOutput) {
         let _scope = self.engine.NativeScrollPassScope();
+        // The caret clients were validated by ValidateAuxiliaryClients; the
+        // source walk only has the remaining ids to find.
+        let used = commit.UsedClients();
+        let mut source_clients = used.len();
+        if let Some(editing) = self.editing {
+            for id in [
+                editing.caret.borrow().display_item_client().Id(),
+                editing.drag_caret.borrow().display_item_client().Id(),
+            ] {
+                if used.contains(&id) {
+                    source_clients = source_clients.saturating_sub(1);
+                }
+            }
+        }
         if let Some(tree) = &self.engine.tree_ {
-            tree.CommitPaintClientState(commit.UsedClients(), &mut layout.fragments);
+            tree.CommitPaintClientState(used, source_clients, &mut layout.fragments);
             // LocalFrameView::PaintTree clears only the source dirty paths
             // after completed paint; display-locked subtrees retain theirs.
             if let Some(layer) = unsafe { tree.Root().PaintingLayerDefault().as_mut() } {

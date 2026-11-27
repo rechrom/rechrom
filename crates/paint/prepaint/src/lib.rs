@@ -15,6 +15,7 @@ pub mod background_geometry;
 pub mod block_paint_invalidator;
 pub mod box_paint_invalidator;
 pub mod client_rects;
+pub mod committed_paint_clients;
 pub mod clip_path_clipper;
 pub mod compositing_reason_finder;
 pub mod contoured_border_geometry;

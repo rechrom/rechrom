@@ -1405,13 +1405,22 @@ impl PaintLifecycle for PaintEngine {
         trace.set("clients", clients.len() as f64);
         trace.set("repainted", repainted as u8 as f64);
         trace.set("recording_revision", recording_revision as f64);
+        // ~PaintController validates the used clients through their own
+        // pointers (paint_controller.cc:127-143), never by walking the
+        // LayoutObject tree. The resident client directory resolves each id
+        // to its live client; only the ids it cannot resolve (the caret
+        // clients, or a client created after the directory's last rebuild)
+        // go to the Layout commit, which validates them on its source
+        // owners.
+        let unresolved = self.pre_paint.ValidateLiveClientsForCommittedPaint(&clients);
+        trace.set("unresolved_clients", unresolved.len() as f64);
         self.pre_paint.CommitClients(clients.iter().copied());
         PaintOutput::new(
             self.persistent_data
                 .GetPaintArtifact()
                 .expect("committed Paint result")
                 .clone(),
-            layout::paint::PaintClientCommit::FromClientSet(clients),
+            layout::paint::PaintClientCommit::FromClientSet(unresolved),
         )
     }
 }
