@@ -789,7 +789,6 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         container_runtime: Option<&'a ProductionContainerRuntime<'a>>,
         font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
     ) -> Self {
-        let language = AtomicString::default();
         // cpp: ComputedStyleBuilder's inherited/non-inherited variable data is
         // initialized with the rest of the style.  The Rust port owns those
         // maps beside ComputedStyle, so establish the equivalent base before
@@ -823,6 +822,54 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
                 &length,
             )
         });
+        Self::with_custom_properties(
+            document,
+            media,
+            root_font_size,
+            color_scheme_settings,
+            system_colors,
+            text_link_text_color,
+            link_color,
+            visited_link_color,
+            active_link_color,
+            custom_properties,
+            parent_custom_properties,
+            substitution_context,
+            image_resolver,
+            property_registry,
+            function_registry,
+            container_runtime,
+            font_metrics,
+        )
+    }
+
+    /// The backend with an explicit variable seed. StyleResolver's MISU
+    /// branch (ApplyInlineProperties) never resolves or writes a custom
+    /// property: CanApplyInlineStyleIncrementally (style_resolver.cc) rejects
+    /// unparsed declarations and pending substitutions, and the retained
+    /// variables of the cloned style stay with that style's owner. It
+    /// therefore starts from an empty seed instead of copying the previous
+    /// CustomProperties map on every incremental update.
+    pub(crate) fn with_custom_properties(
+        document: Option<&'a dom::Document>,
+        media: MediaValuesCachedData,
+        root_font_size: f32,
+        color_scheme_settings: production_style_builder::ColorSchemeSettings,
+        system_colors: super::production_style_resolver::ProductionSystemColorContext<'a>,
+        text_link_text_color: Option<foundation::Color>,
+        link_color: Option<foundation::Color>,
+        visited_link_color: Option<foundation::Color>,
+        active_link_color: Option<foundation::Color>,
+        custom_properties: CustomProperties,
+        parent_custom_properties: Option<&'a CustomProperties>,
+        substitution_context: SubstitutionContext<'a>,
+        image_resolver: Option<&'a dyn URLImageResolver>,
+        property_registry: Option<&'a PropertyRegistry>,
+        function_registry: Option<&'a production_style_sheet::ProductionFunctionRegistry>,
+        container_runtime: Option<&'a ProductionContainerRuntime<'a>>,
+        font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
+    ) -> Self {
+        let language = AtomicString::default();
         Self {
             document,
             media,
@@ -1429,7 +1476,12 @@ pub(crate) fn ApplyInlineProperties(
     builder: &mut ComputedStyleBuilder,
     properties: &[(CSSPropertyName, Rc<production_css_value::Value>)],
 ) -> Result<u32, Vec<ProductionCascadeFallback>> {
-    let backend = ProductionStyleCascadeBackend::new(
+    // cpp: StyleResolver::ApplyBaseStyleNoCache MISU branch
+    // (style_resolver.cc) applies each inline declaration through
+    // StyleBuilder::ApplyProperty on the cloned style; no variable is
+    // resolved or written, so the cloned style's CustomProperties is not
+    // copied into this backend (see with_custom_properties).
+    let backend = ProductionStyleCascadeBackend::with_custom_properties(
         inputs.document,
         inputs.media,
         inputs.root_font_size,
@@ -1439,7 +1491,7 @@ pub(crate) fn ApplyInlineProperties(
         inputs.link_color,
         inputs.visited_link_color,
         inputs.active_link_color,
-        inputs.custom_properties,
+        CustomProperties::default(),
         inputs.parent_custom_properties,
         inputs.substitution_context,
         inputs.image_resolver,
@@ -1448,9 +1500,6 @@ pub(crate) fn ApplyInlineProperties(
         inputs.container_runtime,
         inputs.font_metrics,
     );
-    if let Some(root) = inputs.root_style.clone() {
-        let _ = backend.document_element_style.set(root);
-    }
     backend.is_document_element.set(inputs.is_document_element);
     let element = Rc::new(ProductionElement {
         node: inputs.subject_node,
@@ -1458,6 +1507,11 @@ pub(crate) fn ApplyInlineProperties(
         root: inputs.root_style.clone(),
         pseudo_id: inputs.pseudo_id,
     });
+    // The element context above holds its own root handle; hand the input's
+    // handle to the backend instead of rooting a third one.
+    if let Some(root) = inputs.root_style {
+        let _ = backend.document_element_style.set(root);
+    }
     let request = ProductionRequest {
         pseudo_id: inputs.pseudo_id,
         originating_style: None,
@@ -3970,7 +4024,9 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                 self.ApplyCustomProperty(name, property, state, value);
                 return;
             }
-            let parent = state.ParentStyle();
+            // StyleBuilder::ApplyProperty reads state.ParentStyle() as a
+            // borrowed pointer; do not root a new handle per declaration.
+            let parent = state.ParentStyleRef();
             let parent = parent.as_ref().map(|p| Self::style(p));
             // cpp: style_resolver_state.cc:451-469 ResolveLightDarkPair.
             // Production longhand application is the computed style owner below the
@@ -4138,7 +4194,12 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     });
                 return;
             }
-            let conversion_media = state.CssToLengthConversionData().media.clone();
+            // StyleBuilder::ApplyProperty reads the state's
+            // CSSToLengthConversionData in place. The longhand appliers below
+            // receive the builder and values, never the state, so the shared
+            // borrow cannot overlap a conversion-data update.
+            let conversion_data = state.CssToLengthConversionData();
+            let conversion_media = &conversion_data.media;
             let result = if let Some(images) = self.image_resolver {
                 production_style_builder::ApplyWithImageResolverColorSchemeAndRootStyle(
                     property.PropertyID(),
@@ -4146,7 +4207,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     parent,
                     value,
                     self.root_font_size,
-                    &conversion_media,
+                    conversion_media,
                     images,
                     self.color_scheme_settings,
                     self.document_element_style
@@ -4165,7 +4226,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     parent,
                     value,
                     self.root_font_size,
-                    &conversion_media,
+                    conversion_media,
                     self.color_scheme_settings,
                     self.document_element_style
                         .get()

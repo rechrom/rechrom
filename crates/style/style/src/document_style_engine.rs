@@ -382,6 +382,28 @@ struct ProductionResolverRuleSets {
     author: Rc<Vec<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>>,
 }
 
+/// cpp: StyleEngine::UpdateActiveStyle (style_engine.cc) rebuilds the
+/// ScopedStyleResolver RuleSet owners only from
+/// UpdateActiveStyleSheetsInShadow / UpdateActiveStyleSheetsInDocument, and
+/// ScopedStyleResolver::AppendActiveStyleSheets keeps them until the active
+/// sheets change. The assembled resolver bundle is retained the same way: it
+/// is valid for exactly these active-sheet owners, this media environment and
+/// this DOM structure (the implicit @scope triggers are the sheets' owner
+/// parents). Any typed-sheet or RuleSet synchronization releases it.
+struct RetainedResolverRuleSets {
+    sheets: Arc<Vec<(Rc<CSSStyleSheet>, CascadeOrigin)>>,
+    scopes: Arc<Vec<Option<usize>>>,
+    media: MediaValuesCachedData,
+    // Document::CollectionMembershipKey changes on every child-list,
+    // shadow-root or ordinary attribute change, but not on a CSSOM inline
+    // style write, so a per-frame `element.style` mutation keeps the bundle.
+    structure: (DOMOwnerHandle, u64),
+    rule_sets: Rc<ProductionResolverRuleSets>,
+    // Diagnostic counters the assembly would have reported, replayed on reuse.
+    rule_sets_consulted: usize,
+    skipped_owner_media: usize,
+}
+
 // A style request names a pseudo on the originating element, never a DOM query
 // for a synthetic element. Other pseudo families require their own lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -931,6 +953,7 @@ pub struct DocumentStyleEngine {
         Option<Rc<crate::resolver::production_style_resolver::ProductionRuleCollectionCache>>,
     retained_resolver_batch:
         Option<Rc<crate::resolver::production_style_resolver::ProductionResolverBatch>>,
+    retained_resolver_rule_sets: Option<RetainedResolverRuleSets>,
     empty_user_agent_rules: RetainedRuleSet,
     // Blink discovers viewport-unit users by walking the live element tree
     // when the viewport dirty flags are consumed. Keep the equivalent exact
@@ -1141,6 +1164,7 @@ impl DocumentStyleEngine {
             ordinary_signature_sheets_complete: None,
             retained_rule_collections: None,
             retained_resolver_batch: None,
+            retained_resolver_rule_sets: None,
             empty_user_agent_rules: Rc::new(crate::rule_set::RuleSet::new()),
             viewport_dependent_elements: HashSet::new(),
             container_dependent_elements: HashSet::new(),
@@ -2177,14 +2201,20 @@ impl DocumentStyleEngine {
                 (font_features_changed, function_registry, registry_changed, has_scope_rules)
             };
         let function_registry = &*function_registry_owner;
-        let environment = (media.clone(), document.GetCompatibilityMode());
+        // cpp: StyleEngine::MediaQueryAffectingValueChanged /
+        // CompatibilityModeChanged are change notifications; an unchanged
+        // environment is compared in place, not copied on every update.
+        let environment_unchanged = self
+            .environment
+            .as_ref()
+            .is_some_and(|(previous, mode)| *mode == compatibility_mode && previous == media);
         // Scope activation can change when its triggering context changes.
         // Container rules carry their dependency flags on ComputedStyle,
         // including when the previous query result was false.
         let conservative_scope_invalidation = has_scope_rules
             && (!document.StyleState().changes.is_empty()
             || !self.invalidated_container_nodes.is_empty());
-        let environment_changed = self.environment.as_ref() != Some(&environment);
+        let environment_changed = !environment_unchanged;
         let all_dirty = font_features_changed
             || registry_changed
             || document.StyleState().all_dirty
@@ -2263,7 +2293,7 @@ impl DocumentStyleEngine {
         let quirks_changed = self
             .environment
             .as_ref()
-            .is_none_or(|(_, mode)| *mode != environment.1);
+            .is_none_or(|(_, mode)| *mode != compatibility_mode);
         if quirks_changed
             || rule_sets_changed
             || self.active_sheet_scopes.as_slice() != active_sheet_scopes.as_slice()
@@ -2276,7 +2306,7 @@ impl DocumentStyleEngine {
         // shadow TreeScope does not make document RuleSet invalidation
         // inexact; only inputs shared by selector/cascade evaluation do.
         let rule_set_invalidation_context_unchanged =
-            (self.environment.as_ref() == Some(&environment) || viewport_only_environment_change)
+            (environment_unchanged || viewport_only_environment_change)
                 && !font_features_changed
                 && !registry_changed
                 && environment_variables.is_none();
@@ -3573,7 +3603,9 @@ impl DocumentStyleEngine {
             self.sheet_revision = Some(revision);
             self.active_sheets = active_sheets;
             self.active_sheet_scopes = active_sheet_scopes;
-            self.environment = Some(environment);
+            if environment_changed {
+                self.environment = Some((media.clone(), compatibility_mode));
+            }
             self.sheet_dependencies = sheet_dependencies;
             FinishUpdate(
                 document_owner,
@@ -3586,7 +3618,13 @@ impl DocumentStyleEngine {
             return Ok(StyleUpdateImpact::default());
         }
         let production_resolver_rule_sets = self
-            .ProductionResolverRuleSets(document, media, &sheets, active_sheet_scopes.as_slice())
+            .RetainedProductionResolverRuleSets(
+                document,
+                media,
+                &sheets,
+                &active_sheets,
+                &active_sheet_scopes,
+            )
             .ok_or(DocumentStyleError::Unsupported(
                 "production-resolver-rule-set-bundle",
             ))?;
@@ -4892,7 +4930,7 @@ impl DocumentStyleEngine {
                                         PseudoStyleKind::After => after_has_marker,
                                         _ => false,
                                     },
-                                    Some(&production_resolver_rule_sets),
+                                    Some(&*production_resolver_rule_sets),
                                     &rule_collections,
                                     &resolver_batch,
                                     &computed_style,
@@ -5357,7 +5395,9 @@ impl DocumentStyleEngine {
         self.sheet_revision = Some(revision);
         self.active_sheets = active_sheets;
         self.active_sheet_scopes = active_sheet_scopes;
-        self.environment = Some(environment);
+        if environment_changed {
+            self.environment = Some((media.clone(), compatibility_mode));
+        }
         self.sheet_dependencies = sheet_dependencies;
         self.matches.extend(pending_matches);
         self.cascade_values.extend(pending_values);
@@ -5469,6 +5509,7 @@ impl DocumentStyleEngine {
         self.ordinary_signature_sheets_complete = None;
         self.retained_rule_collections = None;
         self.retained_resolver_batch = None;
+        self.retained_resolver_rule_sets = None;
     }
     fn SynchronizeTypedSheets(
         &mut self,
@@ -5832,6 +5873,58 @@ impl DocumentStyleEngine {
         }
         description.SetResolvedFontFeaturesForFamilies(resolved.into());
         production_style_builder::StageFontDescription(builder, &description);
+    }
+
+    /// cpp: StyleEngine::UpdateActiveStyle (style_engine.cc) and
+    /// ScopedStyleResolver::AppendActiveStyleSheets (scoped_style_resolver.cc).
+    /// Blink keeps one ScopedStyleResolver and its RuleSets per active
+    /// TreeScope and touches them only when that scope's active sheets
+    /// change; an ordinary style recalc reads the retained owners. Reuse the
+    /// assembled bundle while its active sheets, media environment and DOM
+    /// structure are unchanged. Typed-sheet/RuleSet synchronization clears it
+    /// (InvalidateSynchronizedStyleSheets).
+    fn RetainedProductionResolverRuleSets(
+        &mut self,
+        document: &Document,
+        media: &MediaValuesCachedData,
+        sheets: &[(&CSSStyleSheet, CascadeOrigin)],
+        active_sheets: &Arc<Vec<(Rc<CSSStyleSheet>, CascadeOrigin)>>,
+        active_sheet_scopes: &Arc<Vec<Option<usize>>>,
+    ) -> Option<Rc<ProductionResolverRuleSets>> {
+        let structure = document.CollectionMembershipKey();
+        if let Some(retained) = self.retained_resolver_rule_sets.as_ref() {
+            if structure == Some(retained.structure)
+                && Arc::ptr_eq(&retained.sheets, active_sheets)
+                && Arc::ptr_eq(&retained.scopes, active_sheet_scopes)
+                && retained.media == *media
+            {
+                self.translated_rule_shadow_stats.rule_sets_consulted +=
+                    retained.rule_sets_consulted;
+                self.translated_rule_shadow_stats.skipped_owner_media +=
+                    retained.skipped_owner_media;
+                return Some(retained.rule_sets.clone());
+            }
+        }
+        let consulted_before = self.translated_rule_shadow_stats.rule_sets_consulted;
+        let skipped_before = self.translated_rule_shadow_stats.skipped_owner_media;
+        let rule_sets = Rc::new(self.ProductionResolverRuleSets(
+            document,
+            media,
+            sheets,
+            active_sheet_scopes.as_slice(),
+        )?);
+        self.retained_resolver_rule_sets = structure.map(|structure| RetainedResolverRuleSets {
+            sheets: active_sheets.clone(),
+            scopes: active_sheet_scopes.clone(),
+            media: media.clone(),
+            structure,
+            rule_sets: rule_sets.clone(),
+            rule_sets_consulted: self.translated_rule_shadow_stats.rule_sets_consulted
+                - consulted_before,
+            skipped_owner_media: self.translated_rule_shadow_stats.skipped_owner_media
+                - skipped_before,
+        });
+        Some(rule_sets)
     }
 
     /// Assemble the exact active RuleSet owners consumed by
