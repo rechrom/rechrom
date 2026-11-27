@@ -912,11 +912,18 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
         ScrollTranslationAction::End
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.cc:1084-1110.
+    // Blink reads `drawing->GetPaintRecord()` here and again in ConvertRange's
+    // item loop; both are the DrawingDisplayItem's one retained PaintRecord.
+    // Rechrom's GetPaintRecord lowers a record lease on each call, so the
+    // single drawing item's record produced here is handed back through
+    // `single_record` and reused by ConvertRange for that same item instead
+    // of being lowered twice per converted chunk.
     fn HasDrawing(
         &self,
         artifact: &Arc<B::PaintArtifact>,
         chunk: &B::PaintChunk,
         state: &B::PropertyTreeState,
+        single_record: &mut Option<B::PaintRecord>,
     ) -> bool {
         if state.EffectNode() != self.current_effect_ {
             return true;
@@ -929,11 +936,16 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
             return true;
         }
         let item = items.next().unwrap();
-        if item.IsDrawing()
-            && self.services.RecordIsEmpty(&item.GetPaintRecord(artifact,self.services))
-            && state.EffectNode().IsRoot()
-        {
-            return false;
+        if item.IsDrawing() {
+            let record = item.GetPaintRecord(artifact, self.services);
+            let empty = self.services.RecordIsEmpty(&record);
+            if empty && state.EffectNode().IsRoot() {
+                return false;
+            }
+            // ConvertRange paints a scrollbar item through PaintScrollbar.
+            if !item.IsScrollbar() {
+                *single_record = Some(record);
+            }
         }
         true
     }
@@ -955,7 +967,9 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
                 continue;
             }
             let state = chunk.PropertiesUnalias();
-            if !self.HasDrawing(chunks.artifact(), chunk, &state) {
+            // The single drawing item's record, when HasDrawing produced it.
+            let mut single_record = None;
+            if !self.HasDrawing(chunks.artifact(), chunk, &state, &mut single_record) {
                 *index += 1;
                 continue;
             }
@@ -994,7 +1008,10 @@ impl<B: PaintChunksTypes, R: ConversionResult<B>> ConversionContext<'_, B, R> {
                 let record = if item.IsScrollbar() {
                     item.PaintScrollbar(chunks.artifact(),self.services)
                 } else if item.IsDrawing() {
-                    item.GetPaintRecord(chunks.artifact(),self.services)
+                    match single_record.take() {
+                        Some(record) => record,
+                        None => item.GetPaintRecord(chunks.artifact(), self.services),
+                    }
                 } else {
                     continue;
                 };
