@@ -904,12 +904,15 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             .as_ref()
             .map_or(*paint_info, |state| *state.GetPaintInfo());
         // Chromium's PaintLineBoxes visits no ordinary line in the
-        // block-background phases because atomic inlines paint all their
-        // phases from the foreground pass (PaintAtomicInlineChild). This walk
-        // still paints atomic-inline decorations (inline-block, replaced
-        // borders/backgrounds) from the background phases, so lines must stay
-        // visited there until atomic inlines paint atomically.
-        let skips_ordinary_lines = false && paint_model::paint_phase::ShouldPaintDescendantBlockBackgrounds(phase);
+        // block-background phases; only a block-in-inline line paints its
+        // block background there (box_fragment_painter.cc:1050-1065,
+        // PaintBoxDecorationBackgroundForBlockInInline). Atomic inlines in a
+        // line paint all their phases from the foreground pass (PaintBoxItem
+        // -> PaintFragment -> PaintAllPhasesAtomically,
+        // box_fragment_painter.cc:615-641, 2034-2077), and inline boxes paint
+        // their decorations in the foreground phase only.
+        let skips_ordinary_lines =
+            paint_model::paint_phase::ShouldPaintDescendantBlockBackgrounds(phase);
         // MathML operators suppress their inline children; read once per
         // visit, on the first fragment-item child.
         let mut suppresses_fragment_items: Option<bool> = None;
@@ -969,7 +972,15 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             {
                 continue;
             }
-            let is_atomic = child_fragment.paint.painted_atomically;
+            // PhysicalFragment::IsPaintedAtomically of the resident box
+            // (atomic inlines, flex/grid items, floats), read live as
+            // BoxFragmentPainter::PaintFragment / Paint read it
+            // (box_fragment_painter.cc:636-651). The stored
+            // `paint.painted_atomically` is only a detached-fixture fallback
+            // and is never populated for resident fragments. A
+            // self-painting-layer child was already left to its own layer
+            // above, matching `!box_fragment_.HasSelfPaintingLayer()` there.
+            let is_atomic = child_fragment.ViewPaintedAtomically();
             let child_is_float = IsFloat(child);
             match crate::phase::ClassifyChildPhase(phase, child_is_float, is_atomic) {
                 crate::phase::ChildPhaseAction::Skip => {}
