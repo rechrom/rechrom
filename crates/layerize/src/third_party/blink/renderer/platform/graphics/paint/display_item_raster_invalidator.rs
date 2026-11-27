@@ -23,6 +23,11 @@ pub struct DisplayItemRasterInvalidator<
     new_display_items_: &'a [I],
     old_image_content_revisions_: &'a [Vec<(u64, u64)>],
     new_image_content_revisions_: &'a [Vec<(u64, u64)>],
+    // Interim for Chromium's tombstones in the old list: whether the new
+    // artifact moved each old item out of the cache (indexed like
+    // `old_display_items_`; empty means none). Read through
+    // `OldItemIsTombstone`. Replaced when cached items are moved in place.
+    old_display_items_moved_: &'a [bool],
     mapper_: &'a M,
     old_display_items_index_: HashMap<DisplayItemClientId, Vec<usize>>,
 }
@@ -44,6 +49,7 @@ impl<
             new_display_items_: new,
             old_image_content_revisions_: &[],
             new_image_content_revisions_: &[],
+            old_display_items_moved_: &[],
             mapper_: mapper,
             old_display_items_index_: HashMap::new(),
         }
@@ -56,6 +62,29 @@ impl<
         self.old_image_content_revisions_ = old;
         self.new_image_content_revisions_ = new;
         self
+    }
+    /// The new artifact's record of which old items it moved out of the
+    /// cache: Chromium's `old_item.IsTombstone()`. Interim until cached items
+    /// are moved in place and leave real tombstones in the old list.
+    pub fn WithOldItemsMovedFromCache(mut self, moved: &'a [bool]) -> Self {
+        self.old_display_items_moved_ = moved;
+        self
+    }
+    // Source: display_item_raster_invalidator.cc:62,74-79,89 test
+    // `old_item.IsTombstone()`, which in Chromium means the new item was
+    // copied from this cached old item (the old list is tombstoned by
+    // paint_controller.cc:283-286,737-820). Rechrom's PaintController does
+    // not tombstone the shared old artifact; it publishes its moves on the new
+    // artifact (PaintRecording::previous_items_moved_from_cache). Interim:
+    // replaced by `IsTombstone()` alone when items are moved in place.
+    #[inline(always)]
+    fn OldItemIsTombstone(&self, old_index: usize) -> bool {
+        self.old_display_items_[old_index].IsTombstone()
+            || self
+                .old_display_items_moved_
+                .get(old_index)
+                .copied()
+                .unwrap_or(false)
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:11-99.
     pub fn Generate(&mut self) {
@@ -107,7 +136,7 @@ impl<
             // subtype bytes now belong to `new`, so the deliberately-cleared
             // base draws-content bit is not a content transition.
             if reason == Reason::kNone
-                && !old.IsTombstone()
+                && !self.OldItemIsTombstone(old_index)
                 && old.DrawsContent() != new.DrawsContent()
             {
                 reason = if new.DrawsContent() {
@@ -135,7 +164,7 @@ impl<
             }
             if reason != Reason::kNone && (old.DrawsContent() || new.DrawsContent()) {
                 let value = clients.entry(new.ClientId()).or_default();
-                if old.IsTombstone() || old.DrawsContent() {
+                if self.OldItemIsTombstone(old_index) || old.DrawsContent() {
                     value.old_visual_rect.Union(old.VisualRect());
                 }
                 if new.DrawsContent() {
@@ -145,7 +174,9 @@ impl<
             }
             debug_assert!(!matched[old_index]);
             matched[old_index] = true;
-            if old.IsTombstone() {
+            // Source: display_item_raster_invalidator.cc:74-79. A tombstone
+            // means `new` was copied from the cached `old`.
+            if self.OldItemIsTombstone(old_index) {
                 latest = latest.max(old_index);
             }
         }
@@ -153,7 +184,7 @@ impl<
             if matched[i] {
                 continue;
             }
-            if old.DrawsContent() || old.IsTombstone() {
+            if old.DrawsContent() || self.OldItemIsTombstone(i) {
                 clients
                     .entry(old.ClientId())
                     .or_default()

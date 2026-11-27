@@ -510,6 +510,18 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                                 .artifact()
                                 .ImageContentRevisionsInChunk(index),
                         )
+                        // Interim for the tombstones Chromium's
+                        // PaintController leaves in the old list
+                        // (display_item_raster_invalidator.cc:51-56,74-79);
+                        // replaced when cached items are moved in place.
+                        .WithOldItemsMovedFromCache(
+                            chunks
+                                .artifact()
+                                .OldDisplayItemsMovedFromCacheInChunk(
+                                    &old_artifact,
+                                    old_chunk_index,
+                                ),
+                        )
                         .Generate();
                     }
                 }

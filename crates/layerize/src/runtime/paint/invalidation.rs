@@ -198,6 +198,9 @@ impl<R: PaintSkiaBackend> RasterInvalidationArtifact<CpuGeometryMapper<R>> for P
     fn RecordingRevision(&self) -> u64 {
         self.recording_revision
     }
+    fn OldDisplayItemsMovedFromCacheInChunk(&self, old: &Self, old_chunk_index: usize) -> &[bool] {
+        self.PreviousItemsMovedFromCacheInChunk(old, old_chunk_index)
+    }
 }
 impl<R: PaintSkiaBackend> RasterInvalidationSubset<CpuGeometryMapper<R>> for PaintChunkSubset {
     fn artifact(&self) -> &Arc<PaintArtifact> {

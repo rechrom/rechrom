@@ -314,6 +314,23 @@ impl PaintController {
     pub(crate) fn Finish(&mut self, output: &mut PaintRecording) -> SubsequencesData {
         self.paint_chunker.Finish(&mut output.chunks);
         debug_assert!(!self.under_invalidation_checker.IsChecking());
+        // Interim for Chromium's tombstones in the current list
+        // (paint_controller.cc:283-286,737-820), which
+        // DisplayItemRasterInvalidator reads to detect reordered items
+        // (display_item_raster_invalidator.cc:51-56,74-79): publish this
+        // controller's moves on the new recording. Replaced when cached items
+        // are moved in place in the old artifact.
+        output.previous_items_moved_from_cache = self.previous.as_ref().and_then(|previous| {
+            let moved: Vec<bool> = (0..previous.display_items.len())
+                .map(|index| self.PreviousItemIsTombstone(index))
+                .collect();
+            moved.contains(&true).then(|| {
+                Arc::new(crate::artifact::PreviousItemsMovedFromCache {
+                    previous_recording_revision: previous.recording_revision,
+                    moved,
+                })
+            })
+        });
         std::mem::take(&mut self.new_subsequences)
     }
 

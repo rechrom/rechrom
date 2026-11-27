@@ -412,6 +412,31 @@ pub struct PaintRecording {
     /// already performed its animated-image UseCounter check.
     pub painted_layout_image_resource_ids: SharedArtifactData<HashSet<image_resource::ImageId>>,
     pub caret: Option<CaretGeometry>,
+    /// The display items of the previous artifact this recording's
+    /// PaintController moved out of the cache. See
+    /// [`PreviousItemsMovedFromCache`]. Not part of artifact equality.
+    pub previous_items_moved_from_cache: Option<Arc<PreviousItemsMovedFromCache>>,
+}
+
+/// Interim stand-in for the tombstones Chromium's PaintController leaves in
+/// the current (old) display item list when it moves a cached item or a
+/// cached subsequence into the new list (paint_controller.cc:283-286,
+/// 737-820). DisplayItemRasterInvalidator reads `old_item.IsTombstone()` as
+/// "the new item was copied from the cached old item"
+/// (display_item_raster_invalidator.cc:51-56,74-79, and 62,89 for the old
+/// visual rect). Rechrom's previous artifact stays a shared `Arc` and is not
+/// tombstoned, so the PaintController's moved-item record is published here,
+/// on the recording that describes the old -> new transition.
+///
+/// Replaced when cached items are moved in place, leaving real tombstones in
+/// the old artifact.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PreviousItemsMovedFromCache {
+    /// `recording_revision` of the previous artifact the flags index. A
+    /// consumer applies them only to that exact old recording.
+    pub previous_recording_revision: u64,
+    /// Indexed like the previous artifact's `display_items`.
+    pub moved: Vec<bool>,
 }
 
 impl PartialEq for PaintRecording {
@@ -513,6 +538,34 @@ impl PaintRecording {
             .expect("paint chunk index must be valid");
         self.display_items
             .ItemsInRange(chunk.begin_index as usize, chunk.end_index as usize)
+    }
+
+    /// For the items of `previous`'s chunk `previous_chunk_index`, whether
+    /// this recording moved each one out of the cache: Chromium's
+    /// `IsTombstone()` on those old items (see
+    /// [`PreviousItemsMovedFromCache`]). Empty when this recording was not
+    /// painted from `previous`'s recording, in which case no old item counts
+    /// as moved.
+    pub fn PreviousItemsMovedFromCacheInChunk(
+        &self,
+        previous: &PaintRecording,
+        previous_chunk_index: usize,
+    ) -> &[bool] {
+        let Some(record) = self.previous_items_moved_from_cache.as_deref() else {
+            return &[];
+        };
+        if previous.recording_revision == 0
+            || record.previous_recording_revision != previous.recording_revision
+        {
+            return &[];
+        }
+        let Some(chunk) = previous.chunks.get(previous_chunk_index) else {
+            return &[];
+        };
+        record
+            .moved
+            .get(chunk.begin_index as usize..chunk.end_index as usize)
+            .unwrap_or_default()
     }
 
     // Source: paint_artifact.cc:14-23.
@@ -672,6 +725,7 @@ impl PaintRecording {
         self.recording_revision = 0;
         self.resources = None;
         self.caret = None;
+        self.previous_items_moved_from_cache = None;
     }
 
     /// Replace only the immutable replay-resource snapshot. Recorded ops and
