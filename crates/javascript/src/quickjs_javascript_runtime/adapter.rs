@@ -2058,7 +2058,7 @@ impl Context {
     }
     /// A Promise/native job or a dynamic import awaiting resumption.
     pub(super) fn has_pending_jobs(&self) -> bool {
-        unsafe { JS_IsJobPending(self.owner.rt) != 0 }
+        (unsafe { JS_IsJobPending(self.owner.rt) != 0 })
             || !self.data().pending_dynamic_imports.borrow().is_empty()
     }
     pub fn run_jobs_errors(&mut self) -> Vec<Value> {
