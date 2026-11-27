@@ -38,6 +38,8 @@ pub trait CpuPaintPlatform<R: PaintSkiaBackend>: Send + Sync {
     fn TraceLayer(&self, event: &str, element: Option<ElementId>);
     fn Vector2dFToString(&self, value: Vector2dF) -> String;
     fn TraceScope(&self, category: &str, name: &str, count: Option<usize>);
+    /// Whether display-list trace snapshots are recorded.
+    fn TraceSnapshotsEnabled(&self) -> bool;
     fn CreateObjectTracker(&self, layer_id: i32) -> paint::ObjectTracker;
     fn BeginPushPropertiesTrace(&self) -> paint::PaintTraceScope;
     fn BeginUpdateTrace(&self, source_frame_number: i32) -> paint::PaintTraceScope;
@@ -136,6 +138,9 @@ impl<R: PaintSkiaBackend> RecordingSourceServices<paint::CpuRecordingTypes<R>>
     }
     fn TraceScope(&self, category: &str, name: &str, count: Option<usize>) {
         self.platform.TraceScope(category, name, count)
+    }
+    fn TraceSnapshotsEnabled(&self) -> bool {
+        self.platform.TraceSnapshotsEnabled()
     }
 }
 impl<R: PaintSkiaBackend, F: LayerizeFamily<Skia = R>> PictureLayerServices<F> for CpuMainPaintServices<R> {
@@ -869,6 +874,8 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         c: &mut LayerContext<'_, F>,
         sequence: &mut i32,
     ) -> Result<(), paint::PaintInputError> {
+        let classify_trace =
+            browser_tracing::span("layerize", "Layerize.UpdateCompositor.Classify");
         let viewport = input.ViewportProperties::<R, F>();
         let mut pending = CpuPendingLayerServices(std::marker::PhantomData);
         let mut context =
@@ -972,6 +979,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
                 pac.SetNeedsUpdateAfterRepaint(previous, input.artifact(), self);
             }
         }
+        drop(classify_trace);
         if !pac.TryFastPathUpdate(input.artifact().clone(), &mut context) {
             pac.Update(
                 input.artifact().clone(),
@@ -990,6 +998,8 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         //
         // Source: local_frame_view.cc:3545-3563;
         //         paint_artifact_compositor.cc:1500-1521.
+        let _scroll_trace =
+            browser_tracing::span("layerize", "Layerize.UpdateCompositor.DirectScrollOffsets");
         for scroll_translation in &input
             .artifact()
             .compositor_viewport

@@ -835,9 +835,15 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
             self.chunks_.artifact().PaintChunkCount(),
             repainted_artifact.PaintChunkCount()
         );
+        let mut trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.UpdateCompositedLayerForRepaint",
+        );
         self.SetPaintArtifact(repainted_artifact);
         let chunks_unchanged = (0..self.chunks_.len())
             .all(|index| self.chunks_.chunk(index).is_moved_from_cached_subsequence());
+        trace.set("chunks", self.chunks_.len() as f64);
+        trace.set("chunks_unchanged", chunks_unchanged as u8 as f64);
         if !self.ChunkRequiresOwnLayer() {
             if self.UsesSolidColorLayer() {
                 let layer = self

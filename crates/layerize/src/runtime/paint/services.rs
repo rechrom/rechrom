@@ -61,8 +61,19 @@ impl Diagnostics {
             );
         }
     }
-    fn scope(self: &Arc<Self>, name: &str, value: serde_json::Value) -> PaintTraceScope {
-        self.event("begin", name, value);
+    /// Chromium's TRACE_EVENT scopes cost nothing while their category is
+    /// off. The diagnostic stream is a fixed configuration value, so a
+    /// disabled stream gets a zero-sized scope: no argument value, name copy,
+    /// owner reference or heap allocation per PictureLayer::Update.
+    fn scope(
+        self: &Arc<Self>,
+        name: &str,
+        value: impl FnOnce() -> serde_json::Value,
+    ) -> PaintTraceScope {
+        if !self.config.trace {
+            return Box::new(DisabledTraceScope);
+        }
+        self.event("begin", name, value());
         Box::new(TraceScope {
             diagnostics: self.clone(),
             name: name.to_owned(),
@@ -70,6 +81,10 @@ impl Diagnostics {
         })
     }
 }
+/// The scope of a disabled diagnostic stream (zero-sized: boxing it does not
+/// allocate).
+struct DisabledTraceScope;
+impl CpuPaintTraceScope for DisabledTraceScope {}
 struct TraceScope {
     diagnostics: Arc<Diagnostics>,
     name: String,
@@ -103,7 +118,7 @@ impl Drop for ObjectTrace {
 struct AnalysisTrace(Arc<Diagnostics>);
 impl CpuPaintAnalysisTrace for AnalysisTrace {
     fn Scope(&self, name: &'static str) -> PaintTraceScope {
-        self.0.scope(name, serde_json::Value::Null)
+        self.0.scope(name, || serde_json::Value::Null)
     }
 }
 
@@ -411,7 +426,7 @@ impl CpuPaintPlatform<SkRegion> for SkiaPaintPlatform {
     }
     fn BeginPacUpdateTrace(&self) -> PaintTraceScope {
         self.diagnostics
-            .scope("PaintArtifactCompositor::Update", serde_json::Value::Null)
+            .scope("PaintArtifactCompositor::Update", || serde_json::Value::Null)
     }
     fn ShouldRecordSubsampledMetric(&self, p: f64) -> bool {
         if !self.diagnostics.config.histogram {
@@ -457,13 +472,25 @@ impl CpuPaintPlatform<SkRegion> for SkiaPaintPlatform {
         eprintln!("Paint: {message}");
     }
     fn TraceLayer(&self, event: &str, element: Option<ElementId>) {
+        // Every Layer setter reports here; format the element only for an
+        // enabled stream.
+        if !self.diagnostics.config.trace {
+            return;
+        }
         self.diagnostics
             .event("layer", event, serde_json::json!(format!("{element:?}")));
     }
     fn Vector2dFToString(&self, v: Vector2dF) -> String {
         format!("{},{}", v.x(), v.y())
     }
+    fn TraceSnapshotsEnabled(&self) -> bool {
+        // SkiaPaintValueServices::TraceSnapshot writes only this stream.
+        self.diagnostics.config.trace
+    }
     fn TraceScope(&self, category: &str, name: &str, count: Option<usize>) {
+        if !self.diagnostics.config.trace {
+            return;
+        }
         self.diagnostics
             .event(category, name, serde_json::json!(count));
     }
@@ -477,16 +504,16 @@ impl CpuPaintPlatform<SkRegion> for SkiaPaintPlatform {
     }
     fn BeginPushPropertiesTrace(&self) -> PaintTraceScope {
         self.diagnostics
-            .scope("PictureLayer::PushPropertiesTo", serde_json::Value::Null)
+            .scope("PictureLayer::PushPropertiesTo", || serde_json::Value::Null)
     }
     fn BeginUpdateTrace(&self, n: i32) -> PaintTraceScope {
         self.diagnostics
-            .scope("PictureLayer::Update", serde_json::json!(n))
+            .scope("PictureLayer::Update", || serde_json::json!(n))
     }
     fn BeginUpdateLayerTask(&self, layer: i32, host: i32) -> PaintTraceScope {
         self.diagnostics.scope(
             "UpdateLayer",
-            serde_json::json!({"layer":layer,"host":host}),
+            || serde_json::json!({"layer":layer,"host":host}),
         )
     }
     fn CreatePictureRecorder(&self) -> CpuPictureRecorder<SkRegion> {
