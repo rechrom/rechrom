@@ -874,7 +874,7 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
         c: &mut LayerContext<'_, F>,
         sequence: &mut i32,
     ) -> Result<(), paint::PaintInputError> {
-        let classify_trace =
+        let mut classify_trace =
             browser_tracing::span("layerize", "Layerize.UpdateCompositor.Classify");
         let viewport = input.ViewportProperties::<R, F>();
         let mut pending = CpuPendingLayerServices(std::marker::PhantomData);
@@ -970,9 +970,16 @@ impl<R: PaintSkiaBackend> CpuMainPaintServices<R> {
             // live nodes themselves are shared by both artifacts. Same
             // artifact contents with changed properties therefore still
             // reach the full update.
-            let property_trees_changed = previous.property_tree_update_generation
-                != input.artifact().property_tree_update_generation
-                || unabsorbed_scroll_offset_change;
+            let generation_changed = previous.property_tree_update_generation
+                != input.artifact().property_tree_update_generation;
+            let property_trees_changed = generation_changed || unabsorbed_scroll_offset_change;
+            // Attribution of the update request (Performance report input).
+            classify_trace.set("property_generation_changed", generation_changed as u8 as f64);
+            classify_trace.set(
+                "unabsorbed_scroll_offset_change",
+                unabsorbed_scroll_offset_change as u8 as f64,
+            );
+            classify_trace.set("scrollbar_inputs_changed", scrollbar_inputs_changed as u8 as f64);
             if property_trees_changed || scrollbar_inputs_changed {
                 pac.SetNeedsUpdate();
             } else {
