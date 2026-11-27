@@ -3,7 +3,9 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
+use paint_input_types::layout_input::Offset;
 use paint_model::PaintRect;
+use prepaint::object_paint_properties::ObjectPaintPropertySlot;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
 use crate::box_fragment_painter::BoxFragmentPainter;
@@ -13,6 +15,36 @@ use crate::paint_context::PaintContext;
 use crate::paint_engine::PaintHitTestOpaqueness;
 use crate::paint_info::PaintInfo;
 use crate::PaintPhase;
+
+/// Source: fragment_data.h:32-38 `FragmentData::PaintOffset()`, read from
+/// the occurrence's PrePaint FragmentData as Chromium's SVG painters read
+/// `PaintOffset()` / `FirstFragment().PaintOffset()`. FragmentData holds the
+/// offset LOCAL to its LocalBorderBoxProperties transform; the painters still
+/// record in the flat replay space that `PaintTreeNode::EnclosingRect` /
+/// `PixelSnappedRect` project by `paint_snap_offset`, so the local offset is
+/// carried back into that space by the same delta. Fixture nodes without
+/// FragmentData keep the node's copy.
+pub(crate) fn SVGPaintOffset(node: &PaintTreeNode<'_>) -> Offset {
+    match node.FragmentData() {
+        Some(data) => {
+            let offset = data.PaintOffset();
+            Offset {
+                x: offset.left.ToDouble() - node.paint_snap_offset.x,
+                y: offset.top.ToDouble() - node.paint_snap_offset.y,
+            }
+        }
+        None => node.paint_offset,
+    }
+}
+
+/// Source: scoped_svg_paint_state.cc:102-139 and svg_mask_painter.cc:239-245:
+/// whether `FirstFragment().PaintProperties()->Mask()` exists. Fixture nodes
+/// without FragmentData keep the node's `applies_mask`.
+pub(crate) fn SVGHasMaskProperty(node: &PaintTreeNode<'_>) -> bool {
+    node.FragmentData().map_or(node.applies_mask, |data| {
+        data.HasPropertySlot(ObjectPaintPropertySlot::Mask)
+    })
+}
 
 /// Shared SVG model-object paint operations.
 ///
@@ -44,10 +76,11 @@ impl SVGModelObjectPainter {
     /// callers must not substitute the frame rect for culling.
     pub fn VisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
         let fragment = node.fragment.as_deref()?;
+        let paint_offset = SVGPaintOffset(node);
         if let Some(rect) = fragment.paint.SvgVisualRect() {
             return Some(PaintRect {
-                x: node.paint_offset.x + rect.offset.x,
-                y: node.paint_offset.y + rect.offset.y,
+                x: paint_offset.x + rect.offset.x,
+                y: paint_offset.y + rect.offset.y,
                 width: rect.size.width,
                 height: rect.size.height,
             });
@@ -72,8 +105,8 @@ impl SVGModelObjectPainter {
                 0.0
             };
             return Some(PaintRect {
-                x: node.paint_offset.x + shape.bounds_offset.x - outset,
-                y: node.paint_offset.y + shape.bounds_offset.y - outset,
+                x: paint_offset.x + shape.bounds_offset.x - outset,
+                y: paint_offset.y + shape.bounds_offset.y - outset,
                 width: shape.bounds_width + outset * 2.0,
                 height: shape.bounds_height + outset * 2.0,
             });
@@ -91,8 +124,8 @@ impl SVGModelObjectPainter {
             // Do not substitute the fragment frame when neither exists.
             .or_else(|| fragment.ViewBoxSelfVisualOverflow())?;
         Some(PaintRect {
-            x: node.paint_offset.x + rect.offset.x,
-            y: node.paint_offset.y + rect.offset.y,
+            x: paint_offset.x + rect.offset.x,
+            y: paint_offset.y + rect.offset.y,
             width: rect.size.width,
             height: rect.size.height,
         })
