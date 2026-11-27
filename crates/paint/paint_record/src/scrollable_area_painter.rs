@@ -597,6 +597,19 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
+        // Source: scrollable_area_painter.cc RecordResizerScrollHitTestData
+        // returns on !box->CanResize() before reading any control geometry;
+        // CanResize requires a `resize` style (LayoutBox::CanResize), and
+        // without it ResizerCornerRect is empty. Do not materialize the
+        // positioned scrollbar payload just to find an empty resizer.
+        if fragment
+            .paint
+            .style
+            .Source()
+            .is_some_and(|style| !style.HasResize())
+        {
+            return;
+        }
         let Some(data) = self.Scrollbars(scrollbars) else {
             return;
         };

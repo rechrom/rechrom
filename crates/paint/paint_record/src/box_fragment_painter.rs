@@ -1022,10 +1022,21 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 return;
             }
             if self.node.is_root && !paint_info.ShouldSkipBackground() {
-                if fragment.paint.BackgroundTransfersToView()
-                    && CanvasBackground(self.node).is_some()
-                {
-                    let background_state = CanvasBackgroundPaintState(self.node);
+                // ViewPainter::PaintBoxDecorationBackground reads the
+                // LayoutView's propagated background once and hands the same
+                // facts to PaintRootGroup / PaintRootElementGroup
+                // (view_painter.cc:76-262). Read the live canvas selection
+                // once here instead of once per helper.
+                let canvas = if fragment.paint.BackgroundTransfersToView() {
+                    CanvasBackground(self.node)
+                } else {
+                    None
+                };
+                // The scrolling-contents view background rect, shared by the
+                // root group and the scrolling canvas record.
+                let view_background_rect = std::cell::OnceCell::new();
+                if let Some(canvas) = canvas {
+                    let background_state = CanvasBackgroundPaintStateFor(self.node, &canvas);
                     let paints_separate_backdrop =
                         !background_state.same_nodes(&self.node.contents_properties.nodes);
                     let paints_separate_effect = !background_state
@@ -1052,16 +1063,18 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         );
                     }
                     if paints_separate_backdrop {
-                        self.PaintRootGroup(phase);
+                        self.PaintRootGroupWithRect(phase, &view_background_rect);
                     }
                     self.PaintCanvasBackgroundWithState(
                         paint_info,
+                        &canvas,
+                        &view_background_rect,
                         background_state,
                         paints_separate_backdrop,
                         paints_separate_effect,
                     );
                 } else {
-                    self.PaintRootGroup(phase);
+                    self.PaintRootGroupWithRect(phase, &view_background_rect);
                 }
             }
             let composites_fixed_background = UsesCompositedFixedBackground(self.node);
@@ -1209,7 +1222,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             if !theme_owns_decoration {
                 let paints_contents = fragment.paint.BackgroundPaintLocation().PaintsContents();
-                let scrolls_overflow = fragment.ViewScrollGeometry().2;
+                // LayoutBox::ScrollsOverflow (box_fragment_painter.cc:717) is
+                // HasNonVisibleOverflow() && overflow auto/scroll; every such
+                // box needs a local scroll node, so the scroll-container test
+                // answers the common non-scroller case without the live
+                // ScrollWidth/ScrollHeight/client-size export.
+                let scrolls_overflow =
+                    fragment.ViewHasScrollContainer() && fragment.ViewScrollGeometry().2;
                 if paints_contents || scrolls_overflow {
                     let _contents_properties =
                         crate::scoped_paint_state::ScopedBoxContentsPaintState::new(
@@ -2506,7 +2525,19 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     /// Keeping it in the paint artifact lets PaintArtifactCompositor upcast
     /// descendant content (including transformed SVG) into the root group,
     /// preserving Chromium's device-space raster origin.
+    #[allow(dead_code)]
     fn PaintRootGroup(&self, phase: PaintPhase) {
+        self.PaintRootGroupWithRect(phase, &std::cell::OnceCell::new());
+    }
+
+    /// PaintRootGroup with ViewPainter's pixel-snapped background rect
+    /// (view_painter.cc:34-73,152) computed at most once per
+    /// PaintBoxDecorationBackground and shared with the canvas record.
+    fn PaintRootGroupWithRect(
+        &self,
+        phase: PaintPhase,
+        view_background_rect: &std::cell::OnceCell<Option<PaintRect>>,
+    ) {
         let fragment = self
             .node
             .fragment
@@ -2518,7 +2549,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let Some(base_background_color) = BaseBackgroundColor(fragment, self.DocumentResources()) else {
             return;
         };
-        let Some(rect) = ViewBackgroundRect(self.node, true) else {
+        let Some(rect) = *view_background_rect.get_or_init(|| ViewBackgroundRect(self.node, true))
+        else {
             return;
         };
         if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
@@ -2705,8 +2737,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     /// border radii do not constrain the canvas; positioning still uses the
     /// root element box, while the paint area covers at least the viewport and
     /// (for scrolling layers) the complete scrollable contents.
+    #[allow(dead_code)]
     fn PaintCanvasBackground(&self, paint_info: &PaintInfo<'c, 'o>) {
-        let background_state = CanvasBackgroundPaintState(self.node);
+        let Some(canvas) = CanvasBackground(self.node) else {
+            return;
+        };
+        let background_state = CanvasBackgroundPaintStateFor(self.node, &canvas);
         let paints_separate_backdrop =
             !background_state.same_nodes(&self.node.contents_properties.nodes);
         let paints_separate_effect = !background_state
@@ -2715,15 +2751,22 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .same_node(&self.node.contents_properties.nodes.effect.lifecycle);
         self.PaintCanvasBackgroundWithState(
             paint_info,
+            &canvas,
+            &std::cell::OnceCell::new(),
             background_state,
             paints_separate_backdrop,
             paints_separate_effect,
         );
     }
 
+    /// `canvas` is the live canvas selection read once by the caller;
+    /// `view_background_rect` memoizes the scrolling-contents view rect it
+    /// shares with PaintRootGroup.
     fn PaintCanvasBackgroundWithState(
         &self,
         paint_info: &PaintInfo<'c, 'o>,
+        canvas: &CanvasBackgroundPaintView<'_>,
+        view_background_rect: &std::cell::OnceCell<Option<PaintRect>>,
         background_state: PropertyTreeState,
         paints_separate_backdrop: bool,
         paints_separate_effect: bool,
@@ -2734,9 +2777,6 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("root paint tree node has a fragment");
-        let Some(canvas) = CanvasBackground(self.node) else {
-            return;
-        };
         let style: &PaintStyle = canvas.style;
         if ShouldForceWhiteBackgroundForPrintEconomyWithStyle(fragment, style) {
             return;
@@ -2760,8 +2800,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !(has_fixed && has_scrolling) {
             self.PaintCanvasBackgroundInOnePropertyState(
                 paint_info,
-                style,
-                canvas.effective_zoom,
+                canvas,
+                view_background_rect,
                 has_fixed,
                 background_state,
                 paints_separate_backdrop,
@@ -2803,8 +2843,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
-        let scrolling_rect = CanvasBackgroundRectInState(self.node, true, &background_state)
-            .expect("root canvas background must have a scrolling paint rectangle");
+        let scrolling_rect = ViewBackgroundRectInState(
+            self.node,
+            *view_background_rect.get_or_init(|| ViewBackgroundRect(self.node, true)),
+            &background_state,
+        )
+        .expect("root canvas background must have a scrolling paint rectangle");
         if scrolling_rect.width > 0.0
             && scrolling_rect.height > 0.0
             && IsVisible(self.node, &scrolling_rect)
@@ -2876,23 +2920,30 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             if fixed {
                 base_state.transform = self.node.properties.nodes.transform.clone();
             }
-            let rect = CanvasBackgroundRectInState(self.node, !fixed, &base_state)
+            let view_rect = if fixed {
+                ViewBackgroundRect(self.node, false)
+            } else {
+                *view_background_rect.get_or_init(|| ViewBackgroundRect(self.node, true))
+            };
+            let rect = ViewBackgroundRectInState(self.node, view_rect, &base_state)
                 .expect("root canvas background layer must have a paint rectangle");
             if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
                 continue;
             }
             let positioning = if fixed {
                 FixedBackgroundPositioningArea(self.node).unwrap_or_else(|| {
-                    CanvasBackgroundPositioningBoxRectInState(
+                    CanvasBackgroundPositioningBoxRectInStateFor(
                         self.node,
+                        canvas,
                         layer.origin,
                         &base_state,
                         rect,
                     )
                 })
             } else {
-                CanvasBackgroundPositioningBoxRectInState(
+                CanvasBackgroundPositioningBoxRectInStateFor(
                     self.node,
+                    canvas,
                     layer.origin,
                     &base_state,
                     rect,
@@ -3196,13 +3247,15 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     fn PaintCanvasBackgroundInOnePropertyState(
         &self,
         paint_info: &PaintInfo<'c, 'o>,
-        style: &PaintStyle,
-        effective_zoom: f32,
+        canvas: &CanvasBackgroundPaintView<'_>,
+        view_background_rect: &std::cell::OnceCell<Option<PaintRect>>,
         fixed: bool,
         mut background_state: PropertyTreeState,
         paints_separate_backdrop: bool,
         paints_separate_effect: bool,
     ) {
+        let style: &PaintStyle = canvas.style;
+        let effective_zoom = canvas.effective_zoom;
         let phase = paint_info.phase;
         let fragment = self
             .node
@@ -3220,7 +3273,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fixed {
             background_state.transform = self.node.properties.nodes.transform.clone();
         }
-        let rect = CanvasBackgroundRectInState(self.node, !fixed, &background_state)
+        let view_rect = if fixed {
+            ViewBackgroundRect(self.node, false)
+        } else {
+            *view_background_rect.get_or_init(|| ViewBackgroundRect(self.node, true))
+        };
+        let rect = ViewBackgroundRectInState(self.node, view_rect, &background_state)
             .expect("root canvas background must have a paint rectangle");
         if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
             return;
@@ -3307,16 +3365,18 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             let positioning = if fixed {
                 FixedBackgroundPositioningArea(self.node).unwrap_or_else(|| {
-                    CanvasBackgroundPositioningBoxRectInState(
+                    CanvasBackgroundPositioningBoxRectInStateFor(
                         self.node,
+                        canvas,
                         layer.origin,
                         &background_state,
                         rect,
                     )
                 })
             } else {
-                CanvasBackgroundPositioningBoxRectInState(
+                CanvasBackgroundPositioningBoxRectInStateFor(
                     self.node,
+                    canvas,
                     layer.origin,
                     &background_state,
                     rect,
@@ -6743,6 +6803,7 @@ fn CanvasBackground<'n>(node: &'n PaintTreeNode<'_>) -> Option<CanvasBackgroundP
     }
 }
 
+#[allow(dead_code)]
 fn CanvasBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<PaintRect> {
     node.fragment.as_deref()?;
     CanvasBackground(node)?;
@@ -6771,12 +6832,20 @@ fn FindPaintNodeById<'n, 'f>(
 /// ViewPainter uses the document element's LocalBorderBoxProperties but
 /// replaces its CSS transform with PreTransform. This preserves paint-offset
 /// and sticky translations as well as the element's clip/effect state.
+#[allow(dead_code)]
 fn CanvasBackgroundPaintState(node: &PaintTreeNode<'_>) -> PropertyTreeState {
-    let document_element_node_id = node
-        .fragment
-        .as_deref()
-        .and_then(|_| CanvasBackground(node))
-        .map_or(0, |canvas| canvas.document_element_node_id);
+    match node.fragment.as_deref().and_then(|_| CanvasBackground(node)) {
+        Some(canvas) => CanvasBackgroundPaintStateFor(node, &canvas),
+        None => node.contents_properties.nodes.clone(),
+    }
+}
+
+/// CanvasBackgroundPaintState for a canvas selection the caller already read.
+fn CanvasBackgroundPaintStateFor(
+    node: &PaintTreeNode<'_>,
+    canvas: &CanvasBackgroundPaintView<'_>,
+) -> PropertyTreeState {
+    let document_element_node_id = canvas.document_element_node_id;
     // Source: view_painter.cc:166-188 uses document.documentElement()'s
     // LayoutObject, which is always a descendant of the LayoutView. The
     // LayoutView fragment carries the same DOM input identity (its node is the
@@ -6794,16 +6863,26 @@ fn CanvasBackgroundPaintState(node: &PaintTreeNode<'_>) -> PropertyTreeState {
     state
 }
 
+#[allow(dead_code)]
 fn CanvasBackgroundRectInState(
     node: &PaintTreeNode<'_>,
     scrolling: bool,
     destination: &PropertyTreeState,
 ) -> Option<PaintRect> {
-    let rect = CanvasBackgroundRect(node, scrolling)?;
+    ViewBackgroundRectInState(node, CanvasBackgroundRect(node, scrolling), destination)
+}
+
+/// A ViewBackgroundRect (LayoutView contents space) mapped into
+/// `destination`'s transform space.
+fn ViewBackgroundRectInState(
+    node: &PaintTreeNode<'_>,
+    rect: Option<PaintRect>,
+    destination: &PropertyTreeState,
+) -> Option<PaintRect> {
     SourceToDestinationRect(
         &node.contents_properties.nodes.transform,
         &destination.transform,
-        rect,
+        rect?,
     )
 }
 
@@ -6811,6 +6890,7 @@ fn CanvasBackgroundRectInState(
 /// stitched border box for image sizing and positioning even though the draw
 /// destination is the LayoutView canvas. The exported paint offset is already
 /// in LayoutView contents space, matching the ordinary (unmapped) source path.
+#[allow(dead_code)]
 fn CanvasBackgroundPositioningBoxRect(
     node: &PaintTreeNode<'_>,
     box_type: BackgroundBox,
@@ -6820,6 +6900,13 @@ fn CanvasBackgroundPositioningBoxRect(
         .expect("canvas background requires a fragment");
     let canvas = CanvasBackground(node)
         .expect("canvas background positioning requires document-element geometry");
+    CanvasBackgroundPositioningBoxRectFor(&canvas, box_type)
+}
+
+fn CanvasBackgroundPositioningBoxRectFor(
+    canvas: &CanvasBackgroundPaintView<'_>,
+    box_type: BackgroundBox,
+) -> PaintRect {
     let mut rect = PaintRect {
         x: canvas.document_element_paint_offset.x,
         y: canvas.document_element_paint_offset.y,
@@ -6841,8 +6928,30 @@ fn CanvasBackgroundPositioningBoxRect(
 /// already encoded by the property tree. Chromium therefore uses the mapped
 /// canvas origin as BackgroundImageGeometry's offset instead of subtracting
 /// the document element's LayoutView-space paint offset.
+#[allow(dead_code)]
 fn CanvasBackgroundPositioningBoxRectInState(
     node: &PaintTreeNode<'_>,
+    box_type: BackgroundBox,
+    destination: &PropertyTreeState,
+    mapped_canvas_rect: PaintRect,
+) -> PaintRect {
+    node.fragment
+        .as_deref()
+        .expect("canvas background requires a fragment");
+    let canvas = CanvasBackground(node)
+        .expect("canvas background positioning requires document-element geometry");
+    CanvasBackgroundPositioningBoxRectInStateFor(
+        node,
+        &canvas,
+        box_type,
+        destination,
+        mapped_canvas_rect,
+    )
+}
+
+fn CanvasBackgroundPositioningBoxRectInStateFor(
+    node: &PaintTreeNode<'_>,
+    canvas: &CanvasBackgroundPaintView<'_>,
     box_type: BackgroundBox,
     destination: &PropertyTreeState,
     mapped_canvas_rect: PaintRect,
@@ -6854,13 +6963,8 @@ fn CanvasBackgroundPositioningBoxRectInState(
         .lifecycle
         .same_node(&destination.transform.lifecycle)
     {
-        return CanvasBackgroundPositioningBoxRect(node, box_type);
+        return CanvasBackgroundPositioningBoxRectFor(canvas, box_type);
     }
-    node.fragment
-        .as_deref()
-        .expect("canvas background requires a fragment");
-    let canvas = CanvasBackground(node)
-        .expect("canvas background positioning requires document-element geometry");
     let mut rect = PaintRect {
         x: mapped_canvas_rect.x,
         y: mapped_canvas_rect.y,
@@ -6907,17 +7011,20 @@ fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Paint
             })
         })
         .unwrap_or(fragment.ViewSize());
+    // One live LayoutBox::ScrollWidth/ScrollHeight read (LayoutView::
+    // DocumentRect, view_painter.cc:126-135) serves both axes.
+    let scroll_size = fragment.ViewScrollGeometry().0;
     let mut rect = PaintRect {
         x: node.paint_offset.x,
         y: node.paint_offset.y,
         width: viewport
             .width
             .max(fragment.ViewSize().width)
-            .max(fragment.ViewScrollGeometry().0.width),
+            .max(scroll_size.width),
         height: viewport
             .height
             .max(fragment.ViewSize().height)
-            .max(fragment.ViewScrollGeometry().0.height),
+            .max(scroll_size.height),
     };
     if let Some(source_background) = source_background {
         rect.union(source_background);
@@ -7518,8 +7625,9 @@ fn ContentsBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     // LayoutBox::ScrollWidth/Height describe the scrolling padding area. The
     // background painter adds the border widths while recording the local
     // layer into scrolling-contents space.
-    rect.width = fragment.ViewScrollGeometry().0.width + border.left + border.right;
-    rect.height = fragment.ViewScrollGeometry().0.height + border.top + border.bottom;
+    let scroll_size = fragment.ViewScrollGeometry().0;
+    rect.width = scroll_size.width + border.left + border.right;
+    rect.height = scroll_size.height + border.top + border.bottom;
     rect
 }
 
