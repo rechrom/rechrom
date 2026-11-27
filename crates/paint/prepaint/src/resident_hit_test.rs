@@ -5,9 +5,10 @@
 //! and verifies source identity; hit testing must prepare lifecycle first.
 
 use layout::fragment::ResidentBoxGeometry as _;
-use foundation::PhysicalOffset;
+use foundation::{Member, PhysicalOffset};
 use layout::output::FragmentCursor;
 use layout::paint::{FragmentPaintData, PaintFragmentCursor};
+use layout::views::paint_layer::PaintLayer;
 use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey, PaintPropertyNodeStore,
@@ -16,8 +17,10 @@ use paint_model::{
     PaintRect,
 };
 
+use crate::fragment_data::PrePaintFragmentData;
+use crate::object_paint_properties::{ObjectPaintProperties, ObjectPaintPropertySlot};
 use crate::pre_paint_tree_walk::{PaintTreeNode, PrePaintTreeWalk};
-use std::{cell::Ref, collections::HashMap};
+use std::{cell::Ref, collections::HashMap, sync::Arc};
 
 /// Source PaintLayerStackingNode vectors. These are references to resident
 /// derived Paint owners, not copies of fragments or a hit-test-only tree.
@@ -161,48 +164,111 @@ pub struct ResidentLayerSelection {
     pub positive_z: bool,
 }
 
-/// Borrowed iterator over the canonical source lists. Iterator values retain
-/// only the existing Paint owner's lifetime and native property slots.
+/// Borrowed iterator over the stacking root PaintLayer's own lists, in
+/// PaintLayerPaintOrderIterator order (paint_layer_paint_order_iterator.cc:
+/// 39-79): NegZOrderList, the normal-flow children (PaintLayer children that
+/// are not stacked), then PosZOrderList (which also holds the overscroll
+/// area parents and top-layer layers, paint_layer_stacking_node.cc:283-326).
+/// For overlay overflow controls it is the one
+/// LayersPaintingOverlayOverflowControlsAfter list
+/// (paint_layer_stacking_node.h:117-124). The lists are Layout's
+/// PaintLayerStackingNode vectors read in place; each listed PaintLayer
+/// resolves to its committed FragmentData owner by LayoutObject identity.
 pub struct ResidentPaintLayerOrderCursor<'a> {
-    order: Ref<'a, Option<ResidentPaintLayerOrder>>,
-    slots: &'a PaintPropertyNodeStore,
-    controls_after: Option<u64>,
-    selection: ResidentLayerSelection,
+    walk: &'a PrePaintTreeWalk,
+    root: PaintFragmentCursor<'a>,
+    first: &'a [Member<PaintLayer>],
+    last: &'a [Member<PaintLayer>],
+    /// The next normal-flow child from the front and from the back.
+    normal_front: *const PaintLayer,
+    normal_back: *const PaintLayer,
+    normal_len: usize,
     front: usize,
     back: usize,
     reverse: bool,
 }
-impl<'a> ResidentPaintLayerOrderCursor<'a> {
-    fn At(&self, index: usize) -> &'a PaintTreeNode<'static> {
-        let order = self
-            .order
-            .as_ref()
-            .expect("source layer order was prepared");
-        let nodes = self
-            .controls_after
-            .map_or(order.layers.as_slice(), |child| {
-                order
-                    .controls_after
-                    .get(&child)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[])
-            });
-        // The borrowed PaintEngine retains these exact boxed PrePaint owners;
-        // topology mutation cannot occur until this cursor has been released.
-        unsafe { &*nodes[index].cast::<PaintTreeNode<'static>>() }
+
+/// Source paint_layer_paint_order_iterator.cc:55-63: the normal-flow
+/// children are the PaintLayer children that are not stacked. Returns the
+/// first such layer at or after `layer` along `next`.
+fn NormalFlowChild(
+    mut layer: *const PaintLayer,
+    next: fn(&PaintLayer) -> *mut PaintLayer,
+) -> *const PaintLayer {
+    while let Some(current) = unsafe { layer.as_ref() } {
+        if !current.GetLayoutObject().IsStacked() {
+            return layer;
+        }
+        layer = next(current);
     }
-    fn Includes(&self, layer: &PaintTreeNode<'_>) -> bool {
-        if !layer.is_stacked {
-            self.selection.normal_flow
-        } else if layer.stacking_level < 0 {
-            self.selection.negative_z
-        } else {
-            self.selection.positive_z
+    std::ptr::null()
+}
+
+impl<'a> ResidentPaintLayerOrderCursor<'a> {
+    fn new(
+        walk: &'a PrePaintTreeWalk,
+        root: PaintFragmentCursor<'a>,
+        first: &'a [Member<PaintLayer>],
+        normal_flow_parent: Option<&'a PaintLayer>,
+        last: &'a [Member<PaintLayer>],
+        reverse: bool,
+    ) -> Self {
+        let (normal_front, normal_back, normal_len) = match normal_flow_parent {
+            Some(parent) => {
+                let front = NormalFlowChild(parent.FirstChild(), PaintLayer::NextSibling);
+                let back = NormalFlowChild(parent.LastChild(), PaintLayer::PreviousSibling);
+                let mut len = 0;
+                let mut child = front;
+                while let Some(current) = unsafe { child.as_ref() } {
+                    len += 1;
+                    child = NormalFlowChild(current.NextSibling(), PaintLayer::NextSibling);
+                }
+                (front, back, len)
+            }
+            None => (std::ptr::null(), std::ptr::null(), 0),
+        };
+        Self {
+            walk,
+            root,
+            first,
+            last,
+            normal_front,
+            normal_back,
+            normal_len,
+            front: 0,
+            back: first.len() + normal_len + last.len(),
+            reverse,
         }
     }
-    fn Take(&mut self, reverse: bool) -> Option<ResidentPaintHitTest<'a>> {
+
+    fn LayerAt(&mut self, index: usize, from_back: bool) -> *const PaintLayer {
+        if index < self.first.len() {
+            return self.first[index].Get();
+        }
+        let index = index - self.first.len();
+        if index < self.normal_len {
+            // The front and back walks never cross: `front < back` bounds
+            // the number of normal-flow children either side takes.
+            return if from_back {
+                let layer = self.normal_back;
+                self.normal_back = NormalFlowChild(
+                    unsafe { &*layer }.PreviousSibling(),
+                    PaintLayer::PreviousSibling,
+                );
+                layer
+            } else {
+                let layer = self.normal_front;
+                self.normal_front =
+                    NormalFlowChild(unsafe { &*layer }.NextSibling(), PaintLayer::NextSibling);
+                layer
+            };
+        }
+        self.last[index - self.normal_len].Get()
+    }
+
+    fn Take(&mut self, from_back: bool) -> Option<ResidentPaintHitTest<'a>> {
         while self.front < self.back {
-            let index = if reverse {
+            let index = if from_back {
                 self.back -= 1;
                 self.back
             } else {
@@ -210,12 +276,22 @@ impl<'a> ResidentPaintLayerOrderCursor<'a> {
                 self.front += 1;
                 index
             };
-            let node = self.At(index);
-            if self.Includes(node) {
-                return Some(ResidentPaintHitTest {
-                    node,
-                    slots: self.slots,
-                });
+            // The lists name live PaintLayers of this Layout result: Layout
+            // rebuilds them before PrePaint (PaintLayer::
+            // UpdateDescendantDependentFlags, paint_layer.cc:864-882) and the
+            // borrowed PaintEngine keeps the result alive for this cursor.
+            let Some(layer) = (unsafe { self.LayerAt(index, from_back).as_ref() }) else {
+                continue;
+            };
+            // A PaintLayer whose object has no committed resident owner (no
+            // fragment PrePaint reached) has nothing to hit test.
+            let (walk, root): (&'a PrePaintTreeWalk, PaintFragmentCursor<'a>) =
+                (self.walk, self.root);
+            if let Some(resident) = root
+                .ForLayoutObject(layer.GetLayoutObject())
+                .and_then(|cursor| walk.ResidentLayerHitTest(cursor))
+            {
+                return Some(resident);
             }
         }
         None
@@ -405,9 +481,128 @@ impl PrePaintTreeWalk {
     }
 }
 
+impl PrePaintTreeWalk {
+    /// PaintLayerPaintOrderIterator over the PaintLayer `source` names
+    /// (paint_layer_paint_order_iterator.cc:39-79), or, with
+    /// `controls_after`, PaintLayerStackingNode::
+    /// LayersPaintingOverlayOverflowControlsAfter(child layer)
+    /// (paint_layer_stacking_node.h:117-124). Both read Layout's PaintLayer
+    /// and its stacking node in place, the lists Paint shares. The layer is
+    /// resolved by LayoutObject identity, as ResidentLayerHitTest resolves
+    /// it, so an inline-level layer reached through its FragmentItem cursor
+    /// names its own PaintLayer. None when `source` (or `controls_after`)
+    /// has no committed resident layer.
+    pub fn ResidentLayerOrder<'a>(
+        &'a self,
+        source: PaintFragmentCursor<'a>,
+        selection: ResidentLayerSelection,
+        controls_after: Option<PaintFragmentCursor<'_>>,
+        reverse: bool,
+    ) -> Option<ResidentPaintLayerOrderCursor<'a>> {
+        self.ResidentLayerHitTest(source)?;
+        let layer = source.LayerForPaintObject(source.PaintData().paint.LayoutObjectIdentity()?)?;
+        let stacking_node = layer.StackingNode();
+        if let Some(child) = controls_after {
+            self.ResidentLayerHitTest(child)?;
+            let child_layer =
+                child.LayerForPaintObject(child.PaintData().paint.LayoutObjectIdentity()?)?;
+            let list = stacking_node
+                .and_then(|node| {
+                    node.LayersPaintingOverlayOverflowControlsAfter(child_layer as *const PaintLayer)
+                })
+                .map_or(&[][..], |list| &list[..]);
+            return Some(ResidentPaintLayerOrderCursor::new(
+                self, source, list, None, &[], reverse,
+            ));
+        }
+        // Source paint_layer_paint_order_iterator.cc:39-79: the stacking
+        // node's lists exist only on a stacking context with stacked
+        // descendants (paint_layer.cc:864-882); without one they are empty.
+        let negative = stacking_node
+            .filter(|_| selection.negative_z)
+            .map_or(&[][..], |node| &node.NegZOrderList()[..]);
+        let positive = stacking_node
+            .filter(|_| selection.positive_z)
+            .map_or(&[][..], |node| &node.PosZOrderList()[..]);
+        let normal_flow = selection.normal_flow.then_some(layer);
+        Some(ResidentPaintLayerOrderCursor::new(
+            self,
+            source,
+            negative,
+            normal_flow,
+            positive,
+            reverse,
+        ))
+    }
+}
+
+/// The node of an ObjectPaintProperties transform slot, borrowed from the
+/// FragmentData that owns it (object_paint_properties.h:117-139).
+fn TransformSlot(
+    properties: &ObjectPaintProperties,
+    slot: ObjectPaintPropertySlot,
+) -> Option<&Arc<TransformPaintPropertyNode>> {
+    use ObjectPaintPropertySlot as S;
+    match slot {
+        S::PaintOffsetTranslation => properties.PaintOffsetTranslation(),
+        S::StickyTranslation => properties.StickyTranslation(),
+        S::AnchorPositionScrollTranslation => properties.AnchorPositionScrollTranslation(),
+        S::ElementCanvasTransform => properties.ElementCanvasTransform(),
+        S::Translate => properties.Translate(),
+        S::Rotate => properties.Rotate(),
+        S::Scale => properties.Scale(),
+        S::Offset => properties.Offset(),
+        S::Transform => properties.Transform(),
+        S::ContentTranslation => properties.ContentTranslation(),
+        S::Perspective => properties.Perspective(),
+        S::ReplacedContentTransform => properties.ReplacedContentTransform(),
+        S::ScrollTranslation => properties.ScrollTranslation(),
+        S::UnboundedWrapperTransform => properties.UnboundedWrapperTransform(),
+        S::UnboundedInnerTransform => properties.UnboundedInnerTransform(),
+        S::SvgLocalTransform => properties.SvgLocalTransform(),
+        S::TextCombineTransform => properties.TextCombineTransform(),
+        _ => None,
+    }
+}
+
+/// The node of an ObjectPaintProperties clip slot, borrowed from the
+/// FragmentData that owns it (object_paint_properties.h:161-174).
+fn ClipSlot(
+    properties: &ObjectPaintProperties,
+    slot: ObjectPaintPropertySlot,
+) -> Option<&Arc<ClipPaintPropertyNode>> {
+    use ObjectPaintPropertySlot as S;
+    match slot {
+        S::ClipPathClip => properties.ClipPathClip(),
+        S::MaskClip => properties.MaskClip(),
+        S::CssClip => properties.CssClip(),
+        S::OverflowControlsClip => properties.OverflowControlsClip(),
+        S::BackgroundClip => properties.BackgroundClip(),
+        S::PixelMovingFilterClipExpander => properties.PixelMovingFilterClipExpander(),
+        S::InnerBorderRadiusClip => properties.InnerBorderRadiusClip(),
+        S::OverflowClip => properties.OverflowClip(),
+        S::CssClipFixedPosition => properties.CssClipFixedPosition(),
+        S::InnerBorderShapeClip => properties.InnerBorderShapeClip(),
+        S::BackdropFilterClip => properties.BackdropFilterClip(),
+        _ => None,
+    }
+}
+
 impl<'a> ResidentPaintHitTest<'a> {
+    /// The occurrence's committed FragmentData (fragment_data.h), which
+    /// PrePaint keeps current for every visited and retained object. None
+    /// only for hand-built nodes, which keep their own copies.
+    fn Data(self) -> Option<&'a PrePaintFragmentData> {
+        self.node.FragmentData()
+    }
+
+    /// PaintLayer::NeedsReorderOverlayOverflowControls (paint_layer.h:
+    /// 427-431), written by the layer's stacking node.
     pub fn NeedsReorderOverlayControls(self) -> bool {
-        self.node.needs_reorder_overlay_overflow_controls.get()
+        match self.node.SourceCursor().and_then(|cursor| cursor.OwnPaintLayer()) {
+            Some(layer) => layer.NeedsReorderOverlayOverflowControls(),
+            None => self.node.needs_reorder_overlay_overflow_controls.get(),
+        }
     }
 
     pub fn LayoutObjectIdentity(
@@ -416,36 +611,12 @@ impl<'a> ResidentPaintHitTest<'a> {
         self.Fragment().paint.LayoutObjectIdentity()
     }
 
-    pub fn LayerOrder(
-        self,
-        selection: ResidentLayerSelection,
-        controls_after: Option<u64>,
-        reverse: bool,
-    ) -> ResidentPaintLayerOrderCursor<'a> {
-        let order = self.node.hit_test_layer_order.borrow();
-        let source = order
-            .as_ref()
-            .expect("canonical layer order was prepared by PaintWalk");
-        let length = controls_after.map_or(source.layers.len(), |child| {
-            source.controls_after.get(&child).map_or(0, Vec::len)
-        });
-        ResidentPaintLayerOrderCursor {
-            order,
-            slots: self.slots,
-            controls_after,
-            selection,
-            front: 0,
-            back: length,
-            reverse,
-        }
-    }
-
     /// Source: LayoutObject::HasNonZeroEffectiveOpacity(), layout_object.cc
     /// 2363-2385. Read the committed effect ancestry, including inherited
     /// effects, rather than reconstructing effective opacity from CSS.
     pub fn HasNonZeroEffectiveOpacity(self) -> bool {
         paint_model::property_cell::with_access(|access| {
-            let mut effect = Some(self.node.properties.nodes.effect.as_ref());
+            let mut effect = Some(self.LocalBorderBoxProperties().effect.as_ref());
             while let Some(current) = effect {
                 if current.state(access).opacity == 0.0 {
                     return false;
@@ -457,8 +628,12 @@ impl<'a> ResidentPaintHitTest<'a> {
     }
 
 
+    /// fragment_data.h:104-110 `PaintProperties()` holds a node.
     pub fn HasPaintProperties(self) -> bool {
-        self.node.HasOwnPaintProperties()
+        match self.Data() {
+            Some(data) => data.HasPaintProperties(),
+            None => self.node.HasOwnPaintProperties(),
+        }
     }
 
     pub fn Identity(self) -> usize {
@@ -472,21 +647,36 @@ impl<'a> ResidentPaintHitTest<'a> {
             .expect("resident paint node has a source")
     }
 
+    /// FragmentData::PaintOffset() (fragment_data.h:32-38) in the flat
+    /// replay space hit testing shares with the recorded ops
+    /// (`PaintTreeNode::FlatPaintOffset`).
     pub fn PaintOffset(self) -> PhysicalOffset {
+        let offset = self.node.FlatPaintOffsetOf(self.Data());
         PhysicalOffset::new(
-            foundation::LayoutUnit::FromFloatRound(self.node.paint_offset.x as f32),
-            foundation::LayoutUnit::FromFloatRound(self.node.paint_offset.y as f32),
+            foundation::LayoutUnit::FromFloatRound(offset.x as f32),
+            foundation::LayoutUnit::FromFloatRound(offset.y as f32),
         )
     }
 
+    /// fragment_data.h:137-142.
     pub fn LocalBorderBoxProperties(self) -> &'a PropertyTreeState {
-        &self.node.properties.nodes
+        match self.Data().and_then(PrePaintFragmentData::LocalBorderBoxPropertiesRef) {
+            Some(state) => state,
+            None => &self.node.properties.nodes,
+        }
     }
-    pub fn ContentsProperties(self) -> &'a PropertyTreeState {
-        &self.node.contents_properties.nodes
+    /// fragment_data.h:170-177.
+    pub fn ContentsProperties(self) -> PropertyTreeState {
+        match self.Data() {
+            Some(data) => data.ContentsProperties(),
+            None => self.node.contents_properties.nodes.clone(),
+        }
     }
-    // Source: fragment_data.cc:89-140. Property parents keep their exact owner.
-    pub fn PreClip(self) -> std::sync::Arc<ClipPaintPropertyNode> {
+    // Source: fragment_data.cc:89-109. Property parents keep their exact owner.
+    pub fn PreClip(self) -> Arc<ClipPaintPropertyNode> {
+        if let Some(data) = self.Data() {
+            return paint_model::property_cell::with_access(|access| data.PreClip(access));
+        }
         for role in [
             PaintPropertyRole::ClipPathClip,
             PaintPropertyRole::MaskClip,
@@ -501,7 +691,11 @@ impl<'a> ResidentPaintHitTest<'a> {
         }
         self.node.properties.nodes.clip.clone()
     }
-    pub fn PreEffect(self) -> std::sync::Arc<EffectPaintPropertyNode> {
+    // Source: fragment_data.cc:123-135.
+    pub fn PreEffect(self) -> Arc<EffectPaintPropertyNode> {
+        if let Some(data) = self.Data() {
+            return paint_model::property_cell::with_access(|access| data.PreEffect(access));
+        }
         for role in [PaintPropertyRole::Effect, PaintPropertyRole::Filter] {
             if let Some(effect) = self.slots.EffectForKey(self.Key(role)) {
                 return paint_model::property_cell::with_access(|access| {
@@ -512,23 +706,50 @@ impl<'a> ResidentPaintHitTest<'a> {
         self.node.properties.nodes.effect.clone()
     }
 
-    pub fn LocalBorderTransform(self) -> &'a std::sync::Arc<TransformPaintPropertyNode> {
-        &self.node.properties.nodes.transform
+    pub fn LocalBorderTransform(self) -> &'a Arc<TransformPaintPropertyNode> {
+        &self.LocalBorderBoxProperties().transform
     }
 
-    pub fn ContentsTransform(self) -> &'a std::sync::Arc<TransformPaintPropertyNode> {
-        &self.node.contents_properties.nodes.transform
+    /// fragment_data.cc:67-87 `ContentsTransform`, borrowed from the slot
+    /// that owns it.
+    pub fn ContentsTransform(self) -> &'a Arc<TransformPaintPropertyNode> {
+        let Some(data) = self.Data() else {
+            return &self.node.contents_properties.nodes.transform;
+        };
+        data.PaintProperties()
+            .and_then(|properties| {
+                properties
+                    .ScrollTranslation()
+                    .or_else(|| properties.ReplacedContentTransform())
+                    .or_else(|| properties.Perspective())
+                    .or_else(|| properties.ContentTranslation())
+            })
+            .unwrap_or_else(|| self.LocalBorderTransform())
     }
 
     pub fn LocalBorderClip(self) -> &'a ClipPaintPropertyNode {
-        &self.node.properties.nodes.clip
+        &self.LocalBorderBoxProperties().clip
     }
 
+    /// fragment_data.cc:111-121 `ContentsClip`, borrowed from the slot that
+    /// owns it.
     pub fn ContentsClip(self) -> &'a ClipPaintPropertyNode {
-        &self.node.contents_properties.nodes.clip
+        let Some(data) = self.Data() else {
+            return &self.node.contents_properties.nodes.clip;
+        };
+        data.PaintProperties()
+            .and_then(|properties| {
+                properties
+                    .OverflowClip()
+                    .or_else(|| properties.InnerBorderRadiusClip())
+            })
+            .unwrap_or_else(|| &self.LocalBorderBoxProperties().clip)
     }
 
-    pub fn PreTransform(self) -> &'a std::sync::Arc<TransformPaintPropertyNode> {
+    /// fragment_data.cc:55-65 `PreTransform`. The parent link of the
+    /// outermost CSS transform node can only be read under the property
+    /// access proof, so the borrowed form still reads the walk's copy.
+    pub fn PreTransform(self) -> &'a Arc<TransformPaintPropertyNode> {
         &self.node.pre_transform
     }
 
@@ -543,80 +764,38 @@ impl<'a> ResidentPaintHitTest<'a> {
         }
     }
 
-    pub fn Transform(
-        self,
-        role: PaintPropertyRole,
-    ) -> Option<&'a std::sync::Arc<TransformPaintPropertyNode>> {
-        self.slots.TransformOwnerForKey(self.Key(role))
+    /// The object's own transform node of `role`: its ObjectPaintProperties
+    /// slot (object_paint_properties.h:117-139).
+    pub fn Transform(self, role: PaintPropertyRole) -> Option<&'a Arc<TransformPaintPropertyNode>> {
+        match self.Data() {
+            Some(data) => TransformSlot(
+                data.PaintProperties()?,
+                ObjectPaintPropertySlot::FromRole(role)?,
+            ),
+            None => self.slots.TransformOwnerForKey(self.Key(role)),
+        }
     }
 
+    /// The object's own clip node of `role`: its ObjectPaintProperties slot
+    /// (object_paint_properties.h:161-174).
     pub fn Clip(self, role: PaintPropertyRole) -> Option<&'a ClipPaintPropertyNode> {
-        self.slots.ClipForKey(self.Key(role))
+        match self.Data() {
+            Some(data) => ClipSlot(
+                data.PaintProperties()?,
+                ObjectPaintPropertySlot::FromRole(role)?,
+            )
+            .map(|clip| &**clip),
+            None => self.slots.ClipForKey(self.Key(role)),
+        }
     }
 
+    /// The flat accumulated background clip the walk computed for this
+    /// object (PaintLayerClipper's background rect source).
     pub fn BackgroundClip(self) -> Option<PaintRect> {
         self.node.clip
     }
 
     pub fn ForegroundClip(self) -> Option<PaintRect> {
-        paint_model::property_cell::with_access(|a| self.node.contents_properties.nodes.clip.PaintClipRect(a))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn layer(id: u64, stacked: bool, z: i32) -> Box<PaintTreeNode<'static>> {
-        let mut fragment = FragmentPaintData::default();
-        fragment.node_id = id;
-        let mut node = Box::new(PaintTreeNode::default());
-        node.SetOwnedFragmentForTesting(&fragment);
-        node.is_stacked = stacked;
-        node.stacking_level = z;
-        node
-    }
-
-    #[test]
-    fn source_layer_masks_and_overlay_reverse_order_share_the_resident_lists() {
-        let negative = layer(1, true, -2);
-        let normal = layer(2, false, 0);
-        let positive = layer(3, true, 1);
-        let front = layer(4, true, 7);
-        let pointer = |node: &PaintTreeNode<'static>| node as *const _ as *const ();
-        let root = layer(0, true, 0);
-        *root.hit_test_layer_order.borrow_mut() = Some(ResidentPaintLayerOrder {
-            layers: vec![
-                pointer(&negative),
-                pointer(&normal),
-                pointer(&positive),
-                pointer(&front),
-            ],
-            controls_after: HashMap::from([(77, vec![pointer(&normal), pointer(&positive)])]),
-            paint: ResidentPaintOrderLists::default(),
-        });
-        let slots = PaintPropertyNodeStore::default();
-        let source = ResidentPaintHitTest {
-            node: &root,
-            slots: &slots,
-        };
-        let selection = ResidentLayerSelection {
-            negative_z: false,
-            normal_flow: true,
-            positive_z: true,
-        };
-        let ids: Vec<_> = source
-            .LayerOrder(selection, None, true)
-            .map(|node| node.Fragment().node_id)
-            .collect();
-        assert_eq!(ids, [4, 3, 2]);
-        // The controls map is stored in paint order. Source HitTestChildren
-        // reverses its borrowed iterator exactly once.
-        let ids: Vec<_> = source
-            .LayerOrder(selection, Some(77), false)
-            .rev()
-            .map(|node| node.Fragment().node_id)
-            .collect();
-        assert_eq!(ids, [3, 2]);
+        paint_model::property_cell::with_access(|a| self.ContentsClip().PaintClipRect(a))
     }
 }
