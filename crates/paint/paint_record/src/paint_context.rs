@@ -2121,9 +2121,19 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,
     ) -> Self {
-        let previous = context
-            .borrow_mut()
-            .replace_chunk_properties(node.properties.nodes.clone());
+        let mut borrowed = context.borrow_mut();
+        // Entering and leaving a scope whose state already has these live
+        // nodes changes neither the chunk id nor the current state
+        // (PaintChunker::replace_properties / restore_properties keep both
+        // for the same nodes), so the common case references nothing.
+        if borrowed
+            .paint_controller
+            .CurrentPaintChunkProperties()
+            .same_nodes(&node.properties.nodes)
+        {
+            return Self { context, previous: None };
+        }
+        let previous = borrowed.replace_chunk_properties(node.properties.nodes.clone());
         Self { context, previous: Some(previous) }
     }
 

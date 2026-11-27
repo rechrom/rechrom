@@ -692,6 +692,13 @@ pub trait ResidentBoxGeometry {
     /// inside flag, text-combine inline offset) from the resident item.
     fn ViewTextItemFacts(&self) -> (bool, f64, Option<ListStyleType>, bool, f64);
     fn ViewIsLineBreak(&self) -> bool;
+    /// Whether the resident owner is a line box (a kLine FragmentItem or a
+    /// physical line box) that is not a block-in-inline line, the lines
+    /// BoxFragmentPainter::PaintBoxDecorationBackgroundForBlockInInline
+    /// skips with their descendants in the block-background phases
+    /// (core/paint/box_fragment_painter.cc, PaintLineBoxes). Detached
+    /// fixtures without a resident owner return false.
+    fn ViewIsLineOutsideBlockInInline(&self) -> bool;
     /// The active ScopedDisplayItemFragment value; an inline item's
     /// FragmentItem::FragmentId().
     fn ViewDisplayItemFragment(&self) -> u32;
@@ -1783,6 +1790,26 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     .map_or(self.paint.is_line_break, |item| item.IsText() && item.IsLineBreak())
             }
             _ => self.paint.is_line_break,
+        }
+    }
+
+    fn ViewIsLineOutsideBlockInInline(&self) -> bool {
+        use crate::boundary_types::ResidentFragmentOwner;
+        match self.resident_owner {
+            // FragmentItem::IsBlockInInline reads the line's
+            // PhysicalLineBoxFragment for a kLine item (fragment_item.h).
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).is_some_and(|item| {
+                    item.Type() == crate::fragment_item::ItemType::kLine && !item.IsBlockInInline()
+                })
+            }
+            ResidentFragmentOwner::Physical(address) => {
+                let fragment =
+                    unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
+                fragment.IsLineBox() && !fragment.IsBlockInInline()
+            }
+            ResidentFragmentOwner::None => false,
         }
     }
 

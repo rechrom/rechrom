@@ -20,14 +20,17 @@ pub struct SVGContainerPainter;
 
 impl SVGContainerPainter {
     pub fn IsContainer(node: &PaintTreeNode<'_>) -> bool {
-        node.fragment.as_deref().is_some_and(|fragment| {
-            matches!(
-                fragment.paint.SourceKind(),
-                NodeKind::kSvgGroup
-                    | NodeKind::kSvgResourceMarker
-                    | NodeKind::kSvgViewportContainer
-            )
-        })
+        node.fragment
+            .as_deref()
+            .is_some_and(|fragment| Self::IsContainerKind(fragment.paint.SourceKind()))
+    }
+
+    /// `IsContainer` for a source kind the caller has read once.
+    pub fn IsContainerKind(kind: NodeKind) -> bool {
+        matches!(
+            kind,
+            NodeKind::kSvgGroup | NodeKind::kSvgResourceMarker | NodeKind::kSvgViewportContainer
+        )
     }
 
     fn HasReferenceFilter(node: &PaintTreeNode<'_>) -> bool {

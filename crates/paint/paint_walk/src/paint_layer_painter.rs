@@ -737,30 +737,35 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         };
         let paint_info = &paint_info;
         self.context.borrow_mut().walk_metrics.phase_visits += 1;
-        if node
-            .fragment
-            .as_deref()
-            .expect("PrePaint node must own a fragment")
-            .ViewHidden()
-        {
+        if fragment.ViewHidden() {
             self.context.borrow_mut().walk_metrics.skipped_hidden += 1;
             return;
         }
-        if !node
-            .fragment
-            .as_deref()
-            .expect("PrePaint node must own a fragment")
-            .ViewCanPaintFragmentOccurrence()
-        {
+        if !fragment.ViewCanPaintFragmentOccurrence() {
             self.context.borrow_mut().walk_metrics.skipped_phase += 1;
             return;
         }
         let phase = paint_info.phase;
-        if !crate::scoped_svg_paint_state::ScopedSVGPaintState::PaintsPhase(node, phase) {
+        // The SVG painter gates below all key on the source node kind; read
+        // it once for this visit, as BoxFragmentPainter / the SVG painters
+        // read their LayoutObject's type once per Paint call.
+        let source_kind = fragment.paint.SourceKind();
+        let owns_svg_paint_scope =
+            crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScopeForKind(
+                node,
+                source_kind,
+            );
+        if owns_svg_paint_scope && phase != PaintPhase::kForeground {
             self.context.borrow_mut().walk_metrics.skipped_phase += 1;
             return;
         }
-        if !crate::scoped_svg_paint_state::ScopedSVGPaintState::ShouldPaint(node, paint_info) {
+        if owns_svg_paint_scope
+            && !crate::scoped_svg_paint_state::ScopedSVGPaintState::ShouldPaintForKind(
+                node,
+                source_kind,
+                paint_info,
+            )
+        {
             return;
         }
         if crate::phase::ShouldSkipPhase(
@@ -772,13 +777,15 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             self.context.borrow_mut().walk_metrics.skipped_phase += 1;
             return;
         }
-        let is_svg_container = crate::svg_container_painter::SVGContainerPainter::IsContainer(node);
+        let is_svg_container =
+            crate::svg_container_painter::SVGContainerPainter::IsContainerKind(source_kind);
         if is_svg_container
             && !crate::svg_container_painter::SVGContainerPainter::ShouldPaintSubtree(node)
         {
             return;
         }
-        let is_svg_root = crate::svg_root_painter::SVGRootPainter::IsRoot(node);
+        // SVGRootPainter::IsRoot: the source kind is kSvgRoot.
+        let is_svg_root = source_kind == layout::input::NodeKind::kSvgRoot;
         if is_svg_root
             && !crate::svg_root_painter::SVGRootPainter::ShouldPaintSubtree(node, paint_info)
         {
@@ -866,20 +873,46 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             BoxFragmentPainter::PaintFragmentBeforeChildren(node, paint_info);
         }
 
-        let contents_paint_state =
-            paint_record::scoped_paint_state::ScopedBoxContentsPaintState::new(paint_info, node);
+        let needs_reference_filter_chunk = phase == PaintPhase::kForeground
+            && ((is_svg_container
+                && crate::svg_container_painter::SVGContainerPainter::NeedsReferenceFilterChunk(
+                    node,
+                ))
+                || crate::scoped_svg_paint_state::ScopedSVGPaintState::NeedsReferenceFilterChunkForKind(
+                    node,
+                    source_kind,
+                    paint_info,
+                ));
+        // BoxFragmentPainter::PaintObject enters ScopedBoxContentsPaintState
+        // only for a box with children or items to traverse
+        // (box_fragment_painter.cc:858-959, `!Children().empty() ||
+        // HasItems()`); a leaf records nothing in the contents space. The
+        // reference-filter chunk below still belongs to the contents state.
+        let contents_paint_state = (!node.children.is_empty() || needs_reference_filter_chunk)
+            .then(|| {
+                paint_record::scoped_paint_state::ScopedBoxContentsPaintState::new(
+                    paint_info, node,
+                )
+            });
+        if needs_reference_filter_chunk {
+            self.context.borrow_mut().EnsureChunk();
+        }
         // Chromium's child/item traversal consumes the PaintInfo owned by
         // ScopedBoxContentsPaintState, not the border-box input PaintInfo. Keep
         // the adjusted contents CullRect alive across the resident child walk.
-        let contents_paint_info = *contents_paint_state.GetPaintInfo();
-        if phase == PaintPhase::kForeground
-            && (crate::svg_container_painter::SVGContainerPainter::NeedsReferenceFilterChunk(node)
-                || crate::scoped_svg_paint_state::ScopedSVGPaintState::NeedsReferenceFilterChunk(
-                    node, paint_info,
-                ))
-        {
-            self.context.borrow_mut().EnsureChunk();
-        }
+        let contents_paint_info = contents_paint_state
+            .as_ref()
+            .map_or(*paint_info, |state| *state.GetPaintInfo());
+        // PaintLineBoxes paints no line in the block-background phases except
+        // the block-in-inline boxes of block-in-inline lines
+        // (box_fragment_painter.cc, PaintLineBoxes /
+        // PaintBoxDecorationBackgroundForBlockInInline): an ordinary line and
+        // its items are not visited for those phases.
+        let skips_ordinary_lines =
+            paint_model::paint_phase::ShouldPaintDescendantBlockBackgrounds(phase);
+        // MathML operators suppress their inline children; read once per
+        // visit, on the first fragment-item child.
+        let mut suppresses_fragment_items: Option<bool> = None;
 
         for child_owner in &node.children {
             let child = child_owner.as_ref();
@@ -907,41 +940,42 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
                 }
                 continue;
             }
-            if !BoxFragmentPainter::ShouldPaintChildFragment(node, child) {
+            let child_fragment = child
+                .fragment
+                .as_deref()
+                .expect("PrePaint node must own a fragment");
+            if skips_ordinary_lines && child_fragment.ViewIsLineOutsideBlockInInline() {
+                continue;
+            }
+            // One read per child of its fragment-item type, shared by the
+            // MathML operator test (ShouldPaintChildFragment) and the cull.
+            let child_is_fragment_item = matches!(
+                child_fragment.ViewKind(),
+                FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
+            ) || child_fragment.ViewIsInlineBox();
+            if child_is_fragment_item
+                && *suppresses_fragment_items.get_or_insert_with(|| {
+                    BoxFragmentPainter::SuppressesFragmentItemChildren(node)
+                })
+            {
                 continue;
             }
             // Chromium's early child cull here belongs to FragmentItems. A
             // physical child may establish its own PaintOffsetTranslation;
             // its recursive ShouldPaintFragment maps the cull rect into that
             // property space before testing its ink overflow.
-            let child_is_fragment_item = matches!(
-                child
-                    .fragment
-                    .as_deref()
-                    .expect("PrePaint node must own a fragment")
-                    .ViewKind(),
-                FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
-            ) || child
-                .fragment
-                .as_deref()
-                .expect("PrePaint node must own a fragment")
-                .ViewIsInlineBox();
             if child_is_fragment_item
                 && !BoxFragmentPainter::ChildIntersectsCullRect(child, &contents_paint_info)
             {
                 continue;
             }
-            let is_atomic = child
-                .fragment
-                .as_deref()
-                .expect("PrePaint node must own a fragment")
-                .paint
-                .painted_atomically;
-            match crate::phase::ClassifyChildPhase(phase, IsFloat(child), is_atomic) {
+            let is_atomic = child_fragment.paint.painted_atomically;
+            let child_is_float = IsFloat(child);
+            match crate::phase::ClassifyChildPhase(phase, child_is_float, is_atomic) {
                 crate::phase::ChildPhaseAction::Skip => {}
                 crate::phase::ChildPhaseAction::PaintAtomically => {
                     let mut atomic_info = contents_paint_info.ForDescendants();
-                    if IsFloat(child) {
+                    if child_is_float {
                         atomic_info.phase = crate::phase::FloatPaintPhase(atomic_info.phase);
                     }
                     self.PaintAllPhasesAtomically(child, &atomic_info);
@@ -982,14 +1016,14 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             self.context.borrow_mut().BeginEscapableGeometry(node, None);
         }
         if enter_node && !restore_text_combine {
-            if crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(node) {
+            if owns_svg_paint_scope {
                 debug_assert_eq!(phase, PaintPhase::kForeground);
                 self.context.borrow_mut().EndEscapableGeometry(node);
                 crate::scoped_svg_paint_state::ScopedSVGPaintState::FinishEffectsAfterContents(
                     node,
                     self.context,
                 );
-                if crate::svg_container_painter::SVGContainerPainter::IsContainer(node) {
+                if is_svg_container {
                     crate::svg_container_painter::SVGContainerPainter::PaintOutlineAfterEffects(
                         node,
                         self.context,
