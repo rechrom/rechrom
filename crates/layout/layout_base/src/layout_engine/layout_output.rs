@@ -9,6 +9,7 @@ use foundation::{gfx, PhysicalOffset, PhysicalRect, PhysicalSize};
 use crate::fragment_tree::{
     FragmentPaintData, LayoutResultHandle, PaintPropertiesHandle,
 };
+use crate::boundary_types::PrePaintSlot;
 use crate::fragment_data::{FragmentPaintBinding, FragmentPaintSidecar};
 use crate::layout_result::LayoutResult;
 use crate::physical_box_fragment::PhysicalBoxFragment;
@@ -689,7 +690,7 @@ impl LayoutPaintState {
         }
     }
 
-    /// The current publication's sidecar of `owner`, rebinding and
+    /// The current publication's sidecar value of `owner`, rebinding and
     /// refreshing it on the publication's first access. `display_item_fragment`
     /// is the display-item fragment scope the reaching walk carries for a
     /// physical owner, when known.
@@ -698,12 +699,24 @@ impl LayoutPaintState {
         owner: PaintFragmentOwner,
         display_item_fragment: Option<u32>,
     ) -> *mut FragmentPaintData {
+        unsafe { &*self.SlotSidecar(owner, display_item_fragment) }.Data()
+    }
+
+    /// The current publication's sidecar of `owner` (see `Slot`): the
+    /// FragmentData-owned occurrence state whose FragmentPaintData and
+    /// PrePaint slot a cursor reaches.
+    fn SlotSidecar(
+        &self,
+        owner: PaintFragmentOwner,
+        display_item_fragment: Option<u32>,
+    ) -> *const FragmentPaintSidecar {
         let sidecar = unsafe { &*self.ResolveSidecar(owner) };
         let binding = sidecar.Binding();
         let publication = self.publication.get();
         let key = owner.Key();
         if binding.publication == publication && binding.owner == key {
-            return Self::Current(sidecar, owner, binding, display_item_fragment);
+            Self::Current(sidecar, owner, binding, display_item_fragment);
+            return sidecar;
         }
         // A replacement result's publication (a newer serial) rebound this
         // FragmentData's sidecar: as with Chromium's single FragmentData, an
@@ -711,7 +724,7 @@ impl LayoutPaintState {
         if binding.publication > publication
             || (self.superseded.get() && binding.publication == publication)
         {
-            return sidecar.Data();
+            return sidecar;
         }
         if self.superseded.get() {
             // Reached through this superseded handle only now: refresh a
@@ -720,11 +733,14 @@ impl LayoutPaintState {
             let private = unsafe { &*self.FallbackSidecar(owner.InstanceId(Some(self))) };
             let binding = private.Binding();
             if binding.publication == publication && binding.owner == key {
-                return Self::Current(private, owner, binding, display_item_fragment);
+                Self::Current(private, owner, binding, display_item_fragment);
+                return private;
             }
-            return self.Bind(owner, private, display_item_fragment);
+            self.Bind(owner, private, display_item_fragment);
+            return private;
         }
-        self.Bind(owner, sidecar, display_item_fragment)
+        self.Bind(owner, sidecar, display_item_fragment);
+        sidecar
     }
 
     /// A sidecar this publication already bound to `owner`. A first binding
@@ -1661,6 +1677,60 @@ impl<'a> PaintFragmentCursor<'a> {
     pub unsafe fn PaintDataMut(self) -> &'a mut FragmentPaintData {
         let state = self.state.expect("paint cursor has no result state");
         unsafe { &mut *state.Slot(self.source.PaintOwner(), self.display_item_fragment) }
+    }
+
+    /// The PrePaint-owned paint state slot of this fragment occurrence: the
+    /// paint side of Chromium's FragmentData (PaintOffset,
+    /// ObjectPaintProperties, LocalBorderBoxProperties, cull rects;
+    /// core/paint/fragment_data.h:32-38,104-168,228-233). It lives on the
+    /// occurrence's sidecar beside, not inside, the shared PaintProperties
+    /// payload, so it survives relayout with the LayoutObject's FragmentData
+    /// and keeps its address across targeted updates. None for a cursor
+    /// without a result state (hand-built fixtures).
+    pub fn PrePaintSlot(self) -> Option<&'a PrePaintSlot> {
+        let state = self.state?;
+        let sidecar =
+            unsafe { &*state.SlotSidecar(self.source.PaintOwner(), self.display_item_fragment) };
+        Some(sidecar.PrePaint())
+    }
+
+    /// The PrePaint state PrePaint last wrote for this occurrence, if any
+    /// (Chromium reads FragmentData's rare data, null before the first
+    /// PrePaintTreeWalk reaches it: core/paint/fragment_data.h:105-110,
+    /// 160-168). `T` is PrePaint's concrete FragmentData state.
+    pub fn PrePaintData<T: std::any::Any>(self) -> Option<&'a T> {
+        self.PrePaintSlot()?.Get::<T>()
+    }
+
+    /// The occurrence's PrePaint state for writing, created on first use as
+    /// FragmentData::EnsureRareData creates its rare data
+    /// (core/paint/fragment_data.cc:43-47).
+    ///
+    /// # Safety
+    /// Only PrePaint writes it, on the document sequence, with no other live
+    /// reference to this occurrence's state (the single-writer discipline of
+    /// `PaintDataMut`).
+    pub unsafe fn PrePaintDataMut<T: std::any::Any + Default>(self) -> &'a mut T {
+        let slot = self
+            .PrePaintSlot()
+            .expect("paint cursor has no result state");
+        unsafe { slot.Ensure::<T>() }
+    }
+
+    /// The fragment's FragmentPaintData and PrePaint state resolved once, as
+    /// PrePaintTreeWalk reaches a FragmentData once per visit
+    /// (core/paint/pre_paint_tree_walk.cc:418-436) and writes both through
+    /// it.
+    ///
+    /// # Safety
+    /// As `PaintDataMut` and `PrePaintDataMut`.
+    pub unsafe fn PaintDataAndPrePaintDataMut<T: std::any::Any + Default>(
+        self,
+    ) -> (&'a mut FragmentPaintData, &'a mut T) {
+        let state = self.state.expect("paint cursor has no result state");
+        let sidecar: &'a FragmentPaintSidecar =
+            unsafe { &*state.SlotSidecar(self.source.PaintOwner(), self.display_item_fragment) };
+        (unsafe { &mut *sidecar.Data() }, unsafe { sidecar.PrePaint().Ensure::<T>() })
     }
 
     /// Source: core/paint/pre_paint_tree_walk.cc:418-436. PrePaintTreeWalk

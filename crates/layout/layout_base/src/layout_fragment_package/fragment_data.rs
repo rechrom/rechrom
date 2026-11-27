@@ -90,6 +90,14 @@ pub struct FragmentPaintBinding {
 pub struct FragmentPaintSidecar {
     data: UnsafeCell<crate::fragment_tree::FragmentPaintData>,
     binding: Cell<FragmentPaintBinding>,
+    // The paint side of Chromium's FragmentData that PrePaint writes
+    // (paint_offset_ and RareData's paint_properties,
+    // local_border_box_properties, cull rects;
+    // core/paint/fragment_data.h:239-240,228-233). Kept beside `data`, not
+    // in its shared payload, and untouched by LayoutPaintState::Bind, so it
+    // follows this occurrence's FragmentData across relayout and
+    // republication as Chromium's FragmentData stays on the LayoutObject.
+    pre_paint: crate::boundary_types::PrePaintSlot,
 }
 
 #[allow(non_snake_case)]
@@ -98,7 +106,14 @@ impl FragmentPaintSidecar {
         Rc::new(Self {
             data: UnsafeCell::new(Default::default()),
             binding: Cell::new(FragmentPaintBinding::default()),
+            pre_paint: Default::default(),
         })
+    }
+
+    /// The occurrence's PrePaint output slot (PaintFragmentCursor::
+    /// PrePaintSlot).
+    pub fn PrePaint(&self) -> &crate::boundary_types::PrePaintSlot {
+        &self.pre_paint
     }
 
     /// The canonical sidecar value. Callers uphold the PrePaint/Paint

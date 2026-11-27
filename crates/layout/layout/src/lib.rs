@@ -145,7 +145,8 @@ pub mod result {
     };
     // Fragment-local Paint sidecars and the resources they reference.
     pub use layout_base::fragment_tree::{
-        FragmentPaintData, FragmentPaintRect, PaintProperties, PaintResources, SvgTextPaintData,
+        FragmentPaintData, FragmentPaintRect, PaintProperties, PaintResources, PrePaintSlot,
+        SvgTextPaintData,
     };
     // The receipt Paint hands back when its artifact is complete.
     pub use layout_base::layout_engine::{PaintClientCommit, PaintCommitOutput};

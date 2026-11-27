@@ -455,6 +455,81 @@ impl<Paint: Clone> std::ops::DerefMut for PaintPropertiesHandle<Paint> {
     }
 }
 
+/// PrePaint's output slot on one fragment occurrence: the paint-side state of
+/// Chromium's FragmentData (PaintOffset, ObjectPaintProperties,
+/// LocalBorderBoxProperties, cull rects;
+/// core/paint/fragment_data.h:32-38,104-168,228-233), which Layout stores
+/// and PrePaint alone writes.
+///
+/// Layout cannot name PrePaint's concrete state (layout_base never depends
+/// on paint_model or prepaint), and the sidecar it lives on is fixed by the
+/// LayoutObject's FragmentData, so the slot holds that state type-erased.
+/// Like FragmentData::rare_data_ it is allocated on first write
+/// (core/paint/fragment_data.cc:43-47) and keeps its heap address until the
+/// slot is cleared or dropped with its sidecar, i.e. with the FragmentData
+/// entry (FragmentDataList::Shrink) or the LayoutObject. It is never part of
+/// the copy-on-write PaintProperties payload and is never cloned.
+///
+/// Sequence confinement: the slot is `!Send` and `!Sync`; PrePaint writes it
+/// on the document sequence and Paint/Layerize read it there, under the
+/// single-writer discipline of `PaintFragmentCursor::PaintDataMut`.
+#[derive(Default)]
+pub struct PrePaintSlot {
+    value: std::cell::UnsafeCell<Option<Box<dyn std::any::Any>>>,
+}
+
+#[allow(non_snake_case)]
+impl PrePaintSlot {
+    /// Whether PrePaint has not written this occurrence yet (or cleared it).
+    pub fn IsEmpty(&self) -> bool {
+        unsafe { &*self.value.get() }.is_none()
+    }
+
+    /// The stored state, if PrePaint wrote one. Panics when the slot holds a
+    /// different type: one PrePaint state type exists per process.
+    pub fn Get<T: std::any::Any>(&self) -> Option<&T> {
+        unsafe { &*self.value.get() }
+            .as_deref()
+            .map(|value| value.downcast_ref::<T>().expect("PrePaint slot holds another state type"))
+    }
+
+    /// The stored state for writing, if any.
+    ///
+    /// # Safety
+    /// The caller is the sequence's single PrePaint writer and holds no
+    /// other reference into this slot.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn GetMut<T: std::any::Any>(&self) -> Option<&mut T> {
+        unsafe { &mut *self.value.get() }
+            .as_deref_mut()
+            .map(|value| value.downcast_mut::<T>().expect("PrePaint slot holds another state type"))
+    }
+
+    /// The stored state, created with `T::default()` on first use
+    /// (FragmentData::EnsureRareData, core/paint/fragment_data.cc:43-47).
+    ///
+    /// # Safety
+    /// As `GetMut`.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn Ensure<T: std::any::Any + Default>(&self) -> &mut T {
+        unsafe { &mut *self.value.get() }
+            .get_or_insert_with(|| Box::new(T::default()))
+            .downcast_mut::<T>()
+            .expect("PrePaint slot holds another state type")
+    }
+
+    /// Drop the stored state (FragmentData::ClearPaintProperties /
+    /// ClearLocalBorderBoxProperties together,
+    /// core/paint/fragment_data.h:119-122,147-151).
+    ///
+    /// # Safety
+    /// As `GetMut`; no reference returned by `Get`/`GetMut`/`Ensure` may
+    /// outlive this call.
+    pub unsafe fn Clear(&self) {
+        *unsafe { &mut *self.value.get() } = None;
+    }
+}
+
 /// Fragment-local geometry, identity, and lifecycle state parameterized by its
 /// assembly-owned heavy paint payload.
 // cpp: layoutng_fragment_tree/fragment_tree.h:303-322

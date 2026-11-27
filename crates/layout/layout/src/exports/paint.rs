@@ -47,7 +47,7 @@ pub mod paint {
         CollapsedTablePaintData, CollapsedTableSection, FieldsetPaintData, FormControlPaintData,
         FragmentBoxSides, FragmentPaintData, FragmentPaintRect, GapRule, GapRulePaintData,
         GapRuleSide, MathMLPaintData, MathMLPaintKind, PageBackgroundPaintData,
-        PageContainerBackgroundPaintData, PaintGlyph, PaintGlyphRun, PaintProperties,
+        PageContainerBackgroundPaintData, PaintGlyph, PaintGlyphRun, PaintProperties, PrePaintSlot,
         PaintResources, RasterEffectOutset, ReplacedContentPaintData, ResidentPaintSourceScope,
         ScrollContainerPaintData,
         ScrollSnapAxisPaintData, ScrollSnapStrictnessPaintData, ScrollbarPaintAxis,
