@@ -960,6 +960,28 @@ impl<'a, B: StyleResolverStateBackend> StyleResolverState<'a, B> {
         ));
         self.InvalidateLengthConversionData();
     }
+    /// Installs an existing builder as this state's style builder.
+    ///
+    /// cpp: style_resolver.cc:1958-2095 (StyleResolver::ApplyBaseStyle MISU
+    /// branch). Blink keeps exactly one StyleResolverState whose builder is
+    /// the clone of the element's previous style; the inline declarations are
+    /// applied to that same builder. The Rust production adapter lends that
+    /// builder to this state for StyleBuilder::ApplyProperty instead of first
+    /// creating a throwaway `CreateNewStyle` builder and swapping. Like
+    /// CreateNewClonedStyle, the length conversion data is recomputed lazily
+    /// from the installed builder on its first use.
+    pub fn SetStyleBuilder(&self, builder: ComputedStyleBuilder) {
+        *self.style_builder_.borrow_mut() = Some(builder);
+        self.InvalidateLengthConversionData();
+    }
+    /// Returns the builder lent by `SetStyleBuilder` (or created by
+    /// CreateNewStyle / CreateNewClonedStyle) without taking a style.
+    pub fn TakeStyleBuilder(&self) -> ComputedStyleBuilder {
+        self.style_builder_
+            .borrow_mut()
+            .take()
+            .expect("style builder must be initialized")
+    }
     pub fn StyleBuilder(&self) -> Ref<'_, ComputedStyleBuilder> {
         Ref::map(self.style_builder_.borrow(), |builder| {
             builder.as_ref().expect("style builder must be initialized")
@@ -982,10 +1004,12 @@ impl<'a, B: StyleResolverStateBackend> StyleResolverState<'a, B> {
         }
         self.css_to_length_conversion_data_.borrow_mut()
     }
+    // cpp: style_resolver_state.h TakeLengthConversionFlags. Blink only
+    // exchanges the accumulated flags with zero. Flags are added while a
+    // value is converted, never while the conversion data is rebuilt, so a
+    // dirty conversion data object is not recomputed (with its container
+    // size lookup) just to read them.
     pub fn TakeLengthConversionFlags(&self) -> u32 {
-        if self.css_to_length_conversion_data_dirty_.get() {
-            self.UpdateLengthConversionData();
-        }
         self.length_conversion_flags_.replace(0)
     }
     pub fn AddLengthConversionFlags(&self, flags: u32) {

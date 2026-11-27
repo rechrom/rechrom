@@ -3565,7 +3565,7 @@ impl DocumentStyleEngine {
         }
         // ChildNeedsStyleRecalc equivalent: enter only paths to dirty elements;
         // inherited differences can extend traversal during style resolution.
-        let mut visit = HashSet::new();
+        let mut visit = DirtyPathVisitSet::new(document.NodeCount());
         for &index in &dirty {
             let mut ancestor = Some(index);
             while let Some(index) = ancestor {
@@ -3629,7 +3629,11 @@ impl DocumentStyleEngine {
                 "production-resolver-rule-set-bundle",
             ))?;
         drop(invalidation_trace);
-        let _recalc_trace = browser_tracing::span("style", "StyleEngine.RecalcStyle");
+        let mut recalc_trace = browser_tracing::span("style", "StyleEngine.RecalcStyle");
+        recalc_trace.set("visit_marks", visit.len() as f64);
+        let recalc_setup_trace = browser_tracing::span("style", "StyleEngine.RecalcSetup");
+        let mut recalc_visited_nodes = 0usize;
+        let mut recalc_children_probed = 0usize;
         // The cache owns a bounded set of immutable preparation records, each
         // validated against the exact RuleSet inputs of a request. Like
         // StyleResolver::ua_rule_set_groups_ and ScopedStyleResolver's
@@ -3734,6 +3738,7 @@ impl DocumentStyleEngine {
         let mut custom_property_change_cache =
             HashMap::<(usize, usize), Rc<HashSet<std::string::String>>>::new();
         let mut root_font = media.em_size;
+        drop(recalc_setup_trace);
         while let Some((
             index,
             parent_index,
@@ -3746,6 +3751,7 @@ impl DocumentStyleEngine {
             has_scroller_ancestor_with_scroll_marker_group,
         )) = stack.pop()
         {
+            recalc_visited_nodes += 1;
             let mut resolved_to_commit = None;
             let mut clear_current_style = false;
             let document = &*document_owner;
@@ -3964,6 +3970,10 @@ impl DocumentStyleEngine {
                         resolve_missing += reason_missing as usize;
                         resolve_ensured += reason_ensured as usize;
                         stats.resolved_nodes += 1;
+                        let prepare_trace = browser_tracing::span(
+                            "style",
+                            "StyleEngine.PrepareResolverInputs",
+                        );
                         let incremental_style = incremental_style_candidates.contains(&index)
                             && ensure_target.is_none()
                             && !inherited
@@ -4146,6 +4156,7 @@ impl DocumentStyleEngine {
                         collaborators.selectors = Some(self.selectors.clone());
                         collaborators.selector_backend = Some(selector_backend.clone());
                         collaborators.interaction = self.selectors.borrow().interaction;
+                        drop(prepare_trace);
                         let translated_output = match crate::resolver::production_style_resolver::ApplyBaseStyleBuilderForElement(
                                 crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                                     matching: crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
@@ -4280,6 +4291,8 @@ impl DocumentStyleEngine {
                             "StyleEngine.ResolveGeneratedPseudos",
                         );
                         generated_pseudo_trace.set("node_id", node.Id() as f64);
+                        let mut pseudo_match_trace =
+                            browser_tracing::span("style", "StyleEngine.MatchGeneratedPseudoRules");
                         let mut pseudo_rules = Vec::new();
                         let mut pseudo_flags = PseudoIdFlags::default();
                         for (pseudo_index, kind) in
@@ -4346,6 +4359,10 @@ impl DocumentStyleEngine {
                             }
                             pseudo_rules.push((kind, rules));
                         }
+                        pseudo_match_trace.set("collect_rules_calls", pseudo_rules.len() as f64);
+                        drop(pseudo_match_trace);
+                        let adjust_trace =
+                            browser_tracing::span("style", "StyleEngine.AdjustResolvedStyle");
                         // MatchResult carries generated and highlight pseudo bits.
                         // Merge those typed flags with the pseudo styles resolved
                         // below without replacing either source of metadata.
@@ -4749,6 +4766,7 @@ impl DocumentStyleEngine {
                             style,
                             has_scroller_ancestor_with_scroll_marker_group,
                         );
+                        drop(adjust_trace);
                         let final_style = unsafe { &*style.Get() };
                         if parent.is_none() {
                             root_font = final_style.GetFontDescription().SpecifiedSize()
@@ -5180,6 +5198,7 @@ impl DocumentStyleEngine {
                                   explicit: bool,
                                   subtree: bool,
                                   at_shadow_boundary: bool| {
+                recalc_children_probed += 1;
                 let should_visit = if ensure_target.is_some() {
                     visit.contains(&child)
                 } else {
@@ -5297,6 +5316,8 @@ impl DocumentStyleEngine {
                     document_owner.SetOverscrollAreaParentStyle(index, None);
                 }
             } else if let Some((resolved, visual_impact)) = resolved_to_commit {
+                let _commit_trace =
+                    browser_tracing::span("style_commit", "StyleEngine.CommitResolvedStyle");
                 CommitResolvedStyle(
                     document_owner,
                     &mut self.viewport_dependent_elements,
@@ -5350,6 +5371,10 @@ impl DocumentStyleEngine {
                 }
             }
         }
+        recalc_trace.set("visited_nodes", recalc_visited_nodes as f64);
+        recalc_trace.set("children_probed", recalc_children_probed as f64);
+        recalc_trace.set("resolved_nodes", stats.resolved_nodes as f64);
+        let _recalc_finish_trace = browser_tracing::span("style", "StyleEngine.RecalcFinish");
         drop(sheets);
         if ensure_target.is_none() {
             let document = &*document_owner;
@@ -8507,6 +8532,52 @@ fn ConnectedElement(document: &Document, index: usize) -> bool {
 // assignment; Style consumes only the active, ordered assigned-node view.
 fn AssignedNodesForSlot(document: &Document, slot: usize) -> Vec<usize> {
     document.AssignedNodes(slot)
+}
+
+/// The recalc traversal's ChildNeedsStyleRecalc / NeedsStyleRecalc marks.
+///
+/// cpp: node.h ChildNeedsStyleRecalc and
+/// element.cc Element::RecalcDescendantStyles. Blink keeps one flag bit on
+/// each Node and tests it for every child of a visited parent. The traversal
+/// here tests every child of every visited node too, so the marks are a
+/// node-indexed bit vector rather than a SipHash set: membership is one load,
+/// as in Blink, instead of a hash per child of every ancestor of a dirty node.
+/// Nodes created after the marks were taken (generated pseudo owners) are
+/// unmarked, exactly as they were absent from the former set.
+struct DirtyPathVisitSet {
+    marks: Vec<bool>,
+    len: usize,
+}
+
+impl DirtyPathVisitSet {
+    fn new(node_count: usize) -> Self {
+        Self {
+            marks: vec![false; node_count],
+            len: 0,
+        }
+    }
+    /// Marks `index`; returns false when it was already marked.
+    fn insert(&mut self, index: usize) -> bool {
+        if index >= self.marks.len() {
+            self.marks.resize(index + 1, false);
+        }
+        let mark = &mut self.marks[index];
+        if *mark {
+            return false;
+        }
+        *mark = true;
+        self.len += 1;
+        true
+    }
+    fn contains(&self, index: &usize) -> bool {
+        self.marks.get(*index).copied().unwrap_or(false)
+    }
+    fn len(&self) -> usize {
+        self.len
+    }
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 fn FlatTreeStyleParentElement(document: &Document, index: usize) -> Option<usize> {

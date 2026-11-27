@@ -2667,6 +2667,8 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
         state: &mut B::StyleResolverState,
         cascade: &mut B::StyleCascade,
     ) {
+        let _trace =
+            browser_tracing::span("style_resolve", "StyleResolver.FinishResolveStyleBuilder");
         let b = self.backend;
         if b.RecalcFlag(context, ResolverRecalcFlag::EnsuringStyle) {
             b.SetBuilderFlag(
@@ -3229,9 +3231,17 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
             }
             return;
         }
-        if b.RecalcFlag(context, ResolverRecalcFlag::CanUseIncrementalStyle)
-            && self.CanApplyInlineStyleIncrementally(element, state, request)
-        {
+        let apply_incrementally = b.RecalcFlag(context, ResolverRecalcFlag::CanUseIncrementalStyle)
+            && {
+                let _trace = browser_tracing::span(
+                    "style_resolve",
+                    "StyleResolver.CanApplyInlineStyleIncrementally",
+                );
+                self.CanApplyInlineStyleIncrementally(element, state, request)
+            };
+        if apply_incrementally {
+            let clone_trace =
+                browser_tracing::span("style_resolve", "StyleResolver.IncrementalCloneStyle");
             b.StateCreateNewClonedStyle(
                 state,
                 &b.ElementComputedStyle(element)
@@ -3242,7 +3252,11 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
                 ResolverStyleFlag::SkipsContents,
                 false,
             );
+            drop(clone_trace);
+            let mut collect_trace =
+                browser_tracing::span("style_resolve", "StyleResolver.IncrementalInlineProperties");
             let mut author_flags = 0u64;
+            let mut inline_properties = 0usize;
             if let Some(inline_style) = b.InlineStyle(element) {
                 for property in b.PropertySetProperties(&inline_style) {
                     b.ApplyScopedProperty(
@@ -3252,9 +3266,14 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
                         b.ElementTreeScope(element),
                     );
                     author_flags |= CSSProperty::Get(b.PropertyID(property)).GetFlags();
+                    inline_properties += 1;
                 }
             }
+            collect_trace.set("properties", inline_properties as f64);
+            drop(collect_trace);
             b.StateSetComputedStyleFlagsFromAuthorFlags(state, author_flags);
+            let _adjust_trace =
+                browser_tracing::span("style_resolve", "StyleResolver.IncrementalAdjustStyle");
             self.ApplyLengthConversionFlags(state);
             b.AdjustComputedStyle(
                 state,

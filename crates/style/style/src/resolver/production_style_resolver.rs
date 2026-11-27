@@ -4031,42 +4031,50 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             // below by sharing the previous owner. The inline declarations
             // never read it (CanApplyInlineStyleIncrementally rejects
             // var()/env() values), so it is not lent to the backend either.
+            let inputs_trace =
+                browser_tracing::span("style_resolve", "StyleResolver.InlineCascadeInputs");
+            let inputs = ProductionCascadeInputs {
+                document: Some(self.document),
+                media: self.initial.media.clone(),
+                base: self.initial.initial.clone(),
+                parent: state.parent.as_deref().cloned(),
+                root_style: self.cascade.root_style.clone(),
+                match_result: MatchResult::default(),
+                root_font_size: self.cascade.root_font_size,
+                color_scheme_settings: self.cascade.color_scheme_settings,
+                system_colors: self.cascade.system_colors,
+                text_link_text_color: self.cascade.text_link_text_color,
+                link_color: self.cascade.link_color,
+                visited_link_color: self.cascade.visited_link_color,
+                active_link_color: self.cascade.active_link_color,
+                is_document_element: false,
+                pseudo_id: self.cascade.pseudo_id,
+                // The MISU request is never for a pseudo element.
+                originating_style: None,
+                subject_node: self.cascade.subject_node,
+                container_runtime: self.cascade.container_runtime,
+                custom_properties: None,
+                parent_custom_properties: self.cascade.parent_custom_properties,
+                substitution_context: self.cascade.substitution_context,
+                image_resolver: self.cascade.image_resolver,
+                property_registry: self.cascade.property_registry,
+                function_registry: self.cascade.function_registry,
+                animations: None,
+                transitions: None,
+                font_metrics: self.cascade.font_metrics,
+            };
+            drop(inputs_trace);
             let result = crate::resolver::production_style_cascade::ApplyInlineProperties(
-                ProductionCascadeInputs {
-                    document: Some(self.document),
-                    media: self.initial.media.clone(),
-                    base: self.initial.initial.clone(),
-                    parent: state.parent.as_deref().cloned(),
-                    root_style: self.cascade.root_style.clone(),
-                    match_result: MatchResult::default(),
-                    root_font_size: self.cascade.root_font_size,
-                    color_scheme_settings: self.cascade.color_scheme_settings,
-                    system_colors: self.cascade.system_colors,
-                    text_link_text_color: self.cascade.text_link_text_color,
-                    link_color: self.cascade.link_color,
-                    visited_link_color: self.cascade.visited_link_color,
-                    active_link_color: self.cascade.active_link_color,
-                    is_document_element: false,
-                    pseudo_id: self.cascade.pseudo_id,
-                    // The MISU request is never for a pseudo element.
-                    originating_style: None,
-                    subject_node: self.cascade.subject_node,
-                    container_runtime: self.cascade.container_runtime,
-                    custom_properties: None,
-                    parent_custom_properties: self.cascade.parent_custom_properties,
-                    substitution_context: self.cascade.substitution_context,
-                    image_resolver: self.cascade.image_resolver,
-                    property_registry: self.cascade.property_registry,
-                    function_registry: self.cascade.function_registry,
-                    animations: None,
-                    transitions: None,
-                    font_metrics: self.cascade.font_metrics,
-                },
+                inputs,
                 &mut state.builder,
                 &properties,
             );
             match result {
                 Ok(length_flags) => {
+                    let _publish_trace = browser_tracing::span(
+                        "style_resolve",
+                        "StyleResolver.InlinePublishRetainedOutputs",
+                    );
                     state.length_conversion_flags |= length_flags;
                     let old = self
                         .cascade
@@ -5828,6 +5836,7 @@ pub(crate) fn ApplyBaseStyleBuilderForElement(
     collaborators
         .subject_node
         .get_or_insert(inputs.element_index);
+    let setup_trace = browser_tracing::span("style_resolve", "StyleResolver.ResolveElementSetup");
     let element = ProductionResolverElement::ForNode(
         inputs.document,
         inputs.element_index,
@@ -5844,12 +5853,19 @@ pub(crate) fn ApplyBaseStyleBuilderForElement(
         collaborators,
     );
     let request = host.NewStyleRequest();
-    let context = host.NewStyleRecalcContext();
+    drop(setup_trace);
+    let context = {
+        // The nearest-size-container ancestor walk (style_recalc_context.cc).
+        let _trace = browser_tracing::span("style_resolve", "StyleResolver.NewStyleRecalcContext");
+        host.NewStyleRecalcContext()
+    };
+    let state_trace = browser_tracing::span("style_resolve", "StyleResolver.NewResolverState");
     let mut state = host.NewStyleResolverState(&element, &element, Some(&context), &request);
     state.parent = parent.map(Rc::new);
     state.layout_parent = state.parent.clone();
     state.originating_style = host.cascade.originating_style.clone().map(Rc::new);
     let mut cascade = host.NewStyleCascade(&mut state);
+    drop(state_trace);
     StyleResolver::new(&element, &host).ResolveStyleBuilderForProduction(
         &element,
         &context,
@@ -5860,6 +5876,7 @@ pub(crate) fn ApplyBaseStyleBuilderForElement(
     // The cascade only records a pointer to `state`; release it before the
     // final builder moves to the caller.
     drop(cascade);
+    let _finish_trace = browser_tracing::span("style_resolve", "StyleResolver.ResolveElementFinish");
     let style: ComputedStyleBuilder = state.builder;
     {
         let metrics = host.base_style_metrics.borrow();

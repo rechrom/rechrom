@@ -1481,6 +1481,8 @@ pub(crate) fn ApplyInlineProperties(
     // StyleBuilder::ApplyProperty on the cloned style; no variable is
     // resolved or written, so the cloned style's CustomProperties is not
     // copied into this backend (see with_custom_properties).
+    let mut setup_trace = browser_tracing::span("style_resolve", "StyleCascade.InlineApplySetup");
+    setup_trace.set("properties", properties.len() as f64);
     let backend = ProductionStyleCascadeBackend::with_custom_properties(
         inputs.document,
         inputs.media,
@@ -1501,28 +1503,35 @@ pub(crate) fn ApplyInlineProperties(
         inputs.font_metrics,
     );
     backend.is_document_element.set(inputs.is_document_element);
-    let element = Rc::new(ProductionElement {
-        node: inputs.subject_node,
-        parent: inputs.parent.clone(),
-        root: inputs.root_style.clone(),
-        pseudo_id: inputs.pseudo_id,
-    });
-    // The element context above holds its own root handle; hand the input's
-    // handle to the backend instead of rooting a third one.
-    if let Some(root) = inputs.root_style {
+    // The element context owns the input's parent handle (moved, not
+    // re-rooted); only the root needs a second handle for the backend.
+    let root_style = inputs.root_style;
+    if let Some(root) = root_style.clone() {
         let _ = backend.document_element_style.set(root);
     }
+    let element = Rc::new(ProductionElement {
+        node: inputs.subject_node,
+        parent: inputs.parent,
+        root: root_style,
+        pseudo_id: inputs.pseudo_id,
+    });
     let request = ProductionRequest {
         pseudo_id: inputs.pseudo_id,
         originating_style: None,
     };
     let state = StyleResolverState::new(&backend, &(), element, None, Some(&request));
-    state.CreateNewStyle(
-        ProductionStyleCascadeBackend::style(&inputs.base),
-        ProductionStyleCascadeBackend::style(inputs.parent.as_ref().unwrap_or(&inputs.base)),
-        None,
-    );
-    std::mem::swap(&mut *state.StyleBuilderMut(), builder);
+    // cpp: style_resolver.cc:1958-2095. The MISU branch applies the inline
+    // declarations to the one builder cloned from the previous style; lend
+    // that builder to the state instead of building a throwaway
+    // CreateNewStyle(initial, parent) builder and swapping it out. The
+    // placeholder left behind is a pointer copy of the initial singleton.
+    state.SetStyleBuilder(std::mem::replace(
+        builder,
+        ComputedStyleBuilder::from_style(ProductionStyleCascadeBackend::style(&backend.initial)),
+    ));
+    drop(setup_trace);
+    let mut apply_trace = browser_tracing::span("style_resolve", "StyleCascade.InlineApplyLoop");
+    apply_trace.set("properties", properties.len() as f64);
     for (name, value) in properties {
         let logical = CSSProperty::Get(name.Id());
         let property = if logical.IsSurrogate() {
@@ -1538,7 +1547,8 @@ pub(crate) fn ApplyInlineProperties(
         );
     }
     let flags = state.TakeLengthConversionFlags();
-    std::mem::swap(&mut *state.StyleBuilderMut(), builder);
+    *builder = state.TakeStyleBuilder();
+    drop(apply_trace);
     let fallbacks = backend.take_fallbacks();
     if fallbacks.is_empty() {
         Ok(flags)

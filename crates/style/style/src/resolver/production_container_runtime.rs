@@ -382,6 +382,21 @@ impl ProductionContainerRuntime<'_> {
     // container whose evaluator has no completed observation is skipped for
     // this axis; the caller performs Chromium's small-viewport fallback.
     pub(crate) fn ContainerUnitSizeForAxis(&self, context: usize, horizontal: bool) -> Option<f64> {
+        // cpp: css_to_length_conversion_data.cc ContainerSizes::Cache*:
+        // Blink finds the size container lazily, only when a container-
+        // relative unit is evaluated. This eager adapter keeps the same
+        // result without the ancestor walk when no container has a completed
+        // observation for this axis: every walk would then end in None.
+        let any_observed = self.states.values().any(|state| {
+            if horizontal {
+                state.width.is_some()
+            } else {
+                state.height.is_some()
+            }
+        });
+        if !any_observed {
+            return None;
+        }
         let selector = ProductionContainerSelector::ForPhysicalAxis(horizontal);
         let mut starting = Some(context);
         while let Some(container) = self.FindContainer(starting, &selector) {

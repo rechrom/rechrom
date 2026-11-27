@@ -620,11 +620,14 @@ fn SetInlineCSSPropertyInternal(
     // SetPropertyInternal (resolve, parse, projection) inside a JS callback.
     let mut trace = browser_tracing::span("style", "CSSOM.SetInlineProperty");
     let mode = InlineParserMode(standard_mode);
+    let resolve_trace = browser_tracing::span("style", "CSSOM.ResolveInlineDeclaration");
     let parsed = source_context.map_or_else(
         || ResolveInlineStyle(style, mode),
         |context| ResolveInlineStyleWithContext(style, context),
     );
     let mut properties = parsed.properties.MutableCopy();
+    drop(resolve_trace);
+    let parse_trace = browser_tracing::span("style", "CSSOM.ParseInlineValue");
     let result = if value.empty() {
         let removed = if id == CSSPropertyID::kVariable {
             properties.RemoveProperty(custom_name.expect("actual custom property name"), None)
@@ -681,6 +684,8 @@ fn SetInlineCSSPropertyInternal(
             }
         }
     };
+    drop(parse_trace);
+    let _retain_trace = browser_tracing::span("style", "CSSOM.RetainInlineDeclaration");
     trace.set(
         "changed",
         if result >= SetResult::kModifiedExisting {
