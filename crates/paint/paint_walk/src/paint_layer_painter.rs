@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 use layout::fragment::FragmentKind;
 use layout::input::FloatSide;
+use layout::views::paint_layer::PaintLayer;
 use paint_input_types::paint_input::PaintFilterType;
 
 use crate::box_fragment_painter::BoxFragmentPainter;
@@ -13,7 +14,8 @@ use crate::ignore_paint_timing_scope::IgnorePaintTimingScope;
 use crate::paint_context::PaintContext;
 use crate::paint_info::PaintInfo;
 use crate::paint_layer_paint_order_iterator::{
-    CollectPaintLayerChildren, PaintLayerPaintOrder, PaintLayerPaintOrderEntry,
+    PaintLayerIteration, PaintLayerPaintOrderEntry, PaintLayerPaintOrderIterator,
+    ResidentLayerNodes, SourcePaintLayer,
 };
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::PaintPhase;
@@ -196,48 +198,14 @@ fn HasEscapingChildLayer(parent: &PaintTreeNode<'_>) -> bool {
     false
 }
 
-/// Visit the direct child PaintLayers of `root` (PaintLayer::FirstChild() /
-/// NextSibling()) until `visit` returns false. Returns false when stopped.
-/// ShouldCreateSubsequence only asks whether the first child or a second
-/// child exists (paint_layer_painter.cc:250-254), so it stops early instead
-/// of collecting every child layer into a fresh Vec per layer visit.
-fn ForEachDirectPaintLayerChild<'n, 'f>(
-    root: &'n PaintTreeNode<'f>,
-    visit: &mut dyn FnMut(&'n PaintTreeNode<'f>) -> bool,
-) -> bool {
-    for child in &root.children {
-        if child.is_embedded_local_frame_root {
-            continue;
-        }
-        if child.is_paint_layer {
-            if !visit(child) {
-                return false;
-            }
-        } else if !ForEachDirectPaintLayerChild(child, visit) {
-            return false;
-        }
-    }
-    true
-}
-
-/// `paint_layer.FirstChild()->FirstChild() || ...->NextSibling()`:
-/// whether the layer has at least two descendant layers.
-fn HasTwoDescendantPaintLayers(layer: &PaintTreeNode<'_>) -> bool {
-    let mut first = None;
-    let mut has_second = false;
-    ForEachDirectPaintLayerChild(layer, &mut |child| {
-        if first.is_none() {
-            first = Some(child);
-            true
-        } else {
-            has_second = true;
-            false
-        }
-    });
-    if has_second {
-        return true;
-    }
-    first.is_some_and(|first| !ForEachDirectPaintLayerChild(first, &mut |_| false))
+/// Source: paint_layer_painter.cc:250-254. `paint_layer.FirstChild() &&
+/// (FirstChild()->FirstChild() || FirstChild()->NextSibling())` over the
+/// PaintLayer tree: whether the layer has at least two descendant layers.
+fn HasTwoDescendantPaintLayers(layer: &PaintLayer) -> bool {
+    let Some(first) = (unsafe { layer.FirstChild().as_ref() }) else {
+        return false;
+    };
+    !first.FirstChild().is_null() || !first.NextSibling().is_null()
 }
 
 /// Source: `paint_layer_painter.cc:221-235,239-284`.
@@ -269,7 +237,7 @@ fn ShouldCreateSubsequence(
     {
         return true;
     }
-    if HasTwoDescendantPaintLayers(layer) {
+    if SourcePaintLayer(layer).is_some_and(HasTwoDescendantPaintLayers) {
         return true;
     }
     if context.borrow().NumNewChunks() > 0 {
@@ -311,6 +279,9 @@ fn ShouldCreateSubsequence(
 
 pub struct PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
     layer: &'n PaintTreeNode<'f>,
+    /// Chromium's `paint_layer_`: the Layout-owned PaintLayer of the
+    /// resident node's LayoutObject. None for hand-built fixture nodes.
+    paint_layer: Option<&'n PaintLayer>,
     context: &'c RefCell<PaintContext<'o>>,
     /// The property ancestors a child layer re-enters. A child painter
     /// borrows its paint-order entry's list (PaintLayerPainter is a stack
@@ -328,6 +299,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
     ) -> Self {
         Self {
             layer,
+            paint_layer: SourcePaintLayer(layer),
             context,
             inherited_geometry: std::borrow::Cow::Owned(inherited_geometry),
             paint_flags: PaintFlag::kNoFlag,
@@ -341,10 +313,52 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
     ) -> Self {
         Self {
             layer,
+            paint_layer: SourcePaintLayer(layer),
             context,
             inherited_geometry: std::borrow::Cow::Borrowed(inherited_geometry),
             paint_flags: PaintFlag::kNoFlag,
         }
+    }
+
+    /// PaintLayer::SetPreviousPaintResult (paint_layer.cc:2827-2832), written
+    /// by PaintLayerPainter::Paint. The node's cell stays the in-flight value
+    /// ScopedBoxContentsPaintState downgrades and the remaining node readers
+    /// see until the PrePaint node tree is removed. The source skips the
+    /// PaintLayer write while CullRectUpdater::IsOverridingCullRects(); in
+    /// Rechrom only the special recordings (drag images, resource subtrees)
+    /// override cull rects, and they all paint with kOmitCompositingInfo.
+    fn SetPreviousPaintResult(&self, result: PaintResult) {
+        self.layer.previous_paint_result.set(result);
+        if self.paint_flags & PaintFlag::kOmitCompositingInfo == 0 {
+            if let Some(paint_layer) = self.paint_layer {
+                paint_layer.SetPreviousPaintResult(result);
+            }
+        }
+    }
+
+    /// PaintLayer::NeedsReorderOverlayOverflowControls (paint_layer.h:
+    /// 427-431), set by the owning PaintLayerStackingNode's rebuild. The
+    /// node cell is not written here: its one remaining reader, the resident
+    /// hit-test cursor, pairs it with the overlay-control map of its own
+    /// collector (EnsureResidentHitTestLayerOrder), which writes it.
+    fn NeedsReorderOverlayOverflowControls(&self) -> bool {
+        self.paint_layer
+            .is_some_and(PaintLayer::NeedsReorderOverlayOverflowControls)
+    }
+
+    /// PaintLayer::NeedsPaintPhaseFloat / NeedsPaintPhaseDescendantOutlines
+    /// (paint_layer.h:490-507), set by PaintInvalidator::UpdatePaintingLayer.
+    /// A fixture node without a PaintLayer keeps its aggregated node flags.
+    fn NeedsPaintPhaseFloat(&self) -> bool {
+        self.paint_layer
+            .map_or(self.layer.needs_float_phase, PaintLayer::NeedsPaintPhaseFloat)
+    }
+
+    fn NeedsPaintPhaseDescendantOutlines(&self) -> bool {
+        self.paint_layer.map_or(
+            self.layer.needs_outline_phase,
+            PaintLayer::NeedsPaintPhaseDescendantOutlines,
+        )
     }
 
     /// PaintLayerPainter::Paint(context, paint_flags), source.cc:289-333.
@@ -383,15 +397,8 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         Some(MapRectFromRoot(root_clip, &self.layer.transforms).unwrap_or_default())
     }
 
+    /// PaintLayerPainter::Paint, paint_layer_painter.cc:287-596.
     pub fn Paint(&self) -> PaintResult {
-        self.PaintInternal(true, false)
-    }
-
-    fn PaintInternal(
-        &self,
-        include_descendant_layers: bool,
-        suppress_overlay_overflow_controls: bool,
-    ) -> PaintResult {
         self.context.borrow_mut().walk_metrics.layer_visits += 1;
         // Source: core/paint/paint_layer_painter.cc:289-295,300-302.
         let fragment = self
@@ -442,7 +449,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         let (mut result, should_paint_content, clipped_out) =
             CullAdmission(self.layer, should_paint_content);
         if clipped_out {
-            self.layer.previous_paint_result.set(result);
+            self.SetPreviousPaintResult(result);
             return result;
         }
         // ScopedBoxContentsPaintState may downgrade this while phases paint.
@@ -476,7 +483,9 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
                     client,
                     debug.clone(),
                 ) {
-                    self.layer.previous_paint_result.set(cached_result);
+                    // Chromium returns PaintLayer::PreviousPaintResult(); the
+                    // subsequence marker retains that same value.
+                    self.SetPreviousPaintResult(cached_result);
                     return cached_result;
                 }
             }
@@ -548,23 +557,28 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         self.context
             .borrow_mut()
             .BeginEscapableGeometry(self.layer, None);
-        // The stacking root's retained z-order lists (rebuilt only when
-        // PrePaint dirtied them) are borrowed once and consumed at each
-        // group's original point.
-        let paint_order = if include_descendant_layers
-            && (!self.layer.paint_layer_facts_are_authoritative
-                || (self.layer.has_self_painting_layer_descendant
-                    && !self.layer.child_paint_blocked_by_display_lock))
-        {
-            Some(CollectPaintLayerChildren(self.layer))
-        } else {
-            None
+        // Source: paint_layer_painter.cc:640-650. PaintChildren returns early
+        // without self-painting descendants or under a display lock. The
+        // resident occurrences of the child layers are looked up in one map
+        // shared by both PaintChildren calls of this layer.
+        let child_layers = match self.paint_layer {
+            Some(paint_layer)
+                if self.layer.has_self_painting_layer_descendant
+                    && !self.layer.child_paint_blocked_by_display_lock =>
+            {
+                Some((
+                    paint_layer,
+                    ResidentLayerNodes::Collect(self.layer, paint_layer.StackingNode().is_some()),
+                ))
+            }
+            _ => None,
         };
-        let negative_count = paint_order
-            .as_ref()
-            .map_or(0, |order| order.NegativeZOrderCount());
-        if let Some(order) = &paint_order {
-            result.Include(self.PaintLayerChildren(0..negative_count, order));
+        if let Some((paint_layer, nodes)) = &child_layers {
+            result.Include(self.PaintChildren(
+                paint_layer,
+                PaintLayerIteration::kNegativeZOrderChildren,
+                nodes,
+            ));
         }
         if should_paint_content {
             let _foreground_properties = crate::paint_context::ScopedPaintChunkProperties::layer(
@@ -592,8 +606,12 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         self.context
             .borrow_mut()
             .BeginEscapableGeometry(self.layer, None);
-        if let Some(order) = &paint_order {
-            result.Include(self.PaintLayerChildren(negative_count..order.len(), order));
+        if let Some((paint_layer, nodes)) = &child_layers {
+            result.Include(self.PaintChildren(
+                paint_layer,
+                PaintLayerIteration::kNormalFlowAndPositiveZOrderChildren,
+                nodes,
+            ));
         }
 
         // Source: paint_layer_painter.cc:507-514. Overlay controls are above
@@ -601,7 +619,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         // them after the highest contained stacked descendant.
         if should_paint_content
             && self.layer.has_overlay_overflow_controls
-            && !suppress_overlay_overflow_controls
+            && !self.NeedsReorderOverlayOverflowControls()
         {
             self.PaintWithPhase(
                 self.layer,
@@ -636,7 +654,7 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
             self.context.borrow_mut().EndGeometry(ancestor);
         }
         result.Include(self.layer.previous_paint_result.get());
-        self.layer.previous_paint_result.set(result);
+        self.SetPreviousPaintResult(result);
         if let Some(recorder) = &subsequence_recorder {
             recorder.SetPaintResult(result);
         }
@@ -684,11 +702,11 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
                 &self.PaintInfo(PaintPhase::kForcedColorsModeBackplate),
             );
         }
-        if self.layer.needs_float_phase {
+        if self.NeedsPaintPhaseFloat() {
             self.PaintWithPhase(self.layer, &self.PaintInfo(PaintPhase::kFloat));
         }
         self.PaintWithPhase(self.layer, &self.PaintInfo(PaintPhase::kForeground));
-        if self.layer.needs_outline_phase {
+        if self.NeedsPaintPhaseDescendantOutlines() {
             self.PaintWithPhase(
                 self.layer,
                 &self.PaintInfo(PaintPhase::kDescendantOutlinesOnly),
@@ -1129,52 +1147,108 @@ impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
         }
     }
 
-    fn PaintLayerChildren(
+    /// Source: paint_layer_painter.cc:623-690 (PaintChildren). `root` is this
+    /// painter's PaintLayer, or a child PaintLayer without a resident layer
+    /// node whose children this painter paints in its place (see
+    /// PaintLayerWithoutResidentNode).
+    fn PaintChildren(
         &self,
-        children: std::ops::Range<usize>,
-        paint_order: &PaintLayerPaintOrder<'n, 'f>,
+        root: &PaintLayer,
+        children_to_visit: PaintLayerIteration,
+        nodes: &ResidentLayerNodes<'n, 'f>,
     ) -> PaintResult {
         let mut result = PaintResult::kFullyPainted;
-        for index in children {
-            let child = paint_order.Entry(index);
-            let escapes_current_geometry = self.EntryEscapesCurrentGeometry(&child);
-            if escapes_current_geometry {
-                self.SuspendGeometryForEscapingChild();
+        let mut iterator = PaintLayerPaintOrderIterator::new(root, children_to_visit);
+        while let Some(child) = iterator.Next() {
+            // A normal-flow child outside every z-order list paints nothing:
+            // no visible content, self-painting descendant or view-transition
+            // name (PaintLayer::IsZOrderListVisible, paint_layer.cc:573-575).
+            // The flat replay stream would still record its empty property
+            // scopes, so it is not entered.
+            if !child.GetLayoutObject().IsStacked() && !child.IsZOrderListVisible() {
+                continue;
             }
-            let child_painter =
-                PaintLayerPainter::with_inherited_geometry(child.layer, self.context, child.property_ancestors)
-                    .WithFlags(self.paint_flags);
-            if child.layer.is_stacking_context {
-                result.Include(child_painter.Paint());
-            } else {
-                result.Include(child_painter.PaintInternal(
-                    false,
-                    paint_order.NeedsReorderOverlayOverflowControls(child.layer),
-                ));
+            let mut has_resident_node = false;
+            for occurrence in nodes.Occurrences(child) {
+                has_resident_node = true;
+                result.Include(self.PaintChildOccurrence(&occurrence));
             }
-            if escapes_current_geometry {
-                self.ResumeGeometryAfterEscapingChild();
+            if !has_resident_node {
+                result.Include(self.PaintLayerWithoutResidentNode(child, nodes));
             }
 
-            // Source: core/paint/paint_layer_painter.cc:645-681. A target can
-            // carry more than one scroller's controls, in collection order.
-            for scroller in paint_order.ControlsAfter(child.layer) {
-                let escapes_current_geometry = self.EntryEscapesCurrentGeometry(&scroller);
-                if escapes_current_geometry {
-                    self.SuspendGeometryForEscapingChild();
-                }
-                PaintLayerPainter::with_inherited_geometry(
-                    scroller.layer,
-                    self.context,
-                    scroller.property_ancestors,
-                )
-                .WithFlags(self.paint_flags)
-                .PaintOverlayOverflowControls();
-                result.Include(scroller.layer.previous_paint_result.get());
-                if escapes_current_geometry {
-                    self.ResumeGeometryAfterEscapingChild();
+            // Source: paint_layer_painter.cc:671-685. A target can carry more
+            // than one scroller's controls, in collection order.
+            if let Some(scrollers) = iterator.LayersPaintingOverlayOverflowControlsAfter(child) {
+                for scroller in scrollers.iter() {
+                    // Members of the live stacking node's map.
+                    let scroller = unsafe { &*scroller.Get() };
+                    debug_assert!(scroller.NeedsReorderOverlayOverflowControls());
+                    for occurrence in nodes.Occurrences(scroller) {
+                        let escapes_current_geometry =
+                            self.EntryEscapesCurrentGeometry(&occurrence);
+                        if escapes_current_geometry {
+                            self.SuspendGeometryForEscapingChild();
+                        }
+                        PaintLayerPainter::with_inherited_geometry(
+                            occurrence.layer,
+                            self.context,
+                            occurrence.property_ancestors,
+                        )
+                        .WithFlags(self.paint_flags)
+                        .PaintOverlayOverflowControls();
+                        result.Include(occurrence.layer.previous_paint_result.get());
+                        if escapes_current_geometry {
+                            self.ResumeGeometryAfterEscapingChild();
+                        }
+                    }
                 }
             }
+        }
+        result
+    }
+
+    /// PaintLayerPainter(*child).Paint() for one resident occurrence of the
+    /// child layer, re-entering the property scopes between this layer and it.
+    fn PaintChildOccurrence(&self, child: &PaintLayerPaintOrderEntry<'_, 'n, 'f>) -> PaintResult {
+        let escapes_current_geometry = self.EntryEscapesCurrentGeometry(child);
+        if escapes_current_geometry {
+            self.SuspendGeometryForEscapingChild();
+        }
+        let result = PaintLayerPainter::with_inherited_geometry(
+            child.layer,
+            self.context,
+            child.property_ancestors,
+        )
+        .WithFlags(self.paint_flags)
+        .Paint();
+        if escapes_current_geometry {
+            self.ResumeGeometryAfterEscapingChild();
+        }
+        result
+    }
+
+    /// PaintLayerPainter(*layer).Paint() for a PaintLayer PrePaint built no
+    /// layer node for: a non-self-painting layer, or an inline-level layer
+    /// whose content Rechrom paints with its line box. Such a layer records
+    /// no content of its own here, so Paint reduces to its early returns and
+    /// its two PaintChildren calls (paint_layer_painter.cc:304-308,481-483,
+    /// 499-501,640-650). Its descendants' resident nodes lie below this
+    /// painter's node, so they are painted from here with their recorded
+    /// property ancestors.
+    fn PaintLayerWithoutResidentNode(
+        &self,
+        layer: &PaintLayer,
+        nodes: &ResidentLayerNodes<'n, 'f>,
+    ) -> PaintResult {
+        if !layer.HasSelfPaintingLayerDescendant()
+            || layer.GetLayoutObject().ChildPaintBlockedByDisplayLock()
+        {
+            return PaintResult::kFullyPainted;
+        }
+        let result = self.PaintChildren(layer, PaintLayerIteration::kAllChildren, nodes);
+        if self.paint_flags & PaintFlag::kOmitCompositingInfo == 0 {
+            layer.SetPreviousPaintResult(result);
         }
         result
     }
@@ -1390,49 +1464,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn child_incomplete_paint_result_propagates_to_parent_layer() {
-        let full = PaintRect {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
-        };
-        let inner = PaintRect {
-            x: 10.0,
-            y: 10.0,
-            width: 20.0,
-            height: 20.0,
-        };
-        let mut parent = cull_layer(inner, inner, full, full);
-        parent.paint_layer_facts_are_authoritative = true;
-        parent.is_paint_layer = true;
-        parent.is_self_painting_layer = true;
-        parent.has_self_painting_layer_descendant = true;
-        parent.is_stacking_context = true;
-
-        let mut child = cull_layer(inner, inner, full, full);
-        child.paint_layer_facts_are_authoritative = true;
-        child.is_paint_layer = true;
-        child.is_self_painting_layer = true;
-        child.is_stacking_context = true;
-        child.is_z_order_list_visible = true;
-        child
-            .fragment
-            .as_mut()
-            .unwrap()
-            .paint
-            .paint_layer_is_fragmented = true;
-        parent.children.push(Box::new(child));
-
-        let mut output = PaintRecording::default();
-        let context = RefCell::new(PaintContext::new(&mut output));
-        assert_eq!(
-            PaintLayerPainter::new(&parent, &context, Vec::new()).Paint(),
-            PaintResult::kMayBeClippedByCullRect
-        );
-    }
-
     fn node_with_opacity(opacity: f32) -> PaintTreeNode<'static> {
         let mut fragment = FragmentPaintData::default();
         fragment.paint.style.SetOpacityForTesting(opacity);
@@ -1497,19 +1528,19 @@ mod tests {
     }
 
     #[test]
-    fn subsequence_admission_requires_source_support_and_nontrivial_children() {
-        let fragment = FragmentPaintData::default();
+    fn subsequence_admission_requires_source_support() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.style.SetPointerEventsNoneForTesting(true);
         let mut node = PaintTreeNode::default();
         node.SetOwnedFragmentForTesting(&fragment);
         node.supports_subsequence_caching = true;
-        let mut first = PaintTreeNode::default();
-        first.is_paint_layer = true;
-        let mut second = PaintTreeNode::default();
-        second.is_paint_layer = true;
-        node.children.push(Box::new(first));
-        node.children.push(Box::new(second));
         let mut output = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
+        context.borrow_mut().update_chunk_id_and_properties(
+            &node,
+            crate::display_item_id::DisplayItemIdType::kLayerChunk,
+        );
+        context.borrow_mut().EnsureChunk();
 
         assert!(ShouldCreateSubsequence(&node, &context, PaintFlag::kNoFlag));
         context.borrow_mut().BeginSkippingCache();
