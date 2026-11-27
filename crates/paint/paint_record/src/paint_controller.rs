@@ -915,6 +915,16 @@ impl PaintController {
         self.metrics
     }
 
+    /// Counts a display item recorded by a painter in this cycle, as opposed
+    /// to one moved from the previous artifact.
+    pub(crate) fn CountRecordedItem(&mut self, kind: RecordedDisplayItemKind) {
+        match kind {
+            RecordedDisplayItemKind::Drawing => self.metrics.recorded_drawings += 1,
+            RecordedDisplayItemKind::Scrollbar => self.metrics.recorded_scrollbars += 1,
+            RecordedDisplayItemKind::ForeignLayer => {}
+        }
+    }
+
     /// Source: `paint_controller.cc:136-143`.
     ///
     /// Chromium DisplayItemClients are validated by Layout's reciprocal commit

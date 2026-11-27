@@ -642,6 +642,8 @@ impl<'o> PaintContext<'o> {
         let record_background =
             DrawingBackgroundColor(id, visual_rect, std::slice::from_ref(&item));
         let record_has_text = item.r#type == DisplayItemType::kDrawGlyphRun;
+        self.paint_controller
+            .CountRecordedItem(RecordedDisplayItemKind::Drawing);
         self.paint_controller.ProcessNewItem(
             self.output,
             id,
@@ -879,6 +881,7 @@ impl<'o> PaintContext<'o> {
                     .any(|op| op.r#type == DisplayItemType::kDrawGlyphRun);
             }
         }
+        self.paint_controller.CountRecordedItem(kind);
         self.paint_controller.ProcessNewItem(
             self.output,
             id,

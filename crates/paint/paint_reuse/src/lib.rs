@@ -24,6 +24,10 @@ pub struct PaintReuseMetrics {
     pub subsequence_rejected_missing_index: usize,
     pub subsequence_rejected_tombstone: usize,
     pub subsequence_rejected_invalid: usize,
+    /// Display items newly recorded this cycle (not moved from the cache),
+    /// by kind: DrawingDisplayItem and ScrollbarDisplayItem.
+    pub recorded_drawings: usize,
+    pub recorded_scrollbars: usize,
 }
 
 impl PaintReuseMetrics {

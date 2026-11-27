@@ -903,6 +903,8 @@ fn RecordPaint(
         context.borrow().CacheMetrics().rejected_missing_previous as f64,
     );
     let reuse = context.borrow().CacheMetrics();
+    trace.set("recorded_drawings", reuse.recorded_drawings as f64);
+    trace.set("recorded_scrollbars", reuse.recorded_scrollbars as f64);
     let walk = context.borrow().walk_metrics;
     browser_tracing::instant(
         "paint_reuse",

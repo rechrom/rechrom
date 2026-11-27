@@ -7848,15 +7848,37 @@ fn BackgroundInsets(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Edges 
     inset
 }
 
+/// Whether the fragment's style can resolve to a non-zero corner radius.
+///
+/// Chromium resolves corner radii only `if (style.HasBorderRadius())`
+/// (contoured_border_geometry.cc:137-141,245-253) and BoxDecorationData's
+/// bleed avoidance reads the same ComputedStyle bit
+/// (box_decoration_data.cc:29-31), so a box without radii never resolves
+/// them. ComputedStyle::HasBorderRadius() tests each corner's width
+/// (computed_style.h:1398-1415); a zero-width corner is degenerate and
+/// resolves to a square corner (MakeDegenerateCornerSquare), so every
+/// resolved radius is zero. It also answers false under border-shape while
+/// the radii stay specified, so a border-shape style, like a detached
+/// projection without a live source, keeps the resolving path.
+fn StyleMayHaveCornerRadius(fragment: &FragmentPaintData) -> bool {
+    match fragment.paint.style.Source() {
+        Some(computed) => computed.HasBorderShape() || computed.HasBorderRadius(),
+        None => true,
+    }
+}
+
 pub(crate) fn BackgroundRadii(
     node: &PaintTreeNode<'_>,
     box_type: BackgroundBox,
 ) -> PaintCornerRadii {
-    let decoration = DecorationRect(node);
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
+    if !StyleMayHaveCornerRadius(fragment) {
+        return PaintCornerRadii::default();
+    }
+    let decoration = DecorationRect(node);
     ResolveCornerRadii(
         &fragment.paint.style,
         &fragment.BorderSides(),
@@ -7877,18 +7899,18 @@ fn BackgroundRadiiForRect(
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
+    if !StyleMayHaveCornerRadius(fragment) {
+        return PaintCornerRadii::default();
+    }
+    let insets = BackgroundInsets(node, box_type);
     ResolveCornerRadii(
         &fragment.paint.style,
         &fragment.BorderSides(),
         Size {
-            width: rect.width
-                + BackgroundInsets(node, box_type).left
-                + BackgroundInsets(node, box_type).right,
-            height: rect.height
-                + BackgroundInsets(node, box_type).top
-                + BackgroundInsets(node, box_type).bottom,
+            width: rect.width + insets.left + insets.right,
+            height: rect.height + insets.top + insets.bottom,
         },
-        BackgroundInsets(node, box_type),
+        insets,
     )
 }
 
