@@ -12,12 +12,15 @@ use crate::cc::{
 use std::sync::Arc;
 pub trait ScrollbarLayerTypes: MainLayerTypes {
     type ScrollbarCanvas: ?Sized;
-    type Scrollbar: Scrollbar<Self::ScrollbarCanvas> + Send + Sync + 'static;
+    type Scrollbar: Scrollbar<Self::ScrollbarCanvas> + Clone + Send + Sync + 'static;
     /// Source: PaintedScrollbarLayer::RasterizeScrollbarPart. The concrete CPU
     /// family supplies the transparent bitmap/canvas allocation while cc owns
-    /// repaint policy and UI-resource lifetime.
+    /// repaint policy and UI-resource lifetime. The thumb is painted through
+    /// the layer's own scrollbar adapter, which clears its thumb-repaint flag
+    /// exactly as Blink's ScrollbarLayerDelegate::PaintThumb does
+    /// (scrollbar_layer_delegate.cc PaintThumb -> ClearThumbNeedsRepaint).
     fn RasterizeScrollbarThumb(
-        scrollbar: &Self::Scrollbar,
+        scrollbar: &mut Self::Scrollbar,
         logical_size: super::geometry::Size,
         pixel_size: super::geometry::Size,
     ) -> <Self as crate::commit::CommitTypes>::UIResourceBitmap;
