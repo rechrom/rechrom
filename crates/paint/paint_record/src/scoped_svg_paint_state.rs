@@ -32,8 +32,15 @@ impl ScopedSVGPaintState {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        matches!(
-            fragment.paint.SourceKind(),
+        Self::OwnsPaintScopeForKind(node, fragment.paint.SourceKind())
+    }
+
+    /// `OwnsPaintScope` for a caller that has read the node's source kind
+    /// once for its visit (paint_walk's per-phase gate).
+    pub fn OwnsPaintScopeForKind(node: &PaintTreeNode<'_>, kind: NodeKind) -> bool {
+        !node.is_paint_layer
+            && matches!(
+            kind,
             NodeKind::kSvgGroup
                 | NodeKind::kSvgResourceMarker
                 | NodeKind::kSvgText
@@ -72,9 +79,22 @@ impl ScopedSVGPaintState {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if fragment.paint.SourceKind() != NodeKind::kSvgShape {
+        Self::ShouldPaintForKind(node, fragment.paint.SourceKind(), paint_info)
+    }
+
+    /// `ShouldPaint` with the node's source kind read once by the caller.
+    pub fn ShouldPaintForKind(
+        node: &PaintTreeNode<'_>,
+        kind: NodeKind,
+        paint_info: &PaintInfo<'_, '_>,
+    ) -> bool {
+        if !Self::OwnsPaintScopeForKind(node, kind) || kind != NodeKind::kSvgShape {
             return true;
         }
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
         let Some(shape) = fragment.paint.SvgShape().map(|shape| &**shape) else {
             return false;
         };
@@ -105,6 +125,21 @@ impl ScopedSVGPaintState {
                 fragment.paint.SourceKind() == NodeKind::kSvgShape
                     && !fragment.paint.style.visible()
                     && Self::HasReferenceFilter(node)
+            })
+    }
+
+    /// `NeedsReferenceFilterChunk` with the node's source kind read once by
+    /// the caller.
+    pub fn NeedsReferenceFilterChunkForKind(
+        node: &PaintTreeNode<'_>,
+        kind: NodeKind,
+        paint_info: &PaintInfo<'_, '_>,
+    ) -> bool {
+        kind == NodeKind::kSvgShape
+            && paint_info.phase == PaintPhase::kForeground
+            && !paint_info.IsRenderingClipPathAsMaskImage()
+            && node.fragment.as_deref().is_some_and(|fragment| {
+                !fragment.paint.style.visible() && Self::HasReferenceFilter(node)
             })
     }
 

@@ -210,6 +210,38 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         }
     }
 
+    /// Whether `new(node, paint_info)` would install neither chunk properties
+    /// nor a drawing PaintOffsetTranslation, so that the state it builds is
+    /// exactly `ForCullTest`. The tests mirror `new`'s branches, cheapest
+    /// node facts first.
+    pub(crate) fn InstallsNothing(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>) -> bool {
+        let Some(fragment) = node.fragment.as_deref() else {
+            return false;
+        };
+        if paint_info.phase == PaintPhase::kMask {
+            return false;
+        }
+        if paint_info.phase == PaintPhase::kOverlayOverflowControls
+            || (node.is_paint_layer && node.is_self_painting_layer)
+        {
+            return true;
+        }
+        let may_install = node.applies_transform
+            || node.applies_effect
+            || (node.paint_offset_translation.is_some()
+                && paint_info.context.borrow().InDrawingRecorder());
+        if !may_install && !fragment.IsPageBorderBox() {
+            return true;
+        }
+        IsSvgLayoutChild(fragment.paint.SourceKind())
+    }
+
+    /// The state `new` builds when `InstallsNothing` holds: the local cull
+    /// rect and the node's paint offset, with no scope.
+    pub(crate) fn ForCullTest(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
+        Self::unadjusted(node, paint_info, node.paint_offset)
+    }
+
     fn unadjusted(
         node: &'n PaintTreeNode<'f>,
         paint_info: &PaintInfo<'c, 'o>,

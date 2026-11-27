@@ -81,11 +81,17 @@ pub struct BoxFragmentPainter<'n, 'f, 'c, 'o> {
 pub fn GetHitTestOpaqueness(fragment: &FragmentPaintData) -> PaintHitTestOpaqueness {
     let style = &fragment.paint.style;
     if !fragment.paint.VisibleToHitTesting() || !style.visible() || style.pointer_events_none() {
-        PaintHitTestOpaqueness::Transparent
-    } else if style.border_radius > 0.0
-        || style.border_radii().is_some()
-        || fragment.paint.IsSVGChild()
-    {
+        return PaintHitTestOpaqueness::Transparent;
+    }
+    // ObjectPainter::GetHitTestOpaqueness reads StyleRef().HasBorderRadius()
+    // (core/paint/object_painter.cc); a live source answers that directly
+    // instead of projecting all four corner radii. Detached projections keep
+    // their exported radius values.
+    let has_border_radius = match style.Source() {
+        Some(computed) => computed.HasBorderRadius(),
+        None => style.border_radius > 0.0 || style.border_radii().is_some(),
+    };
+    if has_border_radius || fragment.paint.IsSVGChild() {
         PaintHitTestOpaqueness::Mixed
     } else {
         PaintHitTestOpaqueness::Opaque
@@ -114,9 +120,15 @@ fn PaintsSelfOutlineAfterChildren(phase: PaintPhase) -> bool {
 // distinct from CSS visibility. Hidden table parts still supply their
 // background to visible cells.
 fn IsVisibleToPaint(fragment: &FragmentPaintData) -> bool {
-    if fragment.ViewHidden() {
-        return false;
-    }
+    !fragment.ViewHidden() && IsVisibleToPaintNotHidden(fragment)
+}
+
+/// IsVisibleToPaint for a fragment already known not to be hidden for paint:
+/// BoxFragmentPainter::PaintInternal tests IsHiddenForPaint once on entry
+/// (box_fragment_painter.cc:643-662) and PaintObject reads only the style
+/// visibility after it. Rechrom's paint_walk performs that entry test before
+/// it calls the per-phase hooks, so they must not repeat the fragment query.
+fn IsVisibleToPaintNotHidden(fragment: &FragmentPaintData) -> bool {
     fragment.paint.style.visible()
         || matches!(
             fragment.paint.Display(),
@@ -668,8 +680,31 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         node: &'n PaintTreeNode<'f>,
         paint_info: &PaintInfo<'c, 'o>,
     ) -> bool {
+        // ShouldPaint reads only the state's cull rect and paint offset. When
+        // the full ScopedPaintState would install no chunk properties and no
+        // drawing translation, entering it has no other effect, so the gate
+        // tests the cull alone; otherwise it keeps the scope's chunk-state
+        // effect, as PaintInternal enters the state before ShouldPaint
+        // (box_fragment_painter.cc:615-641).
+        if crate::scoped_paint_state::ScopedPaintState::InstallsNothing(node, paint_info) {
+            let paint_state =
+                crate::scoped_paint_state::ScopedPaintState::ForCullTest(node, paint_info);
+            return Self::ShouldPaintWithState(node, &paint_state);
+        }
         let paint_state = crate::scoped_paint_state::ScopedPaintState::new(node, paint_info);
         Self::ShouldPaintWithState(node, &paint_state)
+    }
+
+    /// BoxFragmentPainter::PaintInternal of a MathML operator paints the
+    /// stretched glyph itself and skips its inline children
+    /// (box_fragment_painter.cc:1016-1018). One read per parent visit; the
+    /// per-child test is `ShouldPaintChildFragment`.
+    pub fn SuppressesFragmentItemChildren(parent: &PaintTreeNode<'_>) -> bool {
+        parent
+            .fragment
+            .as_deref()
+            .and_then(|fragment| fragment.ViewMathML())
+            .is_some_and(|math| math.kind == layout::paint::MathMLPaintKind::kOperator)
     }
 
     // Chromium: box_fragment_painter.cc:2016-2022,2059-2064,2106-2119.
@@ -736,14 +771,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     // must not paint the operator's source text a second time. Physical box
     // children remain independently traversable.
     pub fn ShouldPaintChildFragment(parent: &PaintTreeNode<'_>, child: &PaintTreeNode<'_>) -> bool {
-        let parent_is_mathml_operator = parent
-            .fragment
-            .as_deref()
-            .and_then(|fragment| fragment.ViewMathML())
-            .is_some_and(|math| {
-                math.kind == layout::paint::MathMLPaintKind::kOperator
-            });
-        if !parent_is_mathml_operator {
+        if !Self::SuppressesFragmentItemChildren(parent) {
             return true;
         }
         let child = child
@@ -772,11 +800,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     /// mirrors that gate before its resident child traversal, so the
     /// recording entry must not export and test the filtered ink overflow a
     /// second time. The cull test reads only the node's own cull rect and
-    /// paint offset, so the earlier answer is exact.
+    /// paint offset, so the earlier answer is exact. The caller has also
+    /// established !ViewHidden() and ViewCanPaintFragmentOccurrence() (the
+    /// walk's entry gate), which the recording entry does not repeat.
     pub fn PaintFragmentAdmitted(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
         let paint_state = crate::scoped_paint_state::ScopedPaintState::new(node, paint_info);
         debug_assert!(Self::ShouldPaintWithState(node, &paint_state));
-        Self::new(node, paint_info.context).Paint(paint_state.GetPaintInfo());
+        Self::new(node, paint_info.context).PaintWithEntry(paint_state.GetPaintInfo(), true);
     }
 
     fn ShouldPaintWithState(
@@ -827,34 +857,36 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         node: &'n PaintTreeNode<'f>,
         paint_info: &PaintInfo<'c, 'o>,
     ) {
+        if paint_info.phase != PaintPhase::kForeground {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let unscaled_text_combine_caret = node.applies_transform
-            && fragment.paint.IsTextCombine()
-            && paint_info.context.borrow().caret.is_some();
-        if paint_info.phase == PaintPhase::kForeground
-            && fragment.paint.HasSource()
-            && IsVisibleToPaint(fragment)
-            && PaintsCaretBeforeChildren(
-                paint_info.context.borrow().caret_shape,
-                unscaled_text_combine_caret,
-            )
-        {
+        // The caret tests read the recording's caret state before any
+        // fragment query; every operand is pure, so the order of the
+        // conjunction does not change its value. paint_walk calls this hook
+        // only for a node its entry gate found not hidden for paint.
+        let (has_caret, caret_shape) = {
+            let context = paint_info.context.borrow();
+            (context.caret.is_some(), context.caret_shape)
+        };
+        let paints_caret = caret_shape == Some(CaretShape::kBlock)
+            || (has_caret && node.applies_transform && fragment.paint.IsTextCombine());
+        if paints_caret && fragment.paint.HasSource() && IsVisibleToPaintNotHidden(fragment) {
             crate::caret_display_item_client::PaintCaret(node, paint_info.context);
         }
-        if paint_info.phase == PaintPhase::kForeground
-            && fragment.paint.HasSource()
-            && IsVisibleToPaint(fragment)
-            && PaintsCaretBeforeChildren(
-                paint_info
-                    .context
-                    .borrow()
-                    .drag_caret
-                    .and_then(|state| state.native.map(|native| native.shape)),
-                node.applies_transform && fragment.paint.IsTextCombine(),
-            )
+        let drag_caret_shape = paint_info
+            .context
+            .borrow()
+            .drag_caret
+            .and_then(|state| state.native.map(|native| native.shape));
+        if PaintsCaretBeforeChildren(
+            drag_caret_shape,
+            node.applies_transform && fragment.paint.IsTextCombine(),
+        ) && fragment.paint.HasSource()
+            && IsVisibleToPaintNotHidden(fragment)
         {
             crate::caret_display_item_client::PaintDragCaret(node, paint_info.context);
         }
@@ -893,6 +925,13 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
 
     // Chromium: box_fragment_painter.h:62; box_fragment_painter.cc:643-662.
     fn Paint(&self, paint_info: &PaintInfo<'c, 'o>) {
+        self.PaintWithEntry(paint_info, false);
+    }
+
+    /// `Paint`; `walk_admitted` means paint_walk's PaintWithPhase gate has
+    /// just established !ViewHidden() and ViewCanPaintFragmentOccurrence()
+    /// for this node, so those pure entry tests are not read again.
+    fn PaintWithEntry(&self, paint_info: &PaintInfo<'c, 'o>, walk_admitted: bool) {
         let fragment = self
             .node
             .fragment
@@ -904,8 +943,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let text_combine = fragment.paint.IsTextCombine();
         if fragment.paint.IsSVGHiddenContainer()
             || (!fragment.paint.HasSource() && !text_combine)
-            || fragment.ViewHidden()
-            || !fragment.ViewCanPaintFragmentOccurrence()
+            || (!walk_admitted
+                && (fragment.ViewHidden() || !fragment.ViewCanPaintFragmentOccurrence()))
         {
             return;
         }
@@ -936,7 +975,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let phase = paint_info.phase;
-        let is_visible = IsVisibleToPaint(fragment);
+        // PaintObject runs only after Paint's entry test rejected a fragment
+        // hidden for paint.
+        let is_visible = IsVisibleToPaintNotHidden(fragment);
         // Overflow controls and the resizer scroll hit-test data below read
         // one positioned scrollable-area payload for this paint.
         let scrollbars = crate::scrollable_area_painter::ScrollbarPaintDataCell::new();
@@ -1469,7 +1510,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .expect("paint tree node has a fragment");
         let has_source = fragment.paint.HasSource();
         let text_combine = fragment.paint.IsTextCombine();
-        if (!has_source && !text_combine) || !IsVisibleToPaint(fragment) {
+        // paint_walk calls this hook only for a node its entry gate found not
+        // hidden for paint.
+        if (!has_source && !text_combine) || !IsVisibleToPaintNotHidden(fragment) {
             return;
         }
         // Chromium: box_fragment_painter.cc:785-793. Bar and underscore
@@ -1512,7 +1555,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !has_source {
             return;
         }
-        if fragment.paint.SourceKind() == NodeKind::kFrameSet {
+        // One read of the source node kind for the post-children hooks.
+        let source_kind = fragment.paint.SourceKind();
+        if source_kind == NodeKind::kFrameSet {
             FrameSetPainter::new(self.node, self.context).PaintBorders(paint_info);
         }
         if matches!(
@@ -1536,9 +1581,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);
         }
-        if fragment.paint.SourceKind() == NodeKind::kReplaced
-            && fragment.ViewEstablishesPaintState()
-        {
+        if source_kind == NodeKind::kReplaced && fragment.ViewEstablishesPaintState() {
             self.PaintReplacedSelection(paint_info);
         }
     }
