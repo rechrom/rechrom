@@ -65,6 +65,45 @@ impl PrePaintSourceObject {
     }
 }
 
+thread_local! {
+    static RESIDENT_PAINT_SOURCE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Paint's tree-walk scope over one leased resident Layout result.
+///
+/// Chromium's painters read `PhysicalFragment::layout_object_` and the
+/// object's ComputedStyle directly while LocalFrameView::PaintTree walks the
+/// PaintLayer tree (core/frame/local_frame_view.cc:3183-3226): no layout
+/// object is destroyed during the walk, and every fragment it reaches is the
+/// live tree's. While this scope is open, PaintProperties reads its bound
+/// source LayoutObject without the per-call heap membership query; the
+/// query remains for payloads read outside a walk. Sequence-confined: the
+/// scope is neither Send nor Sync.
+pub struct ResidentPaintSourceScope {
+    _sequence: std::marker::PhantomData<*const ()>,
+}
+
+impl ResidentPaintSourceScope {
+    pub fn new() -> Self {
+        RESIDENT_PAINT_SOURCE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        Self {
+            _sequence: std::marker::PhantomData,
+        }
+    }
+
+    /// Whether a paint tree walk is open on this sequence.
+    #[inline]
+    pub(crate) fn IsActive() -> bool {
+        RESIDENT_PAINT_SOURCE_DEPTH.with(|depth| depth.get() != 0)
+    }
+}
+
+impl Drop for ResidentPaintSourceScope {
+    fn drop(&mut self) {
+        RESIDENT_PAINT_SOURCE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
 // The C++ definitions are public API; all crate::* names above retain their
 // owner in the later layoutng crate. The Cargo cycle needs an interface split.
 
@@ -1750,6 +1789,48 @@ impl ResidentBoxGeometry for FragmentPaintData {
         }
     }
 
+    // The single facts of ViewBoxGeometryFacts, read alone from the resident
+    // box as Chromium's painters read PhysicalBoxFragment::IsInlineBox() and
+    // friends, without computing the other three.
+    fn ViewIsInlineBox(&self) -> bool {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => box_fragment.IsInlineBox(),
+            None => self.paint.box_fragment_is_inline_box,
+        }
+    }
+
+    fn ViewHitTestOverflowClip(&self) -> Option<FragmentPaintRect> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveBoxHitTestOverflowClip(
+                    box_fragment,
+                    self.paint.ShouldClipOverflowAlongEitherAxis(),
+                )
+            }
+            None => self.paint.hit_test_overflow_clip,
+        }
+    }
+
+    fn ViewScrolledContentOffset(&self) -> Offset {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveBoxScrolledContentOffset(
+                    box_fragment,
+                )
+            }
+            None => self.paint.pixel_snapped_scrolled_content_offset,
+        }
+    }
+
+    fn ViewBoxSelfVisualOverflow(&self) -> Option<FragmentPaintRect> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveBoxSelfVisualOverflow(box_fragment)
+            }
+            None => self.paint.box_self_visual_overflow,
+        }
+    }
+
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4] {
         use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
@@ -2238,12 +2319,26 @@ impl PaintProperties {
     /// Borrow the resident Chromium LayoutObject that owns this fragment's
     /// paint inputs. The LayoutResult and its heap scope keep the object live;
     /// this does not create a second owner or an exported paint-data copy.
+    ///
+    /// Inside a `ResidentPaintSourceScope` (the paint tree walk) every bound
+    /// source belongs to the leased resident result, so the address is read
+    /// directly, as Chromium's painters read PhysicalFragment::layout_object_
+    /// (core/layout/physical_fragment.h). Outside it the heap membership
+    /// query still guards retained payloads.
+    #[inline]
     pub(crate) fn SourceObjectPointer(&self) -> *mut LayoutObject {
         let object = self.source_object_address as *mut LayoutObject;
-        if object.is_null() || !foundation::IsManagedLayoutAddress(object) {
-            std::ptr::null_mut()
-        } else {
+        if object.is_null() {
+            return std::ptr::null_mut();
+        }
+        if ResidentPaintSourceScope::IsActive() {
+            debug_assert!(foundation::IsManagedLayoutAddress(object));
+            return object;
+        }
+        if foundation::IsManagedLayoutAddress(object) {
             object
+        } else {
+            std::ptr::null_mut()
         }
     }
 

@@ -118,9 +118,25 @@ pub struct PaintContext<'o> {
     foreign_layers: Option<&'o HashMap<u64, Arc<dyn crate::ForeignLayer>>>,
     text_paint_aggregations: Vec<TextPaintAggregation>,
     paint_timing_root_properties: Option<PropertyTreeState>,
+    /// The last fragment Append() stamped and its occurrence identity. A
+    /// node's display items are appended consecutively (save, drawings,
+    /// restore), and the resident fragment sidecar it borrows cannot change
+    /// during one synchronous recording, so the identity is read once per run
+    /// of items instead of once per item.
+    last_instance_fragment: usize,
+    last_instance_id: u64,
 }
 
 impl<'o> PaintContext<'o> {
+    fn FragmentInstanceIdFor(&mut self, fragment: &layout::paint::FragmentPaintData) -> u64 {
+        let key = fragment as *const layout::paint::FragmentPaintData as usize;
+        if self.last_instance_fragment != key {
+            self.last_instance_id = fragment.ViewFragmentInstanceId();
+            self.last_instance_fragment = key;
+        }
+        self.last_instance_id
+    }
+
     pub fn BindPaintTimingRoot(&mut self, root: &PaintTreeNode<'_>) {
         self.paint_timing_root_properties = Some(root.properties.nodes.clone());
     }
@@ -302,6 +318,8 @@ impl<'o> PaintContext<'o> {
             foreign_layers: None,
             text_paint_aggregations: Vec::new(),
             paint_timing_root_properties: None,
+            last_instance_fragment: 0,
+            last_instance_id: 0,
         }
     }
 
@@ -358,6 +376,8 @@ impl<'o> PaintContext<'o> {
             foreign_layers: None,
             text_paint_aggregations: Vec::new(),
             paint_timing_root_properties: None,
+            last_instance_fragment: 0,
+            last_instance_id: 0,
         }
     }
 
@@ -588,7 +608,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        item.fragment_instance_id = fragment.ViewFragmentInstanceId();
+        item.fragment_instance_id = self.FragmentInstanceIdFor(fragment);
         // Blink records save/restore/clip inside PaintRecords, not as drawing
         // DisplayItems. They must neither consume a pending scope ID nor create
         // a fallback identity. The existing flat replay ABI retains the ops.
@@ -1297,6 +1317,15 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn BeginGeometry(&mut self, node: &PaintTreeNode<'_>) {
+        // Most nodes own none of these PrePaint-resolved scopes; read the
+        // node's own flags before any fragment/source query (the conditions
+        // below are pure, so testing them first keeps the same result).
+        if !node.applies_transform
+            && !(node.applies_root_clip && node.root_clip.is_some())
+            && !(node.applies_clip_path && node.local_clip_path_children.len() <= 1)
+        {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1381,15 +1410,14 @@ impl<'o> PaintContext<'o> {
         node: &PaintTreeNode<'_>,
         clip_override: Option<PaintRect>,
     ) {
+        if !node.applies_overflow_clip || node.local_clip.is_none() {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.HasSource()
-            || !fragment.ViewEstablishesPaintState()
-            || !node.applies_overflow_clip
-            || node.local_clip.is_none()
-        {
+        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
         }
         self.Append(
@@ -1459,6 +1487,15 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn BeginEffects(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_backdrop_filter
+            && !node.applies_blend
+            && !node.applies_opacity
+            && !node.applies_mask
+            && !node.applies_css_clip
+            && !node.applies_filter
+        {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1579,6 +1616,9 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn EndFilter(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_filter {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1600,6 +1640,9 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn EndMaskClip(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_mask {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1627,6 +1670,9 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn BeginCssClip(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_css_clip {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1661,6 +1707,9 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn EndCssClip(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_css_clip {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1683,6 +1732,13 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn EndEffectsAfterFilter(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_mask
+            && !node.applies_opacity
+            && !node.applies_blend
+            && !node.applies_backdrop_filter
+        {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1741,6 +1797,12 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn EndGeometry(&mut self, node: &PaintTreeNode<'_>) {
+        if !(node.applies_clip_path && node.local_clip_path_children.len() <= 1)
+            && !node.applies_root_clip
+            && !node.applies_transform
+        {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
@@ -1786,15 +1848,14 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn EndEscapableGeometry(&mut self, node: &PaintTreeNode<'_>) {
+        if !node.applies_overflow_clip || node.local_clip.is_none() {
+            return;
+        }
         let fragment = node
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.HasSource()
-            || !fragment.ViewEstablishesPaintState()
-            || !node.applies_overflow_clip
-            || node.local_clip.is_none()
-        {
+        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
         }
         self.Append(

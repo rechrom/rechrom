@@ -841,7 +841,12 @@ fn RecordPaint(
         // paint_walk. Recording work remains attributable to paint_record by
         // its crate symbols and the work-volume summary emitted below.
         let mut trace = browser_tracing::span("paint_walk", "PaintWalk.Traverse");
-        PaintLayerPainter::new(&paint_tree, &context, Vec::new()).Paint();
+        {
+            // LocalFrameView::PaintTree walks the live tree under the source
+            // lease; painters read each fragment's LayoutObject directly.
+            let _resident_sources = layout::paint::ResidentPaintSourceScope::new();
+            PaintLayerPainter::new(&paint_tree, &context, Vec::new()).Paint();
+        }
         let walk = context.borrow().walk_metrics;
         trace.set("layers", walk.layer_visits as f64);
         trace.set("phase_visits", walk.phase_visits as f64);

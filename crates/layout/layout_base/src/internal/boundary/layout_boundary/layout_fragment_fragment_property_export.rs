@@ -1224,29 +1224,44 @@ pub(crate) fn LiveBoxGeometryFacts(
     fragment: &PhysicalBoxFragment,
     clips: bool,
 ) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>) {
-    let hit_test_overflow_clip = clips.then(|| {
+    (
+        fragment.IsInlineBox(),
+        LiveBoxHitTestOverflowClip(fragment, clips),
+        LiveBoxScrolledContentOffset(fragment),
+        LiveBoxSelfVisualOverflow(fragment),
+    )
+}
+
+/// `LiveBoxGeometryFacts().1` alone: the hit-test overflow clip rect when
+/// the box clips overflow (box_fragment_painter.cc NodeAtPoint).
+pub(crate) fn LiveBoxHitTestOverflowClip(
+    fragment: &PhysicalBoxFragment,
+    clips: bool,
+) -> Option<FragmentPaintRect> {
+    clips.then(|| {
         ExportInkRect(fragment.OverflowClipRect(
             foundation::OverlayScrollbarClipBehavior::kExcludeOverlayScrollbarSizeForHitTesting,
         ))
-    });
-    let object = fragment.GetLayoutObject();
-    let scrolled = if object.is_null() {
-        Offset::default()
-    } else {
-        let scrolled = fragment.PixelSnappedScrolledContentOffset();
-        Offset {
-            x: scrolled.x() as f64,
-            y: scrolled.y() as f64,
-        }
-    };
-    let self_visual_overflow = unsafe { DynamicTo::<LayoutBox>(object).as_ref() }
-        .map(|layout_box| ExportInkRect(layout_box.SelfVisualOverflowRect()));
-    (
-        fragment.IsInlineBox(),
-        hit_test_overflow_clip,
-        scrolled,
-        self_visual_overflow,
-    )
+    })
+}
+
+/// `LiveBoxGeometryFacts().2` alone: PixelSnappedScrolledContentOffset.
+pub(crate) fn LiveBoxScrolledContentOffset(fragment: &PhysicalBoxFragment) -> Offset {
+    if fragment.GetLayoutObject().is_null() {
+        return Offset::default();
+    }
+    let scrolled = fragment.PixelSnappedScrolledContentOffset();
+    Offset {
+        x: scrolled.x() as f64,
+        y: scrolled.y() as f64,
+    }
+}
+
+/// `LiveBoxGeometryFacts().3` alone: LayoutBox::SelfVisualOverflowRect()
+/// (box_painter.cc:124-129).
+pub(crate) fn LiveBoxSelfVisualOverflow(fragment: &PhysicalBoxFragment) -> Option<FragmentPaintRect> {
+    unsafe { DynamicTo::<LayoutBox>(fragment.GetLayoutObject()).as_ref() }
+        .map(|layout_box| ExportInkRect(layout_box.SelfVisualOverflowRect()))
 }
 
 /// Source: core/paint/box_fragment_painter.cc:2492-2510 and

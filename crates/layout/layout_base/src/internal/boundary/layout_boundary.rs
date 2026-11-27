@@ -146,7 +146,8 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
     LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine, LiveSvgShape,
     LiveBoxInkOverflow, LiveBoxInkOverflowAt, LiveItemInkOverflow, LiveItemInkOverflowAt,
-    LiveTextGlyphInk, LiveBoxGeometryFacts,
+    LiveTextGlyphInk, LiveBoxGeometryFacts, LiveBoxHitTestOverflowClip,
+    LiveBoxScrolledContentOffset, LiveBoxSelfVisualOverflow,
     LiveSvgPaintGeometry, LiveSvgTextDecorationStyle, LiveSvgViewBox, LiveTextHitTestBounds,
     PropertyFragmentUniqueId, ResolvePendingPaintStyle,
 };

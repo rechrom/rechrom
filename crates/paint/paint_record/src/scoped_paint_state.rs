@@ -76,19 +76,24 @@ pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
 
 /// Source: `scoped_paint_state.cc:152-164`.
 fn UpdatePreviousPaintResultForContents(node: &PaintTreeNode<'_>) {
+    // The node's own retained result and cull rect are tested before the
+    // source LayoutBox/PaintLayer reads; every condition is a pure query.
+    if node.previous_paint_result.get() != PaintResult::kFullyPainted {
+        return;
+    }
+    let Some(contents_cull_rect) = node.cull_rect else {
+        return;
+    };
     let Some(fragment) = node.fragment.as_deref() else {
         return;
     };
     if !fragment.paint.IsLayoutBox()
         || !fragment.paint.PaintLayerStateIsAuthoritative()
         || fragment.paint.PaintLayerClientId() == 0
-        || node.previous_paint_result.get() != PaintResult::kFullyPainted
     {
         return;
     }
-    let (Some(contents_cull_rect), Some(contents_visual_rect)) =
-        (node.cull_rect, ContentsVisualRect(node))
-    else {
+    let Some(contents_visual_rect) = ContentsVisualRect(node) else {
         return;
     };
     if !contents_cull_rect.contains(contents_visual_rect) {
