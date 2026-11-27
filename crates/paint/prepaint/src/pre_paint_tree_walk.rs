@@ -130,7 +130,20 @@ impl<'a> PaintFragmentSource<'a> {
         if self.1.is_some() {
             return self;
         }
-        Self(self.0, Some(self.0.PaintData() as *const FragmentPaintData))
+        // PaintDataMut keeps the sidecar's mutable provenance for
+        // ReadPrePaintInvalidationForVisit below.
+        let data = unsafe { self.0.PaintDataMut() } as *mut FragmentPaintData;
+        Self(self.0, Some(data as *const FragmentPaintData))
+    }
+
+    /// Source: pre_paint_tree_walk.cc:418-436. Read the visited object's
+    /// dirty bits through the FragmentData this visit already reached
+    /// (Resolved), without resolving the sidecar a second time.
+    pub(crate) unsafe fn ReadPrePaintInvalidationForVisit(self) -> Self {
+        let resolved = self.Resolved();
+        let data = resolved.1.expect("resolved above") as *mut FragmentPaintData;
+        unsafe { resolved.0.ReadPrePaintInvalidationForResolvedVisit(data) };
+        resolved
     }
 
     pub fn PaintData(self) -> &'a FragmentPaintData {
@@ -6891,10 +6904,9 @@ impl PrePaintTreeWalk {
         let checkpoint = || profile.then(std::time::Instant::now);
         let t_start = checkpoint();
         // FragmentDataIterator: reach this object's FragmentData once.
-        let fragment = fragment.Resolved();
         // Source: pre_paint_tree_walk.cc:418-436. Read this object's dirty
-        // bits as of this visit.
-        unsafe { fragment.Cursor().ReadPrePaintInvalidationForVisit() };
+        // bits as of this visit, through that same FragmentData.
+        let fragment = unsafe { fragment.ReadPrePaintInvalidationForVisit() };
         // Decision D2: an out-of-flow object takes its effect state from its
         // logical parent before admission, so a retained subtree is compared
         // against, and a rebuilt one parented to, the logical effect.
@@ -8438,18 +8450,23 @@ impl PrePaintTreeWalk {
         let use_directory = !self.stats.post_walk;
         let mut rejection = 0u8;
         let mut updated = 0usize;
+        // Per-phase time of the direct updates (trace only): lookup and
+        // CanDoDeferredTransformNodeUpdate checks, matrix, node update and
+        // flat-list refresh, cull rect.
+        let mut phase_ns = [0u64; 4];
         for &client in pending {
             let mut nodes: Vec<*mut PaintTreeNode<'static>> = Vec::new();
             if use_directory {
                 if let Some(entries) = self.client_nodes.get(&client) {
-                    nodes.extend(entries.iter().copied().filter(|&pointer| {
-                        // The directory is owned by the retained tree that
-                        // this walk returned; its boxes did not move.
-                        unsafe { &*pointer }
+                    // The directory is owned by the retained tree that this
+                    // walk returned; its boxes did not move.
+                    let names_client = |pointer: &*mut PaintTreeNode<'static>| {
+                        unsafe { &**pointer }
                             .fragment
                             .as_deref()
                             .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
-                    }));
+                    };
+                    nodes.extend(entries.iter().copied().filter(names_client));
                 }
             } else {
                 fn find(
@@ -8476,7 +8493,7 @@ impl PrePaintTreeWalk {
                 [] => continue,
                 [pointer] => {
                     let node = unsafe { &mut **pointer };
-                    match self.DirectlyUpdateTransformMatrix(node) {
+                    match self.DirectlyUpdateTransformMatrix(node, &mut phase_ns) {
                         Ok(true) => updated += 1,
                         Ok(false) => {}
                         Err(code) => {
@@ -8494,6 +8511,10 @@ impl PrePaintTreeWalk {
         }
         trace.set("updated", updated as f64);
         trace.set("rejection", rejection as f64);
+        trace.set("check_ms", phase_ns[0] as f64 / 1e6);
+        trace.set("matrix_ms", phase_ns[1] as f64 / 1e6);
+        trace.set("update_ms", phase_ns[2] as f64 / 1e6);
+        trace.set("cull_ms", phase_ns[3] as f64 / 1e6);
         rejection == 0
     }
 
@@ -8504,7 +8525,15 @@ impl PrePaintTreeWalk {
     fn DirectlyUpdateTransformMatrix(
         &mut self,
         node: &mut PaintTreeNode<'static>,
+        phase_ns: &mut [u64; 4],
     ) -> Result<bool, u8> {
+        let profile = browser_tracing::enabled();
+        let checkpoint = || profile.then(std::time::Instant::now);
+        let t_start = checkpoint();
+        // paint_property_tree_builder.cc stores the object's direct
+        // compositing reasons once (full_context_.direct_compositing_reasons);
+        // the role and Effect checks below read that one value.
+        let _direct_reasons = CompositingReasonFinder::DirectReasonsScope();
         let Some(cache) = node.cache.as_ref() else {
             return Err(2);
         };
@@ -8587,6 +8616,8 @@ impl PrePaintTreeWalk {
         {
             return Err(7);
         }
+        let t_checked = checkpoint();
+        phase_ns[0] += ProfileNs(t_start, t_checked);
 
         // ComputedStyle::ApplyTransform with kIncludeTransformOperations,
         // kExcludeTransformOrigin, kExcludeMotionPath and
@@ -8619,11 +8650,14 @@ impl PrePaintTreeWalk {
         let animation_state = TransformAnimationState {
             is_running_animation_on_compositor,
         };
+        let t_matrix = checkpoint();
+        phase_ns[1] += ProfileNs(t_checked, t_matrix);
         let store = &mut self.property_node_store;
         let change = paint_model::property_cell::with_writer(|writer| {
             store.DirectlyUpdateTransform(writer, &current, matrix, [0.0; 3], animation_state)
         });
         if change == PaintPropertyChangeType::Unchanged {
+            phase_ns[2] += ProfileNs(t_matrix, checkpoint());
             return Ok(true);
         }
         // 4873-4875.
@@ -8633,6 +8667,16 @@ impl PrePaintTreeWalk {
         // The flat list of this object and of every descendant shares the
         // prefix ending at this matrix.
         ReplaceFlatTransformInSubtree(node, flat_index, &old_matrix, &matrix);
+        let t_updated = checkpoint();
+        phase_ns[2] += ProfileNs(t_matrix, t_updated);
+        // Charged when this function returns, whichever exit it takes.
+        struct CullTimer<'a>(Option<std::time::Instant>, &'a mut u64);
+        impl Drop for CullTimer<'_> {
+            fn drop(&mut self) {
+                *self.1 += ProfileNs(self.0, self.0.map(|_| std::time::Instant::now()));
+            }
+        }
+        let _cull_timer = CullTimer(t_updated, &mut phase_ns[3]);
         // CullRectUpdater::PaintPropertiesChanged (cull_rect_updater.cc:
         // 558-620): a simple-value transform change updates this object's
         // cull rects. Descendant cull rects are relative to its contents cull
@@ -8710,7 +8754,7 @@ impl PrePaintTreeWalk {
         self.completed_local_frame_prepaint.clear();
         self.paint_invalidator.BeginPass();
         // The root's dirty bits decide the clean-tree admission below.
-        unsafe { root.Cursor().ReadPrePaintInvalidationForVisit() };
+        let root = unsafe { root.ReadPrePaintInvalidationForVisit() };
         // A sliced inline box's strip is computed when it is read
         // (ViewStitchedDecoration over the live inline cursor), as Chromium's
         // InlineBoxFragmentPainter does; PrePaint does not pre-populate it.

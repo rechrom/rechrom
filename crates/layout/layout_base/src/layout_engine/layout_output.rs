@@ -1636,6 +1636,39 @@ impl<'a> PaintFragmentCursor<'a> {
         unsafe { self.RefreshPrePaintInvalidation() };
     }
 
+    /// `ReadPrePaintInvalidationForVisit` for a visit that already reached
+    /// this cursor's FragmentData sidecar: `data` is the pointer
+    /// `PaintDataMut` returned for this same cursor. PrePaintTreeWalk reaches
+    /// the FragmentData once per visit through FragmentDataIterator
+    /// (core/paint/pre_paint_tree_walk.cc:418-436, WalkLayoutObject) and
+    /// reads the dirty bits from the object it already holds; this does not
+    /// resolve the sidecar (and its box FragmentData sync) again.
+    pub unsafe fn ReadPrePaintInvalidationForResolvedVisit(self, data: *mut FragmentPaintData) {
+        if self.state.is_none() {
+            return;
+        }
+        let epoch = PRE_PAINT_INVALIDATION_EPOCH.with(Cell::get);
+        let data = unsafe { &mut *data };
+        if data.pre_paint_invalidation_epoch == epoch {
+            return;
+        }
+        data.pre_paint_invalidation_epoch = epoch;
+        let direct = data.paint.SourceObjectPointer() as *const LayoutObject;
+        let source = if !direct.is_null() {
+            direct
+        } else if data.paint.HasSource() {
+            self.source.GetLayoutObject() as *const LayoutObject
+        } else {
+            std::ptr::null()
+        };
+        if !source.is_null() {
+            data.pre_paint_invalidation =
+                crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(
+                    source,
+                );
+        }
+    }
+
     /// A paint-input refresh: later PrePaint visits read the LayoutObject
     /// dirty bits again (ReadPrePaintInvalidationForVisit).
     pub(crate) fn AdvancePrePaintInvalidationEpoch() {
