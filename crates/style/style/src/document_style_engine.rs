@@ -1755,7 +1755,7 @@ impl DocumentStyleEngine {
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
     ) -> Result<Option<Persistent<ComputedStyle>>, DocumentStyleError> {
         use crate::resolver::production_style_resolver::{
-            ApplyBaseStyleForElement, ProductionBaseStyleCollaborators, ProductionBaseStyleInputs,
+            ApplyBaseStyleBuilderForElement, ProductionBaseStyleCollaborators, ProductionBaseStyleInputs,
             ProductionResolverBatch, ProductionRuleCollectionCache, ProductionRuleMatchingInputs,
         };
         let document_owner = owner.DocumentForStyleMut();
@@ -1912,7 +1912,7 @@ impl DocumentStyleEngine {
         collaborators.selectors = Some(self.selectors.clone());
         collaborators.selector_backend = Some(selector_backend);
         collaborators.interaction = self.selectors.borrow().interaction;
-        let output = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
+        let output = ApplyBaseStyleBuilderForElement(ProductionBaseStyleInputs {
             matching: ProductionRuleMatchingInputs {
                 document,
                 element_index: element,
@@ -1927,7 +1927,7 @@ impl DocumentStyleEngine {
         })
         .map_err(|_| DocumentStyleError::Unsupported("production-scrollbar-style-resolution"))?;
         self.resolver_dependencies.Merge(&output.metrics);
-        let mut builder = ComputedStyleBuilder::from_style(unsafe { &*output.style.Get() });
+        let mut builder = output.style;
         environment.ApplyState(&mut builder);
         attributes_state.ApplyState(&mut builder);
         self.ResolveFontFeatureValues(&mut builder);
@@ -4108,7 +4108,7 @@ impl DocumentStyleEngine {
                         collaborators.selectors = Some(self.selectors.clone());
                         collaborators.selector_backend = Some(selector_backend.clone());
                         collaborators.interaction = self.selectors.borrow().interaction;
-                        let translated_output = match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+                        let translated_output = match crate::resolver::production_style_resolver::ApplyBaseStyleBuilderForElement(
                                 crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                                     matching: crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
                                         document,
@@ -4124,9 +4124,12 @@ impl DocumentStyleEngine {
                                 },
                             ) {
                                 Ok(output) => {
-                                    let mut translated = ComputedStyleBuilder::from_style(unsafe {
-                                        &*output.style.Get()
-                                    });
+                                    // cpp: StyleResolver::ResolveStyle keeps one
+                                    // StyleResolverState builder until TakeStyle.
+                                    // The resolver hands that same builder over;
+                                    // the adjustments below run on it and the
+                                    // style is taken once after them.
+                                    let mut translated = output.style;
                                     resolver_environment.ApplyState(&mut translated);
                                     resolver_attribute_state.ApplyState(&mut translated);
                                     let metrics = &output.metrics;
@@ -4546,7 +4549,7 @@ impl DocumentStyleEngine {
                                             Some(selector_backend.clone());
                                         collaborators.interaction =
                                             self.selectors.borrow().interaction;
-                                        match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+                                        match crate::resolver::production_style_resolver::ApplyBaseStyleBuilderForElement(
                                         crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                                             matching: crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
                                                 document,
@@ -4579,10 +4582,7 @@ impl DocumentStyleEngine {
                                             if output.metrics.matched_property_sets == 0 {
                                                 continue;
                                             }
-                                            let mut resolved_highlight =
-                                                ComputedStyleBuilder::from_style(unsafe {
-                                                    &*output.style.Get()
-                                                });
+                                            let mut resolved_highlight = output.style;
                                             resolver_environment
                                                 .ApplyState(&mut resolved_highlight);
                                             resolver_attribute_state
@@ -7498,7 +7498,7 @@ impl DocumentStyleEngine {
         );
         collaborators.interaction = self.selectors.borrow().interaction;
         collaborators.color_scheme_settings = self.color_scheme_settings;
-        let output = crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+        let output = crate::resolver::production_style_resolver::ApplyBaseStyleBuilderForElement(
             crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                 matching:
                     crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
@@ -7516,7 +7516,7 @@ impl DocumentStyleEngine {
         )
         .map_err(|_| DocumentStyleError::Unsupported("overscroll pseudo style resolver"))?;
         self.resolver_dependencies.Merge(&output.metrics);
-        let mut builder = ComputedStyleBuilder::from_style(unsafe { &*output.style.Get() });
+        let mut builder = output.style;
         environment_state.ApplyState(&mut builder);
         attribute_state.ApplyState(&mut builder);
         self.ResolveFontFeatureValues(&mut builder);
@@ -7718,7 +7718,7 @@ impl DocumentStyleEngine {
         collaborators.selectors = Some(self.selectors.clone());
         collaborators.selector_backend = Some(selector_backend);
         collaborators.interaction = self.selectors.borrow().interaction;
-        match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+        match crate::resolver::production_style_resolver::ApplyBaseStyleBuilderForElement(
             crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
                 matching:
                     crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
@@ -7752,7 +7752,7 @@ impl DocumentStyleEngine {
                     .translated_style_resolver_applied += 1;
                 self.translated_rule_shadow_stats
                     .translated_style_cascade_pseudo_applied += 1;
-                let mut builder = ComputedStyleBuilder::from_style(unsafe { &*output.style.Get() });
+                let mut builder = output.style;
                 resolver_environment.ApplyState(&mut builder);
                 resolver_attribute_state.ApplyState(&mut builder);
                 if has_nested_marker {

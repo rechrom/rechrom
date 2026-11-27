@@ -2652,6 +2652,21 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
         state: &mut B::StyleResolverState,
         cascade: &mut B::StyleCascade,
     ) -> Option<Rc<B::ComputedStyle>> {
+        self.FinishResolveStyleBuilder(element, context, request, state, cascade);
+        Some(self.backend.StateTakeStyle(state))
+    }
+
+    // cpp: StyleResolver::ResolveStyle (style_resolver.cc), everything after
+    // ApplyBaseStyle up to its final `state.TakeStyle()`. The builder stays
+    // in `state`; FinishResolveStyle performs the one TakeStyle.
+    fn FinishResolveStyleBuilder(
+        &mut self,
+        element: &B::Element,
+        context: &B::StyleRecalcContext,
+        request: &B::StyleRequest,
+        state: &mut B::StyleResolverState,
+        cascade: &mut B::StyleCascade,
+    ) {
         let b = self.backend;
         if b.RecalcFlag(context, ResolverRecalcFlag::EnsuringStyle) {
             b.SetBuilderFlag(
@@ -2661,7 +2676,7 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
             );
         }
         if self.IsForPseudoElement(element, request) && b.StateHadNoMatchedProperties(state) {
-            return Some(b.StateTakeStyle(state));
+            return;
         }
         if self.ApplyAnimatedStyle(state, cascade, context) {
             b.AdjustComputedStyle(
@@ -2730,7 +2745,27 @@ impl<'a, B: StyleResolverBaseStyleBackend> StyleResolver<'a, B> {
             }
         }
         b.StateLoadPendingResources(state);
-        Some(b.StateTakeStyle(state))
+    }
+
+    /// Production StyleEngine entry: StyleResolver::ResolveStyle without its
+    /// final `state.TakeStyle()`. The engine applies its remaining
+    /// element-local adjustments (environment/attribute state, pseudo bits,
+    /// layout display adjustment) to this same builder and then takes the
+    /// style exactly once, as Blink's single StyleResolverState builder does.
+    /// Copying an already taken style into a second builder would allocate a
+    /// throwaway ComputedStyle per resolved element.
+    pub fn ResolveStyleBuilderForProduction(
+        &mut self,
+        element: &B::Element,
+        context: &B::StyleRecalcContext,
+        request: &B::StyleRequest,
+        state: &mut B::StyleResolverState,
+        cascade: &mut B::StyleCascade,
+    ) {
+        let _trace =
+            browser_tracing::span("style_resolve", "StyleResolver.ResolveStyleForProduction");
+        self.ApplyBaseStyle(element, context, request, state, cascade);
+        self.FinishResolveStyleBuilder(element, context, request, state, cascade);
     }
 
     /// Package-private entry for adapters that retain the source state but

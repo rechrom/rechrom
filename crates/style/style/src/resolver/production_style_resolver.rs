@@ -5558,8 +5558,14 @@ pub(crate) struct ProductionResolveBaseStyleInputs<'a> {
 /// ApplyBaseStyleNoCache operation. Custom properties are returned beside the
 /// computed style style because the public DocumentStyleEngine owns their inheritance
 /// side table.
-pub(crate) struct ProductionBaseStyleOutput {
-    pub style: Rc<Persistent<ComputedStyle>>,
+///
+/// The production StyleEngine receives `S = ComputedStyleBuilder`: the
+/// resolver state's own final builder, before TakeStyle, so the engine's
+/// remaining element-local adjustments run on the one builder and the style
+/// is taken once (Blink StyleResolver::ResolveStyle owns one
+/// StyleResolverState builder and calls TakeStyle once).
+pub(crate) struct ProductionBaseStyleOutput<S = Rc<Persistent<ComputedStyle>>> {
+    pub style: S,
     pub custom_properties: Rc<CustomProperties>,
     pub matched_signatures: Vec<(ProductionRuleIdentity, u32, u32)>,
     pub referenced_custom_properties: HashSet<std::string::String>,
@@ -5693,9 +5699,40 @@ pub(crate) fn MatchAllRulesForElement(
     }
 }
 
+/// Test entry returning the taken style; production callers use
+/// `ApplyBaseStyleBuilderForElement` and take the style themselves.
+#[cfg(test)]
 pub(crate) fn ApplyBaseStyleForElement(
     inputs: ProductionBaseStyleInputs<'_>,
 ) -> Result<ProductionBaseStyleOutput, Vec<ProductionStyleResolutionFailure>> {
+    ApplyBaseStyleBuilderForElement(inputs).map(|output| {
+        let ProductionBaseStyleOutput {
+            style: mut builder,
+            custom_properties,
+            matched_signatures,
+            referenced_custom_properties,
+            local_custom_properties,
+            variable_dependencies_complete,
+            metrics,
+        } = output;
+        ProductionBaseStyleOutput {
+            style: Rc::new(Persistent::from_ptr(
+                builder.TakeStyle() as *mut ComputedStyle
+            )),
+            custom_properties,
+            matched_signatures,
+            referenced_custom_properties,
+            local_custom_properties,
+            variable_dependencies_complete,
+            metrics,
+        }
+    })
+}
+
+pub(crate) fn ApplyBaseStyleBuilderForElement(
+    inputs: ProductionBaseStyleInputs<'_>,
+) -> Result<ProductionBaseStyleOutput<ComputedStyleBuilder>, Vec<ProductionStyleResolutionFailure>>
+{
     let ProductionBaseStyleInputs {
         matching: inputs,
         parent,
@@ -5814,9 +5851,17 @@ pub(crate) fn ApplyBaseStyleForElement(
     state.layout_parent = state.parent.clone();
     state.originating_style = host.cascade.originating_style.clone().map(Rc::new);
     let mut cascade = host.NewStyleCascade(&mut state);
-    let style = StyleResolver::new(&element, &host)
-        .ResolveStyleForProduction(&element, &context, &request, &mut state, &mut cascade)
-        .expect("production element resolution retains a style");
+    StyleResolver::new(&element, &host).ResolveStyleBuilderForProduction(
+        &element,
+        &context,
+        &request,
+        &mut state,
+        &mut cascade,
+    );
+    // The cascade only records a pointer to `state`; release it before the
+    // final builder moves to the caller.
+    drop(cascade);
+    let style: ComputedStyleBuilder = state.builder;
     {
         let metrics = host.base_style_metrics.borrow();
         trace.set(
@@ -5852,7 +5897,7 @@ pub(crate) fn ApplyBaseStyleForElement(
         std::mem::take(&mut *host.referenced_custom_properties.borrow_mut());
     let local_custom_properties = std::mem::take(&mut *host.local_custom_properties.borrow_mut());
     if let Some(fonts) = host.cascade.font_metrics {
-        fonts.WillUseFont(unsafe { &*style.Get() }.GetFontDescription());
+        fonts.WillUseFont(style.GetFontDescription());
     }
     Ok(ProductionBaseStyleOutput {
         style,
