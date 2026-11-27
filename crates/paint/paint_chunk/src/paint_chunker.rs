@@ -74,6 +74,42 @@ impl PaintChunker {
         }
     }
 
+    /// ScopedPaintChunkProperties entry (scoped_paint_chunk_properties.h:
+    /// 21-29): `update_properties` that hands the replaced state back by
+    /// move. Chromium's scope keeps raw node pointers for the restore
+    /// (scoped_paint_chunk_properties.h:68-75); moving the chunker's own
+    /// references into the scope keeps them live without another reference
+    /// count per scope.
+    pub fn replace_properties(&mut self, properties: PropertyTreeState) -> PropertyTreeState {
+        if !self.current_properties.same_nodes(&properties) {
+            self.next_chunk_id = None;
+        }
+        std::mem::replace(&mut self.current_properties, properties)
+    }
+
+    /// `update_id_and_properties` that hands the replaced state back by move.
+    pub fn replace_id_and_properties(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: PropertyTreeState,
+    ) -> PropertyTreeState {
+        if self.next_chunk_id.is_none() || !self.current_properties.same_nodes(&properties) {
+            self.next_chunk_id = Some((id, client));
+        }
+        std::mem::replace(&mut self.current_properties, properties)
+    }
+
+    /// ScopedPaintChunkProperties exit (scoped_paint_chunk_properties.h:
+    /// 68-75): UpdateCurrentPaintChunkProperties(previous) with the state the
+    /// scope moved out on entry.
+    pub fn restore_properties(&mut self, previous: PropertyTreeState) {
+        if !self.current_properties.same_nodes(&previous) {
+            self.next_chunk_id = None;
+            self.current_properties = previous;
+        }
+    }
+
     // Preserve a pending outer scope ID while its property state is unchanged.
     // paint_chunker.cc: UpdateCurrentPaintChunkProperties(id, client, properties).
     pub fn update_id_and_properties(

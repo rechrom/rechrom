@@ -1223,6 +1223,55 @@ impl<'o> PaintContext<'o> {
             .UpdateCurrentPaintChunkProperties(properties);
     }
 
+    /// ScopedPaintChunkProperties entry: set `properties` and move the
+    /// replaced state out for the scope's restore.
+    pub(crate) fn replace_chunk_properties(
+        &mut self,
+        properties: PropertyTreeState,
+    ) -> PropertyTreeState {
+        self.paint_controller
+            .ReplaceCurrentPaintChunkProperties(properties)
+    }
+
+    pub(crate) fn replace_chunk_id_and_properties_raw(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: PropertyTreeState,
+    ) -> PropertyTreeState {
+        self.paint_controller
+            .ReplaceCurrentPaintChunkIdAndProperties(id, client, properties)
+    }
+
+    /// `replace_chunk_id_and_properties_raw` with `node`'s drawing client
+    /// and border-box properties (update_chunk_id_and_properties).
+    pub(crate) fn replace_chunk_id_and_properties(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        item_type: DisplayItemIdType,
+    ) -> PropertyTreeState {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
+        self.paint_controller.ReplaceCurrentPaintChunkIdAndProperties(
+            DisplayItemId {
+                client_id: fragment.paint.DisplayItemClientId(),
+                r#type: item_type,
+                fragment: node.DisplayItemFragment(),
+            },
+            DisplayItemClientInfo::from_fragment(fragment),
+            node.properties.nodes.clone(),
+        )
+    }
+
+    /// ScopedPaintChunkProperties exit (scoped_paint_chunk_properties.h:
+    /// 68-75).
+    pub(crate) fn restore_chunk_properties(&mut self, previous: PropertyTreeState) {
+        self.paint_controller
+            .RestoreCurrentPaintChunkProperties(previous);
+    }
+
     /// update_chunk_properties for a borrowed state; the live nodes are
     /// referenced only when the current chunk state changes.
     pub fn update_chunk_properties_ref(&mut self, properties: &PropertyTreeState) {
@@ -1288,16 +1337,6 @@ impl<'o> PaintContext<'o> {
                 DisplayItemClientInfo::from_fragment(fragment),
                 &node.properties.nodes,
             );
-    }
-
-    pub(crate) fn update_chunk_id_and_properties_raw_ref(
-        &mut self,
-        id: DisplayItemId,
-        client: DisplayItemClientInfo,
-        properties: &PropertyTreeState,
-    ) {
-        self.paint_controller
-            .UpdateCurrentPaintChunkIdAndPropertiesRef(id, client, properties);
     }
 
     pub(crate) fn update_chunk_id_and_properties_raw(
@@ -1874,7 +1913,9 @@ impl<'o> PaintContext<'o> {
 /// Restoring properties deliberately does not restore the previous chunk ID.
 pub struct ScopedPaintChunkProperties<'c, 'o> {
     pub(crate) context: &'c std::cell::RefCell<PaintContext<'o>>,
-    pub(crate) previous: PropertyTreeState,
+    /// The state the scope replaced, moved out of the chunker on entry and
+    /// moved back on exit (scoped_paint_chunk_properties.h:68-75).
+    pub(crate) previous: Option<PropertyTreeState>,
 }
 
 impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
@@ -1882,10 +1923,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         properties: PropertyTreeState,
     ) -> Self {
-        let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_properties(properties);
-        Self { context, previous }
+        let previous = context.borrow_mut().replace_chunk_properties(properties);
+        Self { context, previous: Some(previous) }
     }
 
     pub fn drag_caret(
@@ -1911,7 +1950,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             },
             properties,
         );
-        Self { context, previous }
+        Self { context, previous: Some(previous) }
     }
 
     pub fn caret(
@@ -1971,7 +2010,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             },
             properties,
         );
-        Self { context, previous }
+        Self { context, previous: Some(previous) }
     }
 
     pub fn layer(
@@ -1981,9 +2020,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
     ) -> Self {
         let fragment = node.fragment.as_deref().expect("paint layer fragment");
         let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
-        if fragment.paint.PaintLayerClientId() != 0 {
-            borrowed.update_chunk_id_and_properties_raw_ref(
+        let previous = if fragment.paint.PaintLayerClientId() != 0 {
+            borrowed.replace_chunk_id_and_properties_raw(
                 DisplayItemId {
                     client_id: fragment.paint.PaintLayerClientId(),
                     r#type: item_type,
@@ -1997,12 +2035,12 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                         is_just_created: state.is_just_created,
                     }
                 },
-                &node.properties.nodes,
-            );
+                node.properties.nodes.clone(),
+            )
         } else {
-            borrowed.update_chunk_properties_ref(&node.properties.nodes);
-        }
-        Self { context, previous }
+            borrowed.replace_chunk_properties(node.properties.nodes.clone())
+        };
+        Self { context, previous: Some(previous) }
     }
 
     pub fn mask(
@@ -2028,7 +2066,6 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             .expect("Mask paint properties")
             .clone();
         let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
         let layer_client = fragment.paint.PaintLayerClientId();
         let (client_id, client) = if layer_client != 0 {
             (
@@ -2050,7 +2087,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 DisplayItemClientInfo::from_fragment(fragment),
             )
         };
-        borrowed.update_chunk_id_and_properties_raw(
+        let previous = borrowed.replace_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id,
                 r#type: item_type,
@@ -2059,7 +2096,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             client,
             properties,
         );
-        Self { context, previous }
+        Self { context, previous: Some(previous) }
     }
 
     pub fn contents(
@@ -2068,28 +2105,26 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         phase: PaintPhase,
     ) -> Self {
         let fragment = node.fragment.as_deref().expect("contents fragment");
-        let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_id_and_properties_raw_ref(
+        let previous = context.borrow_mut().replace_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToClipType(phase),
                 fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo::from_fragment(fragment),
-            &node.contents_properties.nodes,
+            node.contents_properties.nodes.clone(),
         );
-        Self { context, previous }
+        Self { context, previous: Some(previous) }
     }
 
     pub fn properties_only(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         node: &PaintTreeNode<'_>,
     ) -> Self {
-        let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_properties_ref(&node.properties.nodes);
-        Self { context, previous }
+        let previous = context
+            .borrow_mut()
+            .replace_chunk_properties(node.properties.nodes.clone());
+        Self { context, previous: Some(previous) }
     }
 
     /// TextCombinePainter records parent decorations after the anonymous
@@ -2101,14 +2136,12 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         phase: PaintPhase,
     ) -> Self {
         let fragment = node.fragment.as_deref().expect("text combine fragment");
-        let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
         let mut properties = node.properties.nodes.clone();
         properties.transform = paint_model::property_cell::with_access(|access| {
             properties.transform.Parent(access).cloned()
         })
         .expect("text combine transform must have a parent");
-        borrowed.update_chunk_id_and_properties_raw(
+        let previous = context.borrow_mut().replace_chunk_id_and_properties_raw(
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToDrawingType(phase),
@@ -2117,7 +2150,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemClientInfo::from_fragment(fragment),
             properties,
         );
-        Self { context, previous }
+        Self { context, previous: Some(previous) }
     }
 
     pub fn new(
@@ -2125,10 +2158,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         node: &PaintTreeNode<'_>,
         item_type: DisplayItemIdType,
     ) -> Self {
-        let mut borrowed = context.borrow_mut();
-        let previous = borrowed.chunk_properties();
-        borrowed.update_chunk_id_and_properties(node, item_type);
-        Self { context, previous }
+        let previous = context
+            .borrow_mut()
+            .replace_chunk_id_and_properties(node, item_type);
+        Self { context, previous: Some(previous) }
     }
 }
 
