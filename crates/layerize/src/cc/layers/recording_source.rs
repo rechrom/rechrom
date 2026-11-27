@@ -121,12 +121,16 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
         }
         self.size_ = layer_size;
         self.recording_scale_factor_ = recording_scale_factor;
+        // Attribution of the display-list half of PictureLayer::Update; a span
+        // only, no work moves.
+        let mut trace = browser_tracing::span("layerize", "Layerize.RecordingSource.Update");
         let display_list = client.PaintContentsToDisplayList(context);
         let same_display_list = match (&self.display_list_, &display_list) {
             (None, None) => true,
             (Some(old), Some(new)) => Arc::ptr_eq(old, new),
             _ => false,
         };
+        trace.set("new_display_list", !same_display_list as u8 as f64);
         if same_display_list {
             assert!(!self.force_update_);
             return true;
@@ -151,6 +155,10 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
         }) {
             invalidation.AssignRect(layer_rect);
         } else if new_recorded_bounds != self.recorded_bounds_ {
+            let _bounds_trace = browser_tracing::span(
+                "layerize",
+                "Layerize.RecordingSource.UpdateInvalidationForRecordedBounds",
+            );
             self.UpdateInvalidationForRecordedBounds(
                 self.recorded_bounds_,
                 new_recorded_bounds,
@@ -263,7 +271,21 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
         services: &(impl RecordingSourceServices<B> + ?Sized),
     ) {
         services.TraceScope("cc", "RecordingSource::FinishDisplayItemListUpdate", None);
-        self.DetermineIfSolidColor(services);
+        {
+            let mut solid_trace = browser_tracing::span(
+                "layerize",
+                "Layerize.RecordingSource.DetermineIfSolidColor",
+            );
+            if browser_tracing::enabled() {
+                solid_trace.set(
+                    "ops",
+                    self.display_list_
+                        .as_ref()
+                        .map_or(0, |list| list.TotalOpCount()) as f64,
+                );
+            }
+            self.DetermineIfSolidColor(services);
+        }
         let display_list = self.display_list_.as_ref().expect("display list");
         // DisplayItemList::EmitTraceSnapshot's TRACE_EVENT_OBJECT_SNAPSHOT
         // evaluates its traced value (every r-tree bound) only while the

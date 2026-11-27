@@ -331,6 +331,12 @@ impl<B: PictureLayerTypes> LayerObject<B> for PictureLayer<B> {
     // Source: cc/layers/picture_layer.h:43;
     //         cc/layers/picture_layer.cc:116-150.
     fn Update(&self, c: &mut LayerContext<'_, B>) -> bool {
+        // Per-layer attribution of LayerTreeHost::PaintContent
+        // (layer_tree_host.cc:1093-1125); a span only, no work moves.
+        let mut layer_trace = browser_tracing::span("layerize", "Layerize.PictureLayer.Update");
+        if browser_tracing::enabled() {
+            layer_trace.set("layer_id", self.base_.id() as f64);
+        }
         let host = self.base_.host_id().expect("source attached host");
         *self
             .update_source_frame_number_
@@ -358,6 +364,7 @@ impl<B: PictureLayerTypes> LayerObject<B> for PictureLayer<B> {
             .last_updated_invalidation_
             .Write(&self.base_.Synchronization(c));
         updated |= recording.Update(size, scale, &mut *client, invalidation.as_mut().unwrap(), c);
+        layer_trace.set("updated", updated as u8 as f64);
         if !updated {
             return false;
         }
