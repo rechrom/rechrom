@@ -43,6 +43,37 @@ impl PaintChunker {
         }
     }
 
+    /// `update_properties` for a borrowed state. Chromium's
+    /// ScopedPaintChunkProperties keeps raw node pointers
+    /// (scoped_paint_chunk_properties.h:68-75); the live nodes are referenced
+    /// only when the current state actually changes.
+    pub fn update_properties_ref(&mut self, properties: &PropertyTreeState) {
+        if !self.current_properties.same_nodes(properties) {
+            self.next_chunk_id = None;
+            self.current_properties = properties.clone();
+        }
+    }
+
+    /// `update_id_and_properties` for a borrowed state; an identical state
+    /// (the same live nodes) is not re-referenced.
+    pub fn update_id_and_properties_ref(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        properties: &PropertyTreeState,
+    ) {
+        if self.next_chunk_id.is_none() || !self.current_properties.same_nodes(properties) {
+            self.next_chunk_id = Some((id, client));
+        }
+        let current = &self.current_properties;
+        if !(std::sync::Arc::ptr_eq(&current.transform, &properties.transform)
+            && std::sync::Arc::ptr_eq(&current.clip, &properties.clip)
+            && std::sync::Arc::ptr_eq(&current.effect, &properties.effect))
+        {
+            self.current_properties = properties.clone();
+        }
+    }
+
     // Preserve a pending outer scope ID while its property state is unchanged.
     // paint_chunker.cc: UpdateCurrentPaintChunkProperties(id, client, properties).
     pub fn update_id_and_properties(

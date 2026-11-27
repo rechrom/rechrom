@@ -309,14 +309,18 @@ fn ShouldCreateSubsequence(
     false
 }
 
-pub struct PaintLayerPainter<'n, 'f, 'c, 'o> {
+pub struct PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
     layer: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
-    inherited_geometry: Vec<&'n PaintTreeNode<'f>>,
+    /// The property ancestors a child layer re-enters. A child painter
+    /// borrows its paint-order entry's list (PaintLayerPainter is a stack
+    /// object over the parent's z-order list in Chromium) instead of copying
+    /// it for every child layer.
+    inherited_geometry: std::borrow::Cow<'g, [&'n PaintTreeNode<'f>]>,
     paint_flags: PaintFlags,
 }
 
-impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
+impl<'g, 'n, 'f, 'c, 'o> PaintLayerPainter<'g, 'n, 'f, 'c, 'o> {
     pub fn new(
         layer: &'n PaintTreeNode<'f>,
         context: &'c RefCell<PaintContext<'o>>,
@@ -325,7 +329,20 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         Self {
             layer,
             context,
-            inherited_geometry,
+            inherited_geometry: std::borrow::Cow::Owned(inherited_geometry),
+            paint_flags: PaintFlag::kNoFlag,
+        }
+    }
+
+    fn with_inherited_geometry(
+        layer: &'n PaintTreeNode<'f>,
+        context: &'c RefCell<PaintContext<'o>>,
+        inherited_geometry: &'g [&'n PaintTreeNode<'f>],
+    ) -> Self {
+        Self {
+            layer,
+            context,
+            inherited_geometry: std::borrow::Cow::Borrowed(inherited_geometry),
             paint_flags: PaintFlag::kNoFlag,
         }
     }
@@ -501,7 +518,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         let effect_contains_escaping_child = !self.inherited_geometry.is_empty()
             && !self.layer.escapes_ancestor_geometry
             && HasEscapingChildLayer(self.layer);
-        for ancestor in &self.inherited_geometry {
+        for ancestor in self.inherited_geometry.iter() {
             self.context.borrow_mut().BeginGeometry(ancestor);
             self.context.borrow_mut().BeginEffects(ancestor);
             if !effect_contains_escaping_child && self.UsesInheritedGeometry(ancestor) {
@@ -513,7 +530,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         self.context.borrow_mut().BeginGeometry(self.layer);
         self.context.borrow_mut().BeginEffects(self.layer);
         if effect_contains_escaping_child {
-            for ancestor in &self.inherited_geometry {
+            for ancestor in self.inherited_geometry.iter() {
                 if self.UsesInheritedGeometry(ancestor) {
                     self.context
                         .borrow_mut()
@@ -638,7 +655,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
     }
 
     fn ResumeGeometryAfterEscapingChild(&self) {
-        for ancestor in &self.inherited_geometry {
+        for ancestor in self.inherited_geometry.iter() {
             self.context
                 .borrow_mut()
                 .BeginEscapableGeometry(ancestor, self.InheritedClipInLayerSpace(ancestor));
@@ -1040,7 +1057,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             self.layer,
             crate::display_item_id::DisplayItemIdType::kLayerChunk,
         );
-        for ancestor in &self.inherited_geometry {
+        for ancestor in self.inherited_geometry.iter() {
             self.context.borrow_mut().BeginGeometry(ancestor);
             self.context.borrow_mut().BeginEffects(ancestor);
             self.context
@@ -1081,7 +1098,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 self.SuspendGeometryForEscapingChild();
             }
             let child_painter =
-                PaintLayerPainter::new(child.layer, self.context, child.property_ancestors.clone())
+                PaintLayerPainter::with_inherited_geometry(child.layer, self.context, &child.property_ancestors)
                     .WithFlags(self.paint_flags);
             if child.layer.is_stacking_context {
                 result.Include(child_painter.Paint());
@@ -1102,10 +1119,10 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 if escapes_current_geometry {
                     self.SuspendGeometryForEscapingChild();
                 }
-                PaintLayerPainter::new(
+                PaintLayerPainter::with_inherited_geometry(
                     scroller.layer,
                     self.context,
-                    scroller.property_ancestors.clone(),
+                    &scroller.property_ancestors,
                 )
                 .WithFlags(self.paint_flags)
                 .PaintOverlayOverflowControls();
