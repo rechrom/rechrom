@@ -1982,10 +1982,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             previous_fragment: None,
             previous_gap_rules: None,
             own_change,
-            subtree_keys: own_keys.clone(),
             own_keys,
             nodes: 1,
             computed_pass: self.walk.walk_generation,
+            visited_pass: self.walk.walk_generation,
             physical_children: Vec::new(),
             contains_local_frames: false,
         });
