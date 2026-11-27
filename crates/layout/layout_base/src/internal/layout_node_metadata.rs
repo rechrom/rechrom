@@ -454,6 +454,13 @@ impl Node {
         layout_invalidation_node_input_state::UpdateNodeInputData(self, input)
     }
 
+    // A paint-only restyle replaces resource edges and changed element
+    // metadata only; the caller keeps the font binding and tree seal.
+    #[inline(always)]
+    pub(crate) fn UpdatePaintInputData(&mut self, input: &NodeConstructionData) {
+        layout_invalidation_node_input_state::UpdateNodePaintInputData(self, input)
+    }
+
     // Scroll translation is paint state, not a font or geometry invalidation.
     pub(crate) fn ReflectInputScrollOffset(&mut self, offset: super::layout_input::Offset) {
         if let Some(data) = self.input_data_.element_data.as_mut() {

@@ -61,7 +61,10 @@ pub(super) fn update_node_input(
             resources: Arc::clone(&shared_resources),
             text: record.input.text.clone(),
             element: None,
-            debug_name: record.input.debug_name.clone(),
+            // CreateWithStyleOwner keeps the existing InputKey, whose name is
+            // the retained debug name; Create reads the parameter only to
+            // mint a new key, so copying the string here is dead work.
+            debug_name: String::new(),
             first_line_computed_style: record.input.first_line_computed_style,
             first_line_style: None,
             first_line_resources: None,

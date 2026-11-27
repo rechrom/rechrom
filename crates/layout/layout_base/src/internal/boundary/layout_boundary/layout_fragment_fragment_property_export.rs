@@ -13,18 +13,88 @@ use layout_style::style::style_transform::{
     ApplyTransformOrigin,
 };
 
+/// The style-derived slice of a fragment's PaintProperties that a paint-only
+/// restyle replaces.
+///
+/// Source: core/layout/layout_object.cc:2970-3120 (LayoutObject::SetStyle /
+/// StyleDidChange). Chromium installs the new ComputedStyle on the
+/// LayoutObject; painters read it through StyleRef() and FragmentData keeps
+/// its identity, geometry and border/padding facts. The retained-paint
+/// refresh therefore rebinds only the PaintStyle projection identity (still
+/// resolved on its first read, exactly as ExportProperties records it) and
+/// the stored background facts, instead of building and discarding a
+/// complete PaintProperties projection for every restyled object.
+pub(super) struct RetainedPaintStyle {
+    pub(super) style: PaintStyle,
+    pub(super) live_style_facts: bool,
+    pub(super) background_fill_layer_count: usize,
+    pub(super) has_background: bool,
+    pub(super) background_any_local_attachment_image: bool,
+    pub(super) background_any_default_attachment_image: bool,
+    pub(super) background_any_layer_uses_content_box: bool,
+}
+
+/// The ExportProperties(object, null, null, kPaint, None) values of
+/// RetainedPaintStyle, computed without the rest of the projection.
 #[inline(never)]
-pub(super) fn ExportPaintProperties(
-    object: *const LayoutObject,
-    effective_style: *const StyleComputedStyle,
-) -> PaintProperties {
-    ExportProperties(
-        object,
-        std::ptr::null_mut(),
-        effective_style,
-        LayoutUpdateKind::Paint,
-        None,
-    )
+pub(super) fn ExportRetainedPaintStyle(object: *const LayoutObject) -> RetainedPaintStyle {
+    let mut output = RetainedPaintStyle {
+        style: PaintStyle::default(),
+        live_style_facts: false,
+        background_fill_layer_count: 0,
+        has_background: false,
+        background_any_local_attachment_image: false,
+        background_any_default_attachment_image: false,
+        background_any_layer_uses_content_box: false,
+    };
+    if object.is_null() {
+        return output;
+    }
+    let text_combine = DynamicTo::<LayoutTextCombine>(object);
+    if !text_combine.is_null() {
+        // Same parent-owned decoration state ExportProperties freezes
+        // (core/paint/text_combine_painter.cc:35-48).
+        let parent = unsafe { &*text_combine }.Parent();
+        let parent_style = unsafe { &*parent }.StyleRef();
+        let parent_image_resource_id = unsafe { (*parent).GetNode().as_ref() }
+            .and_then(|node| node.InputStyleResources().image_resource_id);
+        output.style = crate::internal::boundary::paint_style_export::ExportStyle(
+            parent_style,
+            parent_image_resource_id,
+        );
+    }
+    let Some(source) = (unsafe { (*object).GetNode().as_ref() }) else {
+        return output;
+    };
+    let style_resources = EffectiveStyleResources(object, source, std::ptr::null());
+    let layout_style = unsafe { &*object }.StyleRef();
+    output.style = if layout_style.HasOffset() {
+        ResolveFragmentPaintStyle(object, layout_style, style_resources, None)
+    } else {
+        PaintStyle::FromPending(crate::internal::layout_input::PendingPaintStyle {
+            style: layout_style as *const StyleComputedStyle as usize,
+            object: object as usize,
+            resources: RetainStyleResources(style_resources),
+            cache: None,
+        })
+    };
+    output.live_style_facts = output
+        .style
+        .Source()
+        .is_some_and(|style| std::ptr::eq(style, layout_style));
+    if !output.live_style_facts {
+        output.background_fill_layer_count =
+            crate::internal::boundary::paint_style_export::BackgroundFillLayerCount(layout_style);
+        output.has_background = layout_style.HasBackground();
+        let background_layers = layout_style.BackgroundLayers();
+        output.background_any_local_attachment_image =
+            background_layers.AnyLayerHasLocalAttachmentImage();
+        output.background_any_default_attachment_image =
+            background_layers.AnyLayerHasDefaultAttachmentImage();
+        output.background_any_layer_uses_content_box =
+            background_layers.AnyLayerUsesContentBox();
+    }
+    output
 }
 
 /// The StyleResourceData paired with `effective_style` for `object`, whose
@@ -1058,6 +1128,43 @@ pub(crate) fn LiveBoxInkOverflow(fragment: &PhysicalBoxFragment) -> [Option<Frag
         Some(ExportInkRect(ink_overflow)),
         filtered,
     ]
+}
+
+/// Entry `which` of LiveBoxInkOverflow alone (0 self, 1 contents, 2 ink,
+/// 3 filtered ink): a painter reads one rect, so only that one is computed
+/// (the filtered rect alone runs ApplyFiltersToRect).
+pub(crate) fn LiveBoxInkOverflowAt(
+    fragment: &PhysicalBoxFragment,
+    which: usize,
+) -> Option<FragmentPaintRect> {
+    if !fragment.IsInkOverflowComputed() {
+        return None;
+    }
+    match which {
+        0 => Some(ExportInkRect(fragment.SelfInkOverflowRect())),
+        1 => Some(ExportInkRect(fragment.ContentsInkOverflowRect())),
+        2 => Some(ExportInkRect(fragment.InkOverflowRect())),
+        3 => {
+            // Source: core/paint/box_fragment_painter.cc:2122-2133.
+            let box_model = DynamicTo::<LayoutBoxModelObject>(fragment.GetLayoutObject());
+            unsafe { box_model.as_ref() }.map(|box_model| {
+                ExportInkRect(box_model.ApplyFiltersToRect(&fragment.InkOverflowRect()))
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Entry `which` of LiveItemInkOverflow alone.
+pub(crate) fn LiveItemInkOverflowAt(item: &FragmentItem, which: usize) -> Option<FragmentPaintRect> {
+    if let Some(box_fragment) = unsafe { item.BoxFragment().as_ref() } {
+        return LiveBoxInkOverflowAt(box_fragment, which);
+    }
+    match which {
+        0 => Some(ExportInkRect(item.SelfInkOverflowRect())),
+        2 => Some(ExportInkRect(item.InkOverflowRect())),
+        _ => None,
+    }
 }
 
 /// An inline item's ink overflow (FragmentItem::SelfInkOverflowRect /

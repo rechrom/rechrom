@@ -145,12 +145,13 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LiveVideoFrameResourceId, LivePreviousBoxGeometry, LiveViewBackgroundRect,
     LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
     LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine, LiveSvgShape,
-    LiveBoxInkOverflow, LiveItemInkOverflow, LiveTextGlyphInk, LiveBoxGeometryFacts,
+    LiveBoxInkOverflow, LiveBoxInkOverflowAt, LiveItemInkOverflow, LiveItemInkOverflowAt,
+    LiveTextGlyphInk, LiveBoxGeometryFacts,
     LiveSvgPaintGeometry, LiveSvgTextDecorationStyle, LiveSvgViewBox, LiveTextHitTestBounds,
     PropertyFragmentUniqueId, ResolvePendingPaintStyle,
 };
 use layout_fragment_fragment_property_export::{
-    ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties,
+    ExportPrePaintInvalidation, ExportProperties, ExportRetainedPaintStyle,
 };
 mod layout_fragment_fragment_paint_data_init;
 use layout_fragment_fragment_paint_data_init::ReadyPrePaintInvalidation;

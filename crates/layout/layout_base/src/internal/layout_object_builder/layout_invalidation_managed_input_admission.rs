@@ -199,6 +199,30 @@ pub(super) fn RetainInputStyles(
     roots
 }
 
+/// In-place counterpart of RetainInputStyles for an existing record: the
+/// same distinct, ordered roots, reusing the record's Persistent handles
+/// (cppgc BasicPersistent::Assign reuses a non-null handle's node) rather
+/// than allocating and registering a new root set for every restyle.
+#[inline(never)]
+pub(super) fn RefreshInputStyleRoots(
+    roots: &mut Vec<Persistent<StyleComputedStyle>>,
+    styles: [*const StyleComputedStyle; 3],
+) {
+    let mut count = 0;
+    for style in styles {
+        if style.is_null() || roots[..count].iter().any(|root| root.Get().cast_const() == style) {
+            continue;
+        }
+        if count < roots.len() {
+            roots[count].Assign(style.cast_mut());
+        } else {
+            roots.push(Persistent::from_ptr(style.cast_mut()));
+        }
+        count += 1;
+    }
+    roots.truncate(count);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

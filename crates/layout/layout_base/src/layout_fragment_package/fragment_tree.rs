@@ -640,6 +640,13 @@ pub trait ResidentBoxGeometry {
     /// from the resident fragment or item. Only detached fixtures read the
     /// stored values.
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4];
+    /// One entry of `ViewInkOverflows()` (0 self, 1 contents, 2 ink,
+    /// 3 filtered ink), computed alone: painters read one rect per call, as
+    /// Chromium's read PhysicalBoxFragment::InkOverflowRect() and friends
+    /// directly (core/paint/box_fragment_painter.cc:2122-2133).
+    fn ViewInkOverflowAt(&self, which: usize) -> Option<FragmentPaintRect> {
+        self.ViewInkOverflows()[which]
+    }
     /// A resident text item's shaped glyph ink in item-local physical
     /// coordinates (the glyph stage of InkOverflow::ComputeTextInkOverflow,
     /// ink_overflow.cc:439-489). `None` for other owners.
@@ -713,6 +720,11 @@ pub trait ResidentBoxGeometry {
     fn ViewScrollbarClients(&self) -> Option<ScrollbarClients>;
     /// Scroll size, CSSOM client size and ScrollsOverflow of the resident box.
     fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool);
+    /// `ViewScrollGeometry()`'s ScrollsOverflow alone
+    /// (LayoutBox::ScrollsOverflow), without the scroll and client sizes.
+    fn ViewScrollsOverflow(&self) -> bool {
+        self.ViewScrollGeometry().2
+    }
     /// Overflow-control paint data from the resident box's scrollable area.
     fn ViewScrollbars(&self) -> Option<Arc<ScrollbarPaintData>>;
     /// The resident box's self outline rects (AddSelfOutlineRects).
@@ -790,16 +802,16 @@ pub trait ResidentBoxGeometry {
         self.ViewBoxGeometryFacts().3
     }
     fn ViewSelfInkOverflow(&self) -> Option<FragmentPaintRect> {
-        self.ViewInkOverflows()[0]
+        self.ViewInkOverflowAt(0)
     }
     fn ViewContentsInkOverflow(&self) -> Option<FragmentPaintRect> {
-        self.ViewInkOverflows()[1]
+        self.ViewInkOverflowAt(1)
     }
     fn ViewInkOverflow(&self) -> Option<FragmentPaintRect> {
-        self.ViewInkOverflows()[2]
+        self.ViewInkOverflowAt(2)
     }
     fn ViewFilteredInkOverflow(&self) -> Option<FragmentPaintRect> {
-        self.ViewInkOverflows()[3]
+        self.ViewInkOverflowAt(3)
     }
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
@@ -1393,6 +1405,17 @@ impl ResidentBoxGeometry for FragmentPaintData {
         }
     }
 
+    fn ViewScrollsOverflow(&self) -> bool {
+        self.ResidentBoxFragment()
+            .and_then(|box_fragment| unsafe {
+                foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(
+                    box_fragment.GetLayoutObject(),
+                )
+                .as_ref()
+            })
+            .is_some_and(|layout_box| layout_box.ScrollsOverflow())
+    }
+
     fn ViewScrollContainer(&self) -> Option<ScrollContainerPaintData> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {
@@ -1747,6 +1770,22 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     .Items()
                     .get(index)
                     .map_or([None; 4], crate::internal::boundary::layout_boundary::LiveItemInkOverflow)
+            }
+        }
+    }
+
+    fn ViewInkOverflowAt(&self, which: usize) -> Option<FragmentPaintRect> {
+        use crate::boundary_types::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::None => self.ViewInkOverflows()[which],
+            ResidentFragmentOwner::Physical(_) => self.ResidentBoxFragment().and_then(|fragment| {
+                crate::internal::boundary::layout_boundary::LiveBoxInkOverflowAt(fragment, which)
+            }),
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).and_then(|item| {
+                    crate::internal::boundary::layout_boundary::LiveItemInkOverflowAt(item, which)
+                })
             }
         }
     }

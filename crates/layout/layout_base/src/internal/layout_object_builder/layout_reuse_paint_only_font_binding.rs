@@ -18,6 +18,15 @@ pub(super) fn PreservePaintOnlyFontBinding(
     if font.is_null() && container_font.is_null() {
         return style;
     }
+    // The incoming style already carries the bound Fonts (for example the
+    // replacement was derived from the previous resident style): installing
+    // them again would copy an identical ComputedStyle.
+    let incoming = unsafe { &*style };
+    if (font.is_null() || std::ptr::eq(incoming.GetFont(), font))
+        && (container_font.is_null() || std::ptr::eq(incoming.ContainerFont(), container_font))
+    {
+        return style;
+    }
     let mut builder = ComputedStyleBuilder::from_style(unsafe { &*style });
     if !font.is_null() {
         builder.SetFont(Member::from_ptr(font));
