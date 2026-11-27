@@ -1368,11 +1368,22 @@ impl<'a> PaintFragmentCursor<'a> {
         let query = unsafe { object.FactorySet().as_ref() }?.svg_context_reference_box?;
         Some(query(object))
     }
+    /// IsA<SVGUseElement>(GetNode()). Only an SVG element's container can be
+    /// one, so the node's retained kind answers for every other object
+    /// without reaching the element metadata.
     pub fn IsSvgUse(self) -> bool {
-        unsafe { self.source.GetLayoutObject().as_ref() }
-            .and_then(|object| unsafe {
-                foundation::DynamicTo::<Element>(object.GetNode()).as_ref()
-            })
+        use crate::internal::layout_input::NodeKind;
+        let Some(object) = (unsafe { self.source.GetLayoutObject().as_ref() }) else {
+            return false;
+        };
+        let node = object.GetNode();
+        let Some(kind) = (unsafe { node.as_ref() }).map(|node| node.InputKind()) else {
+            return false;
+        };
+        if !matches!(kind, NodeKind::kSvgGroup | NodeKind::kSvgHiddenContainer) {
+            return false;
+        }
+        unsafe { foundation::DynamicTo::<Element>(node).as_ref() }
             .and_then(|element| element.InputElementData().as_ref())
             .is_some_and(|data| data.svg_use.is_some())
     }

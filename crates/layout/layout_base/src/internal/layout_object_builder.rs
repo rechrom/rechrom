@@ -42,7 +42,7 @@ mod layout_reuse_paint_only_font_binding;
 use layout_invalidation_managed_input_admission::{
     ControlPaintStateChanged, ElementCaptureStateChanged, GeometryMetadataEqual,
     ImagePaintStateChanged, LayoutImageNaturalSizeChangeIsPaintOnly, LayoutImageNaturalSizeChanged,
-    NonStyleInputsEqual, RetainInputStyles,
+    NonStyleInputsEqual, RefreshInputStyleRoots, RetainInputStyles,
 };
 use layout_reuse_managed_input_index::BuildManagedInputIndex;
 use layout_reuse_paint_only_font_binding::{FontRequestInputsEqual, PreservePaintOnlyFontBinding};

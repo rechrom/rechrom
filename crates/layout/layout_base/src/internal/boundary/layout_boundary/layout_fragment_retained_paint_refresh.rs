@@ -67,8 +67,10 @@ pub(super) fn refresh_retained_paint_inputs(
     }
     for &object in &objects {
         let client_id = unsafe { &*(object as *const DisplayItemClient) }.Id() as u64;
-        let current = ExportPaintProperties(object, std::ptr::null());
-        let live_style_facts = current.LiveStyleFacts();
+        // Only the style-derived slice changes on a paint-only restyle;
+        // the rest of the sidecar is the retained FragmentData.
+        let current = ExportRetainedPaintStyle(object);
+        let live_style_facts = current.live_style_facts;
         let invalidation = ReadyPrePaintInvalidation(object);
         state.VisitBoundObjectPaintData(unsafe { &*object }, &mut |node| {
             if node.paint.DisplayItemClientId() != client_id {

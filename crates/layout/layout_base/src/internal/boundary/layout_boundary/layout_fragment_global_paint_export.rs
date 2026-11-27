@@ -105,6 +105,21 @@ fn RootFragmentBackground<'a>(
     SourceFragment(output, root_object).map(SelectedFragmentBackground)
 }
 
+/// The element whose background the canvas paints: the body when it
+/// propagates per LayoutBoxModelObject::BackgroundTransfersToView
+/// (core/layout/layout_box_model_object.cc:1123-1151), else the root.
+fn CanvasBackgroundSource(root_object: &LayoutObject) -> &LayoutObject {
+    let body = unsafe { BodyLayoutObject(root_object).as_ref() };
+    let body_transfers = body.is_some_and(|body| {
+        let model = DynamicTo::<LayoutBoxModelObject>(body as *const LayoutObject);
+        !model.is_null() && unsafe { &*model }.BackgroundTransfersToViewDefault()
+    });
+    match body {
+        Some(body) if body_transfers => body,
+        _ => root_object,
+    }
+}
+
 fn RootElementPaintOffset(root_object: &LayoutObject) -> Offset {
     let root_box = DynamicTo::<LayoutBox>(root_object as *const LayoutObject);
     if root_box.is_null() {
@@ -133,15 +148,7 @@ pub(crate) fn ViewBackgroundForRoot<'a>(
         return None;
     }
     let root_geometry = RootFragmentBackground(root_object, output)?;
-    let body = unsafe { BodyLayoutObject(root_object).as_ref() };
-    let body_transfers = body.is_some_and(|body| {
-        let model = DynamicTo::<LayoutBoxModelObject>(body as *const LayoutObject);
-        !model.is_null() && unsafe { &*model }.BackgroundTransfersToViewDefault()
-    });
-    let source = match body {
-        Some(body) if body_transfers => body,
-        _ => root_object,
-    };
+    let source = CanvasBackgroundSource(root_object);
     let mut canvas = SelectedFragmentBackground(SourceFragment(output, source)?);
     canvas.document_element_node_id = InputId(root_object);
     canvas.document_element_size = root_geometry.document_element_size;
@@ -163,6 +170,23 @@ pub(crate) fn CanvasBackgroundForRoot<'a>(
     root_object: &'a LayoutObject,
     output: crate::layout_engine::PaintFragmentCursor<'a>,
 ) -> Option<CanvasBackgroundPaintView<'a>> {
+    // ViewPainter reads the propagated background straight from the
+    // selected element's ComputedStyle (view_painter.cc:76-262). Decide the
+    // painting admission from that live style first, so a transparent canvas
+    // (the common case) does not assemble the root/body background view.
+    if !root_object.ShouldApplyRootBackgroundBehaviorForLayout()
+        || !root_object.IsDocumentElement()
+    {
+        return None;
+    }
+    let style = CanvasBackgroundSource(root_object).StyleRef();
+    if !(crate::internal::boundary::paint_style_export::StyleColor(style, style.BackgroundColor())
+        .alpha
+        > 0.0
+        || style.HasBackgroundImage())
+    {
+        return None;
+    }
     ViewBackgroundForRoot(root_object, output).filter(|canvas| {
         canvas.style.background_color().alpha > 0.0 || canvas.style.has_background_images()
     })

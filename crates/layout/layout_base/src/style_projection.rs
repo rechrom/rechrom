@@ -105,6 +105,21 @@ impl<'a> StyleResourceBindings<'a> {
         }
     }
 
+    /// Whether `data` already holds exactly these bindings, so `ToData` would
+    /// rebuild an equal value. A paint-only restyle normally keeps every
+    /// resource edge; comparing first avoids the copy and its allocation.
+    pub(crate) fn MatchesData(&self, data: &crate::internal::layout_input::StyleResourceData) -> bool {
+        (std::sync::Arc::ptr_eq(self.svg_filter_graphs, &data.svg_filter_graphs)
+            || **self.svg_filter_graphs == *data.svg_filter_graphs)
+            && *self.svg_clip_resources == data.svg_clip_resources
+            && *self.svg_mask_resource == data.svg_mask_resource
+            && self.svg_pattern_content_target == data.svg_pattern_content_target
+            && *self.svg_fill_server == data.svg_fill_server
+            && *self.svg_stroke_server == data.svg_stroke_server
+            && self.svg_markers == &*data.svg_markers
+            && *self.replaced_image_shader == data.replaced_image_shader
+    }
+
     pub(crate) fn ApplyTo(&self, style: &mut LayoutComputedStyle) {
         style.paint.svg_filter_graphs = std::sync::Arc::clone(self.svg_filter_graphs);
         style.svg_clip_resources = self.svg_clip_resources.clone();

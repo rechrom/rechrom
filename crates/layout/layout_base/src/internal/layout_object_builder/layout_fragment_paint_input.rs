@@ -151,7 +151,12 @@ pub(super) fn update_paint_style(
         Arc::make_mut(&mut record.effective_style).style = style;
         record.input.computed_style = style;
         record.effective_computed_style = style;
-        record.input_style_roots = RetainInputStyles(&record.input, style);
+        let styles = [
+            record.input.computed_style,
+            style,
+            record.input.first_line_computed_style,
+        ];
+        RefreshInputStyleRoots(&mut record.input_style_roots, styles);
         let node = unsafe { &mut *record.node };
         node.SetComputedStyle(style);
         unsafe { &mut *record.object }.SetStyle(style);
@@ -354,7 +359,11 @@ pub(super) fn update_paint_input(
         );
         let layout_style = PreservePaintOnlyFontBinding(style, previous);
         let image_resource_id = record.input.resources.image_resource_id;
-        let new_resources = resources.ToData(image_resource_id);
+        // Chromium's resource client edges are untouched by an ordinary
+        // paint-only restyle; rebuild the retained projection only when one
+        // of them actually changed.
+        let new_resources = (!resources.MatchesData(&record.input.resources))
+            .then(|| resources.ToData(image_resource_id));
         let image_resource_binding_changed =
             StyleImageResourceBindingsChanged(previous, unsafe { &*layout_style });
         // The style difference itself is classified by the SetStyle call
@@ -377,18 +386,22 @@ pub(super) fn update_paint_input(
             unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kStyle,
             );
-        } else if StyleResourceBindingsChangedForStyles(
-            previous,
-            unsafe { &*layout_style },
-            record.input.resources.as_ref(),
-            &new_resources,
-        ) || control_paint_state_changed
+        } else if new_resources.as_ref().is_some_and(|new_resources| {
+            StyleResourceBindingsChangedForStyles(
+                previous,
+                unsafe { &*layout_style },
+                record.input.resources.as_ref(),
+                new_resources,
+            )
+        }) || control_paint_state_changed
         {
             unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kStyle,
             );
         }
-        record.input.resources = Arc::new(new_resources);
+        if let Some(new_resources) = new_resources {
+            record.input.resources = Arc::new(new_resources);
+        }
         record.input.computed_style = style;
         {
             let compatibility = Arc::make_mut(&mut record.input.style);
@@ -396,11 +409,18 @@ pub(super) fn update_paint_input(
             resources.ApplyTo(compatibility);
             compatibility.paint.image_resource_id = image_resource_id;
         }
-        record.input.element = if record.input.kind == NodeKind::kText {
-            None
+        let element_changed = if record.input.kind == NodeKind::kText {
+            record.input.element.is_some()
         } else {
-            element.clone()
+            !crate::internal::layout_input::ElementInputUnchanged(&element, &record.input.element)
         };
+        if element_changed {
+            record.input.element = if record.input.kind == NodeKind::kText {
+                None
+            } else {
+                element.clone()
+            };
+        }
         {
             let compatibility = Arc::make_mut(&mut record.effective_style);
             compatibility.style = style;
@@ -408,14 +428,16 @@ pub(super) fn update_paint_input(
             compatibility.paint.image_resource_id = image_resource_id;
         }
         record.effective_computed_style = style;
-        record.input_style_roots =
-            RetainInputStyles(&record.input, record.effective_computed_style);
+        let styles = [
+            record.input.computed_style,
+            record.effective_computed_style,
+            record.input.first_line_computed_style,
+        ];
+        RefreshInputStyleRoots(&mut record.input_style_roots, styles);
         let node = unsafe { &mut *record.node };
-        let sealed = node.InputTreeIsSealed();
-        node.UpdateInputData(&record.input);
-        if sealed {
-            node.seal_input_tree();
-        }
+        // Identity, debug name and tree seal are unchanged by a paint-only
+        // restyle; only resource edges and changed metadata are replaced.
+        node.UpdatePaintInputData(&record.input);
         node.ClearInputFontBinding();
         node.SetComputedStyle(layout_style);
         unsafe { &mut *record.object }.SetStyle(layout_style);

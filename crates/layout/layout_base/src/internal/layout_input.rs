@@ -1731,6 +1731,19 @@ pub struct ElementData {
 
 mod layout_invalidation_element_data_equivalence;
 
+/// Whether replacing `old` with `new` would store an identical value: the
+/// metadata equivalence plus the one input-only field it does not compare.
+/// Lets an in-place restyle skip copying unchanged element metadata.
+pub(crate) fn ElementInputUnchanged(new: &Option<ElementData>, old: &Option<ElementData>) -> bool {
+    match (new, old) {
+        (None, None) => true,
+        (Some(new), Some(old)) => {
+            new.input_image_use_fallback == old.input_image_use_fallback && new == old
+        }
+        _ => false,
+    }
+}
+
 impl Default for ElementData {
     // cpp: layoutng/internal/layout_input.h:791-942
     fn default() -> Self {
