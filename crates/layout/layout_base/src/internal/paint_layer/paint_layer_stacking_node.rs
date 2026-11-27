@@ -374,15 +374,12 @@ impl PaintLayerStackingNode {
         {
             for layer in entry.iter() {
                 let layer = unsafe { &mut *layer.Get() };
-                // Chromium's PaintLayer::RemoveChild dirties these lists
-                // before a layer leaves the tree (paint_layer.cc:774-775).
-                // Rechrom derives layer links from LayoutObjects and a layer
-                // can be destroyed after its LayoutObject was detached, so a
-                // traced but destroyed entry is skipped instead of being
-                // treated as live.
-                if layer.IsDestroyed() {
-                    continue;
-                }
+                // PaintLayer::RemoveChild dirties these lists before a layer
+                // leaves the tree (paint_layer.cc:774-775), and
+                // LayoutObject::RemoveLayers runs it from
+                // WillBeRemovedFromTree before any layer is destroyed, so a
+                // listed layer is always live.
+                debug_assert!(!layer.IsDestroyed());
                 layer.SetNeedsReorderOverlayOverflowControls(false);
             }
         }

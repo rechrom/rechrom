@@ -39,16 +39,22 @@ impl LayoutBoxModelObject {
         unsafe { &mut *(self as *mut LayoutBoxModelObject).cast::<LayoutObject>() }
     }
 
-    // cpp: layoutng/internal/layout_box_model_lifecycle.cc:39-43
+    // Source: core/layout/layout_box_model_object.cc:110-125. The base
+    // destruction removes this object from its parent first, so
+    // WillBeRemovedFromTree -> RemoveLayers invalidates the layer's former
+    // relationships while it is still attached; only then is it destroyed.
     #[inline(never)]
     pub fn WillBeDestroyed(&mut self) {
         self.CheckIsNotDestroyed();
+        self.object_base_mut().WillBeDestroyed();
         if self.HasLayer() {
             self.DestroyLayer();
         } else {
             self.DisposeScrollableAreaForPaintLayer();
         }
-        self.object_base_mut().WillBeDestroyed();
+        // Our layer should have been destroyed and cleared by now.
+        debug_assert!(!self.HasLayer());
+        debug_assert!(self.Layer().is_null());
     }
 
     // cpp: layoutng/internal/layout_box_model_lifecycle.cc:45-53
@@ -78,7 +84,7 @@ impl LayoutBoxModelObject {
             .StyleDidChange(diff, old_style, new_style, style_change_context);
         unsafe { DispatchLayoutBoxModelUpdateFromStyle(self) };
         self.UpdateTransformAfterStyleChange(diff, old_style, new_style);
-        self.UpdateLayerAfterStyleChange();
+        self.UpdateLayerAfterStyleChange(old_style);
         let layer = self.Layer();
         if !layer.is_null() {
             // Source: core/layout/layout_box_model_object.cc:294 and

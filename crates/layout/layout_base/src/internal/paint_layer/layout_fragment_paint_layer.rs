@@ -32,6 +32,33 @@ use super::super::layout_node_metadata::Node;
 use super::super::map_coordinates_flags::MapCoordinatesMode;
 use super::paint_layer_stacking_node::PaintLayerStackingNode;
 
+// Source: core/paint/paint_layer_painter.cc:167-190
+// (PaintLayerPainter::PaintedOutputInvisible(const ComputedStyle&)), a pure
+// style predicate core/paint/paint_layer.cc:797 reads while removing a layer.
+fn PaintedOutputInvisible(style: &ComputedStyle) -> bool {
+    if style.HasNonInitialBackdropFilter() {
+        return false;
+    }
+
+    // Always paint when 'will-change: opacity' is present. Reduces jank for
+    // common animation implementation approaches, for example, an element
+    // that starts with opacity zero and later begins to animate.
+    if style.HasWillChangeProperty(foundation::CSSPropertyID::kOpacity) {
+        return false;
+    }
+
+    if style.HasCurrentOpacityAnimation() {
+        return false;
+    }
+
+    // 0.0004f < 1/2048. With 10-bit color channels (only available on the
+    // newest Macs; otherwise it's 8-bit), we see that an alpha of 1/2048 or
+    // less leads to a color output of less than 0.5 in all channels, hence
+    // not visible.
+    const kMinimumVisibleOpacity: f32 = 0.0004;
+    style.Opacity() < kMinimumVisibleOpacity
+}
+
 // Source: core/paint/paint_layer.h:93-105.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -956,17 +983,199 @@ impl PaintLayer {
         }
     }
 
-    /// Structural layer insertion/removal cannot use the ordinary early-out.
-    /// Rechrom derives layer links from LayoutObject rather than storing
-    /// PaintLayer child pointers, so a newly visible relationship can have a
-    /// dirty immediate parent whose former ancestors were never marked.
-    pub(crate) fn MarkAncestorChainForLayerTreeChange(&mut self) {
-        let mut layer = self as *mut PaintLayer;
-        while !layer.is_null() {
-            let current = unsafe { &mut *layer };
-            current.needs_descendant_dependent_flags_update_ = true;
-            unsafe { &mut *current.layout_object_.Get() }.SetNeedsPaintPropertyUpdate();
-            layer = current.Parent();
+    // `child->DirtyStackingContextZOrderLists()` (paint_layer.cc:2817-2825)
+    // evaluated while `child->parent_ == this`, as AddChild() and
+    // RemoveChild() call it. The ancestor stacking context
+    // (paint_layer.cc:657-664) is found from this parent rather than through
+    // the child's derived Parent(): in MoveLayers() the derived link already
+    // names the new parent while the old parent removes the child.
+    fn DirtyChildStackingContextZOrderLists(&mut self, child: *mut PaintLayer) {
+        let stacking_context = if self.GetLayoutObject().IsStackingContext() {
+            self as *mut PaintLayer
+        } else {
+            self.AncestorStackingContext()
+        };
+        if !stacking_context.is_null() {
+            let node = unsafe { &*stacking_context }.StackingNodePointer();
+            if !node.is_null() {
+                unsafe { &mut *node }.DirtyZOrderLists();
+            }
+        }
+        unsafe { &mut *child }.MarkAncestorChainForFlagsUpdate(
+            DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+        );
+    }
+
+    // Source: core/paint/paint_layer.cc:704-755. Rechrom derives the
+    // parent/sibling links from the LayoutObject tree, so the caller has
+    // already placed `child`'s LayoutObject under this layer's subtree (the
+    // source's `before_child` splice is implied by that position); this
+    // performs the source's invalidation of the new relationship.
+    pub(crate) fn AddChild(&mut self, child: *mut PaintLayer) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.LayerListMutationAllowed());
+        debug_assert_ne!(child, self as *mut PaintLayer);
+
+        let child_ref = unsafe { &*child };
+        if child_ref.GetLayoutObject().IsStacked() || !child_ref.FirstChild().is_null() {
+            // Dirty the z-order list in which we are contained. The
+            // ancestorStackingContextNode() can be null in the case where
+            // we're building up generated content layers. This is ok, since
+            // the lists will start off dirty in that case anyway.
+            self.DirtyChildStackingContextZOrderLists(child);
+        }
+
+        // Non-self-painting children paint into this layer, so the visible
+        // contents status of this layer is affected.
+        if !unsafe { &*child }.IsSelfPaintingLayer() {
+            self.DirtyVisibleContentStatus();
+        }
+
+        self.MarkAncestorChainForFlagsUpdate(
+            DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+        );
+
+        if unsafe { &*child }.SelfNeedsRepaint() {
+            self.MarkPaintingContainerChainForNeedsRepaint();
+        } else {
+            unsafe { &mut *child }.SetNeedsRepaint();
+        }
+
+        if unsafe { &*child }.NeedsCullRectUpdate() {
+            self.SetDescendantNeedsCullRectUpdate();
+        } else {
+            unsafe { &*child }.SetNeedsCullRectUpdate();
+        }
+    }
+
+    // Source: core/paint/paint_layer.cc:757-789. Called before the child's
+    // LayoutObject leaves this layer's subtree (LayoutObject::RemoveLayers
+    // runs from WillBeRemovedFromTree), so the child's derived links still
+    // reach its former painting-container chain; the sibling unlinking is
+    // performed by LayoutObjectChildList.
+    pub(crate) fn RemoveChild(&mut self, old_child: *mut PaintLayer) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.LayerListMutationAllowed());
+
+        unsafe { &mut *old_child }.MarkPaintingContainerChainForNeedsRepaint();
+
+        // Dirty the z-order list in which we are contained.
+        self.DirtyChildStackingContextZOrderLists(old_child);
+        self.MarkAncestorChainForFlagsUpdate(
+            DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+        );
+
+        if self.GetLayoutObject().StyleRef().Visibility() != EVisibility::kVisible {
+            self.DirtyVisibleContentStatus();
+        }
+
+        let old_child_ref = unsafe { &*old_child };
+        if old_child_ref.has_visible_content_
+            || old_child_ref.has_visible_self_painting_descendant_
+        {
+            self.MarkAncestorChainForFlagsUpdate(
+                DescendantDependentFlagsUpdateFlag::kNeedsDescendantDependentUpdate,
+            );
+        }
+    }
+
+    // Source: core/paint/paint_layer.cc:791-833. The child layers' derived
+    // parent is this layer until LayoutBoxModelObject::DestroyLayer() clears
+    // it, so the source's per-child `RemoveChild(current);
+    // parent_->AddChild(current, next_sib)` is split: every RemoveChild runs
+    // first (from this layer, as in the source), then this layer leaves its
+    // parent and is destroyed, then the children are added to the parent
+    // whose derived links now name it. Each step evaluates the same
+    // relationships as the source.
+    pub(crate) fn RemoveOnlyThisLayerAfterStyleChange(
+        this: *mut PaintLayer,
+        old_style: *const ComputedStyle,
+    ) {
+        let layer = unsafe { &mut *this };
+        if let Some(old_style) = unsafe { old_style.as_ref() } {
+            if layer.GetLayoutObject().IsStackedWithStyle(old_style) {
+                layer.DirtyStackingContextZOrderLists();
+            }
+
+            if PaintedOutputInvisible(old_style) {
+                // PaintedOutputInvisible() was true because opacity was near
+                // zero, and this layer is to be removed because opacity
+                // becomes 1. Do the same as StyleDidChange() on change of
+                // PaintedOutputInvisible().
+                unsafe { &mut *layer.layout_object_.Get() }
+                    .SetSubtreeShouldDoFullPaintInvalidation(PaintInvalidationReason::kSubtree);
+            }
+        }
+
+        let parent = layer.Parent();
+        if !parent.is_null() && layer.IsSelfPaintingLayer() {
+            let enclosing_self_painting_layer = unsafe { &*parent }.EnclosingSelfPaintingLayer();
+            if let Some(enclosing) = unsafe { enclosing_self_painting_layer.as_ref() } {
+                enclosing.MergeNeedsPaintPhaseFlagsFrom(layer);
+            }
+        }
+
+        // Now walk our kids to remove them, and potentially reattach to our
+        // parent.
+        //
+        // We might not have a parent if a layout-object is being reinserted
+        // into the layout-tree. This occurs if a layout-object undergoes a
+        // in-flow state change, and the children will be reattached within
+        // LayoutObject::AddLayers.
+        let root = layer.GetLayoutObject() as *const LayoutBoxModelObject as *const LayoutObject;
+        let mut children = Vec::new();
+        let mut current = layer.FirstChild();
+        while !current.is_null() {
+            let next = unsafe { &*current }.NextSiblingWithin(root);
+            layer.RemoveChild(current);
+            children.push(current);
+            current = next;
+        }
+
+        // Remove us from the parent.
+        let object = layer.layout_object_.Get();
+        if !parent.is_null() {
+            unsafe { &mut *parent }.RemoveChild(this);
+        }
+        // `this` is destroyed here and not touched afterwards.
+        unsafe { &mut *object }.DestroyLayer();
+
+        if !parent.is_null() {
+            for child in children {
+                unsafe { &mut *parent }.AddChild(child);
+            }
+        }
+    }
+
+    // Source: core/paint/paint_layer.cc:835-862. A new layer's derived parent
+    // is `GetLayoutObject().Parent()->EnclosingLayer()`, the layer the source
+    // finds and attaches to; the source's `before_child` splice is implied by
+    // the LayoutObject position.
+    pub(crate) fn InsertOnlyThisLayerAfterStyleChange(&mut self) {
+        let this = self as *mut PaintLayer;
+        let object = self.layout_object_.Get().cast::<LayoutObject>();
+        // `parent_` after the source's AddChild(): null when the LayoutObject
+        // has no parent.
+        let parent = self.Parent();
+        if !parent.is_null() {
+            // We need to connect ourselves when our layoutObject() has a
+            // parent. Find our enclosingLayer and add ourselves.
+            unsafe { &mut *parent }.AddChild(this);
+        }
+
+        // Remove all descendant layers from the hierarchy and add them to the
+        // new position.
+        let mut curr = unsafe { &*object }.SlowFirstChild();
+        while !curr.is_null() {
+            unsafe { &mut *curr }.MoveLayers(parent, this);
+            curr = unsafe { &*curr }.NextSibling();
+        }
+
+        if self.IsSelfPaintingLayer() && !parent.is_null() {
+            let enclosing_self_painting_layer = unsafe { &*parent }.EnclosingSelfPaintingLayer();
+            if let Some(enclosing) = unsafe { enclosing_self_painting_layer.as_ref() } {
+                self.MergeNeedsPaintPhaseFlagsFrom(enclosing);
+            }
         }
     }
 
@@ -1557,6 +1766,10 @@ impl PaintLayer {
     // cpp: core/paint/paint_layer.cc:225-257
     pub fn Destroy(&mut self) {
         debug_assert!(!self.is_destroyed_);
+        // Source: core/paint/paint_layer.cc:245-249. If this layer is removed
+        // from the parent, the z-order list should have been invalidated in
+        // RemoveChild().
+        self.needs_reorder_overlay_overflow_controls_ = false;
         self.is_destroyed_ = true;
     }
 }
