@@ -81,14 +81,15 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         &self,
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> TransformNode<R> {
-        let clip = self.resolve_clip(clip);
-        read(|a| super::TransformNode::from_arc(clip.node().LocalTransformSpace(a).clone()))
+        // Read through the borrowed live node (Blink's `const ClipPaintPropertyNode&`);
+        // only the returned link is retained.
+        read(|a| super::TransformNode::from_arc(clip.LocalTransformSpace(a).clone()))
     }
     fn ClipParent(
         &self,
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
-        self.resolve_clip(clip).parent_handle().map(|parent| parent.as_arc().clone())
+        read(|a| clip.Parent(a).cloned())
     }
     fn ClipLowestCommonAncestor(
         &self,
@@ -135,8 +136,7 @@ impl<R: PaintSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> EffectNode<R> {
-        let clip = self.resolve_clip(c);
-        read(|a| super::EffectNode::from_arc(clip.node().PixelMovingFilter(a).expect("source PixelMovingFilter").clone()))
+        read(|a| super::EffectNode::from_arc(c.PixelMovingFilter(a).expect("source PixelMovingFilter").clone()))
     }
     fn FilterLocalTransform(&self, e: &EffectNode<R>) -> TransformNode<R> {
         read(|a| super::TransformNode::from_arc(e.node().LocalTransformSpace(a).clone()))

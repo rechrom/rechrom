@@ -62,23 +62,33 @@ impl<F: LayerizeFamily> SynthesizedClipTypes for F {
     type SkRoundedRect = crate::commit::skia_region::SkRoundedRect;
 }
 impl<F: LayerizeFamily> PropertyTreeManagerTypes for F {
+    // TransformPaintPropertyNode::Root() and its clip, effect and scroll
+    // equivalents return the sequence's static sentinel by reference
+    // (transform_paint_property_node.cc:117-122); retain only that node.
     fn RootTransformNode() -> paint::TransformNode<Sk<F>> {
-        paint::PropertyTreeState::<Sk<F>>::default().transform()
+        ::paint::paint_property_tree::PropertyTreeState::WithRoot(|root| {
+            paint::TransformNode::from_arc(root.transform.clone())
+        })
     }
     fn RootClipNode() -> paint::ClipNode<Sk<F>> {
-        paint::PropertyTreeState::<Sk<F>>::default().clip()
+        ::paint::paint_property_tree::PropertyTreeState::WithRoot(|root| {
+            paint::ClipNode::from_arc(root.clip.clone())
+        })
     }
     fn RootEffectNode() -> paint::EffectNode<Sk<F>> {
-        paint::PropertyTreeState::<Sk<F>>::default().effect()
+        ::paint::paint_property_tree::PropertyTreeState::WithRoot(|root| {
+            paint::EffectNode::from_arc(root.effect.clone())
+        })
     }
     fn RootScrollNode() -> paint::ScrollNode<Sk<F>> {
-        paint::ScrollNode::from_arc(paint_model::property_cell::with_access(|a| {
-            ::paint::paint_property_tree::PropertyTreeState::default()
-                .transform
-                .ScrollNode(a)
-                .expect("native ScrollRoot")
-                .clone()
-        }))
+        ::paint::paint_property_tree::PropertyTreeState::WithRoot(|root| {
+            paint::ScrollNode::from_arc(paint_model::property_cell::with_access(|a| {
+                root.transform
+                    .ScrollNode(a)
+                    .expect("native ScrollRoot")
+                    .clone()
+            }))
+        })
     }
     fn ScrollNodeForTransform(
         t: &paint::TransformNode<Sk<F>>,

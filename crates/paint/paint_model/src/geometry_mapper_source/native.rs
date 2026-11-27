@@ -243,7 +243,7 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         self.singular_transform_fix
     }
     fn RootState(&self) -> Self::State {
-        NativeGeometryState::from_state(&paint_property_tree::PropertyTreeState::default())
+        paint_property_tree::PropertyTreeState::WithRoot(NativeGeometryState::from_state)
     }
     fn MakeState(
         &self,
