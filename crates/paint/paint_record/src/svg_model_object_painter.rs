@@ -18,23 +18,11 @@ use crate::PaintPhase;
 
 /// Source: fragment_data.h:32-38 `FragmentData::PaintOffset()`, read from
 /// the occurrence's PrePaint FragmentData as Chromium's SVG painters read
-/// `PaintOffset()` / `FirstFragment().PaintOffset()`. FragmentData holds the
-/// offset LOCAL to its LocalBorderBoxProperties transform; the painters still
-/// record in the flat replay space that `PaintTreeNode::EnclosingRect` /
-/// `PixelSnappedRect` project by `paint_snap_offset`, so the local offset is
-/// carried back into that space by the same delta. Fixture nodes without
-/// FragmentData keep the node's copy.
+/// `PaintOffset()` / `FirstFragment().PaintOffset()`, in the flat replay
+/// space every paint_record op uses (PaintTreeNode::FlatPaintOffset, the
+/// same value the box painters record with).
 pub(crate) fn SVGPaintOffset(node: &PaintTreeNode<'_>) -> Offset {
-    match node.FragmentData() {
-        Some(data) => {
-            let offset = data.PaintOffset();
-            Offset {
-                x: offset.left.ToDouble() - node.paint_snap_offset.x,
-                y: offset.top.ToDouble() - node.paint_snap_offset.y,
-            }
-        }
-        None => node.paint_offset,
-    }
+    node.FlatPaintOffset()
 }
 
 /// Source: scoped_svg_paint_state.cc:102-139 and svg_mask_painter.cc:239-245:

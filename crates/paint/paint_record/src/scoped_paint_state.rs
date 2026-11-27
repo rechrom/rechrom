@@ -63,8 +63,9 @@ fn LocalCullRect(local_cull_rect: Option<PaintRect>) -> CullRect {
 pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
     let fragment = node.fragment.as_deref()?;
     let mut contents = FragmentRect(fragment.paint.PaintLayerContentsVisualRect()?);
-    contents.x += node.paint_offset.x;
-    contents.y += node.paint_offset.y;
+    let paint_offset = node.FlatPaintOffset();
+    contents.x += paint_offset.x;
+    contents.y += paint_offset.y;
     if fragment.paint.SvgViewBox().is_some() {
         contents = SourceToDestinationRect(
             &LocalBorderBoxProperties(node).transform,
@@ -210,7 +211,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         Self {
             node,
             input_paint_info: adjusted_paint_info,
-            paint_offset: node.paint_offset,
+            paint_offset: node.FlatPaintOffset(),
             _chunk_properties: chunk_properties,
             paint_offset_translation_as_drawing,
         }
@@ -244,7 +245,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
     /// The state `new` builds when `InstallsNothing` holds: the local cull
     /// rect and the node's paint offset, with no scope.
     pub(crate) fn ForCullTest(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
-        Self::unadjusted(node, paint_info, node.paint_offset)
+        Self::unadjusted(node, paint_info, node.FlatPaintOffset())
     }
 
     fn unadjusted(
@@ -328,7 +329,7 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
     }
 
     pub fn new(paint_info: &PaintInfo<'c, 'o>, node: &'n PaintTreeNode<'f>) -> Self {
-        Self::with_offset(paint_info, node.paint_offset, node)
+        Self::with_offset(paint_info, node.FlatPaintOffset(), node)
     }
 
     fn with_offset(

@@ -359,9 +359,10 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     ),
                 },
                 fragment.paint.DisplayItemRasterEffectOutset(),
-                // The control rects are built from the LOCAL FragmentData
-                // PaintOffset, already in the property transform's space.
-                Offset::default(),
+                // The control rects are built from the flat replay-space
+                // paint offset (FragmentPaintOffset); the visual rect is
+                // enclosed in property space through the same delta.
+                self.node.paint_snap_offset,
             );
             self.context.borrow_mut().Append(
                 DisplayItem {

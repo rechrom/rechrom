@@ -82,88 +82,48 @@ pub struct BoxFragmentPainter<'n, 'f, 'c, 'o> {
     context: &'c RefCell<PaintContext<'o>>,
 }
 
-/// FragmentData::PaintOffset() (fragment_data.h:32-38) in the paint-space
-/// doubles painters record with. The offset is in the local space of the
-/// fragment's property tree state transform, LayoutUnit-rounded as
-/// PaintPropertyTreeBuilder stores it; it already includes the property-space
-/// delta the PaintTreeNode copy kept separately, so no snap offset is added.
+/// FragmentData::PaintOffset() (fragment_data.h:32-38) in the flat replay
+/// space the box painter records every op, DrawingRecorder visual rect and
+/// hit-test rect in (PaintTreeNode::FlatPaintOffsetOf): the LOCAL,
+/// LayoutUnit-rounded FragmentData offset moved back by the node's
+/// flat-to-property delta. Fixture nodes without FragmentData use their own
+/// flat offset.
 pub(crate) fn FragmentPaintOffset(
     node: &PaintTreeNode<'_>,
     fragment_data: Option<&PrePaintFragmentData>,
 ) -> Offset {
-    match fragment_data {
-        Some(data) => {
-            let offset = data.PaintOffset();
-            Offset {
-                x: offset.left.ToDouble(),
-                y: offset.top.ToDouble(),
-            }
-        }
-        None => node.paint_offset,
-    }
+    node.FlatPaintOffsetOf(fragment_data)
 }
 
-/// Source: LayoutUnit::Round / ToPixelSnappedRect at the document's device
-/// scale (PaintTreeNode::PixelSnappedRect without its property-space delta:
-/// FragmentData geometry is already in property space).
-fn SnapToDevicePixel(value: f64, scale: f64) -> f64 {
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    (value * scale + 0.5).floor() / scale
-}
-
-/// ToPixelSnappedRect of a rect built from FragmentPaintOffset. Fixture
-/// nodes keep the node's own snapping.
+/// ToPixelSnappedRect of a flat rect built from FragmentPaintOffset. The
+/// node rounds in its property space (where Chromium snaps the local rect)
+/// and returns the flat result.
 fn FragmentPixelSnappedRect(
     node: &PaintTreeNode<'_>,
-    fragment_data: Option<&PrePaintFragmentData>,
+    _fragment_data: Option<&PrePaintFragmentData>,
     rect: &PaintRect,
 ) -> PaintRect {
-    if fragment_data.is_none() {
-        return node.PixelSnappedRect(rect);
-    }
-    let scale = node.pixel_snap_scale;
-    let left = SnapToDevicePixel(rect.x, scale);
-    let top = SnapToDevicePixel(rect.y, scale);
-    let right = SnapToDevicePixel(rect.x + rect.width, scale);
-    let bottom = SnapToDevicePixel(rect.y + rect.height, scale);
-    PaintRect {
-        x: left,
-        y: top,
-        width: right - left,
-        height: bottom - top,
-    }
+    node.PixelSnappedRect(rect)
 }
 
-/// ToEnclosingRect of a rect built from FragmentPaintOffset (the
-/// DrawingRecorder visual-rect conversion).
+/// ToEnclosingRect of a flat rect built from FragmentPaintOffset (the
+/// DrawingRecorder visual-rect conversion), enclosed in property space.
 fn FragmentEnclosingRect(
     node: &PaintTreeNode<'_>,
-    fragment_data: Option<&PrePaintFragmentData>,
+    _fragment_data: Option<&PrePaintFragmentData>,
     rect: PaintRect,
 ) -> PaintRect {
-    if fragment_data.is_none() {
-        return node.EnclosingRect(rect);
-    }
-    rect.enclosing()
+    node.EnclosingRect(rect)
 }
 
-/// The pixel-snapped point of an offset built from FragmentPaintOffset.
+/// The pixel-snapped point of a flat offset built from FragmentPaintOffset,
+/// snapped in property space.
 fn FragmentPixelSnappedOffset(
     node: &PaintTreeNode<'_>,
-    fragment_data: Option<&PrePaintFragmentData>,
+    _fragment_data: Option<&PrePaintFragmentData>,
     offset: Offset,
 ) -> Offset {
-    if fragment_data.is_none() {
-        return node.PixelSnappedOffset(offset);
-    }
-    Offset {
-        x: SnapToDevicePixel(offset.x, node.pixel_snap_scale),
-        y: SnapToDevicePixel(offset.y, node.pixel_snap_scale),
-    }
+    node.PixelSnappedOffset(offset)
 }
 
 /// FragmentData::ContentsProperties() (fragment_data.h:170-177).
@@ -565,7 +525,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
                 backplates.AddLineBreak();
             } else {
                 // Visit stops at PaintLayers, so every item here shares the
-                // painter's local property space.
+                // painter's flat replay space.
                 let paint_offset = FragmentPaintOffset(node, node.FragmentData());
                 backplates.AddTextRect(PaintRect {
                     x: paint_offset.x,
@@ -2018,30 +1978,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             if !cell_fragment.paint.HasSource() || !cell_fragment.paint.style.visible() {
                 continue;
             }
-            // The cell's FragmentData::PaintOffset() is comparable with this
-            // part's only in the same local transform space; a cell or an
-            // intermediate row/section with its own paint offset translation
-            // keeps its offset relative to this part.
-            let cell_data = cell.FragmentData();
-            let same_space = match (
-                self.fragment_data
-                    .and_then(PrePaintFragmentData::LocalBorderBoxPropertiesRef),
-                cell_data.and_then(PrePaintFragmentData::LocalBorderBoxPropertiesRef),
-            ) {
-                (Some(part), Some(cell_state)) => {
-                    Arc::ptr_eq(&part.transform, &cell_state.transform)
-                }
-                _ => false,
-            };
-            let cell_offset = if same_space {
-                FragmentPaintOffset(cell, cell_data)
-            } else {
-                let part_offset = self.PaintOffset();
-                Offset {
-                    x: part_offset.x + cell.paint_offset.x - self.node.paint_offset.x,
-                    y: part_offset.y + cell.paint_offset.y - self.node.paint_offset.y,
-                }
-            };
+            // The cell's paint offset in the flat replay space this part
+            // records in (FragmentPaintOffset).
+            let cell_offset = FragmentPaintOffset(cell, cell.FragmentData());
             let clip = PaintRect {
                 x: cell_offset.x,
                 y: cell_offset.y,
@@ -4023,7 +3962,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         BackgroundBoxRectWithin(self.node, layer.clip, scrolled_border),
                         // The box's InnerBorderRadiusClip, else its
                         // OverflowClip (fragment_data.cc:111-121 ContentsClip
-                        // order), in the same local property space.
+                        // order). The slots hold the property-space rect
+                        // (flat + paint_snap_offset); move it back into the
+                        // flat replay space this painter records in, as
+                        // PaintContext::FlatClipRect does.
                         match self.fragment_data {
                             Some(data) => data
                                 .PaintProperties()
@@ -4035,7 +3977,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                                 .and_then(|clip| {
                                     paint_model::property_cell::with_access(|access| {
                                         let state = clip.state(access);
-                                        state.rect.map(|rect| (rect, state.radii))
+                                        state.rect.map(|mut rect| {
+                                            rect.x -= self.node.paint_snap_offset.x;
+                                            rect.y -= self.node.paint_snap_offset.y;
+                                            (rect, state.radii)
+                                        })
                                     })
                                 }),
                             None => self

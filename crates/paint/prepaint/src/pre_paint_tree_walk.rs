@@ -936,13 +936,52 @@ impl PaintTreeNode<'_> {
         rect
     }
 
+    /// The paint offset Paint records this occurrence with, in the flat
+    /// replay space every paint_record op, DrawingRecorder visual rect, hit
+    /// test rect and chunk bound uses (the space of `paint_offset`): the
+    /// occurrence's FragmentData::PaintOffset() (fragment_data.h:32-38, LOCAL
+    /// to its LocalBorderBoxProperties transform, LayoutUnit-rounded) moved
+    /// back by the flat-to-property delta `paint_snap_offset`. The snapping
+    /// helpers below project into property space and back with the same
+    /// delta. Fixture nodes without FragmentData use their own flat offset.
+    ///
+    /// Paint stays flat until the flat whole-recording replay
+    /// (PaintRecordForArtifact) and the per-item PaintChunksToCcLayer
+    /// consumer agree on Chromium's local space; then this becomes
+    /// FragmentData::PaintOffset() and the delta disappears.
+    pub fn FlatPaintOffset(&self) -> Offset {
+        self.FlatPaintOffsetOf(self.FragmentData())
+    }
+
+    /// FlatPaintOffset with this occurrence's FragmentData already resolved.
+    pub fn FlatPaintOffsetOf(&self, data: Option<&PrePaintFragmentData>) -> Offset {
+        let Some(data) = data else {
+            return self.paint_offset;
+        };
+        let local = data.PaintOffset();
+        let flat = Offset {
+            x: local.left.ToDouble() - self.paint_snap_offset.x,
+            y: local.top.ToDouble() - self.paint_snap_offset.y,
+        };
+        // PaintPropertyTreeBuilder stores round(paint_offset + delta) in
+        // LayoutUnit (FragmentDataPaintOffset); only that rounding may
+        // separate the two copies.
+        debug_assert!(
+            (flat.x - self.paint_offset.x).abs() <= 1.0 / 128.0 + 1e-9
+                && (flat.y - self.paint_offset.y).abs() <= 1.0 / 128.0 + 1e-9,
+            "FragmentData PaintOffset is stale for its paint node"
+        );
+        flat
+    }
+
     pub fn PixelSnappedRect(&self, rect: &PaintRect) -> PaintRect {
         PixelSnappedRectInPropertySpace(rect, self.paint_snap_offset, self.pixel_snap_scale)
     }
 
     pub fn EnclosingRect(&self, rect: PaintRect) -> PaintRect {
-        // DrawingRecorder bounds are enclosed in the same local paint space
-        // as its pixels. The delta accounts for a real paint-space reset.
+        // DrawingRecorder bounds are enclosed in property space, where
+        // Chromium encloses the local rect, and returned in the flat replay
+        // space of the recorded ops (see FlatPaintOffset).
         EnclosingRectInPropertySpace(rect, self.paint_snap_offset)
     }
 

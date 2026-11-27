@@ -76,8 +76,9 @@ fn PaintCaretWithState(
     {
         color.alpha = 0.5;
     }
-    // The caret paints at the FragmentData PaintOffset (local to the box's
-    // LocalBorderBoxProperties transform).
+    // The caret paints at the FragmentData PaintOffset, in the flat replay
+    // space (FragmentPaintOffset) that the node's flat transform list maps
+    // to the root.
     let paint_offset = FragmentPaintOffset(node);
     let rect = PaintRect {
         x: (paint_offset.x + local.offset.x).round(),
@@ -96,17 +97,7 @@ fn PaintCaretWithState(
             .max(0.0),
     };
     if let Some(root_rect) = (!drag)
-        .then(|| {
-            // The flat transform list maps Rechrom's flat paint space, so
-            // the root geometry keeps the flat paint offset until it maps
-            // through the property tree (GeometryMapper).
-            let flat = PaintRect {
-                x: (node.paint_offset.x + local.offset.x).round(),
-                y: (node.paint_offset.y + local.offset.y).round(),
-                ..rect
-            };
-            MapRectToRoot(flat, &node.transforms)
-        })
+        .then(|| MapRectToRoot(rect, &node.transforms))
         .flatten()
     {
         context.borrow_mut().SetCaretGeometry(CaretGeometry {

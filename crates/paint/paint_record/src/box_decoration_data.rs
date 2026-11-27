@@ -14,27 +14,17 @@ use paint_input_types::paint_input::BackgroundBox;
 
 /// Source: core/paint/fragment_data.h:32-38 `FragmentData::PaintOffset()`,
 /// the value ScopedPaintState (scoped_paint_state.h, constructed from the
-/// FragmentData to paint) hands the box painters as `PaintOffset()` (BoxFragmentPainter, TablePainter, FieldsetPainter,
-/// FrameSetPainter, MathMLPainter, ThemePainter, ReplacedPainter children,
-/// ScrollableAreaPainter, InlineBoxFragmentPainter, NinePieceImagePainter):
-/// the fragment's border box origin in the LOCAL space of its
-/// LocalBorderBoxProperties transform, read from the occurrence's PrePaint
-/// FragmentData. A hand-built fixture node without a FragmentData uses the
-/// same local value from its own fields.
+/// FragmentData to paint) hands the box painters as `PaintOffset()`
+/// (BoxFragmentPainter, TablePainter, FieldsetPainter, FrameSetPainter,
+/// MathMLPainter, ThemePainter, ReplacedPainter children,
+/// ScrollableAreaPainter, InlineBoxFragmentPainter, NinePieceImagePainter,
+/// SVG painters), read from the occurrence's PrePaint FragmentData and
+/// expressed in the flat replay space every paint_record op, visual rect and
+/// hit-test rect uses (PaintTreeNode::FlatPaintOffset). Snapping and
+/// enclosing go through PaintTreeNode::PixelSnappedRect / EnclosingRect /
+/// PixelSnappedOffset, which round in property space.
 pub(crate) fn FragmentPaintOffset(node: &PaintTreeNode<'_>) -> Offset {
-    match node.FragmentData() {
-        Some(data) => {
-            let offset = data.PaintOffset();
-            Offset {
-                x: offset.left.ToDouble(),
-                y: offset.top.ToDouble(),
-            }
-        }
-        None => Offset {
-            x: node.paint_offset.x + node.paint_snap_offset.x,
-            y: node.paint_offset.y + node.paint_snap_offset.y,
-        },
-    }
+    node.FlatPaintOffset()
 }
 
 // Chromium: core/paint/box_decoration_data.h:21-173 and
