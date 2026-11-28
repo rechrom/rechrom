@@ -38,7 +38,7 @@ fn ShouldPaintOverflowControls(
         // a scroller explicitly reparented by PaintLayerStackingNode uses the
         // overlay-controls phase. Ordinary non-self-painting scrollers stay in
         // foreground.
-        if node.is_self_painting_layer() || node.needs_reorder_overlay_overflow_controls().get() {
+        if node.is_self_painting_layer() || node.needs_reorder_overlay_overflow_controls() {
             phase == PaintPhase::kOverlayOverflowControls
         } else {
             phase == PaintPhase::kForeground
@@ -64,46 +64,25 @@ fn AbsoluteRoundedRect(node: PaintObject<'_, '_>, offset: Offset, size: Size) ->
 // FragmentData's ObjectPaintProperties::OverflowControlsClip, entered over
 // the box's LocalBorderBoxProperties. `None` when the box has no such clip.
 fn OverflowControlsProperties(node: PaintObject<'_, '_>) -> Option<PropertyTreeState> {
-    let Some(data) = node.FragmentData() else {
-        return node.overflow_controls_properties().clone();
-    };
-    let clip = data.PaintProperties()?.OverflowControlsClip()?.clone();
-    let mut state = data.LocalBorderBoxProperties();
-    state.clip = clip;
-    Some(state)
+    node.overflow_controls_properties()
 }
 
 // Source: core/paint/scrollable_area_painter.cc PaintScrollbar: the
 // FragmentData's Horizontal/VerticalScrollbarEffect, entered inside the
 // overflow-controls clip scope. `None` when the axis has no effect node.
 fn ScrollbarProperties(node: PaintObject<'_, '_>, horizontal: bool) -> Option<PropertyTreeState> {
-    let Some(data) = node.FragmentData() else {
-        return if horizontal {
-            node.horizontal_scrollbar_properties().clone()
-        } else {
-            node.vertical_scrollbar_properties().clone()
-        };
-    };
-    let properties = data.PaintProperties()?;
-    let effect = if horizontal {
-        properties.HorizontalScrollbarEffect()
+    if horizontal {
+        node.horizontal_scrollbar_properties()
     } else {
-        properties.VerticalScrollbarEffect()
-    }?
-    .clone();
-    let mut state = data.LocalBorderBoxProperties();
-    if let Some(clip) = properties.OverflowControlsClip() {
-        state.clip = clip.clone();
+        node.vertical_scrollbar_properties()
     }
-    state.effect = effect;
-    Some(state)
 }
 
 // Source: core/paint/fragment_data.cc:67-87 ContentsTransform.
 fn ContentsTransform(node: PaintObject<'_, '_>) -> Arc<TransformPaintPropertyNode> {
     match node.FragmentData() {
         Some(data) => data.ContentsTransform(),
-        None => node.contents_properties().nodes.transform.clone(),
+        None => node.contents_properties().transform,
     }
 }
 

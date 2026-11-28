@@ -133,7 +133,7 @@ fn FragmentContentsProperties(
 ) -> PropertyTreeState {
     match fragment_data {
         Some(data) => data.ContentsProperties(),
-        None => node.contents_properties().nodes.clone(),
+        None => node.contents_properties(),
     }
 }
 
@@ -144,7 +144,7 @@ fn FragmentContentsTransform(
 ) -> Arc<crate::paint_property_tree::TransformPaintPropertyNode> {
     match fragment_data {
         Some(data) => data.ContentsTransform(),
-        None => node.contents_properties().nodes.transform.clone(),
+        None => node.contents_properties().transform,
     }
 }
 
@@ -159,7 +159,7 @@ fn FragmentLocalBorderBoxTransform(
             Some(state) => state.transform.clone(),
             None => data.LocalBorderBoxProperties().transform,
         },
-        None => node.properties().nodes.transform.clone(),
+        None => node.properties().transform.clone(),
     }
 }
 
@@ -2619,9 +2619,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let properties = self
             .node
             .fixed_background_properties()
-            .as_ref()
-            .expect("composited fixed background properties")
-            .clone();
+            .expect("composited fixed background properties");
         let resources = self.DocumentResources()
             .expect("fixed background resources");
         let viewport = resources.viewport.expect("fixed background viewport");
@@ -7145,8 +7143,8 @@ fn CanvasBackgroundPaintStateFor(
             state
         }
         None => {
-            let mut state = document_element.properties().nodes.clone();
-            state.transform = document_element.pre_transform().clone();
+            let mut state = document_element.properties().clone();
+            state.transform = document_element.pre_transform();
             state
         }
     }

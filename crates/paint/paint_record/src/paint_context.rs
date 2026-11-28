@@ -54,16 +54,14 @@ pub(crate) fn OwnPaintProperties<'n>(
 pub(crate) fn LocalBorderBoxProperties<'n>(
     node: PaintObject<'n, '_>,
 ) -> &'n PropertyTreeState {
-    node.FragmentData()
-        .and_then(|data| data.LocalBorderBoxPropertiesRef())
-        .unwrap_or(&node.properties().nodes)
+    node.properties()
 }
 
 /// Source: fragment_data.h:170-177 `ContentsProperties`.
 pub(crate) fn ContentsProperties(node: PaintObject<'_, '_>) -> PropertyTreeState {
     match node.FragmentData() {
         Some(data) if data.HasLocalBorderBoxProperties() => data.ContentsProperties(),
-        _ => node.contents_properties().nodes.clone(),
+        _ => node.contents_properties(),
     }
 }
 
@@ -71,7 +69,7 @@ pub(crate) fn ContentsProperties(node: PaintObject<'_, '_>) -> PropertyTreeState
 pub(crate) fn ContentsClip(node: PaintObject<'_, '_>) -> Arc<ClipPaintPropertyNode> {
     match node.FragmentData() {
         Some(data) if data.HasLocalBorderBoxProperties() => data.ContentsClip(),
-        _ => node.contents_properties().nodes.clip.clone(),
+        _ => node.contents_properties().clip,
     }
 }
 
@@ -81,7 +79,7 @@ pub(crate) fn ContentsTransform(
 ) -> Arc<crate::paint_property_tree::TransformPaintPropertyNode> {
     match node.FragmentData() {
         Some(data) if data.HasLocalBorderBoxProperties() => data.ContentsTransform(),
-        _ => node.contents_properties().nodes.transform.clone(),
+        _ => node.contents_properties().transform,
     }
 }
 
@@ -89,30 +87,13 @@ pub(crate) fn ContentsTransform(
 pub(crate) fn PaintOffsetTranslation<'n>(
     node: PaintObject<'n, '_>,
 ) -> Option<&'n Arc<crate::paint_property_tree::TransformPaintPropertyNode>> {
-    match node.FragmentData() {
-        Some(data) => data.PaintProperties()?.PaintOffsetTranslation(),
-        None => node.paint_offset_translation().as_ref(),
-    }
+    node.paint_offset_translation()
 }
 
 /// Source: paint_layer_painter.cc:722-729. The kMask phase paints in the
 /// LocalBorderBoxProperties with the Mask effect and its output clip.
 pub(crate) fn MaskProperties(node: PaintObject<'_, '_>) -> PropertyTreeState {
-    if let Some(mask) = OwnPaintProperties(node).and_then(ObjectPaintProperties::Mask) {
-        let output_clip = paint_model::property_cell::with_access(|access| {
-            mask.state(access).output_clip.clone()
-        })
-        .expect("Mask effect has an output clip");
-        return PropertyTreeState {
-            transform: LocalBorderBoxProperties(node).transform.clone(),
-            clip: output_clip,
-            effect: mask.clone(),
-        };
-    }
-    node.mask_properties()
-        .as_ref()
-        .expect("Mask paint properties")
-        .clone()
+    node.mask_properties().expect("Mask paint properties")
 }
 
 /// A clip slot's rect and radii in the flat replay space. The builder placed
@@ -364,7 +345,7 @@ impl<'o> PaintContext<'o> {
     }
 
     pub fn BindPaintTimingRoot(&mut self, root: PaintObject<'_, '_>) {
-        self.paint_timing_root_properties = Some(root.properties().nodes.clone());
+        self.paint_timing_root_properties = Some(root.properties().clone());
     }
     fn BeginTextPaintAggregation(&mut self, node: PaintObject<'_, '_>) -> bool {
         use crate::ignore_paint_timing_scope::IgnorePaintTimingScope as Ignore;
