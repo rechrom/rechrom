@@ -1238,6 +1238,10 @@ pub struct PrePaintTreeWalk {
     /// object_paint_properties.h:86); released at the end of the walk unless
     /// another object registered the same key.
     released_property_keys: Vec<PaintPropertyKey>,
+    /// DisplayItemClient id -> the visited occurrence carrying it, kept by
+    /// the walk for the committed paint's client validation
+    /// (committed_paint_clients; paint_controller.cc:127-143).
+    pub(crate) committed_clients: crate::committed_paint_clients::CommittedClientDirectory,
 }
 
 impl Default for PrePaintTreeWalk {
@@ -1294,6 +1298,7 @@ impl Default for PrePaintTreeWalk {
             consuming_walks: 0,
             recorded_consuming_walks: 0,
             released_property_keys: Vec::new(),
+            committed_clients: Default::default(),
         }
     }
 }
@@ -4066,8 +4071,10 @@ struct WalkContext {
     inherited: InheritedContext,
     /// The parent's PaintInvalidatorContext.
     invalidation: PaintInvalidatorContext,
-    /// force_subtree_update_reasons with isolation piercing: an ancestor's
-    /// own property nodes changed, so no descendant may be skipped.
+    /// force_subtree_update_reasons with isolation piercing: an ancestor
+    /// added or removed one of its property nodes or changed its filter
+    /// taint, so no descendant may be skipped. In-place value changes do
+    /// not force (see WalkObject).
     force_subtree: bool,
     /// The parent's contents cull rect before this walk rebuilt it: the
     /// previous cull rect of a child without its own stored rects.
@@ -4222,9 +4229,15 @@ fn WalkedOwner(cursor: PaintFragmentCursor<'_>) -> (usize, usize) {
 }
 
 /// A fingerprint of the context a builder hands its children (ChildContext
-/// without the wheel-handler bits, which the skip test reads directly).
-/// Property nodes enter by identity: their value changes are reported by
-/// their owner's own change, which forces the subtree.
+/// without the wheel-handler bits, which the skip test reads directly): what
+/// PrePaintTreeWalk::NeedsTreeBuilderContextUpdate compares. Property nodes
+/// enter by identity, as Chromium's PaintPropertyTreeBuilderFragmentContext
+/// names them: a node updated in place keeps it, and the children's
+/// FragmentData keeps naming the live node with its new value. The flat
+/// values (origin, paint space, clip, cull, transform list, scroll anchor,
+/// SVG matrix) are Rechrom's flat accumulation, which the children store in
+/// their FlatReplayData and cull rects; they enter by value, so a subtree is
+/// revisited only as far as these values actually differ.
 fn ChildContextDigest(context: &ChildContext) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -4267,10 +4280,21 @@ fn ChildContextDigest(context: &ChildContext) -> u64 {
     for value in context.transforms.iter() {
         matrix(h, value);
     }
-    context.opacity.to_bits().hash(h);
+    // The accumulated opacity is not hashed: no descendant stores a value
+    // derived from it (its Effect nodes name the live ancestor effect), as
+    // Chromium's context carries no opacity.
     offset(h, context.scroll);
     context.fixed_background_acts_as_scroll.hash(h);
     state(h, &context.properties);
+    // The two values the children's builders read from the current effect
+    // node itself (PaintPropertyTreeBuilder's is_in_tainted_subtree and
+    // drawable-canvas inputs): a change of either in place reaches them
+    // like a context change.
+    paint_model::property_cell::with_access(|a| {
+        let effect = &context.properties.nodes.effect;
+        (effect.IsInTaintedSubtree(a), effect.IsInDrawableCanvasSubtree(a))
+    })
+    .hash(h);
     match &context.canvas_contents {
         None => 0u8.hash(h),
         Some(canvas) => {
@@ -5218,14 +5242,21 @@ impl PrePaintTreeWalk {
             let base = &node.cache.as_ref().unwrap().children;
             self.CaptureRootFixedPositionContext(base, &node);
         }
-        // Source: paint_property_tree_builder.cc:2728-2730 (a changed filter
-        // taint alters descendant Effect state across isolation) and the
-        // property change of this object's own nodes, which reaches every
-        // descendant whose context accumulates them: an isolation-piercing
-        // subtree update. A child context unlike the one the children were
-        // built with updates the children, which decide for their own.
+        // Source: force_subtree_update_reasons. PaintPropertyTreeBuilder forces
+        // the subtree when one of this object's nodes was added or removed
+        // (UpdateForChildren, paint_property_tree_builder.cc:4736-4751) or
+        // its filter taint changed (:2728-2730); both are taken as
+        // isolation-piercing here. A node whose value changed in place keeps
+        // its identity: the descendants' FragmentData still names the same
+        // live nodes, so Chromium does not revisit them (only GeometryMapper
+        // caches are cleared). Every other dependency of the children on
+        // this object (paint offset, which Chromium forces at :4155-4166,
+        // the current transform/clip/effect/scroll nodes, the flat values
+        // they store) is in the child context: a context unlike the one the
+        // children were built with updates the children, which decide for
+        // their own (NeedsTreeBuilderContextUpdate).
         let mut force_children = ctx.force_subtree
-            || own_change != PaintPropertyChangeType::Unchanged
+            || own_change >= PaintPropertyChangeType::NodeAddedOrRemoved
             || FilterTaintChanged(
                 previous
                     .as_ref()
@@ -5460,6 +5491,7 @@ impl PrePaintTreeWalk {
             WriteFlatReplayDataTo(node, data);
             data.SetWalkRecord(record);
             data.SetPreviousGapRules(fragment.ViewGapRules());
+            self.RegisterCommittedClients(fragment.Cursor(), &*fragment, data);
         }
         self.deferred_paint_flag_clears
             .push(&*fragment as *const FragmentPaintData);
@@ -5858,6 +5890,12 @@ impl PrePaintTreeWalk {
         let source_owner_changed = source_owner_changed || self.local_frame_sources_changed;
         self.source_owner_changed = source_owner_changed;
         self.source_result_changed = source_result_changed || source_owner_changed;
+        if source_owner_changed {
+            // The committed-client directory names occurrences of the
+            // previous state's FragmentData; this walk visits every object
+            // and registers them again.
+            self.committed_clients.Clear();
+        }
         self.pending_source_lease = Some(source_lease);
         // The lease above keeps this root alive until CommitWalk retains it.
         self.pending_root = Some(unsafe {
@@ -6163,6 +6201,7 @@ impl PrePaintTreeWalk {
             self.logical_effect_contexts
                 .retain(|_, entries| !entries.is_empty());
             self.property_node_store.ReleaseUnreferencedFragmentSlots();
+            self.committed_clients.Prune();
             self.intersection_observation_state = self
                 .intersection_observation_state
                 .max(self.property_node_store.intersection_observation_state);
@@ -6744,42 +6783,24 @@ impl PrePaintTreeWalk {
     }
 
     /// PaintController validation changes client metadata even without a new
-    /// layout snapshot. Update the walked occurrences that carry a committed
-    /// client in detached payload state (live source clients were validated
-    /// by the Layout commit's PaintController cycle).
+    /// layout snapshot. Update the occurrence carrying each committed client
+    /// in detached payload state (live source clients were validated through
+    /// ValidateLiveClientsForCommittedPaint or the Layout commit). Each id is
+    /// resolved through the committed-client directory, as
+    /// ~PaintController reaches its clients through their pointers
+    /// (paint_controller.cc:127-143); nothing walks the fragment tree.
     pub fn CommitClients(&mut self, clients: impl IntoIterator<Item = u64>) {
-        let clients: HashSet<u64> = clients.into_iter().collect();
-        let Some(root) = self.retained_root.filter(|_| !clients.is_empty()) else {
-            return;
-        };
-        let mut occurrences = Vec::new();
-        self.VisitWalkedOccurrences(root, &mut |cursor, _| {
-            let f = cursor.PaintData();
-            let mut ids = vec![f.paint.DisplayItemClientId(), f.paint.SelectionClientId()];
-            if let Some((id, _)) = f.ViewScrollingBackgroundClient() {
-                ids.push(id);
+        for id in clients {
+            let Some(cursor) = self.CommittedClientOccurrence(id) else {
+                continue;
+            };
+            if cursor.PaintDataOption().is_none() {
+                continue;
             }
-            if let Some(bars) = f.ViewScrollbarClients() {
-                ids.extend(
-                    [bars.horizontal, bars.vertical, bars.corner]
-                        .into_iter()
-                        .flatten()
-                        .map(|(id, _)| id),
-                );
-            }
-            ids.retain(|id| *id != 0 && clients.contains(id));
-            ids.dedup();
-            if !ids.is_empty() {
-                occurrences.push((cursor, ids));
-            }
-        });
-        for (cursor, ids) in occurrences {
-            // SAFETY: the committed walk's lease keeps the payload alive and
+            // SAFETY: the visiting walk's lease keeps the payload alive and
             // PrePaint is its single lifecycle writer here.
             let f = unsafe { cursor.PaintDataMut() };
-            for id in ids {
-                CommitDetachedClient(f, id);
-            }
+            CommitDetachedClient(f, id);
         }
     }
 

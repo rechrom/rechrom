@@ -33,6 +33,7 @@ use paint_model::paint_property_tree::{
 use paint_model::property_cell::PropertyAccess;
 use paint_model::{CullRect, DisplayMaskLayer, PaintRect};
 
+use crate::committed_paint_clients::CarriedClients;
 use crate::object_paint_properties::{ObjectPaintProperties, ObjectPaintPropertySlot};
 
 /// Source: fragment_data.h:205-235 `FragmentData::RareData`, fragment
@@ -80,6 +81,11 @@ pub struct PrePaintFragmentData {
     /// invalidation. Kept on the occurrence until Layout publishes the
     /// LayoutBox value to Paint.
     previous_gap_rules: Option<Arc<layout::paint::GapRulePaintData>>,
+    /// Not Chromium: the DisplayItemClient ids this occurrence carried at
+    /// its last visit and its liveness token in PrePaint's committed-client
+    /// directory (see `committed_paint_clients`). Chromium's PaintController
+    /// holds the client pointers themselves.
+    carried_clients: CarriedClients,
 }
 
 impl std::fmt::Debug for PrePaintFragmentData {
@@ -324,6 +330,11 @@ impl PrePaintFragmentData {
 
     pub fn SetPreviousGapRules(&mut self, rules: Option<Arc<layout::paint::GapRulePaintData>>) {
         self.previous_gap_rules = rules;
+    }
+
+    /// Not Chromium: see `carried_clients`.
+    pub(crate) fn CarriedClientsMut(&mut self) -> &mut CarriedClients {
+        &mut self.carried_clients
     }
 
     /// Not Chromium: the flat replay values of this occurrence.

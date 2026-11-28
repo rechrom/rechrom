@@ -1354,11 +1354,11 @@ impl PaintLifecycle for PaintEngine {
         trace.set("recording_revision", recording_revision as f64);
         // ~PaintController validates the used clients through their own
         // pointers (paint_controller.cc:127-143), never by walking the
-        // LayoutObject tree. The resident client directory resolves each id
-        // to its live client; only the ids it cannot resolve (the caret
-        // clients, or a client created after the directory's last rebuild)
-        // go to the Layout commit, which validates them on its source
-        // owners.
+        // LayoutObject tree. PrePaint's committed-client directory, kept by
+        // the walk for the occurrences it visits, resolves each id to its
+        // live client in O(used clients); only the ids it cannot resolve
+        // (the caret clients, a payload without a live client) go to the
+        // Layout commit, which validates them on its source owners.
         let unresolved = self.pre_paint.ValidateLiveClientsForCommittedPaint(&clients);
         trace.set("unresolved_clients", unresolved.len() as f64);
         self.pre_paint.CommitClients(clients.iter().copied());
