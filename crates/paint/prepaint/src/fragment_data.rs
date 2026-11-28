@@ -25,12 +25,13 @@
 use std::sync::Arc;
 
 use foundation::PhysicalOffset;
+use paint_input_types::layout_input::{Offset, PaintPathCommand, TransformMatrix};
 use paint_model::paint_property_tree::{
     ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyRole, PropertyTreeState,
     TransformPaintPropertyNode,
 };
 use paint_model::property_cell::PropertyAccess;
-use paint_model::{CullRect, PaintRect};
+use paint_model::{CullRect, DisplayMaskLayer, PaintRect};
 
 use crate::object_paint_properties::{ObjectPaintProperties, ObjectPaintPropertySlot};
 
@@ -69,6 +70,112 @@ fn DefaultCullRect() -> CullRect {
 pub struct PrePaintFragmentData {
     paint_offset: PhysicalOffset,
     rare_data: Option<Box<RareData>>,
+    /// Not Chromium: see `FlatReplayData`.
+    flat_replay: FlatReplayData,
+}
+
+/// Not Chromium. The values Rechrom's flat replay stream (PaintContext
+/// BeginGeometry / BeginEffects and the flat-space DrawingRecorder bounds)
+/// needs beside Chromium's FragmentData: the flat-to-property-space delta of
+/// the paint offset, the flat transform list and the object's own flat
+/// matrices, the flat scroll anchor, the walk root's frame clip, the
+/// authored clip-path commands, the fixed-background viewport transform,
+/// the inline-continuation outline group and the resolved mask layers.
+/// Chromium paints in the local property space and has none of them.
+/// The PrePaint walk writes them for the occurrence wherever it writes its
+/// PaintOffset (and where it later changes the flat values of a retained
+/// occurrence), so Paint reads them from the occurrence instead of the
+/// PrePaint node. They go away with the flat replay stream (S0 decision 4).
+///
+/// It also carries the cull rects PrePaint computed for an object without a
+/// PaintLayer when they differ from its paint parent's contents cull rect.
+/// Chromium derives those at paint time (PaintInfo::GetCullRect, adjusted by
+/// ScopedPaintState); Rechrom's builder maps them with CullRectUpdater's
+/// expansion and hysteresis and its infinite-cull decisions, which the paint
+/// walk does not repeat.
+#[derive(Default)]
+pub struct FlatReplayData {
+    /// Flat-to-property-space delta: local = flat + paint_snap_offset.
+    pub paint_snap_offset: Offset,
+    /// The accumulated flat transform list (root first), shared with the
+    /// PrePaint context that built it.
+    pub transforms: Arc<[TransformMatrix]>,
+    pub scroll_offset: Offset,
+    /// Whether the flat replay opens the object's own transform scope.
+    pub applies_transform: bool,
+    pub fixed_background_acts_as_scroll: bool,
+    pub applies_root_clip: bool,
+    /// Whether the object paints its outline (false for every occurrence of
+    /// an inline continuation group but the one painting the united outline).
+    pub paints_outline: bool,
+    rare: Option<Box<FlatReplayRareData>>,
+}
+
+/// The rarely present `FlatReplayData` values.
+#[derive(Default)]
+pub struct FlatReplayRareData {
+    /// The object's own flat matrices (the leading SVG container matrix
+    /// included), replayed as kConcat items.
+    pub local_transforms: Option<Arc<[TransformMatrix]>>,
+    /// The walk root's inherited flat clip.
+    pub root_clip: Option<PaintRect>,
+    /// The builder's authored clip-path commands in the flat replay space.
+    pub clip_path_commands: Option<Arc<[PaintPathCommand]>>,
+    /// The LayoutView transform the composited fixed background paints in.
+    pub fixed_background_transform: Option<Arc<TransformPaintPropertyNode>>,
+    /// (cull rect, contents cull rect) of an object without a PaintLayer
+    /// whose rects differ from its paint parent's contents cull rect; None
+    /// is infinite.
+    pub non_layer_cull_rects: Option<(Option<PaintRect>, Option<PaintRect>)>,
+    /// The united outline rects of an inline continuation group.
+    pub outline_rects: Option<Arc<[PaintRect]>>,
+    pub mask_layers: Option<Arc<[DisplayMaskLayer]>>,
+    /// The flat-space source rect of the MaskClip slot, resolved from the
+    /// exact flat paint offset (PaintTreeNode::ResolvedMaskClipRect).
+    pub mask_clip_rect: Option<PaintRect>,
+}
+
+/// Property nodes compare by identity (they are live objects).
+impl PartialEq for FlatReplayRareData {
+    fn eq(&self, other: &Self) -> bool {
+        self.local_transforms == other.local_transforms
+            && self.root_clip == other.root_clip
+            && self.clip_path_commands == other.clip_path_commands
+            && match (&self.fixed_background_transform, &other.fixed_background_transform) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.non_layer_cull_rects == other.non_layer_cull_rects
+            && self.outline_rects == other.outline_rects
+            && self.mask_layers == other.mask_layers
+            && self.mask_clip_rect == other.mask_clip_rect
+    }
+}
+
+impl FlatReplayData {
+    pub fn Rare(&self) -> Option<&FlatReplayRareData> {
+        self.rare.as_deref()
+    }
+
+    /// Replaces the rare values; no allocation while all of them are empty.
+    pub fn SetRare(&mut self, rare: FlatReplayRareData) {
+        if rare == FlatReplayRareData::default() {
+            self.rare = None;
+        } else if self.rare.as_deref() != Some(&rare) {
+            self.rare = Some(Box::new(rare));
+        }
+    }
+}
+
+impl std::fmt::Debug for FlatReplayData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlatReplayData")
+            .field("paint_snap_offset", &(self.paint_snap_offset.x, self.paint_snap_offset.y))
+            .field("transforms", &self.transforms.len())
+            .field("applies_transform", &self.applies_transform)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PrePaintFragmentData {
@@ -89,6 +196,15 @@ impl PrePaintFragmentData {
 
     pub fn SetPaintOffset(&mut self, paint_offset: PhysicalOffset) {
         self.paint_offset = paint_offset;
+    }
+
+    /// Not Chromium: the flat replay values of this occurrence.
+    pub fn FlatReplay(&self) -> &FlatReplayData {
+        &self.flat_replay
+    }
+
+    pub fn FlatReplayMut(&mut self) -> &mut FlatReplayData {
+        &mut self.flat_replay
     }
 
     /// Source: fragment_data.h:104-110.

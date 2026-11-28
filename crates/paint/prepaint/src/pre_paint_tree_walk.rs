@@ -899,43 +899,55 @@ impl PaintTreeNode<'_> {
     /// The property node adds paint_snap_offset; flat replay uses this same
     /// source rectangle before that projection, avoiding round-trip drift.
     pub fn ResolvedMaskClipRect(&self) -> Option<PaintRect> {
-        let fragment = self.fragment.as_deref()?;
-        let is_svg_effect_child = IsSvgEffectChild(fragment.paint.SourceKind());
-        if !is_svg_effect_child {
-            let bounds = fragment.paint.CssMaskBoundingBox()?;
-            return Some(PaintRect {
-                x: self.paint_offset.x + bounds.offset.x,
-                y: self.paint_offset.y + bounds.offset.y,
-                width: bounds.size.width,
-                height: bounds.size.height,
-            });
-        }
-        let mut rect = self.mask_layers.first().map(|layer| layer.clip_rect);
-        for layer in self.mask_layers.iter().skip(1) {
-            rect = Some(Union(rect.as_ref().unwrap().to_owned(), &layer.clip_rect));
-        }
-        // SVGMaskPainter::ResourceBoundsForSVGChild unions every live mask
-        // resource with VisualRectInLocalSVGCoordinates. Chromium fragment ink
-        // overflow is the boundary projection of that visual rect; keep it in
-        // the same paint space as the resolved mask regions.
-        if is_svg_effect_child {
-            if let Some(visual) = fragment
-                .ViewInkOverflow()
-                .or(fragment.ViewContentsInkOverflow())
-                .or(fragment.ViewSelfInkOverflow())
-            {
-                let visual = PaintRect {
-                    x: self.paint_offset.x + visual.offset.x,
-                    y: self.paint_offset.y + visual.offset.y,
-                    width: visual.size.width,
-                    height: visual.size.height,
-                };
-                rect = Some(rect.map_or(visual, |rect| Union(rect, &visual)));
-            }
-        }
-        rect
+        ResolveFlatMaskClipRect(self.fragment.as_deref()?, self.paint_offset, &self.mask_layers)
     }
+}
 
+/// The flat-space source rect of ObjectPaintProperties::MaskClip for an
+/// occurrence at the flat `paint_offset` with its resolved `mask_layers`
+/// (PaintTreeNode::ResolvedMaskClipRect).
+pub fn ResolveFlatMaskClipRect(
+    fragment: &FragmentPaintData,
+    paint_offset: Offset,
+    mask_layers: &[DisplayMaskLayer],
+) -> Option<PaintRect> {
+    let is_svg_effect_child = IsSvgEffectChild(fragment.paint.SourceKind());
+    if !is_svg_effect_child {
+        let bounds = fragment.paint.CssMaskBoundingBox()?;
+        return Some(PaintRect {
+            x: paint_offset.x + bounds.offset.x,
+            y: paint_offset.y + bounds.offset.y,
+            width: bounds.size.width,
+            height: bounds.size.height,
+        });
+    }
+    let mut rect = mask_layers.first().map(|layer| layer.clip_rect);
+    for layer in mask_layers.iter().skip(1) {
+        rect = Some(Union(rect.as_ref().unwrap().to_owned(), &layer.clip_rect));
+    }
+    // SVGMaskPainter::ResourceBoundsForSVGChild unions every live mask
+    // resource with VisualRectInLocalSVGCoordinates. Chromium fragment ink
+    // overflow is the boundary projection of that visual rect; keep it in
+    // the same paint space as the resolved mask regions.
+    if is_svg_effect_child {
+        if let Some(visual) = fragment
+            .ViewInkOverflow()
+            .or(fragment.ViewContentsInkOverflow())
+            .or(fragment.ViewSelfInkOverflow())
+        {
+            let visual = PaintRect {
+                x: paint_offset.x + visual.offset.x,
+                y: paint_offset.y + visual.offset.y,
+                width: visual.size.width,
+                height: visual.size.height,
+            };
+            rect = Some(rect.map_or(visual, |rect| Union(rect, &visual)));
+        }
+    }
+    rect
+}
+
+impl PaintTreeNode<'_> {
     /// The paint offset Paint records this occurrence with, in the flat
     /// replay space every paint_record op, DrawingRecorder visual rect, hit
     /// test rect and chunk bound uses (the space of `paint_offset`): the
@@ -2065,7 +2077,7 @@ fn PropertySpaceRect(mut rect: PaintRect, delta: Offset) -> PaintRect {
     rect.y += delta.y;
     rect
 }
-fn SnapToPixel(value: f64, scale: f64) -> f64 {
+pub fn SnapToPixel(value: f64, scale: f64) -> f64 {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
@@ -2101,7 +2113,7 @@ pub fn EnclosingRectInPropertySpace(rect: PaintRect, delta: Offset) -> PaintRect
     }
 }
 
-fn PixelSnappedRectInPropertySpace(rect: &PaintRect, delta: Offset, scale: f64) -> PaintRect {
+pub fn PixelSnappedRectInPropertySpace(rect: &PaintRect, delta: Offset, scale: f64) -> PaintRect {
     let mut snapped = PixelSnappedRect(&PropertySpaceRect(*rect, delta), scale);
     snapped.x -= delta.x;
     snapped.y -= delta.y;
@@ -4886,9 +4898,11 @@ fn PrepareOutlines(root: &mut PaintTreeNode<'_>) -> bool {
             occurrence.outline_rects.clear();
             if occurrence_pointer != owner_pointer {
                 occurrence.paints_outline = false;
+                WriteFlatReplayOutline(occurrence);
             }
         }
         unsafe { (*owner_pointer).outline_rects = outline_rects };
+        WriteFlatReplayOutline(unsafe { &*owner_pointer });
     }
     any_group
 }
@@ -5043,6 +5057,7 @@ fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
     *node.hit_test_layer_order.get_mut() = None;
     node.outline_rects.clear();
     node.paints_outline = true;
+    WriteFlatReplayOutline(node);
     for child in &mut node.children {
         ResetPostPaintData(child);
     }
@@ -5421,6 +5436,123 @@ fn WriteRetainedFragmentData(node: &PaintTreeNode<'_>, store: Option<&PaintPrope
         }
     }
     WriteLocalBorderBoxProperties(data, &node.properties.nodes);
+    WriteFlatReplayDataTo(node, data);
+}
+
+/// The flat replay values of `node` (fragment_data.rs FlatReplayData) on its
+/// occurrence's PrePaint FragmentData, for a change made after the visit's
+/// WriteRetainedFragmentData (the parent's leading SVG matrix, a deferred
+/// transform update of a retained subtree).
+fn WriteFlatReplayData(node: &PaintTreeNode<'_>) {
+    let Some(slot) = node
+        .source_cursor
+        .and_then(|cursor| cursor.PrePaintSlotIfCurrent())
+    else {
+        return;
+    };
+    // SAFETY: the walk is the occurrence's single PrePaint writer here; no
+    // reference into the slot is live.
+    let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
+    WriteFlatReplayDataTo(node, data);
+}
+
+/// An `Arc` slice holding `values`, reusing `old` when it already does.
+fn SharedSlice<T: Clone + PartialEq>(old: Option<&Arc<[T]>>, values: &[T]) -> Option<Arc<[T]>> {
+    if values.is_empty() {
+        return None;
+    }
+    match old {
+        Some(old) if **old == *values => Some(old.clone()),
+        _ => Some(Arc::from(values)),
+    }
+}
+
+/// Copies the node's flat replay values (the PrePaint copies the paint walk
+/// still reads through the node) onto the occurrence's FragmentData.
+fn WriteFlatReplayDataTo(node: &PaintTreeNode<'_>, data: &mut PrePaintFragmentData) {
+    // CullRectUpdater stores cull rects only for PaintLayer objects
+    // (SetFragmentCullRects); another object keeps PrePaint's rects here
+    // only when they are not its paint parent's contents cull rect.
+    let has_layer = node
+        .source_cursor
+        .is_some_and(|cursor| cursor.OwnPaintLayer().is_some());
+    let inherited_cull = node.cache.as_ref().map(|cache| cache.inherited.cull);
+    let non_layer_cull_rects = (!has_layer
+        && inherited_cull
+            .is_none_or(|cull| cull != node.self_cull_rect || cull != node.cull_rect))
+    .then_some((node.self_cull_rect, node.cull_rect));
+    let has_mask_clip_inputs = !node.mask_layers.is_empty()
+        || data.HasPropertySlot(ObjectPaintPropertySlot::MaskClip)
+        || data.HasPropertySlot(ObjectPaintPropertySlot::Mask);
+    let flat = data.FlatReplayMut();
+    flat.paint_snap_offset = node.paint_snap_offset;
+    if !Arc::ptr_eq(&flat.transforms, &node.transforms) {
+        flat.transforms = node.transforms.clone();
+    }
+    flat.scroll_offset = node.scroll_offset;
+    flat.applies_transform = node.applies_transform;
+    flat.fixed_background_acts_as_scroll = node.fixed_background_acts_as_scroll;
+    flat.applies_root_clip = node.applies_root_clip;
+    flat.paints_outline = node.paints_outline;
+    let old = flat.Rare();
+    let rare = crate::fragment_data::FlatReplayRareData {
+        local_transforms: SharedSlice(
+            old.and_then(|rare| rare.local_transforms.as_ref()),
+            &node.local_transforms,
+        ),
+        root_clip: node.root_clip,
+        clip_path_commands: SharedSlice(
+            old.and_then(|rare| rare.clip_path_commands.as_ref()),
+            &node.local_clip_path,
+        ),
+        fixed_background_transform: node
+            .fixed_background_properties
+            .as_ref()
+            .map(|state| state.transform.clone()),
+        non_layer_cull_rects,
+        outline_rects: SharedSlice(
+            old.and_then(|rare| rare.outline_rects.as_ref()),
+            &node.outline_rects,
+        ),
+        mask_layers: SharedSlice(
+            old.and_then(|rare| rare.mask_layers.as_ref()),
+            &node.mask_layers,
+        ),
+        // Read by the MaskClip flat replay scope and SVGMaskPainter only.
+        mask_clip_rect: if has_mask_clip_inputs {
+            node.ResolvedMaskClipRect()
+        } else {
+            None
+        },
+    };
+    flat.SetRare(rare);
+}
+
+/// The outline values the post-walk outline passes (ResetPostPaintData,
+/// PrepareOutlines) change on a node, onto its occurrence's FragmentData.
+fn WriteFlatReplayOutline(node: &PaintTreeNode<'_>) {
+    let Some(slot) = node
+        .source_cursor
+        .and_then(|cursor| cursor.PrePaintSlotIfCurrent())
+    else {
+        return;
+    };
+    // SAFETY: the post-walk passes are the occurrence's single PrePaint
+    // writer; no reference into the slot is live.
+    let Some(data) = (unsafe { slot.GetMut::<PrePaintFragmentData>() }) else {
+        return;
+    };
+    let flat = data.FlatReplayMut();
+    if flat.paints_outline == node.paints_outline
+        && flat
+            .Rare()
+            .and_then(|rare| rare.outline_rects.as_deref())
+            .unwrap_or(&[])
+            == node.outline_rects.as_slice()
+    {
+        return;
+    }
+    WriteFlatReplayDataTo(node, data);
 }
 
 /// Source: fragment_data.h:152-155 SetLocalBorderBoxProperties, skipped
@@ -5735,6 +5867,9 @@ fn ReplaceFlatTransformInSubtree(
             }
             replace(&mut cache.children.transforms, index, old, new, memo);
         }
+        // Retained descendants are not visited again this walk: their
+        // occurrences take the new flat list here.
+        WriteFlatReplayData(node);
         for child in &mut node.children {
             visit(child, index, old, new, memo, false);
         }
@@ -8750,6 +8885,7 @@ impl PrePaintTreeWalk {
                 if child_built_this_visit {
                     child_node.local_transforms.insert(0, svg);
                     child_node.applies_transform = true;
+                    WriteFlatReplayData(&child_node);
                 }
             }
             child_node.physical_index = index;

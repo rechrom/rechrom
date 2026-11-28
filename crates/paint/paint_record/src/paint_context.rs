@@ -1651,7 +1651,7 @@ impl<'o> PaintContext<'o> {
             };
             // The flat path keeps the builder's authored commands: the
             // ClipPathClip node holds their property-space PaintPath.
-            item.path = node.local_clip_path().clone();
+            item.path = node.local_clip_path().to_vec();
             item.even_odd = node.clip_path_even_odd();
             self.Append(item, node);
         }

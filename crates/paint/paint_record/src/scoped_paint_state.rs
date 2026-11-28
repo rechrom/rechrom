@@ -80,9 +80,14 @@ pub fn ContentsVisualRect(node: PaintObject<'_, '_>) -> Option<PaintRect> {
 
 /// Source: `scoped_paint_state.cc:152-164`.
 fn UpdatePreviousPaintResultForContents(node: PaintObject<'_, '_>) {
-    // The node's own retained result and cull rect are tested before the
-    // source LayoutBox/PaintLayer reads; every condition is a pure query.
-    if node.previous_paint_result().get() != PaintResult::kFullyPainted {
+    // The in-flight result the walk lent and the cull rect are tested before
+    // the source LayoutBox/PaintLayer reads; every condition is a pure
+    // query. An object reached through the cursor alone has no in-flight
+    // PaintLayerPainter result to downgrade.
+    let Some(previous_paint_result) = node.previous_paint_result() else {
+        return;
+    };
+    if previous_paint_result.get() != PaintResult::kFullyPainted {
         return;
     }
     let Some(contents_cull_rect) = node.cull_rect() else {
@@ -101,8 +106,7 @@ fn UpdatePreviousPaintResultForContents(node: PaintObject<'_, '_>) {
         return;
     };
     if !contents_cull_rect.contains(contents_visual_rect) {
-        node.previous_paint_result()
-            .set(PaintResult::kMayBeClippedByCullRect);
+        previous_paint_result.set(PaintResult::kMayBeClippedByCullRect);
     }
 }
 

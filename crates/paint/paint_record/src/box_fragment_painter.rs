@@ -1611,7 +1611,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let _drawing = DrawingRecorder::new(self.context, self.node, item_type, bounds);
-        let mut mask_layers = self.node.mask_layers().clone();
+        let mut mask_layers = self.node.mask_layers().to_vec();
         for layer in &mut mask_layers {
             layer.dynamic_range_limit = fragment.paint.style.dynamic_range_limit();
         }
@@ -6270,7 +6270,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let outline_rects = if self.node.outline_rects().is_empty() {
             exported_outline_rects.as_slice()
         } else {
-            self.node.outline_rects().as_slice()
+            self.node.outline_rects()
         };
         let exact_outline_is_empty = self_outline.is_some() && outline_rects.is_empty();
         let outline_width = self_outline

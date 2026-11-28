@@ -6,19 +6,27 @@
 //! object_painter.h:21-27). `PaintObject` is that borrowed pair for
 //! paint_record: a small `Copy` view over the source fragment cursor, its
 //! paint sidecar (`cursor.PaintData()`), the occurrence's
-//! `PrePaintFragmentData`, the source `PaintLayer`, and the walk state
-//! Chromium keeps as paint traversal state (ScopedDisplayItemFragment).
+//! `PrePaintFragmentData`, the source `PaintLayer`, and a `PaintWalkContext`
+//! holding the paint traversal state Chromium keeps in PaintInfo and
+//! PaintLayerPainter (the inherited cull rect, the in-flight previous paint
+//! result).
 //!
-//! It is still backed by the resident PrePaint node, which is the only place
-//! this package names it. The accessors under "Values re-sourced from
-//! Layout, FragmentData and PaintLayer" read the owner Chromium reads
-//! (ObjectPaintProperties slots, LocalBorderBoxProperties, the Layout
-//! PaintLayer, DocumentResources, the LayoutObject) whenever the occurrence
-//! has its FragmentData; only hand-built fixtures without one keep the
-//! node's copy. Each re-sourced value is checked against the node copy (see
-//! `VerifySource`) until the copies are deleted. The accessors under "Walk
-//! context" are paint traversal state that still lives on the node; they
-//! move to the walk's own context before the backing node goes away.
+//! Every value is read from the owner Chromium reads: the cursor and its
+//! LayoutObject / PaintLayer / DocumentResources, the FragmentData
+//! (PaintOffset, ObjectPaintProperties slots, LocalBorderBoxProperties,
+//! PaintLayer cull rects) and, for Rechrom's flat replay stream only, the
+//! FragmentData's `FlatReplayData`. A PaintObject is built three ways:
+//!
+//! - `FromCursor(cursor, walk)`: no PrePaint node at all.
+//! - `Walked(node, walk)`: the paint walk's occurrence. The values come from
+//!   the cursor, FragmentData and walk context exactly as for `FromCursor`;
+//!   the resident PrePaint node the walk still traverses is attached only
+//!   as the equivalence oracle (`Verify*`) and for the node-only reads
+//!   listed under "PrePaint node".
+//! - `new(node)`: hand-built fixtures (no FragmentData: every value is the
+//!   node's copy) and the synthetic nodes of scroll_paint_update / special
+//!   paint, whose walk-context values (inherited cull rect, previous paint
+//!   result) are the node's.
 
 #![allow(non_snake_case)]
 
@@ -29,7 +37,9 @@ use layout::fragment::FragmentKind;
 use layout::fragment::ResidentBoxGeometry as _;
 use layout::paint::{FragmentPaintData, PaintFragmentCursor};
 use layout::views::paint_layer::PaintLayer;
-use paint_input_types::layout_input::{Offset, PaintClipPathChild, PaintPathCommand};
+use paint_input_types::layout_input::{
+    Offset, PaintClipPathChild, PaintPathCommand, TransformMatrix,
+};
 use paint_input_types::paint_input::{PaintBlendMode, PaintCornerRadii};
 use paint_input_types::PaintResources;
 use paint_model::paint_property_tree::{
@@ -38,9 +48,11 @@ use paint_model::paint_property_tree::{
 };
 use paint_model::property_cell::with_access;
 use paint_model::{DisplayMaskLayer, PaintResult};
-use prepaint::fragment_data::PrePaintFragmentData;
+use prepaint::fragment_data::{FlatReplayData, FlatReplayRareData, PrePaintFragmentData};
 use prepaint::object_paint_properties::{ObjectPaintProperties, ObjectPaintPropertySlot};
-use prepaint::pre_paint_tree_walk::{FlatTransforms, PaintTreeNode};
+use prepaint::pre_paint_tree_walk::{
+    EnclosingRectInPropertySpace, PaintTreeNode, PixelSnappedRectInPropertySpace, SnapToPixel,
+};
 
 use crate::pre_paint_tree_walk::MaskAdjustedOpacity;
 use crate::PaintRect;
@@ -109,16 +121,91 @@ fn SameOptionalState(a: Option<&PaintPropertyTreeState>, b: Option<&PaintPropert
     }
 }
 
+/// The paint traversal state of one painted occurrence that Chromium keeps
+/// outside FragmentData: PaintInfo's cull rect as the paint parent's
+/// ScopedBoxContentsPaintState left it (paint_info.h GetCullRect,
+/// scoped_paint_state.cc:139-150), and the PaintLayerPainter's in-flight
+/// PaintLayer::PreviousPaintResult that ScopedBoxContentsPaintState
+/// downgrades (scoped_paint_state.cc:152-164).
+#[derive(Clone, Copy, Default)]
+pub struct PaintWalkContext<'n> {
+    /// The paint parent's contents cull rect; None is infinite.
+    inherited_cull_rect: Option<PaintRect>,
+    previous_paint_result: Option<&'n Cell<PaintResult>>,
+}
+
+impl<'n> PaintWalkContext<'n> {
+    pub fn new(
+        inherited_cull_rect: Option<PaintRect>,
+        previous_paint_result: Option<&'n Cell<PaintResult>>,
+    ) -> Self {
+        Self {
+            inherited_cull_rect,
+            previous_paint_result,
+        }
+    }
+
+    /// The context of a PaintLayer painted by its PaintLayerPainter: its
+    /// cull rects are its FragmentData's (CullRectUpdater), so nothing is
+    /// inherited.
+    pub fn ForLayer(previous_paint_result: Option<&'n Cell<PaintResult>>) -> Self {
+        Self::new(None, previous_paint_result)
+    }
+
+    /// The context of a paint child of `parent`: the child paints with the
+    /// parent's contents cull rect (BoxFragmentPainter passes the
+    /// ScopedBoxContentsPaintState PaintInfo to its children).
+    pub fn ForChild(
+        parent: PaintObject<'_, '_>,
+        previous_paint_result: Option<&'n Cell<PaintResult>>,
+    ) -> Self {
+        Self::new(parent.cull_rect(), previous_paint_result)
+    }
+}
+
 /// One painted object occurrence: source fragment + FragmentData + walk state.
 #[derive(Clone, Copy)]
 pub struct PaintObject<'n, 'f> {
-    node: &'n PaintTreeNode<'f>,
+    cursor: Option<PaintFragmentCursor<'n>>,
+    fragment: Option<&'n FragmentPaintData>,
+    data: Option<&'n PrePaintFragmentData>,
+    /// None for a node-backed object, whose walk-context values are the
+    /// node's.
+    walk: Option<PaintWalkContext<'n>>,
+    node: Option<&'n PaintTreeNode<'f>>,
 }
 
 impl<'n, 'f> PaintObject<'n, 'f> {
-    /// The resident PrePaint occurrence the paint walk is visiting.
+    /// A node-backed occurrence: a hand-built fixture, or a synthetic node of
+    /// scroll_paint_update / special paint outside the paint walk.
     pub fn new(node: &'n PaintTreeNode<'f>) -> Self {
-        Self { node }
+        Self {
+            cursor: node.SourceCursor(),
+            fragment: node.fragment.as_deref(),
+            data: node.FragmentData(),
+            walk: None,
+            node: Some(node),
+        }
+    }
+
+    /// The paint walk's occurrence: the values of `FromCursor(node's cursor,
+    /// walk)`, with the resident PrePaint node attached as their oracle.
+    pub fn Walked(node: &'n PaintTreeNode<'f>, walk: PaintWalkContext<'n>) -> Self {
+        Self {
+            walk: Some(walk),
+            ..Self::new(node)
+        }
+    }
+
+    /// An occurrence reached through the fragment cursor alone.
+    pub fn FromCursor(cursor: PaintFragmentCursor<'n>, walk: PaintWalkContext<'n>) -> Self {
+        Self {
+            cursor: Some(cursor),
+            fragment: Some(cursor.PaintData()),
+            data: cursor.PrePaintData::<PrePaintFragmentData>(),
+            walk: Some(walk),
+            node: None,
+        }
     }
 
     /// The walk-side node, for paint_walk while its own traversal still runs
@@ -126,6 +213,51 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     #[doc(hidden)]
     pub fn BackingNode(self) -> &'n PaintTreeNode<'f> {
         self.node
+            .expect("paint_walk traverses PrePaint nodes; this object has none")
+    }
+
+    // -----------------------------------------------------------------
+    // Sources and the oracle.
+    // -----------------------------------------------------------------
+
+    /// The node as the source of every value: an occurrence without
+    /// FragmentData (hand-built fixtures).
+    fn FixtureNode(self) -> Option<&'n PaintTreeNode<'f>> {
+        if self.data.is_some() {
+            None
+        } else {
+            self.node
+        }
+    }
+
+    /// The node as the oracle of a value re-sourced from the occurrence.
+    fn Oracle(self) -> Option<&'n PaintTreeNode<'f>> {
+        if self.data.is_some() {
+            self.node
+        } else {
+            None
+        }
+    }
+
+    fn Verify(self, accessor: &str, same: impl FnOnce(&'n PaintTreeNode<'f>) -> bool) {
+        if let Some(node) = self.Oracle() {
+            VerifySource(accessor, || same(node));
+        }
+    }
+
+    fn VerifyUnderCheck(self, accessor: &str, same: impl FnOnce(&'n PaintTreeNode<'f>) -> bool) {
+        if let Some(node) = self.Oracle() {
+            VerifySourceUnderCheck(accessor, || same(node));
+        }
+    }
+
+    /// The occurrence's flat replay values (FragmentData FlatReplayData).
+    fn Flat(self) -> Option<&'n FlatReplayData> {
+        self.data.map(PrePaintFragmentData::FlatReplay)
+    }
+
+    fn FlatRare(self) -> Option<&'n FlatReplayRareData> {
+        self.Flat()?.Rare()
     }
 
     // -----------------------------------------------------------------
@@ -134,60 +266,60 @@ impl<'n, 'f> PaintObject<'n, 'f> {
 
     /// The borrowed fragment cursor of the painted object (the walk handle).
     pub fn SourceCursor(self) -> Option<PaintFragmentCursor<'n>> {
-        self.node.SourceCursor()
+        self.cursor
     }
 
     /// The fragment's paint sidecar (`cursor.PaintData()`): the paint view of
     /// the PhysicalBoxFragment / FragmentItem and its LayoutObject.
     pub fn Fragment(self) -> Option<&'n FragmentPaintData> {
-        self.node.fragment.as_deref()
+        self.fragment
     }
 
     /// FragmentData of this occurrence (core/paint/fragment_data.h).
     pub fn FragmentData(self) -> Option<&'n PrePaintFragmentData> {
-        self.node.FragmentData()
+        self.data
     }
 
     /// `To<LayoutBoxModelObject>(object).Layer()` of the source object.
     pub fn PaintLayer(self) -> Option<&'n PaintLayer> {
-        self.SourceCursor()?.OwnPaintLayer()
+        self.cursor?.OwnPaintLayer()
     }
 
     /// Document / LocalFrameView paint resources of the source object.
     pub fn DocumentResources(self) -> Option<&'n Arc<PaintResources>> {
-        self.node.DocumentResources()
+        match self.cursor {
+            Some(cursor) => cursor.DocumentResources(),
+            None => self.fragment?.resources.as_ref(),
+        }
     }
 
-    /// The active ScopedDisplayItemFragment (paint traversal state).
+    /// The active ScopedDisplayItemFragment (box_fragment_painter.cc:394-403,
+    /// paint_layer_painter.cc:776-778, inline_box_fragment_painter.cc:63-64):
+    /// Layout resolves it on the paint sidecar from the scope the fragment
+    /// cursor walk carries (layout_output.rs PhysicalDisplayItemFragment).
     pub fn DisplayItemFragment(self) -> u32 {
-        self.node.DisplayItemFragment()
-    }
-
-    /// The fragmentainer this occurrence paints inside (traversal state).
-    pub fn FragmentainerInstanceId(self) -> u64 {
-        self.node.FragmentainerInstanceId()
+        if let Some(node) = self.FixtureNode() {
+            return node.DisplayItemFragment();
+        }
+        let value = self
+            .fragment
+            .map_or(0, |fragment| fragment.ViewDisplayItemFragment());
+        self.VerifyUnderCheck("DisplayItemFragment", |node| value == node.DisplayItemFragment());
+        value
     }
 
     /// Whether ObjectPaintProperties holds the slot of `role`
     /// (object_paint_properties.h `HasNode`).
     pub fn HasOwnPropertyRole(self, role: PaintPropertyRole) -> bool {
-        let Some(data) = self.FragmentData() else {
-            return self.node.HasOwnPropertyRole(role);
+        let Some(data) = self.data else {
+            return self.node.is_some_and(|node| node.HasOwnPropertyRole(role));
         };
         let value = data.HasPropertyRole(role);
         // The node's key log exists only for nodes built with a cache.
-        VerifySourceUnderCheck("HasOwnPropertyRole", || {
-            value == self.node.HasOwnPropertyRole(role)
+        self.VerifyUnderCheck("HasOwnPropertyRole", |node| {
+            value == node.HasOwnPropertyRole(role)
         });
         value
-    }
-
-    /// The FragmentData of an object with a PaintLayer: only those carry
-    /// CullRectUpdater's cull rects (cull_rect_updater.cc:51-90).
-    fn LayerFragmentData(self) -> Option<&'n PrePaintFragmentData> {
-        let data = self.FragmentData()?;
-        self.PaintLayer()?;
-        Some(data)
     }
 
     /// A clip slot's rect and radii in the flat replay space. The builder
@@ -195,7 +327,7 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// paint_snap_offset (PropertySpaceRect); remove it again, as
     /// PaintContext's FlatClipRect does.
     fn FlatSlotClip(self, clip: &ClipPaintPropertyNode) -> Option<(PaintRect, PaintCornerRadii)> {
-        let delta = self.node.paint_snap_offset;
+        let delta = self.paint_snap_offset();
         with_access(|access| {
             let mut rect = clip.PaintClipRect(access)?;
             rect.x -= delta.x;
@@ -210,10 +342,12 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         self,
         accessor: &str,
         slot: impl FnOnce(&'n ObjectPaintProperties) -> Option<&'n Arc<ClipPaintPropertyNode>>,
-        node_value: (Option<PaintRect>, PaintCornerRadii),
+        node_value: impl Fn(&'n PaintTreeNode<'f>) -> (Option<PaintRect>, PaintCornerRadii),
     ) -> (Option<PaintRect>, PaintCornerRadii) {
-        let Some(data) = self.FragmentData() else {
-            return node_value;
+        let Some(data) = self.data else {
+            return self
+                .node
+                .map_or((None, PaintCornerRadii::default()), &node_value);
         };
         let value = match data.PaintProperties().and_then(slot) {
             Some(clip) => match self.FlatSlotClip(clip) {
@@ -222,7 +356,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
             },
             None => (None, PaintCornerRadii::default()),
         };
-        VerifySource(accessor, || {
+        self.Verify(accessor, |node| {
+            let node_value = node_value(node);
             SameOptionalRect(value.0, node_value.0) && value.1 == node_value.1
         });
         value
@@ -233,14 +368,14 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     fn SlotFlagOr(
         self,
         accessor: &str,
-        node_value: bool,
+        node_value: impl Fn(&'n PaintTreeNode<'f>) -> bool,
         derive: impl FnOnce(Option<&'n ObjectPaintProperties>) -> bool,
     ) -> bool {
-        let Some(data) = self.FragmentData() else {
-            return node_value;
+        let Some(data) = self.data else {
+            return self.node.is_some_and(&node_value);
         };
         let value = derive(data.PaintProperties());
-        VerifySource(accessor, || value == node_value);
+        self.Verify(accessor, |node| value == node_value(node));
         value
     }
 
@@ -248,47 +383,102 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     // Paint offset and snapping in the flat replay space.
     // -----------------------------------------------------------------
 
-    /// FragmentData::PaintOffset() in the flat replay space.
+    /// FragmentData::PaintOffset() in the flat replay space: the LOCAL
+    /// offset (fragment_data.h:32-38, LayoutUnit-rounded) moved back by the
+    /// flat-to-property delta `paint_snap_offset`.
     pub fn FlatPaintOffset(self) -> Offset {
-        self.node.FlatPaintOffset()
+        self.FlatPaintOffsetOf(self.data)
     }
 
     /// FlatPaintOffset with this occurrence's FragmentData already resolved.
     pub fn FlatPaintOffsetOf(self, data: Option<&PrePaintFragmentData>) -> Offset {
-        self.node.FlatPaintOffsetOf(data)
+        let Some(data) = data else {
+            return self.node.map_or_else(Offset::default, |node| node.paint_offset);
+        };
+        let local = data.PaintOffset();
+        let delta = self.paint_snap_offset();
+        let flat = Offset {
+            x: local.left.ToDouble() - delta.x,
+            y: local.top.ToDouble() - delta.y,
+        };
+        // PaintPropertyTreeBuilder stores round(paint_offset + delta) in
+        // LayoutUnit (FragmentDataPaintOffset); only that rounding may
+        // separate the two copies.
+        self.Verify("FlatPaintOffset", |node| {
+            (flat.x - node.paint_offset.x).abs() <= 1.0 / 128.0 + 1e-9
+                && (flat.y - node.paint_offset.y).abs() <= 1.0 / 128.0 + 1e-9
+        });
+        flat
     }
 
     pub fn PixelSnappedRect(self, rect: &PaintRect) -> PaintRect {
-        self.node.PixelSnappedRect(rect)
+        PixelSnappedRectInPropertySpace(rect, self.paint_snap_offset(), self.pixel_snap_scale())
     }
 
+    /// DrawingRecorder bounds are enclosed in property space, where Chromium
+    /// encloses the local rect, and returned in the flat replay space of the
+    /// recorded ops (see FlatPaintOffset).
     pub fn EnclosingRect(self, rect: PaintRect) -> PaintRect {
-        self.node.EnclosingRect(rect)
+        EnclosingRectInPropertySpace(rect, self.paint_snap_offset())
     }
 
     pub fn PixelSnappedOffset(self, offset: Offset) -> Offset {
-        self.node.PixelSnappedOffset(offset)
+        let delta = self.paint_snap_offset();
+        let scale = self.pixel_snap_scale();
+        Offset {
+            x: SnapToPixel(offset.x + delta.x, scale) - delta.x,
+            y: SnapToPixel(offset.y + delta.y, scale) - delta.y,
+        }
     }
 
-    /// ObjectPaintProperties::MaskClip source rect in the flat replay space.
+    /// ObjectPaintProperties::MaskClip source rect in the flat replay space,
+    /// as PrePaint resolved it from the exact flat paint offset.
     pub fn ResolvedMaskClipRect(self) -> Option<PaintRect> {
-        self.node.ResolvedMaskClipRect()
+        if let Some(node) = self.FixtureNode() {
+            return node.ResolvedMaskClipRect();
+        }
+        let value = self.FlatRare().and_then(|rare| rare.mask_clip_rect);
+        self.Verify("ResolvedMaskClipRect", |node| {
+            SameOptionalRect(value, node.ResolvedMaskClipRect())
+        });
+        value
     }
 
     // -----------------------------------------------------------------
     // Tree access.
     // -----------------------------------------------------------------
 
-    /// The painted children of this object in PrePaint traversal order.
+    /// The painted children of this object in paint order: the walk's
+    /// resident children while it still traverses PrePaint nodes (the
+    /// fragment cursor's children, then an embedded local frame's root),
+    /// else the fragment cursor's children (box children and FragmentItems,
+    /// BoxFragmentPainter's traversal). Each child paints with this
+    /// object's contents cull rect.
     pub fn Children(self) -> PaintObjectChildren<'n, 'f> {
+        let inherited_cull_rect = if self.walk.is_some() {
+            self.cull_rect()
+        } else {
+            None
+        };
+        let source = match (self.node, self.cursor) {
+            (Some(node), _) => ChildSource::Nodes(node.children.iter()),
+            (None, Some(cursor)) if self.walk.is_some() => {
+                ChildSource::Cursors(cursor.Children().collect::<Vec<_>>().into_iter())
+            }
+            _ => ChildSource::Cursors(Vec::new().into_iter()),
+        };
         PaintObjectChildren {
-            inner: self.node.children.iter(),
+            source,
+            walked: self.walk.is_some(),
+            inherited_cull_rect,
         }
     }
 
-    /// The painted SVG resource subtree root registered for `client`.
+    /// The painted SVG resource subtree root registered for `client`. The
+    /// resource subtree is painted by the paint walk's node traversal
+    /// (PaintSvgResourceSubtree), so it is the PrePaint node's directory.
     pub fn SvgResourceNode(self, client: u64) -> Option<PaintObject<'n, 'static>> {
-        self.node.SvgResourceNode(client).map(PaintObject::new)
+        self.node?.SvgResourceNode(client).map(PaintObject::new)
     }
 
     // -----------------------------------------------------------------
@@ -299,15 +489,14 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// Device scale used to snap paint geometry: the LocalFrameView's
     /// DocumentResources scale PaintPropertyTreeBuilder snaps with.
     pub fn pixel_snap_scale(self) -> f64 {
-        let node_value = self.node.pixel_snap_scale;
-        if self.FragmentData().is_none() {
-            return node_value;
+        if let Some(node) = self.FixtureNode() {
+            return node.pixel_snap_scale;
         }
         let value = self
             .DocumentResources()
             .map_or(1.0, |resources| resources.ArtifactToDeviceScale())
             .max(f64::MIN_POSITIVE);
-        VerifySource("pixel_snap_scale", || value == node_value);
+        self.Verify("pixel_snap_scale", |node| value == node.pixel_snap_scale);
         value
     }
 
@@ -322,10 +511,12 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         self.FlatClipSlotOr(
             "local_inner_border_radius_clip",
             |properties| properties.InnerBorderRadiusClip(),
-            (
-                self.node.local_inner_border_radius_clip,
-                self.node.local_inner_border_radius_radii,
-            ),
+            |node| {
+                (
+                    node.local_inner_border_radius_clip,
+                    node.local_inner_border_radius_radii,
+                )
+            },
         )
     }
 
@@ -340,7 +531,7 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         self.FlatClipSlotOr(
             "local_clip",
             |properties| properties.OverflowClip(),
-            (self.node.local_clip, self.node.local_clip_radii),
+            |node| (node.local_clip, node.local_clip_radii),
         )
     }
 
@@ -349,7 +540,7 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         self.FlatClipSlotOr(
             "local_css_clip",
             |properties| properties.CssClip(),
-            (self.node.local_css_clip, PaintCornerRadii::default()),
+            |node| (node.local_css_clip, PaintCornerRadii::default()),
         )
         .0
     }
@@ -358,7 +549,7 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// builds the single authored path, or one path per reference child, with
     /// the rule PrePaint resolved (the first child's for a reference graph).
     pub fn clip_path_even_odd(self) -> bool {
-        self.SlotFlagOr("clip_path_even_odd", self.node.clip_path_even_odd, |properties| {
+        self.SlotFlagOr("clip_path_even_odd", |node| node.clip_path_even_odd, |properties| {
             properties
                 .and_then(ObjectPaintProperties::ClipPathClip)
                 .is_some_and(|clip| {
@@ -371,45 +562,67 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         })
     }
 
-    /// The contents cull rect of a PaintLayer object (FragmentData::
-    /// GetContentsCullRect, fragment_data.h:163-168; infinite is None). Other
-    /// objects keep the walk's PaintInfo cull rect (walk context).
-    pub fn cull_rect(self) -> Option<PaintRect> {
-        let node_value = self.node.cull_rect;
-        let Some(data) = self.LayerFragmentData() else {
-            return node_value;
+    /// (cull rect, contents cull rect) of this occurrence. A PaintLayer
+    /// object reads its FragmentData's (FragmentData::GetCullRect /
+    /// GetContentsCullRect, fragment_data.h:157-168, written by
+    /// CullRectUpdater). Another object paints with the PaintInfo cull rect
+    /// its paint parent passed down (the walk context), unless PrePaint
+    /// computed rects of its own for it (FlatReplayData). None is infinite.
+    fn CullRects(self) -> (Option<PaintRect>, Option<PaintRect>) {
+        let Some(data) = self.data else {
+            return self
+                .node
+                .map_or((None, None), |node| (node.self_cull_rect, node.cull_rect));
         };
-        let value = data.GetContentsCullRect().Rect();
-        VerifySource("cull_rect", || value == node_value);
+        let value = if self.PaintLayer().is_some() {
+            (data.GetCullRect().Rect(), data.GetContentsCullRect().Rect())
+        } else if let Some(rects) = data
+            .FlatReplay()
+            .Rare()
+            .and_then(|rare| rare.non_layer_cull_rects)
+        {
+            rects
+        } else {
+            match self.walk {
+                Some(walk) => (walk.inherited_cull_rect, walk.inherited_cull_rect),
+                // A node-backed object outside the walk: the node carries the
+                // walk's cull rect.
+                None => {
+                    let node = self.node.expect("node-backed PaintObject");
+                    return (node.self_cull_rect, node.cull_rect);
+                }
+            }
+        };
+        self.VerifyUnderCheck("cull_rect", |node| value == (node.self_cull_rect, node.cull_rect));
         value
     }
 
-    /// The cull rect of a PaintLayer object (FragmentData::GetCullRect,
-    /// fragment_data.h:157-162); other objects keep the walk's PaintInfo cull
-    /// rect (walk context).
+    /// The contents cull rect (FragmentData::GetContentsCullRect for a
+    /// PaintLayer object, else the walk's PaintInfo cull rect).
+    pub fn cull_rect(self) -> Option<PaintRect> {
+        self.CullRects().1
+    }
+
+    /// The cull rect (FragmentData::GetCullRect for a PaintLayer object,
+    /// else the walk's PaintInfo cull rect).
     pub fn self_cull_rect(self) -> Option<PaintRect> {
-        let node_value = self.node.self_cull_rect;
-        let Some(data) = self.LayerFragmentData() else {
-            return node_value;
-        };
-        let value = data.GetCullRect().Rect();
-        VerifySource("self_cull_rect", || value == node_value);
-        value
+        self.CullRects().0
     }
 
     /// ObjectPaintProperties::PaintOffsetTranslation (object_paint_properties.h).
     pub fn paint_offset_translation(self) -> Option<&'n Arc<TransformPaintPropertyNode>> {
-        let node_value = self.node.paint_offset_translation.as_ref();
-        let Some(data) = self.FragmentData() else {
-            return node_value;
+        let Some(data) = self.data else {
+            return self.node?.paint_offset_translation.as_ref();
         };
         let value = data
             .PaintProperties()
             .and_then(ObjectPaintProperties::PaintOffsetTranslation);
-        VerifySource("paint_offset_translation", || match (value, node_value) {
-            (Some(value), Some(node_value)) => Arc::ptr_eq(value, node_value),
-            (None, None) => true,
-            _ => false,
+        self.Verify("paint_offset_translation", |node| {
+            match (value, node.paint_offset_translation.as_ref()) {
+                (Some(value), Some(node_value)) => Arc::ptr_eq(value, node_value),
+                (None, None) => true,
+                _ => false,
+            }
         });
         value
     }
@@ -420,18 +633,19 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// fragment establishing paint state, plus a masked object (the builder
     /// isolates every Mask effect, SVG children included).
     pub fn is_paint_layer(self) -> bool {
-        let node_value = self.node.is_paint_layer;
-        let (Some(data), Some(fragment)) = (self.FragmentData(), self.Fragment()) else {
-            return node_value;
+        let (Some(data), Some(fragment)) = (self.data, self.fragment) else {
+            return self.node.is_some_and(|node| node.is_paint_layer);
         };
         if !fragment.paint.PaintLayerStateIsAuthoritative() {
-            return node_value;
+            if let Some(node) = self.node {
+                return node.is_paint_layer;
+            }
         }
         let value = (fragment.ViewKind() == FragmentKind::kBox
             && fragment.ViewEstablishesPaintState()
             && self.PaintLayer().is_some_and(PaintLayer::IsSelfPaintingLayer))
             || data.HasPropertySlot(ObjectPaintPropertySlot::Mask);
-        VerifySource("is_paint_layer", || value == node_value);
+        self.Verify("is_paint_layer", |node| value == node.is_paint_layer);
         value
     }
 
@@ -439,9 +653,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// object; without a layer, Layout's exported fact for a source-backed
     /// object, else the PrePaint layer classification.
     pub fn is_self_painting_layer(self) -> bool {
-        let node_value = self.node.is_self_painting_layer;
-        let (Some(_), Some(fragment)) = (self.FragmentData(), self.Fragment()) else {
-            return node_value;
+        let (Some(_), Some(fragment)) = (self.data, self.fragment) else {
+            return self.node.is_some_and(|node| node.is_self_painting_layer);
         };
         let value = match self.PaintLayer() {
             Some(layer) => layer.IsSelfPaintingLayer(),
@@ -450,22 +663,23 @@ impl<'n, 'f> PaintObject<'n, 'f> {
             }
             None => self.is_paint_layer(),
         };
-        VerifySource("is_self_painting_layer", || value == node_value);
+        self.Verify("is_self_painting_layer", |node| value == node.is_self_painting_layer);
         value
     }
 
     /// `layer.GetLayoutObject().IsFragmented()` of the source PaintLayer
     /// (layout_object.h IsFragmented: more than one FragmentData).
     pub fn paint_layer_is_fragmented(self) -> bool {
-        let node_value = self.node.paint_layer_is_fragmented;
-        let (Some(_), Some(fragment)) = (self.FragmentData(), self.Fragment()) else {
-            return node_value;
+        let (Some(_), Some(fragment)) = (self.data, self.fragment) else {
+            return self.node.is_some_and(|node| node.paint_layer_is_fragmented);
         };
         let value = match self.PaintLayer() {
             Some(layer) => layer.GetLayoutObject().IsFragmented(),
             None => fragment.paint.PaintLayerIsFragmented(),
         };
-        VerifySource("paint_layer_is_fragmented", || value == node_value);
+        self.Verify("paint_layer_is_fragmented", |node| {
+            value == node.paint_layer_is_fragmented
+        });
         value
     }
 
@@ -473,12 +687,11 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// box_fragment_painter.cc PaintBoxDecorationBackground): the root of
     /// every PrePaint walk, a local frame's included.
     pub fn is_root(self) -> bool {
-        let node_value = self.node.is_root;
-        let (Some(_), Some(fragment)) = (self.FragmentData(), self.Fragment()) else {
-            return node_value;
+        let (Some(_), Some(fragment)) = (self.data, self.fragment) else {
+            return self.node.is_some_and(|node| node.is_root);
         };
         let value = fragment.paint.IsLayoutView();
-        VerifySource("is_root", || value == node_value);
+        self.Verify("is_root", |node| value == node.is_root);
         value
     }
 
@@ -488,42 +701,43 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// only by the resident hit-test collector, so it is compared under the
     /// check switch only.
     pub fn needs_reorder_overlay_overflow_controls(self) -> bool {
-        let node_value = self.node.needs_reorder_overlay_overflow_controls.get();
-        if self.FragmentData().is_none() {
-            return node_value;
-        }
-        let Some(layer) = self.PaintLayer() else {
-            return node_value;
+        let layer = match (self.data, self.PaintLayer()) {
+            (Some(_), Some(layer)) => layer,
+            _ => {
+                return self
+                    .node
+                    .is_some_and(|node| node.needs_reorder_overlay_overflow_controls.get())
+            }
         };
         let value = layer.NeedsReorderOverlayOverflowControls();
-        VerifySourceUnderCheck("needs_reorder_overlay_overflow_controls", || {
-            value == node_value
+        self.VerifyUnderCheck("needs_reorder_overlay_overflow_controls", |node| {
+            value == node.needs_reorder_overlay_overflow_controls.get()
         });
         value
     }
 
     /// ObjectPaintProperties::OverflowClip.
     pub fn applies_overflow_clip(self) -> bool {
-        self.SlotFlagOr("applies_overflow_clip", self.node.applies_overflow_clip, |properties| {
+        self.SlotFlagOr("applies_overflow_clip", |node| node.applies_overflow_clip, |properties| {
             properties.is_some_and(|properties| properties.OverflowClip().is_some())
         })
     }
     /// ObjectPaintProperties::CssClip.
     pub fn applies_css_clip(self) -> bool {
-        self.SlotFlagOr("applies_css_clip", self.node.applies_css_clip, |properties| {
+        self.SlotFlagOr("applies_css_clip", |node| node.applies_css_clip, |properties| {
             properties.is_some_and(|properties| properties.CssClip().is_some())
         })
     }
     /// ObjectPaintProperties::ClipPathClip.
     pub fn applies_clip_path(self) -> bool {
-        self.SlotFlagOr("applies_clip_path", self.node.applies_clip_path, |properties| {
+        self.SlotFlagOr("applies_clip_path", |node| node.applies_clip_path, |properties| {
             properties.is_some_and(|properties| properties.ClipPathClip().is_some())
         })
     }
     /// ObjectPaintProperties::Effect or Filter (the builder creates Effect for
     /// opacity, blending, backdrop filter, mask or an effect reason).
     pub fn applies_effect(self) -> bool {
-        self.SlotFlagOr("applies_effect", self.node.applies_effect, |properties| {
+        self.SlotFlagOr("applies_effect", |node| node.applies_effect, |properties| {
             properties.is_some_and(|properties| {
                 properties.Effect().is_some() || properties.Filter().is_some()
             })
@@ -532,17 +746,17 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// The Effect slot with a non-opaque style opacity (the value the
     /// SaveLayerAlpha replays, as PaintContext's ObjectReplayScopes reads it).
     pub fn applies_opacity(self) -> bool {
-        self.SlotFlagOr("applies_opacity", self.node.applies_opacity, |properties| {
+        self.SlotFlagOr("applies_opacity", |node| node.applies_opacity, |properties| {
             properties.is_some_and(|properties| properties.Effect().is_some())
                 && self
-                    .Fragment()
+                    .fragment
                     .is_some_and(|fragment| MaskAdjustedOpacity(&fragment.paint.style) != 1.0)
         })
     }
     /// The Effect slot with a blend mode or isolating descendant blending
     /// (NeedsCssBlendEffect).
     pub fn applies_blend(self) -> bool {
-        self.SlotFlagOr("applies_blend", self.node.applies_blend, |properties| {
+        self.SlotFlagOr("applies_blend", |node| node.applies_blend, |properties| {
             properties
                 .and_then(ObjectPaintProperties::Effect)
                 .is_some_and(|effect| {
@@ -555,88 +769,100 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     }
     /// ObjectPaintProperties::Filter.
     pub fn applies_filter(self) -> bool {
-        self.SlotFlagOr("applies_filter", self.node.applies_filter, |properties| {
+        self.SlotFlagOr("applies_filter", |node| node.applies_filter, |properties| {
             properties.is_some_and(|properties| properties.Filter().is_some())
         })
     }
     /// The BackdropFilterClip slot, created exactly for a backdrop filter.
     pub fn applies_backdrop_filter(self) -> bool {
-        self.SlotFlagOr("applies_backdrop_filter", self.node.applies_backdrop_filter, |properties| {
-            properties.is_some_and(|properties| properties.BackdropFilterClip().is_some())
-        })
+        self.SlotFlagOr(
+            "applies_backdrop_filter",
+            |node| node.applies_backdrop_filter,
+            |properties| properties.is_some_and(|properties| properties.BackdropFilterClip().is_some()),
+        )
     }
     /// ObjectPaintProperties::Mask.
     pub fn applies_mask(self) -> bool {
-        self.SlotFlagOr("applies_mask", self.node.applies_mask, |properties| {
+        self.SlotFlagOr("applies_mask", |node| node.applies_mask, |properties| {
             properties.is_some_and(|properties| properties.Mask().is_some())
         })
     }
 
     /// FragmentData::LocalBorderBoxProperties (fragment_data.h:137-142).
     pub fn properties(self) -> &'n PaintPropertyTreeState {
-        let node_value = &self.node.properties.nodes;
-        match self
-            .FragmentData()
-            .and_then(|data| data.LocalBorderBoxPropertiesRef())
-        {
+        match self.data.and_then(|data| data.LocalBorderBoxPropertiesRef()) {
             Some(state) => {
-                VerifySource("properties", || SameStateNodes(state, node_value));
+                self.Verify("properties", |node| SameStateNodes(state, &node.properties.nodes));
                 state
             }
-            None => node_value,
+            None => {
+                &self
+                    .node
+                    .expect("PaintObject without LocalBorderBoxProperties")
+                    .properties
+                    .nodes
+            }
         }
     }
 
     /// FragmentData::PreTransform (fragment_data.cc:55-65).
     pub fn pre_transform(self) -> Arc<TransformPaintPropertyNode> {
-        let node_value = &self.node.pre_transform;
-        match self.FragmentData() {
+        match self.data {
             Some(data) if data.HasLocalBorderBoxProperties() => {
                 let value = with_access(|access| data.PreTransform(access));
-                VerifySourceUnderCheck("pre_transform", || Arc::ptr_eq(&value, node_value));
+                self.VerifyUnderCheck("pre_transform", |node| {
+                    Arc::ptr_eq(&value, &node.pre_transform)
+                });
                 value
             }
-            _ => node_value.clone(),
+            _ => match self.node {
+                Some(node) => node.pre_transform.clone(),
+                None => PaintPropertyTreeState::default().transform,
+            },
         }
     }
 
     /// FragmentData::ContentsProperties (fragment_data.h:170-177).
     pub fn contents_properties(self) -> PaintPropertyTreeState {
-        let node_value = &self.node.contents_properties.nodes;
-        match self.FragmentData() {
+        match self.data {
             Some(data) if data.HasLocalBorderBoxProperties() => {
                 let value = data.ContentsProperties();
-                VerifySourceUnderCheck("contents_properties", || {
-                    SameStateNodes(&value, node_value)
+                self.VerifyUnderCheck("contents_properties", |node| {
+                    SameStateNodes(&value, &node.contents_properties.nodes)
                 });
                 value
             }
-            _ => node_value.clone(),
+            _ => self
+                .node
+                .map_or_else(PaintPropertyTreeState::default, |node| {
+                    node.contents_properties.nodes.clone()
+                }),
         }
     }
 
     /// The composited fixed background state: the BackgroundClip slot over
     /// the LocalBorderBoxProperties effect, in the frame's viewport transform
     /// (BoxFragmentPainter::PaintCompositeBackgroundAttachmentFixed). That
-    /// transform is walk context the builder carried; it stays on the node.
+    /// transform is the LayoutView's, which the builder carried down as walk
+    /// context; FlatReplayData keeps it for the occurrence.
     pub fn fixed_background_properties(self) -> Option<PaintPropertyTreeState> {
-        let node_value = self.node.fixed_background_properties.as_ref();
-        let Some(data) = self.FragmentData() else {
-            return node_value.cloned();
+        let Some(data) = self.data else {
+            return self.node?.fixed_background_properties.clone();
         };
         let value = match (
             data.PaintProperties().and_then(ObjectPaintProperties::BackgroundClip),
-            node_value,
+            self.FlatRare()
+                .and_then(|rare| rare.fixed_background_transform.as_ref()),
         ) {
-            (Some(clip), Some(node_state)) => Some(PaintPropertyTreeState {
-                transform: node_state.transform.clone(),
+            (Some(clip), Some(transform)) => Some(PaintPropertyTreeState {
+                transform: transform.clone(),
                 clip: clip.clone(),
                 effect: data.LocalBorderBoxProperties().effect,
             }),
             _ => None,
         };
-        VerifySource("fixed_background_properties", || {
-            SameOptionalState(value.as_ref(), node_value)
+        self.Verify("fixed_background_properties", |node| {
+            SameOptionalState(value.as_ref(), node.fixed_background_properties.as_ref())
         });
         value
     }
@@ -645,9 +871,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// ObjectPaintProperties::OverflowControlsClip entered over the box's
     /// LocalBorderBoxProperties. `None` when the box has no such clip.
     pub fn overflow_controls_properties(self) -> Option<PaintPropertyTreeState> {
-        let node_value = self.node.overflow_controls_properties.as_ref();
-        let Some(data) = self.FragmentData() else {
-            return node_value.cloned();
+        let Some(data) = self.data else {
+            return self.node?.overflow_controls_properties.clone();
         };
         let value = data
             .PaintProperties()
@@ -657,8 +882,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
                 state.clip = clip.clone();
                 state
             });
-        VerifySourceUnderCheck("overflow_controls_properties", || {
-            SameOptionalState(value.as_ref(), node_value)
+        self.VerifyUnderCheck("overflow_controls_properties", |node| {
+            SameOptionalState(value.as_ref(), node.overflow_controls_properties.as_ref())
         });
         value
     }
@@ -673,13 +898,15 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         self.ScrollbarProperties(false)
     }
     fn ScrollbarProperties(self, horizontal: bool) -> Option<PaintPropertyTreeState> {
-        let node_value = if horizontal {
-            self.node.horizontal_scrollbar_properties.as_ref()
-        } else {
-            self.node.vertical_scrollbar_properties.as_ref()
+        let node_value = |node: &'n PaintTreeNode<'f>| {
+            if horizontal {
+                node.horizontal_scrollbar_properties.as_ref()
+            } else {
+                node.vertical_scrollbar_properties.as_ref()
+            }
         };
-        let Some(data) = self.FragmentData() else {
-            return node_value.cloned();
+        let Some(data) = self.data else {
+            return self.node.and_then(node_value).cloned();
         };
         let value = data.PaintProperties().and_then(|properties| {
             let effect = if horizontal {
@@ -695,8 +922,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
             state.effect = effect;
             Some(state)
         });
-        VerifySourceUnderCheck("scrollbar_properties", || {
-            SameOptionalState(value.as_ref(), node_value)
+        self.VerifyUnderCheck("scrollbar_properties", |node| {
+            SameOptionalState(value.as_ref(), node_value(node))
         });
         value
     }
@@ -705,9 +932,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     /// (paint_layer_painter.cc:722-729): the LocalBorderBoxProperties with the
     /// Mask effect and its output clip. `None` without a Mask slot.
     pub fn mask_properties(self) -> Option<PaintPropertyTreeState> {
-        let node_value = self.node.mask_properties.as_ref();
-        let Some(data) = self.FragmentData() else {
-            return node_value.cloned();
+        let Some(data) = self.data else {
+            return self.node?.mask_properties.clone();
         };
         let value = data
             .PaintProperties()
@@ -721,81 +947,173 @@ impl<'n, 'f> PaintObject<'n, 'f> {
                     effect: mask.clone(),
                 }
             });
-        VerifySourceUnderCheck("mask_properties", || {
-            SameOptionalState(value.as_ref(), node_value)
+        self.VerifyUnderCheck("mask_properties", |node| {
+            SameOptionalState(value.as_ref(), node.mask_properties.as_ref())
         });
         value
     }
 
     // -----------------------------------------------------------------
-    // Walk context: paint traversal state the PrePaint walk still carries on
-    // the node (S5b-2 moves it into the walk's own context), and PrePaint
-    // results that have no FragmentData / PaintLayer / Layout owner yet.
+    // Walk context (PaintInfo / PaintLayerPainter traversal state).
+    // -----------------------------------------------------------------
+
+    /// PaintLayerPainter's in-flight PaintLayer::PreviousPaintResult: seeded
+    /// per traversal and downgraded by ScopedBoxContentsPaintState before
+    /// PaintLayerPainter writes the layer (and not written at all under
+    /// kOmitCompositingInfo). The walk lends the cell of the layer being
+    /// painted; an object reached through the cursor alone has none.
+    pub fn previous_paint_result(self) -> Option<&'n Cell<PaintResult>> {
+        match self.walk {
+            Some(walk) => walk.previous_paint_result,
+            None => self.node.map(|node| &node.previous_paint_result),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Flat replay values (FragmentData FlatReplayData): Rechrom's flat
+    // replay stream only; Chromium paints in the local property space.
     // -----------------------------------------------------------------
 
     /// Flat-to-property-space delta of the paint offset.
     pub fn paint_snap_offset(self) -> Offset {
-        self.node.paint_snap_offset
+        let Some(flat) = self.Flat() else {
+            return self.node.map_or_else(Offset::default, |node| node.paint_snap_offset);
+        };
+        let value = flat.paint_snap_offset;
+        self.Verify("paint_snap_offset", |node| value == node.paint_snap_offset);
+        value
     }
     /// The walk root's inherited flat clip (the frame-view viewport clip of
     /// the main frame, the owner's accumulated clip of a local frame). The
     /// frame-level ViewportClip is not an ObjectPaintProperties slot
     /// (ObjectPaintPropertySlot::FromRole).
     pub fn root_clip(self) -> Option<PaintRect> {
-        self.node.root_clip
+        if self.data.is_none() {
+            return self.node.and_then(|node| node.root_clip);
+        }
+        let value = self.FlatRare().and_then(|rare| rare.root_clip);
+        self.Verify("root_clip", |node| value == node.root_clip);
+        value
     }
     pub fn applies_root_clip(self) -> bool {
-        self.node.applies_root_clip
+        let Some(flat) = self.Flat() else {
+            return self.node.is_some_and(|node| node.applies_root_clip);
+        };
+        let value = flat.applies_root_clip;
+        self.Verify("applies_root_clip", |node| value == node.applies_root_clip);
+        value
     }
     /// The builder's authored clip-path commands in the flat replay space; the
     /// ClipPathClip node holds them translated into property space.
-    pub fn local_clip_path(self) -> &'n Vec<PaintPathCommand> {
-        &self.node.local_clip_path
+    pub fn local_clip_path(self) -> &'n [PaintPathCommand] {
+        if self.data.is_none() {
+            return self.node.map_or(&[][..], |node| node.local_clip_path.as_slice());
+        }
+        let value = self
+            .FlatRare()
+            .and_then(|rare| rare.clip_path_commands.as_deref())
+            .unwrap_or(&[]);
+        self.Verify("local_clip_path", |node| value == node.local_clip_path.as_slice());
+        value
     }
-    pub fn local_clip_path_children(self) -> &'n Vec<PaintClipPathChild> {
-        &self.node.local_clip_path_children
+    /// The reference children of a clip-path graph. Only the fixture replay
+    /// scopes read them (PaintContext ObjectReplayScopes::FromPrePaintCopies);
+    /// an occurrence with FragmentData reads the ClipPathClip slot.
+    pub fn local_clip_path_children(self) -> &'n [PaintClipPathChild] {
+        self.FixtureNode()
+            .map_or(&[][..], |node| node.local_clip_path_children.as_slice())
     }
-    pub fn transforms(self) -> &'n FlatTransforms {
-        &self.node.transforms
+    /// The accumulated flat transform list (root first).
+    pub fn transforms(self) -> &'n [TransformMatrix] {
+        let Some(flat) = self.Flat() else {
+            return self.node.map_or(&[][..], |node| &node.transforms[..]);
+        };
+        let value = &flat.transforms[..];
+        self.Verify("transforms", |node| value == &node.transforms[..]);
+        value
     }
-    pub fn local_transforms(self) -> &'n Vec<paint_input_types::layout_input::TransformMatrix> {
-        &self.node.local_transforms
+    /// The object's own flat matrices, replayed as kConcat items.
+    pub fn local_transforms(self) -> &'n [TransformMatrix] {
+        if self.data.is_none() {
+            return self.node.map_or(&[][..], |node| node.local_transforms.as_slice());
+        }
+        let value = self
+            .FlatRare()
+            .and_then(|rare| rare.local_transforms.as_deref())
+            .unwrap_or(&[]);
+        self.Verify("local_transforms", |node| value == node.local_transforms.as_slice());
+        value
     }
     /// Whether the flat replay opens this object's own transform scope. An
     /// SVG child may lead with its container's matrix, which has no slot of
-    /// its own, so this stays with the walk's flat matrices.
+    /// its own, so this stays with the flat matrices.
     pub fn applies_transform(self) -> bool {
-        self.node.applies_transform
+        let Some(flat) = self.Flat() else {
+            return self.node.is_some_and(|node| node.applies_transform);
+        };
+        let value = flat.applies_transform;
+        self.Verify("applies_transform", |node| value == node.applies_transform);
+        value
     }
+    /// The flat scroll anchor the fixed background positioning area adds.
     pub fn scroll_offset(self) -> Offset {
-        self.node.scroll_offset
+        let Some(flat) = self.Flat() else {
+            return self.node.map_or_else(Offset::default, |node| node.scroll_offset);
+        };
+        let value = flat.scroll_offset;
+        self.Verify("scroll_offset", |node| value == node.scroll_offset);
+        value
     }
+    /// CSS transforms on non-root ancestors make background-attachment:fixed
+    /// behave as scroll.
     pub fn fixed_background_acts_as_scroll(self) -> bool {
-        self.node.fixed_background_acts_as_scroll
-    }
-    /// PaintLayerPainter's in-flight PaintLayer::PreviousPaintResult: seeded
-    /// per traversal and downgraded by ScopedBoxContentsPaintState before
-    /// PaintLayerPainter writes the layer (and not written at all under
-    /// kOmitCompositingInfo), so it is traversal state until the walk writes
-    /// the PaintLayer directly.
-    pub fn previous_paint_result(self) -> &'n Cell<PaintResult> {
-        &self.node.previous_paint_result
+        let Some(flat) = self.Flat() else {
+            return self
+                .node
+                .is_some_and(|node| node.fixed_background_acts_as_scroll);
+        };
+        let value = flat.fixed_background_acts_as_scroll;
+        self.Verify("fixed_background_acts_as_scroll", |node| {
+            value == node.fixed_background_acts_as_scroll
+        });
+        value
     }
     /// The united outline of an inline continuation group, joined across its
     /// occurrences by PrepareOutlines (Chromium's LayoutInline OutlineRects
     /// over every FragmentItem of the inline, which the Layout facade does
     /// not expose yet).
     pub fn paints_outline(self) -> bool {
-        self.node.paints_outline
+        let Some(flat) = self.Flat() else {
+            return self.node.is_none_or(|node| node.paints_outline);
+        };
+        let value = flat.paints_outline;
+        self.Verify("paints_outline", |node| value == node.paints_outline);
+        value
     }
-    pub fn outline_rects(self) -> &'n Vec<PaintRect> {
-        &self.node.outline_rects
+    pub fn outline_rects(self) -> &'n [PaintRect] {
+        if self.data.is_none() {
+            return self.node.map_or(&[][..], |node| node.outline_rects.as_slice());
+        }
+        let value = self
+            .FlatRare()
+            .and_then(|rare| rare.outline_rects.as_deref())
+            .unwrap_or(&[]);
+        self.Verify("outline_rects", |node| value == node.outline_rects.as_slice());
+        value
     }
     /// PrePaint's resolved mask layers. PrePaint still needs them for the
     /// MaskClip rect of an SVG child (ResolvedMaskClipRect), and resolving
     /// them again here would repeat the SVG mask shader resolution.
-    pub fn mask_layers(self) -> &'n Vec<DisplayMaskLayer> {
-        &self.node.mask_layers
+    pub fn mask_layers(self) -> &'n [DisplayMaskLayer] {
+        if self.data.is_none() {
+            return self.node.map_or(&[][..], |node| node.mask_layers.as_slice());
+        }
+        let value = self
+            .FlatRare()
+            .and_then(|rare| rare.mask_layers.as_deref())
+            .unwrap_or(&[]);
+        self.Verify("mask_layers", |node| value == node.mask_layers.as_slice());
+        value
     }
 }
 
@@ -805,15 +1123,42 @@ impl<'n, 'f> From<&'n PaintTreeNode<'f>> for PaintObject<'n, 'f> {
     }
 }
 
+#[derive(Clone)]
+enum ChildSource<'n, 'f> {
+    /// The paint walk's resident children.
+    Nodes(std::slice::Iter<'n, Box<PaintTreeNode<'f>>>),
+    /// The fragment cursor's children.
+    Cursors(std::vec::IntoIter<PaintFragmentCursor<'n>>),
+}
+
 /// Iterator over a painted object's children.
 #[derive(Clone)]
 pub struct PaintObjectChildren<'n, 'f> {
-    inner: std::slice::Iter<'n, Box<PaintTreeNode<'f>>>,
+    source: ChildSource<'n, 'f>,
+    /// Whether the parent carries a walk context its children derive theirs
+    /// from (else the children are node-backed, as their parent).
+    walked: bool,
+    inherited_cull_rect: Option<PaintRect>,
 }
 
 impl<'n, 'f> PaintObjectChildren<'n, 'f> {
     pub fn is_empty(&self) -> bool {
-        self.inner.len() == 0
+        self.len() == 0
+    }
+
+    fn Child(&self, node: Option<&'n PaintTreeNode<'f>>, cursor: Option<PaintFragmentCursor<'n>>) -> PaintObject<'n, 'f> {
+        match (node, cursor) {
+            (Some(node), _) if self.walked => PaintObject::Walked(
+                node,
+                PaintWalkContext::new(self.inherited_cull_rect, Some(&node.previous_paint_result)),
+            ),
+            (Some(node), _) => PaintObject::new(node),
+            (None, Some(cursor)) => PaintObject::FromCursor(
+                cursor,
+                PaintWalkContext::new(self.inherited_cull_rect, None),
+            ),
+            (None, None) => unreachable!("a paint child has a node or a cursor"),
+        }
     }
 }
 
@@ -821,17 +1166,28 @@ impl<'n, 'f> Iterator for PaintObjectChildren<'n, 'f> {
     type Item = PaintObject<'n, 'f>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|child| PaintObject::new(child))
+        let (node, cursor) = match &mut self.source {
+            ChildSource::Nodes(nodes) => (Some(&**nodes.next()?), None),
+            ChildSource::Cursors(cursors) => (None, Some(cursors.next()?)),
+        };
+        Some(self.Child(node, cursor))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        match &self.source {
+            ChildSource::Nodes(nodes) => nodes.size_hint(),
+            ChildSource::Cursors(cursors) => cursors.size_hint(),
+        }
     }
 }
 
 impl DoubleEndedIterator for PaintObjectChildren<'_, '_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back().map(|child| PaintObject::new(child))
+        let (node, cursor) = match &mut self.source {
+            ChildSource::Nodes(nodes) => (Some(&**nodes.next_back()?), None),
+            ChildSource::Cursors(cursors) => (None, Some(cursors.next_back()?)),
+        };
+        Some(self.Child(node, cursor))
     }
 }
 

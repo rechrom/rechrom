@@ -38,7 +38,7 @@ impl SVGMaskPainter {
         let fragment = node
             .Fragment()
             .expect("SVG mask owner must have a fragment");
-        let mut mask_layers = node.mask_layers().clone();
+        let mut mask_layers = node.mask_layers().to_vec();
         for layer in &mut mask_layers {
             layer.dynamic_range_limit = fragment.paint.style.dynamic_range_limit();
         }
