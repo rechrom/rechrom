@@ -66,12 +66,69 @@ fn DefaultCullRect() -> CullRect {
 
 /// Source: fragment_data.h:30-245 `FragmentData` (paint side). Not `Clone`:
 /// one live owner per occurrence, as Chromium's GarbageCollected object.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct PrePaintFragmentData {
     paint_offset: PhysicalOffset,
     rare_data: Option<Box<RareData>>,
     /// Not Chromium: see `FlatReplayData`.
     flat_replay: FlatReplayData,
+    /// Not Chromium as one record: see `PrePaintWalkRecord`.
+    walk_record: PrePaintWalkRecord,
+    /// LayoutBox::previous_gap_geometries_ (layout_box.h), the baseline of
+    /// BoxPaintInvalidator::ShouldInvalidateGapDecorations
+    /// (box_paint_invalidator.cc:467-510), saved at the end of the box's
+    /// invalidation. Kept on the occurrence until Layout publishes the
+    /// LayoutBox value to Paint.
+    previous_gap_rules: Option<Arc<layout::paint::GapRulePaintData>>,
+}
+
+impl std::fmt::Debug for PrePaintFragmentData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrePaintFragmentData")
+            .field("paint_offset", &self.paint_offset)
+            .field("rare_data", &self.rare_data)
+            .field("flat_replay", &self.flat_replay)
+            .field("walk_record", &self.walk_record)
+            .field("previous_gap_rules", &self.previous_gap_rules.is_some())
+            .finish()
+    }
+}
+
+/// The values of this occurrence's last PrePaint visit that the next walk
+/// reads to decide whether the occurrence may be skipped and what it must
+/// compare against. Chromium keeps the equivalents on its persistent owners:
+/// the PhysicalFragment link and LayoutBox location/size (`walked_owner`,
+/// `link_offset`, `size`), the PrePaintTreeWalk context the object is
+/// entered with (`display_item_fragment`, `fragmentainer`), PaintLayer
+/// existence (`is_paint_layer`), and its ObjectPaintProperties nodes, whose
+/// changes propagate through `force_subtree_update_reasons`
+/// (pre_paint_tree_walk.cc:398-450). `child_context_digest` stands in for
+/// the values Rechrom's flat builder context accumulates for the children
+/// (paint_property_tree_builder.cc has no such accumulation): a child whose
+/// parent produced the same digest inherits the context it was built with.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PrePaintWalkRecord {
+    /// A PrePaint walk visited this occurrence at least once.
+    pub walked: bool,
+    /// The PhysicalFragment (or FragmentItem and its container) address the
+    /// visit walked; compared, never dereferenced.
+    pub walked_owner: (usize, usize),
+    pub link_offset: Offset,
+    pub size: foundation::LayoutSize,
+    pub display_item_fragment: u32,
+    pub fragmentainer: u64,
+    pub is_paint_layer: bool,
+    /// The visit stored PaintLayer cull rects on this FragmentData
+    /// (CullRectUpdater::SetFragmentCullRects); otherwise the cull rects are
+    /// FlatReplayData's or the paint parent's.
+    pub layer_cull_rects: bool,
+    /// The builder's own non-unit opacity (the opacity Effect it applies).
+    pub applies_opacity: bool,
+    /// CullRectUpdater::ShouldUseInfiniteCullRect's ObjectPaintProperties
+    /// inputs of the visit (filter moving pixels, perspective, active
+    /// transform animation, non-composited transform).
+    pub cull_decision_inputs: [bool; 4],
+    pub child_context_digest: u64,
 }
 
 /// Not Chromium. The values Rechrom's flat replay stream (PaintContext
@@ -95,8 +152,14 @@ pub struct PrePaintFragmentData {
 /// walk does not repeat.
 #[derive(Default)]
 pub struct FlatReplayData {
+    /// The exact flat paint offset; FragmentData::PaintOffset() is its
+    /// LayoutUnit-rounded local form (local = flat + paint_snap_offset).
+    pub paint_offset: Offset,
     /// Flat-to-property-space delta: local = flat + paint_snap_offset.
     pub paint_snap_offset: Offset,
+    /// The flat accumulated clip of this occurrence (PaintLayerClipper's
+    /// background rect source for resident hit testing).
+    pub clip: Option<PaintRect>,
     /// The accumulated flat transform list (root first), shared with the
     /// PrePaint context that built it.
     pub transforms: Arc<[TransformMatrix]>,
@@ -143,12 +206,23 @@ pub struct FlatReplayRareData {
     /// The flat-space source rect of the MaskClip slot, resolved from the
     /// exact flat paint offset (PaintTreeNode::ResolvedMaskClipRect).
     pub mask_clip_rect: Option<PaintRect>,
+    /// LocalBorderBoxProperties().PreTransform() (fragment_data.cc:55-65)
+    /// when it is not the local border box transform, held so that it can
+    /// be borrowed without the property access proof (resident hit tests).
+    pub pre_transform: Option<Arc<TransformPaintPropertyNode>>,
 }
 
 /// Property nodes compare by identity (they are live objects).
 impl PartialEq for FlatReplayRareData {
     fn eq(&self, other: &Self) -> bool {
-        self.local_transforms == other.local_transforms
+        let same_node = |a: &Option<Arc<TransformPaintPropertyNode>>,
+                         b: &Option<Arc<TransformPaintPropertyNode>>| match (a, b) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        same_node(&self.pre_transform, &other.pre_transform)
+            && self.local_transforms == other.local_transforms
             && self.root_clip == other.root_clip
             && self.clip_path_commands == other.clip_path_commands
             && match (&self.fixed_background_transform, &other.fixed_background_transform) {
@@ -174,6 +248,27 @@ impl FlatReplayData {
             self.rare = None;
         } else if self.rare.as_deref() != Some(&rare) {
             self.rare = Some(Box::new(rare));
+        }
+    }
+
+    /// The inline-continuation outline values (PrePaint's outline grouping
+    /// pass), leaving every other value as it is.
+    pub fn SetOutline(&mut self, paints_outline: bool, outline_rects: Option<Arc<[PaintRect]>>) {
+        self.paints_outline = paints_outline;
+        match &mut self.rare {
+            Some(rare) => {
+                rare.outline_rects = outline_rects;
+                if **rare == FlatReplayRareData::default() {
+                    self.rare = None;
+                }
+            }
+            None if outline_rects.is_some() => {
+                self.rare = Some(Box::new(FlatReplayRareData {
+                    outline_rects,
+                    ..Default::default()
+                }));
+            }
+            None => {}
         }
     }
 }
@@ -206,6 +301,29 @@ impl PrePaintFragmentData {
 
     pub fn SetPaintOffset(&mut self, paint_offset: PhysicalOffset) {
         self.paint_offset = paint_offset;
+    }
+
+    /// Not Chromium: the record of this occurrence's last PrePaint visit.
+    pub fn WalkRecord(&self) -> &PrePaintWalkRecord {
+        &self.walk_record
+    }
+
+    pub fn SetWalkRecord(&mut self, record: PrePaintWalkRecord) {
+        self.walk_record = record;
+    }
+
+    /// Whether a PrePaint walk produced this occurrence's state.
+    pub fn WasWalked(&self) -> bool {
+        self.walk_record.walked
+    }
+
+    /// LayoutBox::PreviousGapGeometries (see `previous_gap_rules`).
+    pub fn PreviousGapRules(&self) -> Option<&Arc<layout::paint::GapRulePaintData>> {
+        self.previous_gap_rules.as_ref()
+    }
+
+    pub fn SetPreviousGapRules(&mut self, rules: Option<Arc<layout::paint::GapRulePaintData>>) {
+        self.previous_gap_rules = rules;
     }
 
     /// Not Chromium: the flat replay values of this occurrence.

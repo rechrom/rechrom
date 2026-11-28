@@ -1,9 +1,11 @@
 //! Source core/paint/cull_rect_updater.cc:232-277,437-541,667-697.
-//! A synchronous scope over the retained FragmentData owners. Only the cull
-//! values changed by special painting are saved; no source/tree/style copy.
+//! A synchronous scope over the committed FragmentData owners, reached
+//! through the fragment cursor. Only the cull values changed by special
+//! painting are saved; no source/tree/style copy.
 use crate::cull_rect_updater::{CullRectUpdater, RetainedCullRect, ShouldUseInfiniteCullRect};
 use crate::fragment_data::PrePaintFragmentData;
-use crate::pre_paint_tree_walk::{PaintTreeNode, PrePaintTreeWalk};
+use crate::pre_paint_tree_walk::PrePaintTreeWalk;
+use foundation::TrustedIdentityHashMap as HashMap;
 use layout::input::Position;
 use layout::paint::PaintFragmentCursor;
 use paint_model::{
@@ -13,14 +15,11 @@ use paint_model::{
 use std::sync::Arc;
 
 /// Source cull_rect_updater.cc:51-90,667-697 `g_original_cull_rects`: the
-/// values a special paint replaced, restored when the scope ends.
+/// PaintLayer FragmentData cull rects (cull rect, contents cull rect) a
+/// special paint replaced, restored when the scope ends.
 struct OriginalCullRects {
-    node: *mut PaintTreeNode<'static>,
-    self_cull: Option<PaintRect>,
-    contents_cull: Option<PaintRect>,
-    /// The PaintLayer object's FragmentData cull rects (cull rect, contents
-    /// cull rect) before the override; None when they were not replaced.
-    fragment_data: Option<(CullRect, CullRect)>,
+    cursor: PaintFragmentCursor<'static>,
+    fragment_data: (CullRect, CullRect),
 }
 
 /// The occurrence's FragmentData for writing when CullRectUpdater stores cull
@@ -32,9 +31,8 @@ struct OriginalCullRects {
 /// The caller is the single writer of the occurrence's PrePaint state for
 /// the returned borrow (`PaintFragmentCursor::PrePaintDataMut`).
 unsafe fn LayerFragmentDataMut<'a>(
-    cursor: Option<PaintFragmentCursor<'a>>,
+    cursor: PaintFragmentCursor<'a>,
 ) -> Option<&'a mut PrePaintFragmentData> {
-    let cursor = cursor?;
     if cursor.PrePaintSlot().is_none() || cursor.OwnPaintLayer().is_none() {
         return None;
     }
@@ -54,42 +52,47 @@ struct Context {
     fixed: ContainerCull,
 }
 
-struct OverriddenCullRectScope {
+struct OverriddenCullRectScope<'f> {
     original: Vec<OriginalCullRects>,
+    /// The embedded LocalFrameViews' LayoutView by owner client: a frame's
+    /// objects follow their owner's children, as in the PrePaint walk.
+    frames: &'f HashMap<u64, PaintFragmentCursor<'static>>,
 }
-impl Drop for OverriddenCullRectScope {
+impl Drop for OverriddenCullRectScope<'_> {
     fn drop(&mut self) {
         for saved in self.original.iter().rev() {
-            // WithSpecialPaint borrows PrePaint exclusively. Its resident boxes
-            // and source lease remain alive until the scope restores all values.
-            let node = unsafe { &mut *saved.node };
-            node.self_cull_rect = saved.self_cull;
-            node.cull_rect = saved.contents_cull;
-            if let Some((cull_rect, contents_cull_rect)) = saved.fragment_data {
-                // The scope holds PrePaint exclusively; nothing else borrows
-                // this occurrence's PrePaint state while it restores.
-                if let Some(data) = unsafe { LayerFragmentDataMut(node.SourceCursor()) } {
-                    data.SetCullRect(cull_rect);
-                    data.SetContentsCullRect(contents_cull_rect);
-                }
+            // WithSpecialPaint borrows PrePaint exclusively; the committed
+            // walk's source lease keeps every occurrence alive until the
+            // scope restores all values.
+            if let Some(data) = unsafe { LayerFragmentDataMut(saved.cursor) } {
+                let (cull_rect, contents_cull_rect) = saved.fragment_data;
+                data.SetCullRect(cull_rect);
+                data.SetContentsCullRect(contents_cull_rect);
             }
         }
     }
 }
-impl OverriddenCullRectScope {
+impl OverriddenCullRectScope<'_> {
     fn Override(
         &mut self,
-        node: &mut PaintTreeNode<'static>,
+        cursor: PaintFragmentCursor<'static>,
         context: &Context,
         root: &PropertyTreeState,
         view_cull: Option<PaintRect>,
         view_contents_clip: &Arc<ClipPaintPropertyNode>,
         starting: bool,
     ) {
-        let fragment = node.fragment.as_deref().expect("retained FragmentData");
+        let fragment = cursor.PaintData();
         if fragment.paint.IsFragmentLessBox() || fragment.paint.IsSVGHiddenContainer() {
             return;
         }
+        // Only occurrences a PrePaint walk produced FragmentData for.
+        let Some(data) = cursor
+            .PrePaintData::<PrePaintFragmentData>()
+            .filter(|data| data.WasWalked())
+        else {
+            return;
+        };
         // UpdateRecursively, source.cc:305-310. Containing-block contexts
         // remain distinct from the logical/stacking traversal parent.
         let mut context = context.clone();
@@ -102,46 +105,39 @@ impl OverriddenCullRectScope {
         }
         // The visited object's FragmentData (fragment_data.h:104-110,137-177)
         // supplies its property tree states and PaintOffsetTranslation, as
-        // CullRectUpdater reads them (cc:437-541). Hand-built nodes without
-        // FragmentData keep their own copies.
-        let (local_border_box, contents_state, paint_offset_translation) = match node.FragmentData()
-        {
-            Some(data) => (
-                data.LocalBorderBoxProperties(),
-                data.ContentsProperties(),
-                data.PaintProperties()
-                    .and_then(|properties| properties.PaintOffsetTranslation())
-                    .cloned(),
-            ),
-            None => (
-                node.properties.nodes.clone(),
-                node.contents_properties.nodes.clone(),
-                node.paint_offset_translation.clone(),
-            ),
-        };
+        // CullRectUpdater reads them (cc:437-541).
+        let local_border_box = data.LocalBorderBoxProperties();
+        let contents_state = data.ContentsProperties();
+        let paint_offset_translation = data
+            .PaintProperties()
+            .and_then(|properties| properties.PaintOffsetTranslation())
+            .cloned();
         // The containing-block and display-lock facts are the LayoutObject /
         // PaintLayer's own (cc:305-310,349-382), read live.
         let layer_facts = fragment.paint.LivePaintLayerFacts();
         let can_contain_absolute = fragment.paint.PaintLayerCanContainAbsolutePositionObjects();
         let can_contain_fixed = fragment.paint.PaintLayerCanContainFixedPositionObjects();
-        let facts = node.cull_decision_inputs;
+        let record = data.WalkRecord();
+        let [has_filter_that_moves_pixels, has_perspective, has_active_transform_animation, has_non_composited_transform] =
+            record.cull_decision_inputs;
         let infinite = ShouldUseInfiniteCullRect(
             fragment,
             context.current.subtree_infinite,
-            facts.has_filter_that_moves_pixels,
-            facts.has_perspective,
-            facts.has_active_transform_animation,
-            facts.has_non_composited_transform,
+            has_filter_that_moves_pixels,
+            has_perspective,
+            has_active_transform_animation,
+            has_non_composited_transform,
             // PaintLayer::PreviousPaintResult (cull_rect_updater.cc:221-230),
-            // which PaintLayerPainter writes; Paint no longer writes the node.
-            if node.is_paint_layer {
-                node.SourceCursor()
-                    .and_then(|cursor| cursor.OwnPaintLayer())
-                    .map_or(node.previous_paint_result.get(), |layer| {
+            // which PaintLayerPainter writes; an object without a painting
+            // layer keeps the conservative result.
+            if record.is_paint_layer {
+                cursor
+                    .OwnPaintLayer()
+                    .map_or(paint_model::PaintResult::kMayBeClippedByCullRect, |layer| {
                         layer.PreviousPaintResult()
                     })
             } else {
-                node.previous_paint_result.get()
+                paint_model::PaintResult::kMayBeClippedByCullRect
             },
         );
         let self_cull = if infinite.use_infinite {
@@ -188,31 +184,21 @@ impl OverriddenCullRectScope {
             .0
         };
         // cc:51-90 with g_is_updating_for_overridden_cull_rect: a PaintLayer
-        // object's FragmentData cull rects are replaced too (painters read
-        // them there), saving the originals for the scope's destructor.
-        let fragment_data = unsafe { LayerFragmentDataMut(node.SourceCursor()) }.and_then(|data| {
+        // object's FragmentData cull rects are replaced (painters read them
+        // there), saving the originals for the scope's destructor. Other
+        // objects paint with their paint parent's contents cull rect.
+        if let Some(data) = unsafe { LayerFragmentDataMut(cursor) } {
             let cull_rect = RetainedCullRect(self_cull);
             let contents_cull_rect = RetainedCullRect(contents);
             let original = (data.GetCullRect(), data.GetContentsCullRect());
-            if original == (cull_rect, contents_cull_rect) {
-                return None;
+            if original != (cull_rect, contents_cull_rect) {
+                data.SetCullRect(cull_rect);
+                data.SetContentsCullRect(contents_cull_rect);
+                self.original.push(OriginalCullRects {
+                    cursor,
+                    fragment_data: original,
+                });
             }
-            data.SetCullRect(cull_rect);
-            data.SetContentsCullRect(contents_cull_rect);
-            Some(original)
-        });
-        if node.self_cull_rect != self_cull
-            || node.cull_rect != contents
-            || fragment_data.is_some()
-        {
-            self.original.push(OriginalCullRects {
-                node: node as *mut _,
-                self_cull: node.self_cull_rect,
-                contents_cull: node.cull_rect,
-                fragment_data,
-            });
-            node.self_cull_rect = self_cull;
-            node.cull_rect = contents;
         }
         // source.cc:349-361,378-382. Starting layer can contain every
         // descendant for this override, independent of ordinary CSS ownership.
@@ -231,56 +217,75 @@ impl OverriddenCullRectScope {
         if layer_facts.child_paint_blocked_by_display_lock {
             return;
         }
-        for child in &mut node.children {
+        for child in cursor.Children() {
             self.Override(child, &context, root, view_cull, view_contents_clip, false);
+        }
+        if let Some(&frame) = self.frames.get(&fragment.paint.DisplayItemClientId()) {
+            self.Override(frame, &context, root, view_cull, view_contents_clip, false);
         }
     }
 }
 impl PrePaintTreeWalk {
-    /// One source PaintLayer's first FragmentData, through the existing client
-    /// directory. Zero requests the retained LocalFrameView paint root.
-    /// `input_rect` is in this layer's LocalBorderBoxProperties transform space.
-    /// The callback cannot retain a borrowed tree node beyond this scope.
+    /// One source PaintLayer's first FragmentData, found through the
+    /// committed walk's occurrences. Zero requests the LocalFrameView paint
+    /// root. `input_rect` is in this layer's LocalBorderBoxProperties
+    /// transform space. The callback receives the layer's and the root's
+    /// fragment cursors and cannot retain them beyond this scope.
     pub fn WithSpecialPaint<T>(
         &mut self,
         layer_client_id: u64,
         mut input_rect: PaintRect,
         offset_input_by_paint_offset: bool,
         query: impl for<'n> FnOnce(
-            &'n PaintTreeNode<'static>,
-            &'n PaintTreeNode<'static>,
+            PaintFragmentCursor<'n>,
+            PaintFragmentCursor<'n>,
             &'n PrePaintTreeWalk,
         ) -> T,
     ) -> Option<T> {
-        let root = self.retained_tree.as_deref_mut()? as *mut PaintTreeNode<'static>;
+        let root = self.RetainedRoot()?;
+        // SAFETY: the committed walk's source lease keeps the root's result
+        // alive until the next walk, which cannot run while PrePaint is
+        // borrowed by this scope.
+        let root: PaintFragmentCursor<'static> = unsafe { std::mem::transmute(root) };
         let layer = if layer_client_id == 0 {
             root
         } else {
-            *self
-                .client_nodes
-                .get(&layer_client_id)?
-                .iter()
-                .find(|&&pointer| {
-                    let node = unsafe { &*pointer };
-                    node.is_paint_layer
-                        && node.fragment.as_deref().is_some_and(|fragment| {
-                            fragment.paint.PaintLayerClientId() == layer_client_id
-                        })
-                })?
+            let mut found = None;
+            self.VisitWalkedOccurrences(root, &mut |cursor, data| {
+                if found.is_none()
+                    && data.WalkRecord().is_paint_layer
+                    && cursor.PaintData().paint.PaintLayerClientId() == layer_client_id
+                {
+                    found = Some(cursor);
+                }
+            });
+            // SAFETY: as `root`.
+            unsafe { std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(found?) }
         };
         let root_state = self.viewport_properties_for_special_paint();
         let view_cull = self.viewport_cull_for_special_paint();
         let view_contents_clip = self.viewport_contents_clip_for_special_paint();
+        let frames: HashMap<u64, PaintFragmentCursor<'static>> = self
+            .LocalFrameViews()
+            .map(|view| {
+                // SAFETY: as `root`; the frames' leases are retained with it.
+                let frame: PaintFragmentCursor<'static> = unsafe { std::mem::transmute(view.Root()) };
+                (view.OwnerClient(), frame)
+            })
+            .collect();
         let mut scope = OverriddenCullRectScope {
             original: Vec::new(),
+            frames: &frames,
         };
-        let node = unsafe { &mut *layer };
         if offset_input_by_paint_offset {
             // FirstFragment().PaintOffset() (data_transfer.cc:131-134), in
             // the flat replay space the cull rects and recorded ops use.
-            let paint_offset = node.FlatPaintOffset();
-            input_rect.x += paint_offset.x;
-            input_rect.y += paint_offset.y;
+            if let Some(data) = layer.PrePaintData::<PrePaintFragmentData>() {
+                let local = data.PaintOffset();
+                let snap = data.FlatReplay().paint_snap_offset;
+                input_rect.x += local.left.ToDouble() - snap.x;
+                input_rect.y += local.top.ToDouble() - snap.y;
+            }
         }
         // Source gfx::ToEnclosingRect, including gfx's clamped int geometry.
         let rect = foundation::gfx::ToEnclosingRect(foundation::gfx::RectF::new(
@@ -306,7 +311,7 @@ impl PrePaintTreeWalk {
             fixed: current,
         };
         scope.Override(
-            node,
+            layer,
             &context,
             &root_state,
             if layer_client_id == 0 {
@@ -317,11 +322,9 @@ impl PrePaintTreeWalk {
             &view_contents_clip,
             true,
         );
-        // Both references are read-only while the guard has overridden culls.
-        // Restoring starts only after the callback and its temporary borrows end.
         // The walk is lent back read-only (its LocalFrameViews for the paint
-        // walk); the scope holds raw pointers only.
-        let result = query(unsafe { &*layer }, unsafe { &*root }, &*self);
+        // walk); the scope holds cursors only.
+        let result = query(layer, root, &*self);
         drop(scope);
         Some(result)
     }

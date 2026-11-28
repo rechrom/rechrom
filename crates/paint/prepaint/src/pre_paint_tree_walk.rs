@@ -35,7 +35,7 @@ use crate::box_paint_invalidator::{
 };
 use crate::compositing_reason_finder::CompositingReasonFinder;
 use crate::cull_rect_updater::CullRectUpdater;
-use crate::fragment_data::PrePaintFragmentData;
+use crate::fragment_data::{PrePaintFragmentData, PrePaintWalkRecord};
 use crate::object_paint_properties::{
     ObjectPaintPropertySlot, PaintPropertyNodeKind, PaintPropertySlotNodeRef,
 };
@@ -118,6 +118,10 @@ impl EmbeddedLocalFrameView {
     }
     /// Whether this frame is cross-origin to its parent frame
     /// (FramePainter paints it privacy-preserving).
+    /// The DisplayItemClient id of the LayoutEmbeddedContent that embeds it.
+    pub fn OwnerClient(&self) -> u64 {
+        self.owner_client
+    }
     pub fn CrossOriginToParent(&self) -> bool {
         self.cross_origin_to_parent
     }
@@ -426,48 +430,6 @@ impl std::ops::DerefMut for ResidentFragment {
             Self::Fixture(fragment) => fragment,
         }
     }
-}
-
-/// `previous_client_id` is the DisplayItemClient id PrePaint recorded for the
-/// previous fragment; the previous snapshot's LayoutObject may be gone.
-fn RetainImagePaintedRect(
-    current: &FragmentPaintData,
-    previous: Option<&FragmentPaintData>,
-    previous_client_id: Option<u64>,
-) {
-    if !current.paint.ReplacedIsImage() {
-        return;
-    }
-    let previous = previous
-        .filter(|_| previous_client_id == Some(current.paint.DisplayItemClientId()));
-    if current.paint.image_last_paint_rect.get().is_none() {
-        if let Some(retained) =
-            previous.and_then(|previous| previous.paint.image_last_paint_rect.get())
-        {
-            current.paint.image_last_paint_rect.set(Some(retained));
-        }
-    }
-    if current.paint.image_last_painted_id.get() == image_resource::PaintImageId::INVALID {
-        if let Some(previous) = previous {
-            current
-                .paint
-                .image_last_painted_id
-                .set(previous.paint.image_last_painted_id.get());
-        }
-    }
-}
-
-#[inline]
-fn PreviousFragment(
-    pointer: Option<*const FragmentPaintData>,
-) -> Option<&'static FragmentPaintData> {
-    pointer.map(|pointer| {
-        // The previous retained tree's PaintFragmentLease stays resident for
-        // the duration of Walk. Keep a reference to that canonical sidecar;
-        // copying FragmentPaintData here duplicated Layout/Paint input solely
-        // to satisfy a temporary borrow in invalidation.
-        unsafe { &*pointer }
-    })
 }
 
 pub struct PaintTreeNode<'a> {
@@ -791,29 +753,6 @@ impl<'a> PaintTreeNode<'a> {
 }
 
 impl PaintTreeNode<'_> {
-    /// Resident physical links remain stable while this retained tree is
-    /// borrowed. Logical paint ownership can reparent OOF nodes, so clients
-    /// validating Layout's physical revision paths must use this directory.
-    pub fn PhysicalChildPointers(&self) -> Option<&[*mut PaintTreeNode<'static>]> {
-        self.cache
-            .as_ref()
-            .map(|cache| cache.physical_children.as_slice())
-    }
-
-    /// PrePaint-owned (revision, subtree revision) of this resident node:
-    /// the revision changes whenever PrePaint rebuilds, shifts or refreshes
-    /// the node and is kept while it is reused; the subtree revision also
-    /// changes with any descendant's. Values are process-unique per pass,
-    /// unrelated to Layout's fragment revisions, so a consumer compares two
-    /// recorded values of the same node (Blink's retained FragmentData /
-    /// ObjectPaintProperties identity), never a recorded value with a
-    /// source fragment's.
-    pub fn RecordedRevisions(&self) -> Option<(u64, u64)> {
-        self.cache
-            .as_ref()
-            .map(|cache| (cache.revision, cache.subtree_revision))
-    }
-
     pub fn SourceCursor(&self) -> Option<PaintFragmentCursor<'_>> {
         self.source_cursor
     }
@@ -1082,57 +1021,20 @@ struct RootFixedPositionContext {
     properties: PropertyTreeState,
     scroll_translation: Option<Arc<TransformPaintPropertyNode>>,
 }
+/// The PaintPropertyTreeBuilder output contexts of one visit. Walk-local:
+/// the PaintTreeNode that carries it lives for the visit only (Chromium's
+/// PaintPropertyTreeBuilderContext is a stack value of PrePaintTreeWalk::
+/// Walk, pre_paint_tree_walk.cc:1470-1590).
 struct NodeCache {
+    /// The context this object was built with.
     inherited: InheritedContext,
+    /// The context its children inherit (UpdateForChildren's output).
     children: ChildContext,
-    /// PrePaint-owned generations (PrePaintTreeWalk::revision_generation):
-    /// `revision` changes whenever this node is rebuilt, shifted or
-    /// refreshed for invalidation only, and is kept while it is reused;
-    /// `subtree_revision` also changes when any descendant's does. Zero is
-    /// a pending child walk (DisplayLockContext::SetNeedsPrePaintSubtreeWalk).
-    revision: u64,
-    subtree_revision: u64,
-    /// The document paint resources this node was last proven against, and
-    /// the resource usage (paint_resource_usage::PaintResourceUsage) of this
-    /// node and of its whole subtree. Every node of the subtree paints the
-    /// same under `resources` as under the value it was built with.
-    resources: Option<Arc<PaintResources>>,
-    resource_usage: u8,
-    subtree_resource_usage: u8,
-    /// The values this node compared, recorded after its comparisons; the
-    /// next lifecycle compares the paired fragment against them.
-    record: PrePaintPrevious,
-    /// This node's fragment values as of its last visit: the paint payload
-    /// (shared, not copied) and the fragment's own scalar fields. The paint
-    /// invalidators read them as the previous fragment.
-    previous_fragment: Option<FragmentPaintData>,
-    /// The gap geometry this fragment painted with at its last visit, the
-    /// baseline of ShouldInvalidateGapDecorations (LayoutBox's previous
-    /// GapGeometry, box_paint_invalidator.cc:467-510). Kept here, not written
-    /// into `previous_fragment`'s paint payload, which is shared with the
-    /// live fragment and would be deep-copied by that write.
-    previous_gap_rules: Option<Arc<layout::paint::GapRulePaintData>>,
     /// The maximum change the in-place `Update` of this object's own
-    /// property slots reported when it was last built (Chromium's
-    /// PaintPropertyTreeBuilder `properties_changed_`). The node states
-    /// above name the live slot nodes, so an old/new state comparison alone
-    /// cannot see a value change.
+    /// property slots reported (PaintPropertyTreeBuilder `properties_changed_`).
     own_change: PaintPropertyChangeType,
-    /// This object's ObjectPaintProperties slots. A slot lives while the
-    /// object that owns it does (ObjectPaintProperties::Clear* /
-    /// FragmentData destruction), so no per-subtree key list is kept.
+    /// The ObjectPaintProperties slots this build registered.
     own_keys: Vec<(u64, PaintPropertyKey)>,
-    nodes: usize,
-    computed_pass: u64,
-    /// The walk (PrePaintTreeWalk::walk_generation) that last visited this
-    /// object itself: built, shifted, refreshed or reused it in UpdateNode
-    /// rather than skipping it inside a clean subtree. The post-walk state
-    /// propagation follows the visited (dirty) path only.
-    visited_pass: u64,
-    // Physical links survive logical OOF ownership moves. Boxes stay owned by
-    // retained_tree; topology changes must use the ordinary ownership update.
-    physical_children: Vec<*mut PaintTreeNode<'static>>,
-    contains_local_frames: bool,
 }
 
 /// The effect state one paint-state occurrence of a LayoutObject gives its
@@ -1222,23 +1124,29 @@ pub struct PrePaintTreeWalk {
     visual_viewport_state: Option<paint_model::PaintVisualViewportState>,
     visual_viewport_scroll_offset:
         Option<(foundation::CompositorElementId, foundation::gfx::Vector2dF)>,
-    // Completed geometry/cull state belongs to the resident paint lifecycle,
-    // never to the published drawing artifact or a borrowed fragment tree.
+    /// The slot keys `RegisterProperty` handed out in this pass.
     property_keys: BTreeMap<u64, PaintPropertyKey>,
-    pub retained_tree: Option<Box<PaintTreeNode<'static>>>,
+    /// The Layout result the last committed walk visited and the root of its
+    /// fragment tree. Every value PrePaint produced lives in that result's
+    /// FragmentData; the lease keeps the root cursor (and the occurrences the
+    /// between-walk queries reach from it) alive.
     retained_source_lease: Option<PaintFragmentLease>,
+    retained_root: Option<PaintFragmentCursor<'static>>,
+    /// The same pair for the walk in progress until CommitWalk.
     pending_source_lease: Option<PaintFragmentLease>,
+    pending_root: Option<PaintFragmentCursor<'static>>,
     /// The walk's lease names a different Paint publication state than the
-    /// retained tree's: every retained cursor and sidecar reference must move
-    /// to the new owner before the preceding lease is released.
+    /// last committed walk's: no FragmentData of the preceding state is
+    /// reachable, so the walk visits every object.
     source_owner_changed: bool,
     /// The walk's lease names a replacement LayoutResult (or a different
-    /// state). Under the same state, the clean fragments the replacement
-    /// reused keep their retained cursors; a retained node skips its subtree
-    /// only while it names the same fragment (WalkedSameSourceOwner).
+    /// state); every visited object re-reads the wheel-handler registry.
     source_result_changed: bool,
-    retained_tree_valid: bool,
-    logical_tree_changed: bool,
+    /// Walk-scoped: no subtree may be skipped (first walk, a replacement
+    /// publication state, a viewport or document resource change).
+    full_walk: bool,
+    /// A walk visited this document at least once.
+    walked_once: bool,
     viewport: Option<PaintRect>,
     paint_invalidator: PaintInvalidator,
     viewport_properties: PropertyTreeState,
@@ -1249,12 +1157,12 @@ pub struct PrePaintTreeWalk {
     retained_local_frame_leases: Vec<PaintFragmentLease>,
     local_frame_sources_changed: bool,
     local_frame_depth: u32,
-    /// The ScopedDisplayItemFragment of the node UpdateNode is visiting
+    /// The ScopedDisplayItemFragment of the object being visited
     /// (core/paint/box_fragment_painter.cc:394-403,
     /// core/paint/paint_layer_painter.cc:776-778). Set by the parent before
     /// each child visit; `None` outside a walk.
     display_item_fragment_scope: Option<u32>,
-    /// The fragmentainer identity of the node UpdateNode is visiting
+    /// The fragmentainer identity of the object being visited
     /// (PrePaintTreeWalk's `fragmentainer_idx`; 0 outside any). Set by the
     /// parent before each child visit; `None` outside a walk.
     fragmentainer_scope: Option<u64>,
@@ -1275,86 +1183,61 @@ pub struct PrePaintTreeWalk {
     /// Decision D2: the logical out-of-flow effect parent is found in the
     /// builder context. Every visited paint-state occurrence of a
     /// LayoutObject (by node id) records the effect state its logical
-    /// children inherit; the complete set is rebuilt from the final tree in
-    /// every post-update pass (GatherFinalEffects).
+    /// children inherit; the entries of clean occurrences stay valid.
     logical_effect_contexts: HashMap<u64, Vec<LogicalEffectContext>>,
+    /// Walk-scoped: node ids whose logical effect context this walk created
+    /// or changed; their out-of-flow logical children are fixed up after it.
+    logical_effects_changed: HashSet<u64>,
     /// Node ids of the paint-state-establishing physical ancestors of the
-    /// node UpdateNode is visiting (0 for one that establishes none).
+    /// object being visited (0 for one that establishes none).
     physical_ancestor_ids: Vec<u64>,
-    needs_post_update: bool,
-    /// Whether the last complete PrepareOutlines found an inline outline
-    /// continuation group. Only such groups keep prepared outline rects
-    /// (every other outline is collected at paint time from the live
-    /// fragment, as BoxFragmentPainter::PaintOutline reads
-    /// LayoutObject::OutlineRects in Chromium), so a node-local geometry
-    /// change can skip the post-update pass only while none exists.
+    /// DisplayItemClient ids of the objects on the walk's stack.
+    walk_ancestors: Vec<u64>,
+    /// Walk-scoped: objects the walk must reach even when no dirty bit leads
+    /// to them, with their ancestors: the deferred transform updates
+    /// (LocalFrameView::ExecuteAllPendingUpdates), the embedded local frame
+    /// owners and the display-locked objects with a pending child walk.
+    must_visit_clients: HashSet<u64>,
+    /// The local frame owners and their ancestors the last walk reached.
+    local_frame_ancestors: HashSet<u64>,
+    next_local_frame_ancestors: HashSet<u64>,
+    /// DisplayLockContext::SetNeedsPrePaintSubtreeWalk: display-locked
+    /// objects whose blocked children must be walked with a forced context
+    /// once the lock opens, with the clients of their ancestors.
+    pending_display_lock_walks: HashMap<u64, Vec<u64>>,
+    /// Walk-scoped: the pending child walks of the preceding walks; an entry
+    /// the walk does not reach (its object left the tree) is dropped.
+    previous_display_lock_walks: HashMap<u64, Vec<u64>>,
+    /// The document's paint resources at the last walk, and those of each
+    /// embedded local frame by owner client.
+    last_document_resources: Option<Arc<PaintResources>>,
+    last_frame_resources: HashMap<u64, Arc<PaintResources>>,
+    /// Whether the last outline pass found an inline outline continuation
+    /// group, and whether this walk visited an object of one. Only grouped
+    /// inline outlines are prepared (every other outline is collected at
+    /// paint time from the live fragment, as BoxFragmentPainter::
+    /// PaintOutline reads LayoutObject::OutlineRects in Chromium).
     inline_outline_groups: bool,
+    visited_inline_outline: bool,
     /// Root-to-node transform products of property nodes seen this walk.
     /// The Arc keeps each key's allocation alive for the walk.
     transform_world_memo: HashMap<usize, (Arc<TransformPaintPropertyNode>, TransformMatrix)>,
-    /// RECHROM_PREPAINT_SHIFT_CHECK: rebuild offset-only nodes anyway and
-    /// compare them with the shifted retained node (diagnostic).
-    shift_check: bool,
-    /// RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK: rebuild builder-context
-    /// objects the invalidation-only refresh would retain and report the
-    /// first rebuilt value that differs (diagnostic).
-    invalidation_only_check: bool,
-    /// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: after every walk, assert that
-    /// each retained node's PrePaint FragmentData equals the node
-    /// (FragmentDataMismatch; diagnostic, off by default).
-    fragment_data_check: bool,
-    /// Walk context: whether the UpdateNode visit that just returned built
-    /// its node with PaintPropertyTreeBuilder in this pass (and kept the
-    /// build), read by the parent's child loop right after the visit.
-    last_visit_built: bool,
     pub stats: PrePaintUpdateStats,
     intersection_observation_state:
         foundation::intersection_observation_state::IntersectionObservationState,
-    pub(crate) client_nodes: HashMap<u64, Vec<*mut PaintTreeNode<'static>>>,
-    resident_nodes: Vec<*mut PaintTreeNode<'static>>,
     /// Visited objects whose paint flags this walk consumed. Chromium clears
     /// them once per object after WalkLayoutObject handled every fragment of
     /// it (pre_paint_tree_walk.cc:1584-1585); PrePaint reads the bits at each
     /// fragment's visit, so they are cleared after the walk.
     deferred_paint_flag_clears: Vec<*const FragmentPaintData>,
-    /// Emptied child lists of visited objects, kept with their capacity.
-    /// Chromium's walk keeps no per-object child list (it follows the
-    /// LayoutObject / fragment links in place), so the resident child list a
-    /// visit rebuilds reuses one of these buffers instead of allocating.
-    child_buffers: Vec<Vec<Box<PaintTreeNode<'static>>>>,
-    walk_generation: u64,
-    /// This pass's PrePaint revision generation (NodeCache::revision): a
-    /// process-unique nonzero value, so a node whose revision equals it
-    /// changed in this pass.
-    revision_generation: u64,
-    /// SamePaintResourcesFor results of this pass by (recorded, current,
-    /// usage); the Arcs keep both keys alive for the pass.
-    resource_memo: Vec<(Arc<PaintResources>, Arc<PaintResources>, u8, bool)>,
     /// Walks that visited objects (and so cleared their paint flags), and
     /// that count when Paint last recorded an artifact.
     consuming_walks: u64,
     recorded_consuming_walks: u64,
-    /// Slots this walk released: an object rebuilt without a slot it had,
-    /// or an object whose node left the tree. Chromium destroys them with
-    /// the ObjectPaintProperties entry or the FragmentData
-    /// (object_paint_properties.h Clear*, fragment_data.cc); the walk frees
-    /// them at its end unless another object registered the same key.
+    /// Slots a visited object no longer owns (ObjectPaintProperties::Clear*,
+    /// object_paint_properties.h:86); released at the end of the walk unless
+    /// another object registered the same key.
     released_property_keys: Vec<PaintPropertyKey>,
-    /// The slot nodes of the objects among those that left the tree, for
-    /// clearing from their PrePaint FragmentData when the store drops them.
-    released_slot_nodes: Vec<ReleasedSlotNode>,
-    /// The walk cannot account for every released slot (no retained tree,
-    /// a forced rebuild, or a retained tree this walk did not produce): the
-    /// end of the walk keeps exactly the slots the final tree owns.
-    full_slot_sweep: bool,
-    slot_sweep_pending: bool,
-    /// The root of the tree the last walk returned (as an address), so
-    /// RetainTree can tell a tree the walk did not produce.
-    walked_tree_root: usize,
-    /// The ownership moves of the current logical (paint-order) tree, while
-    /// it differs from the physical tree. Valid for `root` until a walk
-    /// changes the topology.
-    logical_tree_record: Option<LogicalTreeRecord>,
 }
 
 impl Default for PrePaintTreeWalk {
@@ -1365,13 +1248,14 @@ impl Default for PrePaintTreeWalk {
             visual_viewport_state: None,
             visual_viewport_scroll_offset: None,
             property_keys: BTreeMap::new(),
-            retained_tree: None,
             retained_source_lease: None,
+            retained_root: None,
             pending_source_lease: None,
+            pending_root: None,
             source_owner_changed: false,
             source_result_changed: false,
-            retained_tree_valid: false,
-            logical_tree_changed: false,
+            full_walk: true,
+            walked_once: false,
             viewport: None,
             paint_invalidator: Default::default(),
             viewport_properties: PropertyTreeState::default(),
@@ -1391,33 +1275,25 @@ impl Default for PrePaintTreeWalk {
             own_key_log: Vec::new(),
             own_change_log: Vec::new(),
             logical_effect_contexts: HashMap::default(),
+            logical_effects_changed: HashSet::new(),
             physical_ancestor_ids: Vec::new(),
-            needs_post_update: false,
+            walk_ancestors: Vec::new(),
+            must_visit_clients: HashSet::new(),
+            local_frame_ancestors: HashSet::new(),
+            next_local_frame_ancestors: HashSet::new(),
+            pending_display_lock_walks: HashMap::default(),
+            previous_display_lock_walks: HashMap::default(),
+            last_document_resources: None,
+            last_frame_resources: HashMap::default(),
             inline_outline_groups: true,
+            visited_inline_outline: false,
             transform_world_memo: HashMap::default(),
-            shift_check: std::env::var_os("RECHROM_PREPAINT_SHIFT_CHECK").is_some(),
-            invalidation_only_check: std::env::var_os("RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK")
-                .is_some(),
-            fragment_data_check: std::env::var_os("RECHROM_PREPAINT_FRAGMENT_DATA_CHECK")
-                .is_some(),
-            last_visit_built: false,
             stats: PrePaintUpdateStats::default(),
             intersection_observation_state: Default::default(),
-            client_nodes: HashMap::default(),
-            resident_nodes: Vec::new(),
             deferred_paint_flag_clears: Vec::new(),
-            child_buffers: Vec::new(),
-            walk_generation: 0,
-            revision_generation: 0,
-            resource_memo: Vec::new(),
             consuming_walks: 0,
             recorded_consuming_walks: 0,
             released_property_keys: Vec::new(),
-            released_slot_nodes: Vec::new(),
-            full_slot_sweep: true,
-            slot_sweep_pending: false,
-            walked_tree_root: 0,
-            logical_tree_record: None,
         }
     }
 }
@@ -4128,141 +4004,6 @@ fn ResolveMaskLayers(
     output
 }
 
-// Rechrom boundary adaptation for Chromium's missable-child traversal
-// (`pre_paint_tree_walk.cc:769-959`). Layout resolves the exact logical parent
-// fragment occurrence while it still owns the physical fragment graph. Paint
-// consumes only that stable identity; it must not invent a second geometric
-// parent-selection path when the boundary leaves the relationship unsupported.
-// This block is not claimed as a line-for-line translation in the coverage
-// ledger.
-fn GatherFragmentInstances<'a>(
-    node: &mut PaintTreeNode<'a>,
-    fragment_instances: &mut HashMap<u64, *mut PaintTreeNode<'a>>,
-) {
-    let node_pointer = node as *mut PaintTreeNode<'a>;
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment");
-    if fragment.ViewFragmentInstanceId() != 0 {
-        if fragment_instances
-            .insert(fragment.ViewFragmentInstanceId(), node_pointer)
-            .is_some()
-        {
-            panic!("FragmentTree contains duplicate fragment_instance_id values");
-        }
-    }
-    for child in &mut node.children {
-        GatherFragmentInstances(child, fragment_instances);
-    }
-}
-
-struct DetachedPaintNode<'a> {
-    logical_parent: *mut PaintTreeNode<'a>,
-    node: Box<PaintTreeNode<'a>>,
-}
-
-/// The occurrence of an out-of-flow child's logical parent LayoutObject:
-/// the nearest physical ancestor occurrence of it that establishes paint
-/// state, else its only such occurrence (preferring the child's
-/// fragmentainer). Chromium's PrePaintTreeWalk reaches the containing
-/// LayoutObject through its context stack; Rechrom's walk follows physical
-/// fragments, so PrePaint resolves the occurrence here instead of the Layout
-/// export resolving every slot each publication.
-fn ResolveLogicalParentOccurrence<'a>(
-    child: *const PaintTreeNode<'a>,
-    logical_id: u64,
-    physical_ancestors: &[*const PaintTreeNode<'a>],
-    fragment_instances: &HashMap<u64, *mut PaintTreeNode<'a>>,
-) -> Option<*mut PaintTreeNode<'a>> {
-    let establishes = |node: &PaintTreeNode<'a>| {
-        node.fragment.as_deref().is_some_and(|candidate| {
-            candidate.ViewNodeId() == logical_id
-                && candidate.paint.HasSource()
-                && candidate.ViewEstablishesPaintState()
-        })
-    };
-    for &ancestor in physical_ancestors.iter().rev() {
-        let node = unsafe { &*ancestor };
-        if node.fragment.as_deref().is_some_and(|candidate| {
-            candidate.ViewNodeId() == logical_id && candidate.ViewEstablishesPaintState()
-        }) {
-            return Some(ancestor as *mut PaintTreeNode<'a>);
-        }
-    }
-    // The enclosing fragmentainer is the walk's context of each node.
-    let child_fragmentainer = unsafe { &*child }.FragmentainerInstanceId();
-    let unique = |same_fragmentainer: bool| {
-        let mut matches = fragment_instances.values().copied().filter(|&candidate| {
-            let node = unsafe { &*candidate };
-            candidate as *const PaintTreeNode<'a> != child
-                && establishes(node)
-                && (!same_fragmentainer || node.FragmentainerInstanceId() == child_fragmentainer)
-        });
-        let first = matches.next()?;
-        matches.next().is_none().then_some(first)
-    };
-    unique(true).or_else(|| unique(false))
-}
-
-fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
-    parent: &mut PaintTreeNode<'a>,
-    fragment_instances: &HashMap<u64, *mut PaintTreeNode<'a>>,
-    physical_ancestors: &mut Vec<*const PaintTreeNode<'a>>,
-    detached: &mut Vec<DetachedPaintNode<'a>>,
-) {
-    physical_ancestors.push(parent as *const PaintTreeNode<'a>);
-    let mut index = 0;
-    while index < parent.children.len() {
-        let child = parent.children[index].as_mut();
-        let child_pointer = child as *const PaintTreeNode<'a>;
-        let fragment = child
-            .fragment
-            .as_deref()
-            .expect("PrePaint node must own a fragment");
-        let logical_id = fragment.paint.LogicalParentNodeId();
-        let position = fragment.paint.Position();
-        let is_out_of_flow = position == Position::kAbsolute || position == Position::kFixed;
-        let logical_parent = if is_out_of_flow {
-            logical_id.and_then(|logical_id| {
-                ResolveLogicalParentOccurrence(
-                    child_pointer,
-                    logical_id,
-                    physical_ancestors,
-                    fragment_instances,
-                )
-            })
-        } else {
-            None
-        };
-        let logical_parent_is_physical_ancestor = logical_parent.is_some_and(|pointer| {
-            physical_ancestors.contains(&(pointer as *const PaintTreeNode<'a>))
-        });
-        if is_out_of_flow
-            && logical_id.is_some()
-            && !logical_parent_is_physical_ancestor
-            && logical_parent.is_some()
-            && logical_parent != Some(child as *mut PaintTreeNode<'a>)
-        {
-            child.escapes_ancestor_geometry = true;
-            child.physical_ancestors = physical_ancestors.clone();
-            detached.push(DetachedPaintNode {
-                logical_parent: logical_parent.unwrap(),
-                node: parent.children.remove(index),
-            });
-            continue;
-        }
-        DetachLogicallyReparentedOutOfFlowNodes(
-            child,
-            fragment_instances,
-            physical_ancestors,
-            detached,
-        );
-        index += 1;
-    }
-    physical_ancestors.pop();
-}
-
 // core/paint/paint_property_tree_builder.cc, UpdateEffect: mask resources
 // suppress the whole element until every image has finished loading. An error
 // is terminal and contributes transparent black through its retained mask layer.
@@ -4287,714 +4028,6 @@ pub fn MaskAdjustedOpacity(style: &PaintStyle) -> f32 {
     }
 }
 
-/// The number of effect nodes this object owns at the top of its border-box
-/// effect chain (Effect/Mask, then Filter).
-fn LocalEffectCount(node: &PaintTreeNode<'_>) -> usize {
-    usize::from(
-        node.applies_opacity
-            || node.applies_blend
-            || node.applies_backdrop_filter
-            || node.applies_mask,
-    ) + usize::from(node.applies_filter)
-}
-
-/// Decision D2 fix-up. The builder parents an out-of-flow object's effects
-/// to its logical parent occurrence when that occurrence was visited before
-/// it (PrePaintTreeWalk::LogicalOutOfFlowEffectContext). An occurrence the
-/// physical walk reached only later is applied here, once: the outermost
-/// own effect node is updated in place with the logical parent, inheriting
-/// descendants take the logical parent's node, and the recorded builder
-/// contexts follow so the next pass admits the subtree against them.
-fn RebindLogicalEffectState(
-    node: &mut PaintTreeNode<'_>,
-    parent_opacity: f32,
-    parent_effect_id: u64,
-    parent_effect: Arc<EffectPaintPropertyNode>,
-    store: &mut PaintPropertyNodeStore,
-) {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment");
-    let style: Option<&PaintStyle> = fragment.paint.HasSource().then_some(&fragment.paint.style);
-    let local_opacity = if fragment.ViewEstablishesPaintState() {
-        style.map_or(1.0, MaskAdjustedOpacity)
-    } else {
-        1.0
-    };
-    node.opacity = parent_opacity * local_opacity;
-    let local_effect_count = LocalEffectCount(node);
-    if local_effect_count == 0 {
-        node.properties.effect_id = parent_effect_id;
-        node.properties.nodes.effect = parent_effect.clone();
-    } else {
-        let (outermost, state) = paint_model::property_cell::with_access(|access| {
-            let mut outermost = node.properties.nodes.effect.clone();
-            for _ in 1..local_effect_count {
-                outermost = outermost
-                    .Parent(access)
-                    .expect("local effect parent")
-                    .clone();
-            }
-            let state = outermost.state(access);
-            let reparent = !state
-                .parent
-                .as_ref()
-                .is_some_and(|parent| Arc::ptr_eq(parent, &parent_effect));
-            let state = reparent.then(|| {
-                let mut state = state.clone();
-                state.parent = Some(parent_effect.clone());
-                state
-            });
-            (outermost, state)
-        });
-        if let Some(state) = state {
-            paint_model::property_cell::with_writer(|writer| {
-                store.UpdateEffectNode(writer, &outermost, state)
-            });
-        }
-    }
-    if let Some(fixed) = &mut node.fixed_background_properties {
-        fixed.effect = node.properties.nodes.effect.clone();
-    }
-    // A mask effect's parent is this object's own content effect, whose
-    // identity is unchanged. Scrollbar effects are parented to the border-box
-    // effect, which is the logical parent's when the object owns none.
-    for scrollbar in [
-        &node.horizontal_scrollbar_properties,
-        &node.vertical_scrollbar_properties,
-    ] {
-        let Some(scrollbar) = scrollbar else {
-            continue;
-        };
-        let state = paint_model::property_cell::with_access(|access| {
-            let state = scrollbar.effect.state(access);
-            (!state
-                .parent
-                .as_ref()
-                .is_some_and(|parent| Arc::ptr_eq(parent, &node.properties.nodes.effect)))
-            .then(|| {
-                let mut state = state.clone();
-                state.parent = Some(node.properties.nodes.effect.clone());
-                state
-            })
-        });
-        if let Some(state) = state {
-            paint_model::property_cell::with_writer(|writer| {
-                store.UpdateEffectNode(writer, &scrollbar.effect, state)
-            });
-        }
-    }
-    node.contents_properties.effect_id = node.properties.effect_id;
-    node.contents_properties.nodes.effect = node.properties.nodes.effect.clone();
-    // S2 dual write: the occurrence's LocalBorderBoxProperties name the
-    // logical parent's effect as the node now does (Chromium builds them
-    // from `context.current_effect`, paint_property_tree_builder.cc:
-    // 2955-2981, which already follows the logical parent). Own effect
-    // nodes were updated in place, so the ObjectPaintProperties slots and
-    // the PaintOffset are unchanged.
-    if let Some(slot) = node.source_cursor.and_then(|cursor| cursor.PrePaintSlot()) {
-        // SAFETY: single PrePaint writer after the walk; no live reference.
-        if let Some(data) = unsafe { slot.GetMut::<PrePaintFragmentData>() } {
-            WriteLocalBorderBoxProperties(data, &node.properties.nodes);
-        }
-    }
-    if let Some(cache) = node.cache.as_mut() {
-        cache.inherited.opacity = parent_opacity;
-        cache.inherited.properties.effect_id = parent_effect_id;
-        cache.inherited.properties.nodes.effect = parent_effect.clone();
-        cache.children.opacity = node.opacity;
-        cache.children.properties.effect_id = node.properties.effect_id;
-        cache.children.properties.nodes.effect = node.properties.nodes.effect.clone();
-    }
-    for child in &mut node.children {
-        RebindLogicalEffectState(
-            child,
-            node.opacity,
-            node.properties.effect_id,
-            node.properties.nodes.effect.clone(),
-            store,
-        );
-    }
-}
-
-fn FirstLogicalTreeOrder(node: &PaintTreeNode<'_>) -> u64 {
-    let order = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment")
-        .paint
-        .LogicalTreeOrder();
-    if order != 0 {
-        return order;
-    }
-    let mut first = u64::MAX;
-    for child in &node.children {
-        let child_order = FirstLogicalTreeOrder(child);
-        if child_order != 0 {
-            first = first.min(child_order);
-        }
-    }
-    if first == u64::MAX {
-        0
-    } else {
-        first
-    }
-}
-
-fn InsertInLogicalTreeOrder<'a>(parent: &mut PaintTreeNode<'a>, node: Box<PaintTreeNode<'a>>) {
-    let order = FirstLogicalTreeOrder(&node);
-    if order == 0 {
-        parent.children.push(node);
-        return;
-    }
-    let insertion = parent.children.iter().position(|candidate| {
-        let candidate_order = FirstLogicalTreeOrder(candidate);
-        candidate_order != 0 && candidate_order > order
-    });
-    parent
-        .children
-        .insert(insertion.unwrap_or(parent.children.len()), node);
-}
-
-fn RestoreLogicalSiblingOrder(parent: &mut PaintTreeNode<'_>) -> bool {
-    let mut changed = false;
-    for child in &mut parent.children {
-        changed |= RestoreLogicalSiblingOrder(child);
-    }
-    SortLogicalSiblings(parent) || changed
-}
-
-/// One child list of RestoreLogicalSiblingOrder: whether it was reordered.
-fn SortLogicalSiblings(parent: &mut PaintTreeNode<'_>) -> bool {
-    // Physical children usually already follow logical order. Preserve their
-    // Box owners and anonymous slots without allocating/rebuilding three Vecs.
-    let mut previous = 0;
-    let already_ordered = parent.children.iter().all(|child| {
-        let order = FirstLogicalTreeOrder(child);
-        if order == 0 {
-            return true;
-        }
-        if order < previous {
-            return false;
-        }
-        previous = order;
-        true
-    });
-    if already_ordered {
-        return false;
-    }
-    let mut ordered_slots = Vec::new();
-    let mut ordered_children = Vec::new();
-    let mut slots: Vec<Option<Box<PaintTreeNode<'_>>>> = std::mem::take(&mut parent.children)
-        .into_iter()
-        .map(Some)
-        .collect();
-    for (index, slot) in slots.iter_mut().enumerate() {
-        if FirstLogicalTreeOrder(slot.as_ref().unwrap()) == 0 {
-            continue;
-        }
-        ordered_slots.push(index);
-        ordered_children.push(slot.take().unwrap());
-    }
-    ordered_children.sort_by_key(|child| FirstLogicalTreeOrder(child));
-    for (index, child) in ordered_slots.into_iter().zip(ordered_children) {
-        slots[index] = Some(child);
-    }
-    parent.children = slots.into_iter().map(Option::unwrap).collect();
-    true
-}
-
-/// Moves logically reparented out-of-flow subtrees under their logical
-/// parent occurrence (paint order) and applies the D2 fix-up to those the
-/// builder could not parent logically. Returns whether the tree differs
-/// from the physical tree and the number of fix-ups.
-fn RestoreLogicalOutOfFlowParents(
-    root: &mut PaintTreeNode<'_>,
-    store: &mut PaintPropertyNodeStore,
-) -> (bool, usize) {
-    let mut fragment_instances = HashMap::default();
-    GatherFragmentInstances(root, &mut fragment_instances);
-    let mut physical_ancestors = Vec::new();
-    let mut detached = Vec::new();
-    DetachLogicallyReparentedOutOfFlowNodes(
-        root,
-        &fragment_instances,
-        &mut physical_ancestors,
-        &mut detached,
-    );
-    let reparented = !detached.is_empty();
-    let mut fixups = 0;
-    for mut entry in detached {
-        // Pointers target boxed nodes: moving a Box owner never moves its
-        // allocation. All detached owners stay live through this loop.
-        let logical_parent = unsafe { &mut *entry.logical_parent };
-        // The builder context already named this logical parent's effect
-        // state (the common case: the logical parent precedes the
-        // out-of-flow object in the physical walk).
-        let built_logically = entry.node.cache.as_ref().is_some_and(|cache| {
-            Arc::ptr_eq(
-                &cache.inherited.properties.nodes.effect,
-                &logical_parent.properties.nodes.effect,
-            ) && cache.inherited.opacity == logical_parent.opacity
-        });
-        if !built_logically {
-            fixups += 1;
-            RebindLogicalEffectState(
-                &mut entry.node,
-                logical_parent.opacity,
-                logical_parent.properties.effect_id,
-                logical_parent.properties.nodes.effect.clone(),
-                store,
-            );
-        }
-        InsertInLogicalTreeOrder(logical_parent, entry.node);
-    }
-    (RestoreLogicalSiblingOrder(root) || reparented, fixups)
-}
-
-/// One out-of-flow subtree RestoreLogicalOutOfFlowParents moved from its
-/// physical parent to its logical parent occurrence.
-struct LogicalMove {
-    node: *mut PaintTreeNode<'static>,
-    physical_parent: *mut PaintTreeNode<'static>,
-    logical_parent: *mut PaintTreeNode<'static>,
-    physical_ancestors: Vec<*const PaintTreeNode<'static>>,
-}
-
-/// The difference between a logical (paint-order) tree and its physical
-/// tree: the moved out-of-flow subtrees and every node whose child list is
-/// not in physical order. Box addresses are stable while the topology is,
-/// and a walk that changes the topology runs the complete post-update pass,
-/// which records the tree again.
-struct LogicalTreeRecord {
-    root: usize,
-    moves: Vec<LogicalMove>,
-    reordered: Vec<*mut PaintTreeNode<'static>>,
-}
-
-/// Records the moves of the logical tree RestoreLogicalOutOfFlowParents
-/// produced.
-fn RecordLogicalTree(root: &mut PaintTreeNode<'static>) -> LogicalTreeRecord {
-    fn visit(node: &mut PaintTreeNode<'static>, record: &mut LogicalTreeRecord) {
-        let pointer = node as *mut PaintTreeNode<'static>;
-        let mut reordered = false;
-        let mut last_physical_index = None;
-        for child in node.children.iter_mut() {
-            if child.escapes_ancestor_geometry {
-                reordered = true;
-                let physical_parent = *child
-                    .physical_ancestors
-                    .last()
-                    .expect("escaped node retains its physical parent")
-                    as *mut PaintTreeNode<'static>;
-                record.moves.push(LogicalMove {
-                    node: &mut **child as *mut PaintTreeNode<'static>,
-                    physical_parent,
-                    logical_parent: pointer,
-                    physical_ancestors: child.physical_ancestors.clone(),
-                });
-            } else {
-                if last_physical_index.is_some_and(|last| child.physical_index < last) {
-                    reordered = true;
-                }
-                last_physical_index = Some(child.physical_index);
-            }
-        }
-        if reordered {
-            record.reordered.push(pointer);
-        }
-        for child in node.children.iter_mut() {
-            visit(child, record);
-        }
-    }
-    let mut record = LogicalTreeRecord {
-        root: root as *const PaintTreeNode<'static> as usize,
-        moves: Vec::new(),
-        reordered: Vec::new(),
-    };
-    visit(root, &mut record);
-    record
-}
-
-/// RestorePhysicalOwnership for a tree `record` describes: puts each moved
-/// subtree back under its physical parent and the touched child lists back
-/// in physical order. Returns false, changing nothing, when the tree does
-/// not match the record.
-///
-/// Pointer validity:
-/// Every pointer of `record` names a node owned by the tree it recorded,
-/// which must be alive and not otherwise borrowed.
-fn RestorePhysicalFromRecord(record: &LogicalTreeRecord) -> bool {
-    let matches = record.moves.iter().all(|entry| {
-        unsafe { &*entry.logical_parent }
-            .children
-            .iter()
-            .any(|child| std::ptr::eq(&**child, entry.node))
-    });
-    if !matches {
-        return false;
-    }
-    for entry in &record.moves {
-        let logical_parent = unsafe { &mut *entry.logical_parent };
-        let index = logical_parent
-            .children
-            .iter()
-            .position(|child| std::ptr::eq(&**child, entry.node))
-            .expect("checked above");
-        let mut child = logical_parent.children.remove(index);
-        child.escapes_ancestor_geometry = false;
-        child.physical_ancestors.clear();
-        unsafe { &mut *entry.physical_parent }.children.push(child);
-    }
-    for &parent in record
-        .reordered
-        .iter()
-        .chain(record.moves.iter().map(|entry| &entry.physical_parent))
-    {
-        unsafe { &mut *parent }
-            .children
-            .sort_by_key(|child| child.physical_index);
-    }
-    true
-}
-
-/// RestoreLogicalOutOfFlowParents for a walk that kept the topology: redoes
-/// the recorded moves and sibling orders, with the D2 fix-up for a moved
-/// subtree the builder could not parent logically. Returns the fix-ups, or
-/// None, changing nothing, when the tree does not match the record.
-///
-/// Pointer validity:
-/// As RestorePhysicalFromRecord.
-fn ReplayLogicalTree(
-    record: &LogicalTreeRecord,
-    store: &mut PaintPropertyNodeStore,
-) -> Option<usize> {
-    let matches = record.moves.iter().all(|entry| {
-        unsafe { &*entry.physical_parent }
-            .children
-            .iter()
-            .any(|child| std::ptr::eq(&**child, entry.node))
-    });
-    if !matches {
-        return None;
-    }
-    let mut fixups = 0;
-    for entry in &record.moves {
-        let physical_parent = unsafe { &mut *entry.physical_parent };
-        let index = physical_parent
-            .children
-            .iter()
-            .position(|child| std::ptr::eq(&**child, entry.node))
-            .expect("checked above");
-        let mut node = physical_parent.children.remove(index);
-        node.escapes_ancestor_geometry = true;
-        // RestorePhysicalFromRecord cleared the list and kept its buffer.
-        node.physical_ancestors.clone_from(&entry.physical_ancestors);
-        let logical_parent = unsafe { &mut *entry.logical_parent };
-        let built_logically = node.cache.as_ref().is_some_and(|cache| {
-            Arc::ptr_eq(
-                &cache.inherited.properties.nodes.effect,
-                &logical_parent.properties.nodes.effect,
-            ) && cache.inherited.opacity == logical_parent.opacity
-        });
-        if !built_logically {
-            fixups += 1;
-            RebindLogicalEffectState(
-                &mut node,
-                logical_parent.opacity,
-                logical_parent.properties.effect_id,
-                logical_parent.properties.nodes.effect.clone(),
-                store,
-            );
-        }
-        InsertInLogicalTreeOrder(logical_parent, node);
-    }
-    for &parent in &record.reordered {
-        SortLogicalSiblings(unsafe { &mut *parent });
-    }
-    Some(fixups)
-}
-
-/// The ObjectPaintProperties slots of every object of a subtree.
-fn CollectSubtreeOwnKeys(node: &PaintTreeNode<'_>, out: &mut impl FnMut(PaintPropertyKey)) {
-    if let Some(cache) = node.cache.as_ref() {
-        for (_, key) in &cache.own_keys {
-            out(*key);
-        }
-    }
-    for child in &node.children {
-        CollectSubtreeOwnKeys(child, out);
-    }
-}
-
-type InlineOutlineKey = (u64, u64);
-
-fn GatherInlineOutlineGroups<'a>(
-    node: &mut PaintTreeNode<'a>,
-    groups: &mut BTreeMap<InlineOutlineKey, Vec<*mut PaintTreeNode<'a>>>,
-) {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment");
-    if fragment.ViewNodeId() != 0
-        && fragment.ViewKind() == FragmentKind::kBox
-        && fragment.paint.HasSource()
-        && fragment.ViewEstablishesPaintState()
-        && fragment.paint.Display() == Display::kInline
-        && fragment.paint.style.visible()
-        && fragment.paint.style.outline_width() > 0.0
-        && fragment.paint.style.outline_style() != BorderLineStyle::kNone
-        && fragment.paint.style.outline_color().alpha > 0.0
-    {
-        groups
-            .entry((fragment.ViewNodeId(), node.FragmentainerInstanceId()))
-            .or_default()
-            .push(node as *mut PaintTreeNode<'a>);
-    }
-    for child in &mut node.children {
-        GatherInlineOutlineGroups(child, groups);
-    }
-}
-
-/// One occurrence's AddSelfOutlineRects, in paint space, appended to `rects`.
-fn AppendSelfOutlineRects(node: &PaintTreeNode<'_>, rects: &mut Vec<PaintRect>) {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment");
-    if let Some(outline) = fragment.ViewSelfOutline() {
-        rects.extend(outline.rects.iter().map(|rect| PaintRect {
-            x: node.paint_offset.x + rect.offset.x,
-            y: node.paint_offset.y + rect.offset.y,
-            width: rect.size.width,
-            height: rect.size.height,
-        }));
-    }
-}
-
-/// Chromium's stable AutoDarkModeSVGSizeThreshold feature scopes the graphics
-/// context while an SVG root paints its children. The derived flag lives on
-/// each immutable PaintStyle snapshot so reparented PaintLayer descendants and
-/// ordinary retained children observe the same state without depending on walk
-/// call-stack shape. Image auto-dark admission intentionally ignores this flag.
-fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bool) {
-    PropagateAutoDarkModeStateFrom(node, inherited_paused, None);
-}
-
-/// PropagateAutoDarkModeState after a walk that rebound no retained
-/// payload: an object `walk` did not visit kept its size, offset and style
-/// payload, so while the state it holds equals the inherited one its whole
-/// subtree holds the same state as after the last propagation. Only the
-/// visited (dirty) path and subtrees whose inherited state changed are
-/// updated, as Chromium derives the state while painting the SVG root.
-fn UpdateAutoDarkModeStateOnVisitedPath(node: &mut PaintTreeNode<'_>, inherited_paused: bool, walk: u64) {
-    PropagateAutoDarkModeStateFrom(node, inherited_paused, Some(walk));
-}
-
-fn PropagateAutoDarkModeStateFrom(
-    node: &mut PaintTreeNode<'_>,
-    inherited_paused: bool,
-    visited_walk: Option<u64>,
-) {
-    const MAX_IMAGE_LENGTH: f64 = 64.0;
-    if let Some(walk) = visited_walk {
-        let visited = node
-            .cache
-            .as_ref()
-            .is_none_or(|cache| cache.visited_pass == walk);
-        let paint = &node
-            .fragment
-            .as_deref()
-            .expect("PrePaint node must own a fragment")
-            .paint;
-        let current = paint.style.auto_dark_mode_paused() == inherited_paused
-            && !(paint.style.Source().is_none()
-                && paint.selection_style.auto_dark_mode_paused() != inherited_paused)
-            && !paint
-                .svg_text_decoration_style
-                .as_ref()
-                .is_some_and(|style| style.auto_dark_mode_paused() != inherited_paused);
-        if !visited && current {
-            return;
-        }
-    }
-    let child_paused = {
-        let fragment = node
-            .fragment
-            .as_deref()
-            .expect("PrePaint node must own a fragment");
-        if fragment.paint.SourceKind() == NodeKind::kSvgRoot && fragment.paint.style.force_dark() {
-            let snapped = node.PixelSnappedRect(&PaintRect {
-                x: node.paint_offset.x,
-                y: node.paint_offset.y,
-                width: fragment.ViewSize().width,
-                height: fragment.ViewSize().height,
-            });
-            let layout_zoom = node
-                .DocumentResources()
-                .map_or(1.0, |resources| resources.layout_zoom_factor)
-                .max(f64::MIN_POSITIVE);
-            snapped.width / layout_zoom > MAX_IMAGE_LENGTH
-                || snapped.height / layout_zoom > MAX_IMAGE_LENGTH
-        } else {
-            inherited_paused
-        }
-    };
-    {
-        // The style payloads are shared copy-on-write owners: assign only on
-        // change, or every walk deep-copies each node's PaintProperties and
-        // PaintStyleData to store the same value.
-        let fragment = node
-            .fragment
-            .as_deref_mut()
-            .expect("PrePaint node must own a fragment");
-        let paint = &fragment.paint;
-        let style_changed = paint.style.auto_dark_mode_paused() != inherited_paused;
-        // A live-source selection style is resolved in Paint and takes the
-        // originating style's pause (PaintProperties::SelectionPaintStyle).
-        let selection_changed = paint.style.Source().is_none()
-            && paint.selection_style.auto_dark_mode_paused() != inherited_paused;
-        let decoration_changed = paint
-            .svg_text_decoration_style
-            .as_ref()
-            .is_some_and(|style| style.auto_dark_mode_paused() != inherited_paused);
-        if style_changed {
-            fragment.paint.style.SetAutoDarkModePaused(inherited_paused);
-        }
-        if selection_changed {
-            fragment.paint.selection_style.SetAutoDarkModePaused(inherited_paused);
-        }
-        if decoration_changed {
-            if let Some(style) = &mut fragment.paint.svg_text_decoration_style {
-                style.SetAutoDarkModePaused(inherited_paused);
-            }
-        }
-    }
-    for child in &mut node.children {
-        PropagateAutoDarkModeStateFrom(child, child_paused, visited_walk);
-    }
-}
-
-/// Joins the outline of each inline continuation group onto its first
-/// occurrence (OutlinePainter paints the united outline once). Returns
-/// whether any group exists.
-///
-/// Only grouped inline outlines are prepared here. Chromium collects every
-/// other outline at paint time (BoxFragmentPainter::PaintObject ->
-/// FragmentPainter::PaintOutline -> AddOutlineRects,
-/// core/paint/fragment_painter.cc), and BoxFragmentPainter::PaintOutline
-/// here does the same from the live fragment when a node carries no
-/// prepared rects, so a whole-tree ViewSelfOutline pass would only cache
-/// the value Paint reads anyway.
-fn PrepareOutlines(root: &mut PaintTreeNode<'_>) -> bool {
-    let mut groups = BTreeMap::new();
-    GatherInlineOutlineGroups(root, &mut groups);
-    let any_group = !groups.is_empty();
-    for (_unused_key, occurrences) in groups {
-        let owner_pointer = occurrences[0];
-        let mut outline_rects = Vec::new();
-        for occurrence_pointer in occurrences {
-            // The pointers refer to distinct boxed nodes that remain owned by
-            // the tree for this whole pass.
-            let occurrence = unsafe { &mut *occurrence_pointer };
-            AppendSelfOutlineRects(occurrence, &mut outline_rects);
-            occurrence.outline_rects.clear();
-            if occurrence_pointer != owner_pointer {
-                occurrence.paints_outline = false;
-                WriteFlatReplayOutline(occurrence);
-            }
-        }
-        unsafe { (*owner_pointer).outline_rects = outline_rects };
-        WriteFlatReplayOutline(unsafe { &*owner_pointer });
-    }
-    any_group
-}
-
-fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment");
-    // cpp: core/paint/paint_invalidator.cc:33-53
-    // cpp: core/paint/paint_layer_painter.cc:800-809
-    // Empty phases need neither a subtree walk nor replay geometry scopes.
-    // Aggregate after logical reparenting, preserving PaintInvalidator's
-    // current-painting-layer boundary: a self-painting child owns its phase
-    // flags and must not make the ancestor layer visit empty phases.
-    node.needs_float_phase =
-        fragment.paint.HasSource() && fragment.paint.Floating() != FloatSide::kNone;
-    let style = &fragment.paint.style;
-    node.needs_outline_phase = !node.is_paint_layer
-        && (fragment.paint.FocusedImageMapArea().is_some()
-            || fragment
-                .paint
-                .FormControl()
-                .is_some_and(|control| control.auto_focus_ring)
-            || (style.outline_style() != BorderLineStyle::kNone
-                && !(style.outline_width() <= 0.0)
-                && !(style.outline_color().alpha <= 0.0)));
-    node.needs_overflow_controls_phase = fragment
-        .ViewScrollbarsPaintAsOverlay()
-        .is_some_and(|overlay| overlay && node.is_paint_layer);
-    for child in &mut node.children {
-        MarkPaintPhaseNeeds(child);
-        if !child.is_paint_layer {
-            node.needs_float_phase |= child.needs_float_phase;
-            node.needs_outline_phase |= child.needs_outline_phase;
-            node.needs_overflow_controls_phase |= child.needs_overflow_controls_phase;
-        }
-    }
-    WriteFlatReplayPhaseNeeds(node);
-}
-
-/// The aggregated phase needs MarkPaintPhaseNeeds computed, onto the
-/// occurrence's FragmentData FlatReplayData (the paint walk reads them there).
-fn WriteFlatReplayPhaseNeeds(node: &PaintTreeNode<'_>) {
-    let Some(slot) = node
-        .source_cursor
-        .and_then(|cursor| cursor.PrePaintSlotIfCurrent())
-    else {
-        return;
-    };
-    // SAFETY: the post-walk pass is the occurrence's single PrePaint writer;
-    // no reference into the slot is live.
-    let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
-    let flat = data.FlatReplayMut();
-    flat.skip_float_phase = !node.needs_float_phase;
-    flat.skip_outline_phase = !node.needs_outline_phase;
-    flat.skip_overflow_controls_phase = !node.needs_overflow_controls_phase;
-}
-
-/// The SVG resource directory and, for decision D2, the effect state every
-/// paint-state occurrence gives its logical children, from the final tree.
-fn GatherFinalEffects(
-    node: &PaintTreeNode<'_>,
-    logical_effects: &mut HashMap<u64, Vec<LogicalEffectContext>>,
-    resources: &mut HashMap<u64, *const PaintTreeNode<'static>>,
-) {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint node must own a fragment");
-    if fragment.paint.IsSVGHiddenContainer() {
-        resources.insert(
-            fragment.paint.DisplayItemClientId(),
-            node as *const PaintTreeNode<'_> as *const PaintTreeNode<'static>,
-        );
-    }
-    if let Some(context) = LogicalEffectContextOf(node, node.FragmentainerInstanceId()) {
-        logical_effects
-            .entry(fragment.ViewNodeId())
-            .or_default()
-            .push(context);
-    }
-    for child in &node.children {
-        GatherFinalEffects(child, logical_effects, resources);
-    }
-}
-
 /// The effect state `node` gives its logical children when it is a
 /// paint-state occurrence of a LayoutObject (ResolveLogicalParentOccurrence's
 /// candidates), inside `fragmentainer`.
@@ -5012,146 +4045,6 @@ fn LogicalEffectContextOf(node: &PaintTreeNode<'_>, fragmentainer: u64) -> Optio
     })
 }
 
-/// Clears the logical-tree escape marks DetachLogicallyReparentedOutOfFlowNodes
-/// set in the preceding post-update pass.
-fn ResetLogicalEscapes(node: &mut PaintTreeNode<'_>) {
-    node.escapes_ancestor_geometry = false;
-    node.physical_ancestors.clear();
-    for child in &mut node.children {
-        ResetLogicalEscapes(child);
-    }
-}
-
-
-/// Undo ownership moves before an incremental physical-tree update. All Box
-/// allocations remain live until every escaped owner has been put back.
-fn RestorePhysicalOwnership(root: &mut PaintTreeNode<'static>) {
-    fn detach(
-        node: &mut PaintTreeNode<'static>,
-        detached: &mut Vec<(*const PaintTreeNode<'static>, Box<PaintTreeNode<'static>>)>,
-    ) {
-        let mut index = 0;
-        while index < node.children.len() {
-            detach(&mut node.children[index], detached);
-            if node.children[index].escapes_ancestor_geometry {
-                let mut child = node.children.remove(index);
-                let parent = *child
-                    .physical_ancestors
-                    .last()
-                    .expect("escaped node retains its physical parent");
-                child.escapes_ancestor_geometry = false;
-                child.physical_ancestors.clear();
-                detached.push((parent, child));
-            } else {
-                index += 1;
-            }
-        }
-    }
-    fn order(node: &mut PaintTreeNode<'static>) {
-        node.children.sort_by_key(|child| child.physical_index);
-        for child in &mut node.children {
-            order(child);
-        }
-    }
-    let mut detached = Vec::new();
-    detach(root, &mut detached);
-    for (parent, child) in detached {
-        // Physical parents point into the still-owned boxed tree or into a
-        // detached Box kept alive by this loop. Moving a Box does not move it.
-        unsafe { &mut *(parent as *mut PaintTreeNode<'static>) }
-            .children
-            .push(child);
-    }
-    order(root);
-}
-
-/// PaintLayerStackingNode::DirtyZOrderLists over the whole retained tree
-/// (paint_layer_stacking_node.cc:67-83): the next paint walk or hit-test
-/// query rebuilds each list it reaches.
-fn ClearResidentLayerOrders(node: &mut PaintTreeNode<'_>) {
-    *node.hit_test_layer_order.get_mut() = None;
-    for child in &mut node.children {
-        ClearResidentLayerOrders(child);
-    }
-}
-
-fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
-    // Full PrePaint postwalk includes topology/stacking-style changes. Impl
-    // scroll-only property refresh does not clear these source ordering lists.
-    *node.hit_test_layer_order.get_mut() = None;
-    node.outline_rects.clear();
-    node.paints_outline = true;
-    WriteFlatReplayOutline(node);
-    for child in &mut node.children {
-        ResetPostPaintData(child);
-    }
-}
-
-fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    a.ViewNodeId() == b.ViewNodeId()
-        && a.ViewFragmentInstanceId() == b.ViewFragmentInstanceId()
-        && a.ViewKind() == b.ViewKind()
-        && a.paint.DisplayItemClientId() == b.paint.DisplayItemClientId()
-        && a.ViewDisplayItemFragment() == b.ViewDisplayItemFragment()
-}
-
-// Chromium's display-lock path retains children because their LayoutObject and
-// FragmentData owners remain resident. Rechrom may do that only while the same
-// LayoutResult remains current: the locked children are not compared, so their
-// retained cursors must name fragments the current lease keeps alive.
-fn CanRetainDisplayLockedChildren(
-    child_pre_paint_blocked_by_display_lock: bool,
-    source_result_changed: bool,
-) -> bool {
-    child_pre_paint_blocked_by_display_lock && !source_result_changed
-}
-
-/// Whether the retained `node` was last walked over exactly `source`'s
-/// occurrence: the same PhysicalFragment, or the same FragmentItem in the
-/// same container fragment. Addresses only; the walked cursor is never
-/// dereferenced. Under one Paint publication state this is the proof that a
-/// replacement LayoutResult reused the fragment, and with it every fragment,
-/// item and sidecar the retained subtree reaches through its immutable
-/// links: Chromium likewise leaves a clean subtree's FragmentData untouched
-/// across an ancestor's relayout and PrePaintTreeWalk does not descend into
-/// it (pre_paint_tree_walk.cc:398-437). Hand-built nodes have no cursor.
-fn WalkedSameSourceOwner(node: &PaintTreeNode<'_>, source: PaintFragmentSource<'_>) -> bool {
-    use layout::output::FragmentCursor;
-    let Some(walked) = node.source_cursor else {
-        return false;
-    };
-    match (walked.Cursor(), source.Cursor().Cursor()) {
-        (
-            FragmentCursor::Physical { fragment: walked, .. },
-            FragmentCursor::Physical { fragment: current, .. },
-        ) => std::ptr::eq(walked, current),
-        (
-            FragmentCursor::Inline {
-                item: walked,
-                container: walked_container,
-                ..
-            },
-            FragmentCursor::Inline {
-                item: current,
-                container: current_container,
-                ..
-            },
-        ) => std::ptr::eq(walked, current) && std::ptr::eq(walked_container, current_container),
-        _ => false,
-    }
-}
-
-fn RequiresFullSourceWalk(source_owner_changed: bool, retained_tree_valid: bool) -> bool {
-    // Chromium retains LayoutObject/FragmentData owners across PrePaint. A
-    // replacement LayoutResult in Rechrom owns a different sidecar allocation,
-    // so no retained raw FragmentPaintData pointer may cross this boundary.
-    // Rebuild while the preceding lease is still alive. UpdateNode then visits
-    // old/new nodes in lockstep once: O(n), without a recursive compatibility
-    // proof at every descendant.
-    // Retained-node admission reads only the live dirty bits and PrePaint's
-    // own records (UpdateNode), so no Layout certification gates it.
-    source_owner_changed || !retained_tree_valid
-}
 
 // LayoutSVGHiddenContainer::Paint is a subtree boundary. Preserve its
 // descendants in immutable Layout snapshots for resource consumers, but do
@@ -5164,320 +4057,580 @@ fn OrdinaryPaintSourceChildren<'a>(
     fragment.Children()
 }
 
-fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    let phase = |f: &FragmentPaintData| {
-        (
-            f.paint.HasSource(),
-            f.paint.Floating(),
-            f.paint
-                .FormControl()
-                .is_some_and(|control| control.auto_focus_ring),
-            f.paint.FocusedImageMapArea().is_some(),
-            f.ViewScrollbarsPaintAsOverlay().is_some(),
-            f.paint.Display(),
-            f.ViewEstablishesPaintState(),
-            f.paint.IsSVGHiddenContainer(),
-            f.paint.style.visible(),
-            f.paint.style.outline_style(),
-            f.paint.style.outline_width(),
-            f.paint.style.outline_color().alpha,
-        )
-    };
-    phase(a) == phase(b)
+/// Source: PrePaintTreeWalk::PrePaintTreeWalkContext and the parts of
+/// PaintPropertyTreeBuilderContext that cross from a parent's visit to a
+/// child's (pre_paint_tree_walk.h:60-140, paint_property_tree_builder.h).
+/// A stack value of one Walk; nothing of it is retained.
+struct WalkContext {
+    /// The tree builder context the object is built with.
+    inherited: InheritedContext,
+    /// The parent's PaintInvalidatorContext.
+    invalidation: PaintInvalidatorContext,
+    /// force_subtree_update_reasons with isolation piercing: an ancestor's
+    /// own property nodes changed, so no descendant may be skipped.
+    force_subtree: bool,
+    /// The parent's contents cull rect before this walk rebuilt it: the
+    /// previous cull rect of a child without its own stored rects.
+    old_parent_contents_cull: Option<Option<PaintRect>>,
+    /// The auto dark mode pause an SVG root ancestor established.
+    auto_dark_mode_paused: bool,
+    /// The parent's SVG viewBox matrix, which the child's flat replay opens
+    /// as its leading local transform.
+    leading_svg_matrix: Option<TransformMatrix>,
 }
 
-fn SamePhaseInputs(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    SamePhaseStructure(a, b) && a.ViewSize() == b.ViewSize()
+#[derive(Clone, Copy, Default)]
+struct PhaseNeeds {
+    float: bool,
+    outline: bool,
+    overflow_controls: bool,
 }
 
-/// Values of one fragment that this walk compares across lifecycles. Each
-/// retained node records them after its own comparisons, so the next
-/// lifecycle compares against the node's record instead of dereferencing the
-/// previous LayoutResult's sidecar copy (Chromium likewise compares against
-/// previous values kept on its persistent owners). Enums are stored as their
-/// `repr(i32)` discriminants; `kind` is `None` until recorded.
-/// DisplayItemClient ids of one fragment (see ClientDirectoryIds).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ClientIds {
-    display_item: u64,
-    paint_layer: u64,
-    /// Scroll corner, horizontal and vertical scrollbar clients.
-    scrollbars: Option<(u64, Option<u64>, Option<u64>)>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct PrePaintPrevious {
-    kind: Option<FragmentKind>,
-    node_id: u64,
-    fragment_instance_id: u64,
-    display_item_client_id: u64,
-    display_item_fragment: u32,
-    size: foundation::LayoutSize,
-    offset: foundation::LayoutOffset,
-    content_size: foundation::LayoutSize,
-    /// Boolean inputs of SamePhaseStructure, as bits.
-    phase_flags: u32,
-    floating: i32,
-    display: i32,
-    outline_style: i32,
-    outline_width: f64,
-    outline_alpha: f32,
-    position: i32,
-    logical_parent_node_id: Option<u64>,
-    logical_tree_order: u64,
-    /// DisplayItemClient ids compared by SameClientDirectory.
-    clients: ClientIds,
-    /// The selection and scrolling-background DisplayItemClients, which
-    /// SameClientDirectory does not compare but whose recorded ids prove
-    /// them not newly created (HasUnrecordedJustCreatedClient).
-    selection_client_id: u64,
-    scrolling_background_client_id: u64,
-}
-
-/// `clients` is ClientDirectoryIds(f), computed once per visit
-/// (VisitIdentity::CurrentClients).
-fn PrePaintPreviousOf(
-    f: &FragmentPaintData,
-    link_offset: Offset,
-    clients: ClientIds,
-) -> PrePaintPrevious {
-    let p = &f.paint;
-    let (visible, outline_style, outline_width, outline_alpha) = p.style.PhaseStyleValues();
-    let phase_flags = u32::from(p.HasSource())
-        | u32::from(
-            p.FormControl()
-                .is_some_and(|control| control.auto_focus_ring),
-        ) << 1
-        | u32::from(p.FocusedImageMapArea().is_some()) << 2
-        | u32::from(p.scrollbars.is_some()) << 3
-        | u32::from(f.ViewEstablishesPaintState()) << 4
-        | u32::from(p.IsSVGHiddenContainer()) << 5
-        | u32::from(visible) << 6;
-    PrePaintPrevious {
-        kind: Some(f.ViewKind()),
-        node_id: f.ViewNodeId(),
-        fragment_instance_id: f.ViewFragmentInstanceId(),
-        display_item_client_id: p.DisplayItemClientId(),
-        display_item_fragment: f.ViewDisplayItemFragment(),
-        size: f.ViewSize(),
-        offset: link_offset,
-        content_size: f.ViewContentSize(),
-        phase_flags,
-        floating: p.Floating() as i32,
-        display: p.Display() as i32,
-        outline_style: outline_style as i32,
-        outline_width,
-        outline_alpha,
-        position: p.Position() as i32,
-        logical_parent_node_id: p.LogicalParentNodeId(),
-        logical_tree_order: p.LogicalTreeOrder(),
-        clients,
-        selection_client_id: p.SelectionClientId(),
-        scrolling_background_client_id: f
-            .ViewScrollingBackgroundClient()
-            .map_or(0, |(id, _)| id),
+impl PhaseNeeds {
+    fn Merge(&mut self, child: PhaseNeeds) {
+        self.float |= child.float;
+        self.outline |= child.outline;
+        self.overflow_controls |= child.overflow_controls;
     }
 }
 
-/// The previous-fragment view a retained node keeps for the paint
-/// invalidators: the shared paint payload (an Arc, not a copy) and the
-/// fragment's scalar fields. CSSOM inline rectangles are not paint inputs.
-/// The gap geometry baseline is kept beside it (NodeCache::
-/// previous_gap_rules): writing it into this payload would deep-copy the
-/// payload the live fragment shares.
-fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
-    FragmentPaintData {
-        // Document resources are read from the document, never the slot.
-        resources: None,
-        paint: f.paint.clone(),
-        ..*f
-    }
+/// What one occurrence's visit (or skipped subtree) hands its parent.
+#[derive(Clone, Copy, Default)]
+struct VisitResult {
+    /// Upward result of TableCellPaintInvalidator (Chromium mutates the
+    /// already visited row/section/table clients through parent contexts).
+    table_cell_geometry_changed: bool,
+    is_paint_layer: bool,
+    /// The subtree's paint phase needs (MarkPaintPhaseNeeds).
+    phase: PhaseNeeds,
 }
 
-/// The record of a retained node; empty if it has none.
-/// Whether a clean retained subtree pairs one-to-one, by source identity and
-/// child order, with the replacement source subtree. Read-only.
-fn CleanSubtreeRebindable(node: &PaintTreeNode<'static>, source: PaintFragmentSource<'_>) -> bool {
-    if node.fragment.is_none() || !SamePreviousSourceIdentity(node, &source.Resolved()) {
-        return false;
-    }
-    let mut sources = OrdinaryPaintSourceChildren(source);
-    for child in &node.children {
-        match sources.next() {
-            Some(child_source) if CleanSubtreeRebindable(child, child_source) => {}
-            _ => return false,
+impl VisitResult {
+    /// The result of a subtree the walk did not enter, from the values its
+    /// root's FragmentData kept.
+    fn Stored(data: &PrePaintFragmentData) -> Self {
+        let flat = data.FlatReplay();
+        Self {
+            table_cell_geometry_changed: false,
+            is_paint_layer: data.WalkRecord().is_paint_layer,
+            phase: PhaseNeeds {
+                float: !flat.skip_float_phase,
+                outline: !flat.skip_outline_phase,
+                overflow_controls: !flat.skip_overflow_controls_phase,
+            },
         }
     }
-    sources.next().is_none()
 }
 
-/// Move every node of a clean subtree, proven by CleanSubtreeRebindable, to
-/// the replacement owner: its sidecar slot and its source cursor are the only
-/// references into a LayoutResult. Geometry, properties and caches are kept,
-/// as Chromium keeps a clean FragmentData across relayout. Returns the nodes.
-///
-/// The occurrence's PrePaint FragmentData follows the LayoutObject's
-/// FragmentData, so the replacement cursor normally reaches the same slot;
-/// a cursor that reaches another sidecar (a superseded handle's private
-/// one) gets the retained values written into it, as Chromium's single
-/// FragmentData would still hold them.
-fn RebindCleanSubtree(
-    node: &mut PaintTreeNode<'static>,
-    source: PaintFragmentSource<'_>,
-    store: &PaintPropertyNodeStore,
-) -> usize {
-    node.fragment = Some(ResidentFragment::FromSource(&source));
-    node.source_cursor = Some(unsafe {
-        std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
-            source.Cursor(),
-        )
-    });
-    WriteRetainedFragmentData(node, Some(store));
-    // SAFETY: the walk is the single PrePaint writer of this occurrence.
-    unsafe {
-        CullRectUpdater::SetFragmentCullRects(source.Cursor(), node.self_cull_rect, node.cull_rect)
-    };
-    let mut nodes = 1;
-    for (child, child_source) in node.children.iter_mut().zip(OrdinaryPaintSourceChildren(source)) {
-        nodes += RebindCleanSubtree(child, child_source, store);
-    }
-    nodes
-}
-
-// S2 dual write, WP2c: the PrePaint FragmentData (fragment_data.h:32-38,
-// 104-168) of every occurrence equals its PaintTreeNode after each walk,
-// including the nodes PrePaint keeps without a PaintPropertyTreeBuilder
-// build (offset-only shifts, rebased own states, invalidation-only and
-// self-clean refreshes, rebinding, logical effect fix-ups). Chromium has no
-// such paths: it updates the FragmentData in place when it visits the
-// object (paint_property_tree_builder.cc:4143-4168 UpdateForObjectLocation,
-// 2955-2981 UpdateLocalBorderBoxContext) and keeps it unchanged otherwise.
-// These writers mirror the values BuildNode's WriteFragmentData stores.
-
-/// Chromium's PaintOffset of a node (fragment_data.h:32-38): LOCAL to its
-/// LocalBorderBoxProperties transform, i.e. Rechrom's flat `paint_offset`
-/// carried into property space by `paint_snap_offset`, rounded to
-/// LayoutUnit exactly as PaintPropertyTreeBuilder::BuildNode stores it.
-fn FragmentDataPaintOffset(node: &PaintTreeNode<'_>) -> foundation::PhysicalOffset {
-    foundation::PhysicalOffset::new(
-        foundation::LayoutUnit::FromDoubleRound(node.paint_offset.x + node.paint_snap_offset.x),
-        foundation::LayoutUnit::FromDoubleRound(node.paint_offset.y + node.paint_snap_offset.y),
-    )
-}
-
-fn SameStateNodes(
-    a: &paint_model::paint_property_tree::PropertyTreeState,
-    b: &paint_model::paint_property_tree::PropertyTreeState,
-) -> bool {
-    Arc::ptr_eq(&a.transform, &b.transform)
-        && Arc::ptr_eq(&a.clip, &b.clip)
-        && Arc::ptr_eq(&a.effect, &b.effect)
-}
-
-/// The live node the keyed store holds for `key`, of `slot`'s kind.
-fn StoreSlotNode(
-    store: &PaintPropertyNodeStore,
-    key: PaintPropertyKey,
-    slot: ObjectPaintPropertySlot,
-) -> Option<PaintPropertySlotNodeRef> {
-    Some(match slot.Kind() {
-        PaintPropertyNodeKind::Transform => {
-            PaintPropertySlotNodeRef::Transform(store.TransformOwnerForKey(key)?.clone())
-        }
-        PaintPropertyNodeKind::Clip => {
-            PaintPropertySlotNodeRef::Clip(store.ClipOwnerForKey(key)?.clone())
-        }
-        PaintPropertyNodeKind::Effect => {
-            PaintPropertySlotNodeRef::Effect(store.EffectOwnerForKey(key)?.clone())
-        }
-        PaintPropertyNodeKind::Scroll => {
-            PaintPropertySlotNodeRef::Scroll(store.ScrollOwnerForKey(key)?.clone())
-        }
-    })
-}
-
-/// The ObjectPaintProperties slot of a registered key: fragment-owned keys
-/// only (unowned nodes and the frame-level viewport roles have none), as
-/// PaintPropertyTreeBuilder::OwnPropertySlot maps them.
-fn OwnKeySlot(key: &PaintPropertyKey) -> Option<ObjectPaintPropertySlot> {
-    match key.owner {
-        PaintPropertyOwner::Fragment { .. } => ObjectPaintPropertySlot::FromRole(key.role),
-        _ => None,
+// cpp: core/paint/paint_invalidator.cc:33-53
+// cpp: core/paint/paint_layer_painter.cc:800-809
+// Empty phases need neither a subtree walk nor replay geometry scopes. A
+// self-painting child owns its phase flags and must not make the ancestor
+// layer visit empty phases, so only non-layer children are aggregated.
+fn OwnPhaseNeeds(fragment: &FragmentPaintData, is_paint_layer: bool) -> PhaseNeeds {
+    let style = &fragment.paint.style;
+    PhaseNeeds {
+        float: fragment.paint.HasSource() && fragment.paint.Floating() != FloatSide::kNone,
+        outline: !is_paint_layer
+            && (fragment.paint.FocusedImageMapArea().is_some()
+                || fragment
+                    .paint
+                    .FormControl()
+                    .is_some_and(|control| control.auto_focus_ring)
+                || (style.outline_style() != BorderLineStyle::kNone
+                    && !(style.outline_width() <= 0.0)
+                    && !(style.outline_color().alpha <= 0.0))),
+        overflow_controls: fragment
+            .ViewScrollbarsPaintAsOverlay()
+            .is_some_and(|overlay| overlay && is_paint_layer),
     }
 }
 
-/// The slot nodes the node's last build registered (NodeCache::own_keys),
-/// as the keyed store holds them now: the same `Arc`s BuildNode adopted.
-fn OwnSlotNodes(
-    node: &PaintTreeNode<'_>,
-    store: &PaintPropertyNodeStore,
-) -> Vec<(ObjectPaintPropertySlot, PaintPropertySlotNodeRef)> {
-    let Some(cache) = node.cache.as_ref() else {
-        return Vec::new();
-    };
-    cache
-        .own_keys
-        .iter()
-        .filter_map(|(_, key)| {
-            let slot = OwnKeySlot(key)?;
-            Some((slot, StoreSlotNode(store, *key, slot)?))
-        })
-        .collect()
+/// The values of an occurrence's previous visit the builder and the
+/// invalidators compare against, read from its FragmentData before this
+/// visit's build replaces them (Chromium reads fragment_data_.PaintOffset()
+/// and the existing ObjectPaintProperties nodes the same way).
+struct PreviousVisit {
+    record: PrePaintWalkRecord,
+    /// The exact flat paint offset (PaintInvalidator's old paint offset).
+    flat_paint_offset: Offset,
+    had_paint_offset_translation: bool,
+    self_cull_rect: Option<PaintRect>,
+    contents_cull_rect: Option<PaintRect>,
+    /// Its own Filter's operations were origin-tainted
+    /// (paint_property_tree_builder.cc:2632-2633,2713-2730).
+    filter_origin_tainted: bool,
+    /// The roles of its ObjectPaintProperties slots.
+    roles: Vec<PaintPropertyRole>,
+    gap_rules: Option<Arc<layout::paint::GapRulePaintData>>,
 }
 
-/// Write the node's values into its occurrence's PrePaint FragmentData:
-/// the local PaintOffset, LocalBorderBoxProperties and, with `store`, the
-/// ObjectPaintProperties slots (InitPaintProperties / the per-slot Update*
-/// and Clear*, paint_property_tree_builder.cc:4495-4516). A node without a
-/// result state (hand-built fixtures) has no slot.
-fn WriteRetainedFragmentData(node: &PaintTreeNode<'_>, store: Option<&PaintPropertyNodeStore>) {
-    let Some(slot) = node.source_cursor.and_then(|cursor| cursor.PrePaintSlot()) else {
-        return;
-    };
-    let own_slot_nodes = store.map(|store| OwnSlotNodes(node, store));
-    // SAFETY: the walk is the occurrence's single PrePaint writer here; no
-    // reference into the slot is live.
-    let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
-    let paint_offset = FragmentDataPaintOffset(node);
-    if data.PaintOffset() != paint_offset {
-        data.SetPaintOffset(paint_offset);
-    }
-    if let Some(own_slot_nodes) = own_slot_nodes {
-        if own_slot_nodes.is_empty() {
-            data.ClearPaintProperties();
+impl PreviousVisit {
+    fn Of(data: &PrePaintFragmentData, parent_contents_cull: Option<Option<PaintRect>>) -> Self {
+        let record = *data.WalkRecord();
+        let flat = data.FlatReplay();
+        let (self_cull_rect, contents_cull_rect) = if record.layer_cull_rects {
+            (data.GetCullRect().Rect(), data.GetContentsCullRect().Rect())
         } else {
-            let properties = data.EnsurePaintProperties();
-            let mut updated = [false; ObjectPaintPropertySlot::ALL.len()];
-            for (own_slot, slot_node) in own_slot_nodes {
-                updated[own_slot as usize] = true;
-                properties.AdoptSlotNode(own_slot, slot_node);
-            }
-            for own_slot in ObjectPaintPropertySlot::ALL {
-                if !updated[*own_slot as usize] {
-                    properties.ClearSlot(*own_slot);
+            match flat.Rare().and_then(|rare| rare.non_layer_cull_rects) {
+                Some(rects) => rects,
+                None => {
+                    let cull = parent_contents_cull.flatten();
+                    (cull, cull)
                 }
             }
+        };
+        let properties = data.PaintProperties();
+        Self {
+            record,
+            flat_paint_offset: flat.paint_offset,
+            had_paint_offset_translation: properties
+                .is_some_and(|properties| properties.PaintOffsetTranslation().is_some()),
+            self_cull_rect,
+            contents_cull_rect,
+            filter_origin_tainted: properties
+                .and_then(|properties| properties.Filter())
+                .is_some_and(|filter| {
+                    paint_model::property_cell::with_access(|access| {
+                        filter.state(access).filters.origin_tainted()
+                    })
+                }),
+            roles: properties.map_or_else(Vec::new, |properties| {
+                properties
+                    .Slots()
+                    .filter_map(ObjectPaintPropertySlot::Role)
+                    .collect()
+            }),
+            gap_rules: data.PreviousGapRules().cloned(),
         }
     }
-    WriteLocalBorderBoxProperties(data, &node.properties.nodes);
-    WriteFlatReplayDataTo(node, data);
 }
 
-/// The flat replay values of `node` (fragment_data.rs FlatReplayData) on its
-/// occurrence's PrePaint FragmentData, for a change made after the visit's
-/// WriteRetainedFragmentData (the parent's leading SVG matrix, a deferred
-/// transform update of a retained subtree).
-fn WriteFlatReplayData(node: &PaintTreeNode<'_>) {
-    let Some(slot) = node
-        .source_cursor
-        .and_then(|cursor| cursor.PrePaintSlotIfCurrent())
+/// The PhysicalFragment (or FragmentItem and container) a cursor names, as
+/// addresses: the identity a skipped subtree's root must keep (a clean
+/// FragmentData keeps naming the fragment the walk visited).
+fn WalkedOwner(cursor: PaintFragmentCursor<'_>) -> (usize, usize) {
+    use layout::output::FragmentCursor;
+    match cursor.Cursor() {
+        FragmentCursor::Physical { fragment, .. } => (fragment as *const _ as usize, 0),
+        FragmentCursor::Inline {
+            item, container, ..
+        } => (item as *const _ as usize, container as *const _ as usize),
+        #[allow(unreachable_patterns)]
+        _ => (0, 0),
+    }
+}
+
+/// A fingerprint of the context a builder hands its children (ChildContext
+/// without the wheel-handler bits, which the skip test reads directly).
+/// Property nodes enter by identity: their value changes are reported by
+/// their owner's own change, which forces the subtree.
+fn ChildContextDigest(context: &ChildContext) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let h = &mut hasher;
+    fn offset(h: &mut impl Hasher, value: Offset) {
+        value.x.to_bits().hash(h);
+        value.y.to_bits().hash(h);
+    }
+    fn rect(h: &mut impl Hasher, value: Option<PaintRect>) {
+        match value {
+            None => 0u8.hash(h),
+            Some(rect) => {
+                1u8.hash(h);
+                rect.x.to_bits().hash(h);
+                rect.y.to_bits().hash(h);
+                rect.width.to_bits().hash(h);
+                rect.height.to_bits().hash(h);
+            }
+        }
+    }
+    fn matrix(h: &mut impl Hasher, value: &TransformMatrix) {
+        for v in value.values {
+            v.to_bits().hash(h);
+        }
+    }
+    fn state(h: &mut impl Hasher, value: &PropertyTreeState) {
+        value.transform_id.hash(h);
+        value.clip_id.hash(h);
+        value.effect_id.hash(h);
+        value.scroll_id.hash(h);
+        (Arc::as_ptr(&value.nodes.transform) as usize).hash(h);
+        (Arc::as_ptr(&value.nodes.clip) as usize).hash(h);
+        (Arc::as_ptr(&value.nodes.effect) as usize).hash(h);
+    }
+    offset(h, context.origin);
+    offset(h, context.paint_space);
+    rect(h, context.clip);
+    rect(h, context.cull);
+    context.transforms.len().hash(h);
+    for value in context.transforms.iter() {
+        matrix(h, value);
+    }
+    context.opacity.to_bits().hash(h);
+    offset(h, context.scroll);
+    context.fixed_background_acts_as_scroll.hash(h);
+    state(h, &context.properties);
+    match &context.canvas_contents {
+        None => 0u8.hash(h),
+        Some(canvas) => {
+            1u8.hash(h);
+            canvas.layout_object.hash(h);
+            state(h, &canvas.properties);
+        }
+    }
+    context.rendering_context_id.hash(h);
+    context.should_flatten_inherited_transform.hash(h);
+    context.can_inherit_backface_visibility.hash(h);
+    offset(h, context.directly_composited_container_paint_offset_subpixel_delta);
+    context.subtree_should_use_infinite_cull_rect.hash(h);
+    context.flex_or_grid_items.hash(h);
+    match &context.svg {
+        None => 0u8.hash(h),
+        Some(svg) => {
+            1u8.hash(h);
+            matrix(h, svg);
+        }
+    }
+    hasher.finish()
+}
+
+type InlineOutlineKey = (u64, u64);
+
+/// An occurrence of an inline continuation outline group (OutlinePainter
+/// paints the united outline of the inline's fragments once).
+fn InlineOutlineCandidate(fragment: &FragmentPaintData) -> bool {
+    fragment.ViewNodeId() != 0
+        && fragment.ViewKind() == FragmentKind::kBox
+        && fragment.paint.HasSource()
+        && fragment.ViewEstablishesPaintState()
+        && fragment.paint.Display() == Display::kInline
+        && fragment.paint.style.visible()
+        && fragment.paint.style.outline_width() > 0.0
+        && fragment.paint.style.outline_style() != BorderLineStyle::kNone
+        && fragment.paint.style.outline_color().alpha > 0.0
+}
+
+/// One occurrence's AddSelfOutlineRects in the flat paint space, appended.
+fn AppendSelfOutlineRects(fragment: &FragmentPaintData, paint_offset: Offset, rects: &mut Vec<PaintRect>) {
+    if let Some(outline) = fragment.ViewSelfOutline() {
+        rects.extend(outline.rects.iter().map(|rect| PaintRect {
+            x: paint_offset.x + rect.offset.x,
+            y: paint_offset.y + rect.offset.y,
+            width: rect.size.width,
+            height: rect.size.height,
+        }));
+    }
+}
+
+/// Chromium's stable AutoDarkModeSVGSizeThreshold feature scopes the graphics
+/// context while an SVG root paints its children. The derived flag lives on
+/// each immutable PaintStyle snapshot so reparented PaintLayer descendants and
+/// ordinary children observe the same state without depending on the paint
+/// walk's call-stack shape. Image auto-dark admission ignores this flag.
+///
+/// Whether `paint`'s stored state already is `inherited_paused`.
+fn AutoDarkModeStateIsCurrent(fragment: &FragmentPaintData, inherited_paused: bool) -> bool {
+    let paint = &fragment.paint;
+    paint.style.auto_dark_mode_paused() == inherited_paused
+        && !(paint.style.Source().is_none()
+            && paint.selection_style.auto_dark_mode_paused() != inherited_paused)
+        && !paint
+            .svg_text_decoration_style
+            .as_ref()
+            .is_some_and(|style| style.auto_dark_mode_paused() != inherited_paused)
+}
+
+/// Stores `inherited_paused` on the occurrence's style payloads (assigning
+/// only on change: they are shared copy-on-write owners) and returns the
+/// state its children inherit.
+fn ApplyAutoDarkModeState(
+    fragment: &mut FragmentPaintData,
+    paint_offset: Offset,
+    paint_snap_offset: Offset,
+    resources: Option<&Arc<PaintResources>>,
+    inherited_paused: bool,
+) -> bool {
+    const MAX_IMAGE_LENGTH: f64 = 64.0;
+    let child_paused = if fragment.paint.SourceKind() == NodeKind::kSvgRoot
+        && fragment.paint.style.force_dark()
+    {
+        let scale = resources
+            .map_or(1.0, |resources| resources.ArtifactToDeviceScale())
+            .max(f64::MIN_POSITIVE);
+        let snapped = PixelSnappedRectInPropertySpace(
+            &PaintRect {
+                x: paint_offset.x,
+                y: paint_offset.y,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
+            },
+            paint_snap_offset,
+            scale,
+        );
+        let layout_zoom = resources
+            .map_or(1.0, |resources| resources.layout_zoom_factor)
+            .max(f64::MIN_POSITIVE);
+        snapped.width / layout_zoom > MAX_IMAGE_LENGTH
+            || snapped.height / layout_zoom > MAX_IMAGE_LENGTH
+    } else {
+        inherited_paused
+    };
+    let paint = &fragment.paint;
+    let style_changed = paint.style.auto_dark_mode_paused() != inherited_paused;
+    // A live-source selection style is resolved in Paint and takes the
+    // originating style's pause (PaintProperties::SelectionPaintStyle).
+    let selection_changed = paint.style.Source().is_none()
+        && paint.selection_style.auto_dark_mode_paused() != inherited_paused;
+    let decoration_changed = paint
+        .svg_text_decoration_style
+        .as_ref()
+        .is_some_and(|style| style.auto_dark_mode_paused() != inherited_paused);
+    if style_changed {
+        fragment.paint.style.SetAutoDarkModePaused(inherited_paused);
+    }
+    if selection_changed {
+        fragment.paint.selection_style.SetAutoDarkModePaused(inherited_paused);
+    }
+    if decoration_changed {
+        if let Some(style) = &mut fragment.paint.svg_text_decoration_style {
+            style.SetAutoDarkModePaused(inherited_paused);
+        }
+    }
+    child_paused
+}
+
+/// The auto dark mode state of a subtree the walk did not enter: an object
+/// whose stored state equals the inherited one kept its size, offset and
+/// style payload, so its whole subtree holds the state of the last walk.
+/// Only a subtree whose inherited state changed is updated.
+fn PropagateAutoDarkModeOverCursor(cursor: PaintFragmentCursor<'_>, inherited_paused: bool) {
+    if AutoDarkModeStateIsCurrent(cursor.PaintData(), inherited_paused) {
+        return;
+    }
+    let (paint_offset, paint_snap_offset) = cursor
+        .PrePaintData::<PrePaintFragmentData>()
+        .map_or((Offset::default(), Offset::default()), |data| {
+            (data.FlatReplay().paint_offset, data.FlatReplay().paint_snap_offset)
+        });
+    // SAFETY: PrePaint is the single lifecycle writer of the walked source;
+    // no reference into this payload is live.
+    let fragment = unsafe { cursor.PaintDataMut() };
+    let child_paused = ApplyAutoDarkModeState(
+        fragment,
+        paint_offset,
+        paint_snap_offset,
+        cursor.DocumentResources(),
+        inherited_paused,
+    );
+    for child in cursor.Children() {
+        PropagateAutoDarkModeOverCursor(child, child_paused);
+    }
+}
+
+/// The outermost effect node the occurrence's ObjectPaintProperties own at
+/// the top of its border-box effect chain (Effect, else Filter).
+fn OutermostOwnEffect(data: &PrePaintFragmentData) -> Option<Arc<EffectPaintPropertyNode>> {
+    let properties = data.PaintProperties()?;
+    properties.Effect().or_else(|| properties.Filter()).cloned()
+}
+
+/// Reparents `effect` to `parent` in place when it names another parent.
+fn ReparentEffect(
+    effect: &Arc<EffectPaintPropertyNode>,
+    parent: &Arc<EffectPaintPropertyNode>,
+    store: &mut PaintPropertyNodeStore,
+) -> bool {
+    let state = paint_model::property_cell::with_access(|access| {
+        let state = effect.state(access);
+        (!state
+            .parent
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, parent)))
+        .then(|| {
+            let mut state = state.clone();
+            state.parent = Some(parent.clone());
+            state
+        })
+    });
+    let Some(state) = state else {
+        return false;
+    };
+    paint_model::property_cell::with_writer(|writer| store.UpdateEffectNode(writer, effect, state));
+    true
+}
+
+/// Decision D2 fix-up of one out-of-flow occurrence whose logical parent
+/// occurrence gives it `parent_effect`. The builder parents an out-of-flow
+/// object's effects to its logical parent occurrence when the walk visited
+/// that occurrence before it (PrePaintTreeWalk::LogicalOutOfFlowEffectContext);
+/// otherwise this applies it: the outermost own effect node is updated in
+/// place with the logical parent, and an object owning none, with the
+/// descendants that inherit its effect, takes the logical parent's node in
+/// its LocalBorderBoxProperties (Chromium builds them from
+/// `context.current_effect`, paint_property_tree_builder.cc:2955-2981,
+/// which already follows the logical parent). Returns whether it changed.
+fn RebindLogicalEffect(
+    cursor: PaintFragmentCursor<'_>,
+    parent_effect: &Arc<EffectPaintPropertyNode>,
+    store: &mut PaintPropertyNodeStore,
+) -> bool {
+    let Some(data) = cursor.PrePaintData::<PrePaintFragmentData>() else {
+        return false;
+    };
+    if let Some(outermost) = OutermostOwnEffect(data) {
+        return ReparentEffect(&outermost, parent_effect, store);
+    }
+    let Some(old) = data
+        .LocalBorderBoxPropertiesRef()
+        .map(|state| state.effect.clone())
+    else {
+        return false;
+    };
+    if Arc::ptr_eq(&old, parent_effect) {
+        return false;
+    }
+    RebindInheritedEffect(cursor, &old, parent_effect, store);
+    true
+}
+
+/// RebindLogicalEffect for an occurrence inheriting `old`: it and every
+/// descendant that inherits the same effect take `new`; an own outermost
+/// effect parented to `old` is reparented in place.
+fn RebindInheritedEffect(
+    cursor: PaintFragmentCursor<'_>,
+    old: &Arc<EffectPaintPropertyNode>,
+    new: &Arc<EffectPaintPropertyNode>,
+    store: &mut PaintPropertyNodeStore,
+) {
+    let Some(data) = cursor
+        .PrePaintData::<PrePaintFragmentData>()
+        .filter(|data| data.WasWalked())
     else {
         return;
     };
-    // SAFETY: the walk is the occurrence's single PrePaint writer here; no
-    // reference into the slot is live.
-    let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
-    WriteFlatReplayDataTo(node, data);
+    if let Some(outermost) = OutermostOwnEffect(data) {
+        let parented_to_old = paint_model::property_cell::with_access(|access| {
+            outermost
+                .state(access)
+                .parent
+                .as_ref()
+                .is_some_and(|parent| Arc::ptr_eq(parent, old))
+        });
+        if parented_to_old {
+            ReparentEffect(&outermost, new, store);
+        }
+        return;
+    }
+    let Some(mut state) = data.LocalBorderBoxPropertiesRef().cloned() else {
+        return;
+    };
+    if !Arc::ptr_eq(&state.effect, old) {
+        return;
+    }
+    // Scrollbar effects are parented to the border-box effect.
+    let scrollbars: Vec<Arc<EffectPaintPropertyNode>> = data
+        .PaintProperties()
+        .map(|properties| {
+            [
+                properties.HorizontalScrollbarEffect(),
+                properties.VerticalScrollbarEffect(),
+            ]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+        })
+        .unwrap_or_default();
+    state.effect = new.clone();
+    // SAFETY: single PrePaint writer after the walk; no live reference.
+    unsafe { cursor.PrePaintDataMut::<PrePaintFragmentData>() }.SetLocalBorderBoxProperties(state);
+    for scrollbar in &scrollbars {
+        let parented_to_old = paint_model::property_cell::with_access(|access| {
+            scrollbar
+                .state(access)
+                .parent
+                .as_ref()
+                .is_some_and(|parent| Arc::ptr_eq(parent, old))
+        });
+        if parented_to_old {
+            ReparentEffect(scrollbar, new, store);
+        }
+    }
+    for child in cursor.Children() {
+        RebindInheritedEffect(child, old, new, store);
+    }
+}
+
+/// PaintController commit of client `id` on a payload whose client state is
+/// detached from a live source client (paint_controller.cc:127-143 validates
+/// a live client through its own pointer, done by the Layout commit).
+fn CommitDetachedClient(f: &mut FragmentPaintData, id: u64) {
+    if f.paint.DisplayItemClientId() == id
+        && f.paint.display_item_client_is_cacheable
+        && !f.paint.HasLiveDisplayItemClient()
+    {
+        f.paint
+            .display_item_client_invalidation_reason
+            .replace(PaintInvalidationReason::kNone);
+        f.paint.display_item_client_is_just_created.set(false);
+    }
+    if f.paint.SelectionClientId() == id
+        && f.paint.selection_client_is_cacheable
+        && !f.paint.HasLiveSelectionClient()
+    {
+        f.paint
+            .selection_client_invalidation_reason
+            .replace(PaintInvalidationReason::kNone);
+    }
+    let live_scroll_client = f.paint.HasLiveScrollClient(id);
+    let scroll_matches = !live_scroll_client
+        && f.ViewScrollContainer().is_some_and(|scroll| {
+            scroll.scrolling_background_client_id == id
+                && scroll.scrolling_background_client_is_cacheable
+        });
+    if let Some(scroll) = scroll_matches
+        .then(|| f.paint.scroll_container.as_mut())
+        .flatten()
+    {
+        if scroll.scrolling_background_client_id == id
+            && scroll.scrolling_background_client_is_cacheable
+        {
+            scroll
+                .scrolling_background_client_invalidation_reason
+                .replace(PaintInvalidationReason::kNone);
+            scroll
+                .scrolling_background_client_is_just_created
+                .set(false);
+        }
+    }
+    let bars_match = !live_scroll_client && f.paint.scrollbars.as_ref().is_some_and(|bars| {
+        (bars.corner_client_id == id && bars.corner_client_is_cacheable)
+            || [&bars.horizontal, &bars.vertical]
+                .into_iter()
+                .flatten()
+                .any(|axis| {
+                    axis.display_item_client_id == id && axis.display_item_client_is_cacheable
+                })
+    });
+    if let Some(bars) = bars_match.then(|| f.paint.scrollbars.as_mut()).flatten() {
+        let bars = Arc::make_mut(bars);
+        for axis in [&mut bars.horizontal, &mut bars.vertical]
+            .into_iter()
+            .flatten()
+        {
+            if axis.display_item_client_id == id && axis.display_item_client_is_cacheable {
+                axis.display_item_client_invalidation_reason
+                    .replace(PaintInvalidationReason::kNone);
+                axis.display_item_client_is_just_created.set(false);
+            }
+        }
+        if bars.corner_client_id == id && bars.corner_client_is_cacheable {
+            bars.corner_client_invalidation_reason
+                .replace(PaintInvalidationReason::kNone);
+            bars.corner_client_is_just_created.set(false);
+        }
+    }
 }
 
 /// An `Arc` slice holding `values`, reusing `old` when it already does.
@@ -5509,7 +4662,9 @@ fn WriteFlatReplayDataTo(node: &PaintTreeNode<'_>, data: &mut PrePaintFragmentDa
         || data.HasPropertySlot(ObjectPaintPropertySlot::MaskClip)
         || data.HasPropertySlot(ObjectPaintPropertySlot::Mask);
     let flat = data.FlatReplayMut();
+    flat.paint_offset = node.paint_offset;
     flat.paint_snap_offset = node.paint_snap_offset;
+    flat.clip = node.clip;
     if !Arc::ptr_eq(&flat.transforms, &node.transforms) {
         flat.transforms = node.transforms.clone();
     }
@@ -5551,1102 +4706,10 @@ fn WriteFlatReplayDataTo(node: &PaintTreeNode<'_>, data: &mut PrePaintFragmentDa
         } else {
             None
         },
+        pre_transform: (!Arc::ptr_eq(&node.pre_transform, &node.properties.nodes.transform))
+            .then(|| node.pre_transform.clone()),
     };
     flat.SetRare(rare);
-}
-
-/// The outline values the post-walk outline passes (ResetPostPaintData,
-/// PrepareOutlines) change on a node, onto its occurrence's FragmentData.
-fn WriteFlatReplayOutline(node: &PaintTreeNode<'_>) {
-    let Some(slot) = node
-        .source_cursor
-        .and_then(|cursor| cursor.PrePaintSlotIfCurrent())
-    else {
-        return;
-    };
-    // SAFETY: the post-walk passes are the occurrence's single PrePaint
-    // writer; no reference into the slot is live.
-    let Some(data) = (unsafe { slot.GetMut::<PrePaintFragmentData>() }) else {
-        return;
-    };
-    let flat = data.FlatReplayMut();
-    if flat.paints_outline == node.paints_outline
-        && flat
-            .Rare()
-            .and_then(|rare| rare.outline_rects.as_deref())
-            .unwrap_or(&[])
-            == node.outline_rects.as_slice()
-    {
-        return;
-    }
-    WriteFlatReplayDataTo(node, data);
-}
-
-/// Source: fragment_data.h:152-155 SetLocalBorderBoxProperties, skipped
-/// when the slot already names the same nodes.
-fn WriteLocalBorderBoxProperties(
-    data: &mut PrePaintFragmentData,
-    state: &paint_model::paint_property_tree::PropertyTreeState,
-) {
-    if !data
-        .LocalBorderBoxPropertiesRef()
-        .is_some_and(|stored| SameStateNodes(stored, state))
-    {
-        data.SetLocalBorderBoxProperties(state.clone());
-    }
-}
-
-/// A slot node the walk released with the node that owned it (an object
-/// that left the tree): the end-of-walk sweep clears it from the
-/// occurrence's ObjectPaintProperties when the store drops its key.
-struct ReleasedSlotNode {
-    cursor: PaintFragmentCursor<'static>,
-    key: PaintPropertyKey,
-    slot: ObjectPaintPropertySlot,
-    node: PaintPropertySlotNodeRef,
-}
-
-/// The keys (and, for the occurrences with a PrePaint slot, the slot nodes)
-/// of every object of a dropped subtree (CollectSubtreeOwnKeys).
-fn CollectReleasedSubtreeSlots(
-    node: &PaintTreeNode<'static>,
-    store: &PaintPropertyNodeStore,
-    keys: &mut Vec<PaintPropertyKey>,
-    slots: &mut Vec<ReleasedSlotNode>,
-) {
-    if let Some(cache) = node.cache.as_ref() {
-        for (_, key) in &cache.own_keys {
-            keys.push(*key);
-            let (Some(cursor), Some(slot)) = (node.source_cursor, OwnKeySlot(key)) else {
-                continue;
-            };
-            if let Some(slot_node) = StoreSlotNode(store, *key, slot) {
-                slots.push(ReleasedSlotNode {
-                    cursor,
-                    key: *key,
-                    slot,
-                    node: slot_node,
-                });
-            }
-        }
-    }
-    for child in &node.children {
-        CollectReleasedSubtreeSlots(child, store, keys, slots);
-    }
-}
-
-/// Source: ObjectPaintProperties::Clear* (object_paint_properties.h:86) and
-/// FragmentData destruction (fragment_data.cc ClearPaintProperties,
-/// FragmentDataList::Shrink), at the point the keyed store dropped the
-/// slot (RetainLiveSlots). Only a slot that still holds the dropped node is
-/// cleared: an occurrence that took the slot over holds its own node.
-fn ClearReleasedSlotNodes(released: Vec<ReleasedSlotNode>, store: &PaintPropertyNodeStore) {
-    for entry in released {
-        if StoreSlotNode(store, entry.key, entry.slot)
-            .is_some_and(|live| live.PtrEq(&entry.node))
-        {
-            continue;
-        }
-        // The walk's source leases keep every retained cursor's result alive
-        // until RetainTree. A stale box occurrence (its fragment left the
-        // LayoutBox's current results) has no FragmentData to clear: the
-        // object's current FragmentData was rewritten by this walk's
-        // BuildNode, which clears every slot it did not update.
-        let Some(slot) = entry.cursor.PrePaintSlotIfCurrent() else {
-            continue;
-        };
-        // SAFETY: single PrePaint writer, after the walk; no live reference.
-        let Some(data) = (unsafe { slot.GetMut::<PrePaintFragmentData>() }) else {
-            continue;
-        };
-        let Some(properties) = data.PaintPropertiesMut() else {
-            continue;
-        };
-        if properties
-            .SlotNode(entry.slot)
-            .is_some_and(|held| held.PtrEq(&entry.node))
-        {
-            properties.ClearSlot(entry.slot);
-            if !properties.HasAnyNode() {
-                data.ClearPaintProperties();
-            }
-        }
-    }
-}
-
-/// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the first value of `node`'s
-/// PrePaint FragmentData that differs from the node (the proof that Paint
-/// can read the slot instead of PaintTreeNode).
-fn FragmentDataMismatch(
-    node: &PaintTreeNode<'_>,
-    store: &PaintPropertyNodeStore,
-) -> Option<&'static str> {
-    let cursor = node.source_cursor?;
-    let slot = cursor.PrePaintSlot()?;
-    let Some(data) = slot.Get::<PrePaintFragmentData>() else {
-        return Some("missing PrePaintFragmentData");
-    };
-    if data.PaintOffset() != FragmentDataPaintOffset(node) {
-        return Some("PaintOffset");
-    }
-    match data.LocalBorderBoxPropertiesRef() {
-        Some(state) if SameStateNodes(state, &node.properties.nodes) => {}
-        Some(_) => return Some("LocalBorderBoxProperties nodes"),
-        None => return Some("LocalBorderBoxProperties unset"),
-    }
-    if node.cache.is_some() {
-        let own = OwnSlotNodes(node, store);
-        for slot in ObjectPaintPropertySlot::ALL {
-            let expected = own.iter().rev().find(|(own_slot, _)| own_slot == slot);
-            let held = data
-                .PaintProperties()
-                .and_then(|properties| properties.SlotNode(*slot));
-            match (expected, held) {
-                (None, None) => {}
-                (Some((_, expected)), Some(held)) if expected.PtrEq(&held) => {}
-                (Some(_), Some(_)) => return Some("ObjectPaintProperties slot node"),
-                (Some(_), None) => return Some("ObjectPaintProperties slot missing"),
-                (None, Some(_)) => return Some("ObjectPaintProperties stale slot"),
-            }
-        }
-    }
-    // Only PaintLayer objects get cull rects (CullRectUpdater::
-    // SetFragmentCullRects); other FragmentData keep the default.
-    if cursor.OwnPaintLayer().is_some() {
-        if data.GetCullRect() != crate::cull_rect_updater::RetainedCullRect(node.self_cull_rect) {
-            return Some("CullRect");
-        }
-        if data.GetContentsCullRect() != crate::cull_rect_updater::RetainedCullRect(node.cull_rect)
-        {
-            return Some("ContentsCullRect");
-        }
-    }
-    None
-}
-
-/// A retained subtree the walk did not descend into keeps the
-/// ScopedDisplayItemFragment values recorded at its last visit. When its
-/// root's scope changed, re-derive the inherited scopes below it through the
-/// physical links: a fragment opening its own scope keeps it and an embedded
-/// frame root starts at 0 (box_fragment_painter.cc:394-403,
-/// paint_layer_painter.cc:776-778).
-fn RefreshInheritedDisplayItemFragments(node: &mut PaintTreeNode<'static>) {
-    let scope = node.DisplayItemFragment();
-    let fragmentainer = node.FragmentainerInstanceId();
-    let Some(children) = node.cache.as_ref().map(|cache| cache.physical_children.clone()) else {
-        return;
-    };
-    for child in children {
-        // Physical links stay valid while the retained tree owns every box.
-        let child = unsafe { &mut *child };
-        let value = child
-            .fragment
-            .as_deref()
-            .and_then(|fragment| fragment.ViewOwnDisplayItemFragment())
-            .unwrap_or(if child.is_embedded_local_frame_root { 0 } else { scope });
-        // The enclosing fragmentainer is inherited the same way.
-        let child_fragmentainer = child
-            .fragment
-            .as_deref()
-            .and_then(|fragment| fragment.ViewOwnFragmentainerInstanceId())
-            .unwrap_or(if child.is_embedded_local_frame_root { 0 } else { fragmentainer });
-        if child.display_item_fragment != Some(value)
-            || child.fragmentainer_instance_id != Some(child_fragmentainer)
-        {
-            child.display_item_fragment = Some(value);
-            child.fragmentainer_instance_id = Some(child_fragmentainer);
-            RefreshInheritedDisplayItemFragments(child);
-        }
-    }
-}
-
-/// A node without own property nodes takes its clip, cull rects and flat
-/// transforms, and passes them to its children, unchanged from its parent.
-/// Only then is an offset-only update a pure translation.
-fn ShiftPreservesClips(node: &PaintTreeNode<'_>) -> bool {
-    let Some(cache) = node.cache.as_ref() else {
-        return false;
-    };
-    let inherited = &cache.inherited;
-    // Paint layers are admitted: RefreshLivePaintLayerFacts re-reads every
-    // live layer fact the builder reads. SVG children are admitted: their own
-    // local matrices are in SVG user space and keep their values when the
-    // container moves (ShiftKeepsSvgPrefix checks the container's matrix).
-    // An SVG root still rebuilds: its viewBox matrix maps to its paint offset.
-    cache.children.svg.is_none()
-        && node.fixed_background_properties.is_none()
-        && node.overflow_controls_properties.is_none()
-        && node.horizontal_scrollbar_properties.is_none()
-        && node.vertical_scrollbar_properties.is_none()
-        && node.mask_properties.is_none()
-        && node.clip == inherited.clip
-        && node.cull_rect == inherited.cull
-        && node.self_cull_rect == inherited.cull
-        && node.transforms.starts_with(&inherited.transforms)
-        && node.transforms.len() - inherited.transforms.len() <= node.local_transforms.len()
-        && cache.children.clip == inherited.clip
-        && cache.children.cull == inherited.cull
-        && (Arc::ptr_eq(&cache.children.transforms, &node.transforms)
-            || cache.children.transforms == node.transforms)
-}
-
-/// A node with local transforms may lead with its SVG container's matrix,
-/// which the parent inserts only into newly built children. Shifting keeps
-/// that leading matrix, so the container's matrix must be unchanged.
-fn ShiftKeepsSvgPrefix(node: &PaintTreeNode<'_>, old: &InheritedContext, new: &InheritedContext) -> bool {
-    node.local_transforms.is_empty() || old.transforms.last() == new.transforms.last()
-}
-
-/// The flat transform list of a shifted node: the parent's new list followed
-/// by the node's own matrices, which are independent of its position.
-fn ShiftedTransforms(old_node: &FlatTransforms, old_inherited_len: usize, inherited: &FlatTransforms) -> FlatTransforms {
-    let own = &old_node[old_inherited_len..];
-    if own.is_empty() {
-        inherited.clone()
-    } else {
-        let mut list = Vec::with_capacity(inherited.len() + own.len());
-        list.extend_from_slice(inherited);
-        list.extend_from_slice(own);
-        FlatTransforms::from(list)
-    }
-}
-
-/// The deferred transform update (DirectlyUpdateTransformMatrix) of the
-/// object `node`: its own matrix at `index` of the flat lists changes from
-/// `old` to `new`. The object's flat lists and those of its retained
-/// descendants, which all extend that prefix, carry the resident property
-/// node's new value. Lists shared between nodes stay shared.
-fn ReplaceFlatTransformInSubtree(
-    node: &mut PaintTreeNode<'_>,
-    index: usize,
-    old: &TransformMatrix,
-    new: &TransformMatrix,
-) {
-    // Old list address -> its replacement. Most updates touch a handful of
-    // distinct lists (each object that adds own entries starts a new one),
-    // so a short linear memo avoids hashing and the map allocation; a large
-    // subtree with many such objects moves to the map.
-    const LINEAR_MEMO: usize = 16;
-    #[derive(Default)]
-    struct Memo {
-        linear: Vec<(usize, FlatTransforms)>,
-        // Keyed by aligned addresses: the SipHash map, not the identity one.
-        map: std::collections::HashMap<usize, FlatTransforms>,
-    }
-    impl Memo {
-        fn get(&self, key: usize) -> Option<&FlatTransforms> {
-            if self.map.is_empty() {
-                self.linear
-                    .iter()
-                    .find(|(old_key, _)| *old_key == key)
-                    .map(|(_, list)| list)
-            } else {
-                self.map.get(&key)
-            }
-        }
-        fn insert(&mut self, key: usize, list: FlatTransforms) {
-            if self.map.is_empty() && self.linear.len() < LINEAR_MEMO {
-                self.linear.push((key, list));
-                return;
-            }
-            self.map.extend(self.linear.drain(..));
-            self.map.insert(key, list);
-        }
-    }
-    fn replace(
-        list: &mut FlatTransforms,
-        index: usize,
-        old: &TransformMatrix,
-        new: &TransformMatrix,
-        memo: &mut Memo,
-    ) {
-        if list.get(index) != Some(old) {
-            return;
-        }
-        let key = Arc::as_ptr(list).cast::<TransformMatrix>() as usize;
-        if let Some(replaced) = memo.get(key) {
-            *list = replaced.clone();
-            return;
-        }
-        let mut values = list.to_vec();
-        values[index] = *new;
-        let replaced = FlatTransforms::from(values);
-        memo.insert(key, replaced.clone());
-        *list = replaced;
-    }
-    fn visit(
-        node: &mut PaintTreeNode<'_>,
-        index: usize,
-        old: &TransformMatrix,
-        new: &TransformMatrix,
-        memo: &mut Memo,
-        is_owner: bool,
-    ) {
-        replace(&mut node.transforms, index, old, new, memo);
-        if let Some(cache) = node.cache.as_mut() {
-            if is_owner {
-                let local = index - cache.inherited.transforms.len();
-                if let Some(entry) = node.local_transforms.get_mut(local) {
-                    *entry = *new;
-                }
-            } else {
-                replace(&mut cache.inherited.transforms, index, old, new, memo);
-            }
-            replace(&mut cache.children.transforms, index, old, new, memo);
-        }
-        // Retained descendants are not visited again this walk: their
-        // occurrences take the new flat list here.
-        WriteFlatReplayData(node);
-        for child in &mut node.children {
-            visit(child, index, old, new, memo, false);
-        }
-    }
-    visit(node, index, old, new, &mut Memo::default(), true);
-}
-
-/// A node retained under the same property-slot structure while an
-/// ancestor's transform value changed (a ScrollTranslation after a
-/// compositor-owned scroll, SameRetainedContextStructure). The resident
-/// property nodes are updated in place, so the flat transform list this
-/// node and its children build from must carry the same new ancestor values:
-/// a child rebuilt from the retained ChildContext maps its paint offset
-/// through `FlatToPropertySpaceOffset` against the live parent node, and a
-/// stale flat prefix would turn the ancestor's value change into a spurious
-/// PaintOffsetTranslation (and cull rect) offset. Only the inherited prefix
-/// is replaced; this node's own matrices are independent of its position.
-fn RefreshRetainedFlatTransforms(node: &mut PaintTreeNode<'_>, inherited: &InheritedContext) {
-    let Some(cache) = node.cache.as_mut() else {
-        return;
-    };
-    let old = &cache.inherited.transforms;
-    if Arc::ptr_eq(old, &inherited.transforms)
-        || old.len() != inherited.transforms.len()
-        || *old == inherited.transforms
-    {
-        return;
-    }
-    let len = old.len();
-    node.transforms = ShiftedTransforms(&node.transforms, len, &inherited.transforms);
-    cache.children.transforms =
-        ShiftedTransforms(&cache.children.transforms, len, &inherited.transforms);
-    cache.inherited.transforms = inherited.transforms.clone();
-}
-
-/// The object's only own property node is a plain Effect (opacity/blend, no
-/// filter, backdrop or mask) that BuildNode derived from the inherited
-/// transform, clip and effect alone, it is linked to the resident inherited
-/// nodes the object moves under, and the parent facts the builder copies
-/// into it are unchanged. Such an effect keeps its value and its links when
-/// the object moves (Chromium updates only the moved ancestor's slots in
-/// place), so the moved object keeps its own property state.
-fn RebasableOwnEffect(node: &PaintTreeNode<'_>, inherited: &InheritedContext) -> bool {
-    let Some(cache) = node.cache.as_ref() else {
-        return false;
-    };
-    let [(_, key)] = cache.own_keys.as_slice() else {
-        return false;
-    };
-    if key.role != PaintPropertyRole::Effect {
-        return false;
-    }
-    let old = &cache.inherited.properties;
-    let new = &inherited.properties;
-    let own = &node.properties;
-    let effect_node = &own.nodes.effect;
-    let contents = &node.contents_properties.nodes;
-    let children = &cache.children.properties.nodes;
-    paint_model::property_cell::with_access(|access| {
-        let effect = effect_node.state(access);
-        let new_parent = new.nodes.effect.state(access);
-        let old_parent = old.nodes.effect.state(access);
-        own.effect_id == effect_node.id
-            && own.effect_id != old.effect_id
-            && Arc::ptr_eq(&own.nodes.transform, &new.nodes.transform)
-            && Arc::ptr_eq(&own.nodes.clip, &new.nodes.clip)
-            && effect
-                .parent
-                .as_ref()
-                .is_some_and(|parent| Arc::ptr_eq(parent, &new.nodes.effect))
-            && Arc::ptr_eq(&effect.local_transform_space, &new.nodes.transform)
-            && effect
-                .output_clip
-                .as_ref()
-                .is_some_and(|clip| Arc::ptr_eq(clip, &new.nodes.clip))
-            && effect.filters.is_empty()
-            && effect.backdrop_filters.is_empty()
-            && effect.backdrop_filter_clip.is_none()
-            && effect.backdrop_filter_bounds.is_none()
-            && effect.filter_reference_box.is_none()
-            && !effect.has_mask
-            && !effect.is_mask
-            && Arc::ptr_eq(&contents.effect, effect_node)
-            && Arc::ptr_eq(&children.effect, effect_node)
-            && Arc::ptr_eq(&contents.clip, &own.nodes.clip)
-            && Arc::ptr_eq(&contents.transform, &own.nodes.transform)
-            && Arc::ptr_eq(&children.clip, &own.nodes.clip)
-            && Arc::ptr_eq(&children.transform, &own.nodes.transform)
-            && new_parent.compositor.is_in_tainted_subtree
-                == old_parent.compositor.is_in_tainted_subtree
-            && new_parent.compositor.is_in_drawable_canvas_subtree
-                == old_parent.compositor.is_in_drawable_canvas_subtree
-            && new_parent.self_or_ancestor_participates_in_view_transition
-                == old_parent.self_or_ancestor_participates_in_view_transition
-    })
-}
-
-/// Own property nodes of a moved object under its new inherited state.
-/// Chromium updates only the moved ancestor's ObjectPaintProperties in
-/// place, so the object's own resident nodes keep their identity, value and
-/// links. This proves that case: every link of an own node reaches either
-/// another own node or the inherited top node, which must be the same
-/// resident node in the old and new inherited states. Any other link
-/// rejects the shift and the object is rebuilt (updating its slots).
-struct OwnNodeRebase<'a> {
-    access: &'a paint_model::property_cell::PropertyAccess,
-    own_ids: &'a [(u64, PaintPropertyKey)],
-    inherited: &'a paint_model::paint_property_tree::PropertyTreeState,
-    inherited_scroll: Option<Arc<ScrollPaintPropertyNode>>,
-    /// Own nodes already proven, by allocation.
-    proven: Vec<usize>,
-}
-
-impl OwnNodeRebase<'_> {
-    fn is_own(&self, id: u64) -> bool {
-        self.own_ids.iter().any(|(own, _)| *own == id)
-    }
-
-    fn proven<T>(&mut self, node: &Arc<T>, prove: impl FnOnce(&mut Self) -> bool) -> bool {
-        let key = Arc::as_ptr(node) as *const () as usize;
-        if self.proven.contains(&key) {
-            return true;
-        }
-        let proven = prove(self);
-        if proven {
-            self.proven.push(key);
-        }
-        proven
-    }
-
-    fn transform(&mut self, node: &Arc<TransformPaintPropertyNode>) -> bool {
-        if Arc::ptr_eq(node, &self.inherited.transform) {
-            return true;
-        }
-        if !self.is_own(node.id) {
-            return false;
-        }
-        let links = node.state(self.access).links();
-        self.proven(node, |this| {
-            links.parent.as_ref().is_none_or(|parent| this.transform(parent))
-                && links.scroll.as_ref().is_none_or(|scroll| this.scroll(scroll))
-                && links
-                    .scroll_parent_scroll_translation
-                    .as_ref()
-                    .is_none_or(|translation| this.transform(translation))
-        })
-    }
-
-    fn clip(&mut self, node: &Arc<ClipPaintPropertyNode>) -> bool {
-        if Arc::ptr_eq(node, &self.inherited.clip) {
-            return true;
-        }
-        if !self.is_own(node.id) {
-            return false;
-        }
-        let state = node.state(self.access);
-        let (parent, transform, filter) = (
-            state.parent.clone(),
-            state.local_transform_space.clone(),
-            state.pixel_moving_filter.clone(),
-        );
-        self.proven(node, |this| {
-            parent.as_ref().is_none_or(|parent| this.clip(parent))
-                && this.transform(&transform)
-                && filter.as_ref().is_none_or(|filter| this.effect(filter))
-        })
-    }
-
-    fn effect(&mut self, node: &Arc<EffectPaintPropertyNode>) -> bool {
-        if Arc::ptr_eq(node, &self.inherited.effect) {
-            return true;
-        }
-        if !self.is_own(node.id) {
-            return false;
-        }
-        let links = node.state(self.access).links();
-        if links.canvas_child_state.is_some() {
-            return false;
-        }
-        self.proven(node, |this| {
-            links.parent.as_ref().is_none_or(|parent| this.effect(parent))
-                && this.transform(&links.local_transform_space)
-                && links.output_clip.as_ref().is_none_or(|clip| this.clip(clip))
-                && links
-                    .backdrop_filter_clip
-                    .as_ref()
-                    .is_none_or(|clip| this.clip(clip))
-        })
-    }
-
-    fn scroll(&mut self, node: &Arc<ScrollPaintPropertyNode>) -> bool {
-        if self
-            .inherited_scroll
-            .as_ref()
-            .is_some_and(|inherited| Arc::ptr_eq(node, inherited))
-        {
-            return true;
-        }
-        if !self.is_own(node.id) {
-            return false;
-        }
-        let state = node.state(self.access);
-        let (parent, overflow_clip) = (state.parent.clone(), state.overflow_clip.clone());
-        self.proven(node, |this| {
-            parent.as_ref().is_none_or(|parent| this.scroll(parent))
-                && overflow_clip.as_ref().is_none_or(|clip| this.clip(clip))
-        })
-    }
-
-    fn state(&mut self, state: &PropertyTreeState) -> bool {
-        self.transform(&state.nodes.transform)
-            && self.clip(&state.nodes.clip)
-            && self.effect(&state.nodes.effect)
-    }
-}
-
-/// The object's own states under the new inherited state (unchanged nodes).
-struct RebasedOwnStates {
-    properties: PropertyTreeState,
-    contents: PropertyTreeState,
-    children: PropertyTreeState,
-    pre_transform: Option<Arc<TransformPaintPropertyNode>>,
-}
-
-/// Offset-only move of an object that owns property nodes, under an
-/// ancestor whose property space moved with it (its paint offset inside
-/// that space is unchanged, so its own node values are unchanged): its flat
-/// clip moves rigidly with the inherited clip, its own resident nodes keep
-/// their links (OwnNodeRebase), and its cull rects are recomputed as the
-/// builder computes them.
-fn RebaseOwnStates(
-    node: &PaintTreeNode<'_>,
-    inherited: &InheritedContext,
-    delta: ShiftDelta,
-) -> Option<RebasedOwnStates> {
-    let cache = node.cache.as_ref()?;
-    let old = &cache.inherited;
-    let (old_nodes, new_nodes) = (&old.properties.nodes, &inherited.properties.nodes);
-    if delta.offset != delta.paint_space
-        || cache.own_keys.is_empty()
-        || node.fixed_background_properties.is_some()
-        || node.overflow_controls_properties.is_some()
-        || node.horizontal_scrollbar_properties.is_some()
-        || node.vertical_scrollbar_properties.is_some()
-        || node.mask_properties.is_some()
-        || inherited.clip != MovedRect(old.clip, delta.offset)
-        || !node.transforms.starts_with(&old.transforms)
-        || !cache.children.transforms.starts_with(&old.transforms)
-        || !Arc::ptr_eq(&old_nodes.transform, &new_nodes.transform)
-        || !Arc::ptr_eq(&old_nodes.clip, &new_nodes.clip)
-        || !Arc::ptr_eq(&old_nodes.effect, &new_nodes.effect)
-    {
-        return None;
-    }
-    let inherited_scroll = new_nodes.nearest_scroll();
-    paint_model::property_cell::with_access(|access| {
-        let mut rebase = OwnNodeRebase {
-            access,
-            own_ids: &cache.own_keys,
-            inherited: new_nodes,
-            inherited_scroll,
-            proven: Vec::new(),
-        };
-        (rebase.state(&node.properties)
-            && rebase.state(&node.contents_properties)
-            && rebase.state(&cache.children.properties))
-        .then(|| RebasedOwnStates {
-            properties: node.properties.clone(),
-            contents: node.contents_properties.clone(),
-            children: cache.children.properties.clone(),
-            pre_transform: rebase
-                .transform(&node.pre_transform)
-                .then(|| node.pre_transform.clone()),
-        })
-    })
-}
-
-fn MovedRect(rect: Option<PaintRect>, offset: Offset) -> Option<PaintRect> {
-    rect.map(|mut rect| {
-        rect.x += offset.x;
-        rect.y += offset.y;
-        rect
-    })
-}
-
-/// Trace-only classification of a rebuilt node for build_kind_ns.
-fn BuildKind(node: &PaintTreeNode<'_>, fragment: &FragmentPaintData) -> usize {
-    use PaintPropertyRole as R;
-    let roles: Vec<PaintPropertyRole> = node
-        .cache
-        .as_ref()
-        .map(|cache| cache.own_keys.iter().map(|(_, key)| key.role).collect())
-        .unwrap_or_default();
-    let is_transform = |role: &PaintPropertyRole| {
-        matches!(
-            role,
-            R::PaintOffsetTranslation
-                | R::Transform
-                | R::ReplacedContentTransform
-                | R::SvgLocalTransform
-        )
-    };
-    let is_effect = |role: &PaintPropertyRole| matches!(role, R::Effect | R::Filter | R::Mask);
-    if IsSvgLayoutChild(fragment.paint.SourceKind()) || !node.local_transforms.is_empty() {
-        3
-    } else if roles.iter().any(is_transform) {
-        0
-    } else if !roles.is_empty() && !roles.iter().any(is_effect) {
-        1
-    } else if !roles.is_empty() {
-        2
-    } else if node.is_paint_layer {
-        4
-    } else {
-        5
-    }
-}
-
-/// How far an offset-only update moved a subtree and its property space.
-#[derive(Clone, Copy)]
-struct ShiftDelta {
-    offset: Offset,
-    paint_space: Offset,
-}
-
-// Move a retained node (proven by ShiftPreservesClips) by `delta` under its
-// new inherited context.
-// Returns whether the new cull rects need a repaint (CullRectUpdater), as
-// the rebuild path decides it; the node's repaint bit is raised already.
-// The moved PaintOffset (paint_offset + paint_snap_offset) and property
-// state reach the occurrence's PrePaint FragmentData at the end of the
-// visit (UpdateNode's WriteRetainedFragmentData), as BuildNode writes them;
-// the verification mode shifts a copy it restores before that point.
-thread_local! {
-    /// Trace only: ShiftRetainedNode time by part (refresh layer facts,
-    /// property/context update, remainder).
-    static SHIFT_PART_NS: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
-}
-
-fn AddShiftPart(index: usize, from: Option<std::time::Instant>) -> Option<std::time::Instant> {
-    let from = from?;
-    let now = std::time::Instant::now();
-    SHIFT_PART_NS.with(|parts| {
-        let mut value = parts.get();
-        value[index] += now.duration_since(from).as_nanos() as u64;
-        parts.set(value);
-    });
-    Some(now)
-}
-
-pub fn TakeShiftPartNs() -> [u64; 3] {
-    SHIFT_PART_NS.with(|parts| parts.replace([0; 3]))
-}
-
-fn ShiftRetainedNode(
-    node: &mut PaintTreeNode<'static>,
-    delta: ShiftDelta,
-    inherited: &InheritedContext,
-    previous_paint_result: paint_model::PaintResult,
-    rebased: Option<RebasedOwnStates>,
-    viewport: &paint_model::paint_property_tree::PropertyTreeState,
-) -> bool {
-    if let Some(rebased) = rebased {
-        return RebaseRetainedNode(node, delta, inherited, previous_paint_result, rebased, viewport);
-    }
-    let t = browser_tracing::enabled().then(std::time::Instant::now);
-    let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
-        previous_paint_result,
-        Some(node.self_cull_rect),
-        Some(node.cull_rect),
-        inherited.cull,
-        inherited.cull,
-    );
-    RefreshLivePaintLayerFacts(node);
-    let t = AddShiftPart(0, t);
-    node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
-    // Paint offsets are relative to the property space, which moves by
-    // `paint_space` when the parent's own PaintOffsetTranslation moved. An
-    // SVG local transform resets the paint space to the object's own
-    // position, so its paint offset stays zero and its children's space
-    // moves with the object.
-    let resets_paint_space = node
-        .fragment
-        .as_deref()
-        .is_some_and(|fragment| fragment.paint.SvgLocalTransform().is_some());
-    node.absolute_offset.x += delta.offset.x;
-    node.absolute_offset.y += delta.offset.y;
-    if !resets_paint_space {
-        node.paint_offset.x += delta.offset.x - delta.paint_space.x;
-        node.paint_offset.y += delta.offset.y - delta.paint_space.y;
-    }
-    let children_paint_space = if resets_paint_space { delta.offset } else { delta.paint_space };
-    node.clip = inherited.clip;
-    node.cull_rect = inherited.cull;
-    node.self_cull_rect = inherited.cull;
-    let old_inherited_len = node
-        .cache
-        .as_ref()
-        .expect("shifted node has builder state")
-        .inherited
-        .transforms
-        .len();
-    node.transforms = ShiftedTransforms(&node.transforms, old_inherited_len, &inherited.transforms);
-    let shifted_transforms = node.transforms.clone();
-    // Without own nodes the object paints in its parent's property state.
-    // An own plain effect (RebasableOwnEffect) is a resident node already
-    // linked to that same state's nodes, so it keeps its property state.
-    let properties = {
-        let cache = node.cache.as_ref().expect("shifted node has builder state");
-        if cache.own_keys.is_empty() {
-            inherited.properties.clone()
-        } else {
-            node.properties.clone()
-        }
-    };
-    node.properties = properties.clone();
-    node.contents_properties = properties.clone();
-    let cache = node.cache.as_mut().expect("shifted node has builder state");
-    cache.children.properties = properties;
-    cache.inherited = inherited.clone();
-    let t = AddShiftPart(1, t);
-    cache.children.origin.x += delta.offset.x;
-    cache.children.origin.y += delta.offset.y;
-    cache.children.paint_space.x += children_paint_space.x;
-    cache.children.paint_space.y += children_paint_space.y;
-    cache.children.clip = inherited.clip;
-    cache.children.cull = inherited.cull;
-    cache.children.transforms = shifted_transforms;
-    AddShiftPart(2, t);
-    cull_change_needs_repaint
-}
-
-/// ShiftRetainedNode for an object with own property nodes (RebaseOwnStates).
-/// Its own slot nodes keep their links and values, so the occurrence's
-/// ObjectPaintProperties keep the same nodes; the visit's tail rewrites the
-/// slots, PaintOffset, LocalBorderBoxProperties and cull rects from the
-/// rebased node.
-fn RebaseRetainedNode(
-    node: &mut PaintTreeNode<'static>,
-    delta: ShiftDelta,
-    inherited: &InheritedContext,
-    previous_paint_result: paint_model::PaintResult,
-    rebased: RebasedOwnStates,
-    viewport: &paint_model::paint_property_tree::PropertyTreeState,
-) -> bool {
-    let fragment = node.fragment.as_deref().expect("shifted node keeps its fragment");
-    let inputs = node.cull_decision_inputs;
-    let infinite = crate::cull_rect_updater::ShouldUseInfiniteCullRect(
-        fragment,
-        inherited.subtree_should_use_infinite_cull_rect,
-        inputs.has_filter_that_moves_pixels,
-        inputs.has_perspective,
-        inputs.has_active_transform_animation,
-        inputs.has_non_composited_transform,
-        previous_paint_result,
-    );
-    let (self_cull_rect, cull_rect) = if infinite.use_infinite {
-        (None, None)
-    } else {
-        let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(
-            node.DocumentResources().map(|resources| &**resources),
-        );
-        let (self_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
-            inherited.cull,
-            Some(node.self_cull_rect),
-            viewport,
-            &inherited.properties.nodes,
-            &rebased.properties.nodes,
-            expansion_ratio,
-        );
-        let (contents_cull, _) = CullRectUpdater::ComputeFragmentContentsCullRect(
-            self_cull,
-            Some(node.cull_rect),
-            viewport,
-            &rebased.properties.nodes,
-            &rebased.contents.nodes,
-            expansion_ratio,
-        );
-        (self_cull, contents_cull)
-    };
-    let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
-        previous_paint_result,
-        Some(node.self_cull_rect),
-        Some(node.cull_rect),
-        self_cull_rect,
-        cull_rect,
-    );
-    RefreshLivePaintLayerFacts(node);
-    node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
-    // The paint offset inside the moved property space is unchanged.
-    node.absolute_offset.x += delta.offset.x;
-    node.absolute_offset.y += delta.offset.y;
-    node.clip = MovedRect(node.clip, delta.offset);
-    node.self_cull_rect = self_cull_rect;
-    node.cull_rect = cull_rect;
-    let cache = node.cache.as_mut().expect("shifted node has builder state");
-    let old_inherited_len = cache.inherited.transforms.len();
-    node.transforms = ShiftedTransforms(&node.transforms, old_inherited_len, &inherited.transforms);
-    cache.children.transforms =
-        ShiftedTransforms(&cache.children.transforms, old_inherited_len, &inherited.transforms);
-    if let Some(pre_transform) = rebased.pre_transform {
-        node.pre_transform = pre_transform;
-    }
-    node.properties = rebased.properties;
-    node.contents_properties = rebased.contents;
-    cache.children.properties = rebased.children;
-    cache.inherited = inherited.clone();
-    cache.children.origin.x += delta.offset.x;
-    cache.children.origin.y += delta.offset.y;
-    cache.children.paint_space.x += delta.offset.x;
-    cache.children.paint_space.y += delta.offset.y;
-    cache.children.clip = MovedRect(cache.children.clip, delta.offset);
-    cache.children.cull = cull_rect;
-    cull_change_needs_repaint
-}
-
-/// Re-read the live PaintLayer facts the builder reads on every visit
-/// (paint_property_tree_builder.rs BuildNode); a retained node would
-/// otherwise keep the values of its last build.
-fn RefreshLivePaintLayerFacts(node: &mut PaintTreeNode<'static>) {
-    let Some(fragment) = node.fragment.as_deref() else {
-        return;
-    };
-    let facts = fragment.paint.LivePaintLayerFacts();
-    node.paint_layer_facts_are_authoritative = facts.authoritative;
-    if facts.authoritative {
-        node.is_self_painting_layer = facts.is_self_painting;
-    } else {
-        node.is_self_painting_layer = node.is_paint_layer;
-    }
-    node.invisible_for_position_visibility = facts.invisible_for_position_visibility;
-    node.has_ancestor_invisible_for_position_visibility =
-        facts.has_ancestor_invisible_for_position_visibility;
-    node.has_visible_content = facts.has_visible_content;
-    node.has_self_painting_layer_descendant = facts.has_self_painting_layer_descendant;
-    node.is_under_svg_hidden_container = facts.is_under_svg_hidden_container;
-    node.supports_subsequence_caching = facts.supports_subsequence_caching;
-    node.self_or_descendant_needs_repaint = facts.self_or_descendant_needs_repaint;
-    node.paint_layer_is_fragmented = facts.is_fragmented;
-    node.known_to_clip_subtree_to_padding_box = facts.known_to_clip_subtree_to_padding_box;
-    node.child_paint_blocked_by_display_lock = facts.child_paint_blocked_by_display_lock;
-}
-
-/// The fields ShiftRetainedNode writes, for the verification mode.
-struct SavedShiftFields {
-    absolute_offset: Offset,
-    paint_offset: Offset,
-    clip: Option<PaintRect>,
-    cull_rect: Option<PaintRect>,
-    self_cull_rect: Option<PaintRect>,
-    transforms: FlatTransforms,
-    properties: PropertyTreeState,
-    contents_properties: PropertyTreeState,
-    self_or_descendant_needs_repaint: bool,
-    layer_facts: [bool; 11],
-    inherited: InheritedContext,
-    children: ChildContext,
-}
-
-fn LayerFacts(node: &PaintTreeNode<'_>) -> [bool; 11] {
-    [
-        node.paint_layer_facts_are_authoritative,
-        node.is_self_painting_layer,
-        node.invisible_for_position_visibility,
-        node.has_ancestor_invisible_for_position_visibility,
-        node.has_visible_content,
-        node.has_self_painting_layer_descendant,
-        node.is_under_svg_hidden_container,
-        node.supports_subsequence_caching,
-        node.paint_layer_is_fragmented,
-        node.known_to_clip_subtree_to_padding_box,
-        node.child_paint_blocked_by_display_lock,
-    ]
-}
-
-fn SetLayerFacts(node: &mut PaintTreeNode<'_>, facts: [bool; 11]) {
-    [
-        node.paint_layer_facts_are_authoritative,
-        node.is_self_painting_layer,
-        node.invisible_for_position_visibility,
-        node.has_ancestor_invisible_for_position_visibility,
-        node.has_visible_content,
-        node.has_self_painting_layer_descendant,
-        node.is_under_svg_hidden_container,
-        node.supports_subsequence_caching,
-        node.paint_layer_is_fragmented,
-        node.known_to_clip_subtree_to_padding_box,
-        node.child_paint_blocked_by_display_lock,
-    ] = facts;
-}
-
-impl SavedShiftFields {
-    fn Save(node: &PaintTreeNode<'_>) -> Self {
-        let cache = node.cache.as_ref().expect("cached node");
-        Self {
-            absolute_offset: node.absolute_offset,
-            paint_offset: node.paint_offset,
-            clip: node.clip,
-            cull_rect: node.cull_rect,
-            self_cull_rect: node.self_cull_rect,
-            transforms: node.transforms.clone(),
-            properties: node.properties.clone(),
-            contents_properties: node.contents_properties.clone(),
-            self_or_descendant_needs_repaint: node.self_or_descendant_needs_repaint,
-            layer_facts: LayerFacts(node),
-            inherited: cache.inherited.clone(),
-            children: cache.children.clone(),
-        }
-    }
-
-    /// Restores the shifted copy before the visit writes any FragmentData:
-    /// ShiftRetainedNode never writes the occurrence's PrePaint slot (the
-    /// visit's tail does, from the node that stands), so the slot has
-    /// nothing to restore.
-    fn Restore(self, node: &mut PaintTreeNode<'_>) {
-        node.absolute_offset = self.absolute_offset;
-        node.paint_offset = self.paint_offset;
-        node.clip = self.clip;
-        node.cull_rect = self.cull_rect;
-        node.self_cull_rect = self.self_cull_rect;
-        node.transforms = self.transforms;
-        node.properties = self.properties;
-        node.contents_properties = self.contents_properties;
-        node.self_or_descendant_needs_repaint = self.self_or_descendant_needs_repaint;
-        SetLayerFacts(node, self.layer_facts);
-        let cache = node.cache.as_mut().expect("cached node");
-        cache.inherited = self.inherited;
-        cache.children = self.children;
-    }
-}
-
-/// Verification mode: the first geometry field of a shifted node that
-/// differs from the rebuilt node.
-fn ShiftFieldMismatch(a: &PaintTreeNode<'_>, b: &PaintTreeNode<'_>) -> Option<&'static str> {
-    macro_rules! first_diff {
-        ($($field:ident),* $(,)?) => {{
-            $(if a.$field != b.$field { return Some(stringify!($field)); })*
-            None
-        }};
-    }
-    // A newly built SVG child receives its container's matrix as a leading
-    // local transform only after it returns to the parent (UpdateNode's
-    // child loop); the shifted node already carries it.
-    if a.local_transforms != b.local_transforms {
-        let expected = b.cache.as_ref().and_then(|cache| cache.inherited.transforms.last());
-        let prefixed = a.local_transforms.len() == b.local_transforms.len() + 1
-            && a.local_transforms[1..] == b.local_transforms[..]
-            && expected == a.local_transforms.first();
-        if !prefixed {
-            return Some("local_transforms");
-        }
-        if !a.applies_transform {
-            return Some("applies_transform");
-        }
-    } else if a.applies_transform != b.applies_transform {
-        return Some("applies_transform");
-    }
-    first_diff!(
-        absolute_offset,
-        paint_offset,
-        directly_composited_container_paint_offset_subpixel_delta,
-        paint_snap_offset,
-        pixel_snap_scale,
-        root_clip,
-        local_inner_border_radius_clip,
-        local_inner_border_radius_radii,
-        local_clip,
-        local_css_clip,
-        local_clip_radius,
-        local_clip_radii,
-        local_clip_path,
-        clip_path_even_odd,
-        clip,
-        cull_rect,
-        self_cull_rect,
-        transforms,
-        scroll_offset,
-        fixed_background_acts_as_scroll,
-        is_paint_layer,
-        paint_layer_facts_are_authoritative,
-        is_self_painting_layer,
-        invisible_for_position_visibility,
-        has_ancestor_invisible_for_position_visibility,
-        has_visible_content,
-        has_self_painting_layer_descendant,
-        is_under_svg_hidden_container,
-        supports_subsequence_caching,
-        self_or_descendant_needs_repaint,
-        paint_layer_is_fragmented,
-        known_to_clip_subtree_to_padding_box,
-        child_paint_blocked_by_display_lock,
-        is_stacking_context,
-        is_stacked,
-        is_root,
-        stacking_level,
-        is_z_order_list_visible,
-        is_in_top_or_view_transition_layer,
-        is_direct_layout_view_child,
-        can_contain_absolute_position_objects,
-        can_contain_fixed_position_objects,
-        has_overlay_overflow_controls,
-        paint_layer_order_parent_unique_id,
-        paint_layer_order,
-        applies_clip,
-        applies_root_clip,
-        applies_overflow_clip,
-        applies_css_clip,
-        applies_clip_path,
-        applies_effect,
-        applies_opacity,
-        applies_blend,
-        applies_filter,
-        applies_backdrop_filter,
-        applies_mask,
-        mask_layers,
-        overflow_controls_properties,
-    )
-}
-
-/// Verification mode: the child context a shifted node hands down must equal
-/// the one the builder computed.
-fn ShiftChildrenMismatch(shifted: &PaintTreeNode<'_>, built: &PaintTreeNode<'_>) -> Option<&'static str> {
-    let a = &shifted.cache.as_ref()?.children;
-    let b = &built.cache.as_ref()?.children;
-    if a.origin != b.origin {
-        return Some("children.origin");
-    }
-    if a.paint_space != b.paint_space {
-        return Some("children.paint_space");
-    }
-    if a.clip != b.clip {
-        return Some("children.clip");
-    }
-    if a.cull != b.cull {
-        return Some("children.cull");
-    }
-    if a.transforms != b.transforms {
-        return Some("children.transforms");
-    }
-    if a.opacity != b.opacity || a.scroll != b.scroll || a.svg != b.svg {
-        return Some("children.opacity_scroll_svg");
-    }
-    if a.directly_composited_container_paint_offset_subpixel_delta
-        != b.directly_composited_container_paint_offset_subpixel_delta
-        || a.subtree_should_use_infinite_cull_rect != b.subtree_should_use_infinite_cull_rect
-        || a.flex_or_grid_items != b.flex_or_grid_items
-    {
-        return Some("children.flags");
-    }
-    None
 }
 
 /// Nanoseconds between two profiling checkpoints; zero when not profiling.
@@ -6655,383 +4718,6 @@ fn ProfileNs(from: Option<std::time::Instant>, to: Option<std::time::Instant>) -
         (Some(from), Some(to)) => to.duration_since(from).as_nanos().min(u64::MAX as u128) as u64,
         _ => 0,
     }
-}
-
-fn RecordOf(node: &PaintTreeNode<'_>) -> PrePaintPrevious {
-    node.cache.as_ref().map_or_else(PrePaintPrevious::default, |cache| cache.record)
-}
-
-/// SameSourceIdentity of the retained node `previous` (by its record) and
-/// the paired `new` fragment. The enclosing fragmentainer is not part of it:
-/// the walk pairs a node only under a parent of the same identity, so the
-/// fragmentainer ancestor (itself identified by owner and break-token
-/// sequence) is already the same, as in PrePaintTreeWalk's
-/// `fragmentainer_idx` context.
-fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
-    // Without a record, `kind` is None and never equals a fragment's kind.
-    previous.cache.as_ref().is_some_and(|cache| {
-        let recorded = &cache.record;
-        recorded.kind == Some(new.ViewKind())
-            && recorded.node_id == new.ViewNodeId()
-            && recorded.fragment_instance_id == new.ViewFragmentInstanceId()
-            && recorded.display_item_client_id == new.paint.DisplayItemClientId()
-            && recorded.display_item_fragment == new.ViewDisplayItemFragment()
-    })
-}
-
-/// SamePreviousSourceIdentity between two records: the retained node's and
-/// the one this visit computed for its fragment (PrePaintPreviousOf), so a
-/// proof after the rebuild reads no fragment identity again.
-fn SameRecordedSourceIdentity(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
-    recorded.kind.is_some()
-        && recorded.kind == current.kind
-        && recorded.node_id == current.node_id
-        && recorded.fragment_instance_id == current.fragment_instance_id
-        && recorded.display_item_client_id == current.display_item_client_id
-        && recorded.display_item_fragment == current.display_item_fragment
-}
-
-/// One visit's admission identity facts for the pair (retained `previous`,
-/// current fragment), each computed at most once per UpdateNode visit:
-/// RetainedSelfChange, the invalidation-only refresh and the offset-only
-/// shift all consult the same source identity and client directory.
-/// Chromium reads these off the one retained LayoutObject/FragmentData and
-/// never re-derives them (pre_paint_tree_walk.cc:418-437); callers must pass
-/// the same pair on every query.
-#[derive(Default)]
-struct VisitIdentity {
-    same_source: std::cell::Cell<Option<bool>>,
-    current_clients: std::cell::Cell<Option<ClientIds>>,
-    same_clients: std::cell::Cell<Option<bool>>,
-}
-
-impl VisitIdentity {
-    /// The identity facts of a child the parent's visit paired by position
-    /// after proving SamePreviousSourceIdentity for every child of an
-    /// unchanged child list (UpdateNode's `same_children`): the same pair is
-    /// not compared again.
-    fn WithProvenSource(source_identity_proven: bool) -> Self {
-        let identity = Self::default();
-        if source_identity_proven {
-            identity.same_source.set(Some(true));
-        }
-        identity
-    }
-
-    fn SameSource(&self, previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
-        if let Some(same) = self.same_source.get() {
-            return same;
-        }
-        let same = SamePreviousSourceIdentity(previous, new);
-        self.same_source.set(Some(same));
-        same
-    }
-
-    /// ClientDirectoryIds of the current fragment.
-    fn CurrentClients(&self, new: &FragmentPaintData) -> ClientIds {
-        if let Some(clients) = self.current_clients.get() {
-            return clients;
-        }
-        let clients = ClientDirectoryIds(new);
-        self.current_clients.set(Some(clients));
-        clients
-    }
-
-    fn SameClients(&self, previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
-        if let Some(same) = self.same_clients.get() {
-            return same;
-        }
-        let same = SameClientDirectory(previous, new, self.CurrentClients(new));
-        self.same_clients.set(Some(same));
-        same
-    }
-}
-
-/// SamePhaseInputs against the recorded previous values.
-fn SamePreviousPhaseInputs(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
-    SamePreviousPhaseStructure(recorded, current) && recorded.size == current.size
-}
-
-/// SamePhaseStructure against the recorded previous values: the inputs of
-/// this object's own paint-phase needs (MarkPaintPhaseNeeds) and of its
-/// inline-outline grouping, without its size.
-fn SamePreviousPhaseStructure(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
-    recorded.phase_flags == current.phase_flags
-        && recorded.floating == current.floating
-        && recorded.display == current.display
-        && recorded.outline_style == current.outline_style
-        && recorded.outline_width == current.outline_width
-        && recorded.outline_alpha == current.outline_alpha
-}
-
-/// Whether the rebuilt node `built` differs from the retained node `old`
-/// only in this object's own geometry and property values, so every result
-/// of the post-update pass that `old` carries also holds for `built`:
-///
-/// - the client directory (RetainTree) and the physical/logical topology:
-///   same source identity, same DisplayItemClients, same logical position
-///   and the same containing-block abilities (RestoreLogicalOutOfFlowParents);
-/// - the paint-phase needs (MarkPaintPhaseNeeds): same phase structure, same
-///   paint-layer boundary and, for a layer, the same overlay overflow
-///   controls;
-/// - the PaintLayer stacking order the hit-test order lists name
-///   (ResetPostPaintData);
-/// - the property slots, so the effect directory (GatherFinalEffects) names
-///   the same live nodes, updated in place.
-///
-/// Chromium's PrePaintTreeWalk::WalkInternal updates such an object inside
-/// the walk and runs nothing over the rest of the tree
-/// (pre_paint_tree_walk.cc:650-760).
-fn LocalGeometryChange(
-    old: &PaintTreeNode<'_>,
-    built: &PaintTreeNode<'_>,
-    current: &PrePaintPrevious,
-) -> bool {
-    let (Some(old_cache), Some(new_cache), Some(bf)) = (
-        old.cache.as_ref(),
-        built.cache.as_ref(),
-        built.fragment.as_deref(),
-    ) else {
-        return false;
-    };
-    let recorded = &old_cache.record;
-    if IsNewClient(
-        &RecordedClientIds(recorded),
-        current.display_item_client_id,
-        bf.paint.DisplayItemClientState().is_just_created,
-    ) || !SameRecordedSourceIdentity(recorded, current)
-        || !SameClientDirectory(old, bf, current.clients)
-        // RetainTree's directory also names these two clients.
-        || recorded.selection_client_id != current.selection_client_id
-        || recorded.scrolling_background_client_id != current.scrolling_background_client_id
-        || !SamePreviousPhaseStructure(recorded, current)
-        || !SamePreviousLogicalPosition(recorded, current)
-        || old_cache.own_keys != new_cache.own_keys
-    {
-        return false;
-    }
-    macro_rules! same_fields {
-        ($($field:ident),* $(,)?) => {
-            $(if old.$field != built.$field { return false; })*
-        };
-    }
-    same_fields!(
-        is_paint_layer,
-        is_self_painting_layer,
-        has_self_painting_layer_descendant,
-        is_stacking_context,
-        is_stacked,
-        is_root,
-        stacking_level,
-        is_z_order_list_visible,
-        is_in_top_or_view_transition_layer,
-        is_direct_layout_view_child,
-        is_under_svg_hidden_container,
-        can_contain_absolute_position_objects,
-        can_contain_fixed_position_objects,
-        has_overlay_overflow_controls,
-        paint_layer_order_parent_unique_id,
-        paint_layer_order,
-        child_paint_blocked_by_display_lock,
-    );
-    if old.horizontal_scrollbar_properties.is_some() != built.horizontal_scrollbar_properties.is_some()
-        || old.vertical_scrollbar_properties.is_some() != built.vertical_scrollbar_properties.is_some()
-    {
-        return false;
-    }
-    // A layer's own overflow-controls phase (MarkPaintPhaseNeeds) must agree
-    // with the aggregate it keeps.
-    if built.is_paint_layer
-        && bf.ViewScrollbarsPaintAsOverlay().is_some_and(|overlay| overlay)
-            != old.needs_overflow_controls_phase
-    {
-        return false;
-    }
-    true
-}
-
-/// The logical-tree inputs SameGeometry and the invalidation-only refresh
-/// compare, against the recorded previous values.
-fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
-    recorded.position == current.position
-        && recorded.logical_parent_node_id == current.logical_parent_node_id
-        && recorded.logical_tree_order == current.logical_tree_order
-}
-
-/// The DisplayItemClient ids of a fragment's paint payload: the object, its
-/// PaintLayer and, for a scroller, the scroll corner and scrollbar clients.
-fn ClientDirectoryIds(fragment: &FragmentPaintData) -> ClientIds {
-    let paint = &fragment.paint;
-    ClientIds {
-        display_item: paint.DisplayItemClientId(),
-        paint_layer: paint.PaintLayerClientId(),
-        scrollbars: fragment.ViewScrollbarClients().map(|bars| {
-            (
-                bars.corner.map_or(0, |(id, _)| id),
-                bars.horizontal.map(|(id, _)| id),
-                bars.vertical.map(|(id, _)| id),
-            )
-        }),
-    }
-}
-
-/// The DisplayItemClient ids PrePaint recorded for a retained node: its
-/// client directory plus the selection and scrolling-background clients.
-fn RecordedClientIds(recorded: &PrePaintPrevious) -> [u64; 7] {
-    let (corner, horizontal, vertical) = recorded.clients.scrollbars.unwrap_or((0, None, None));
-    [
-        recorded.clients.display_item,
-        recorded.clients.paint_layer,
-        recorded.selection_client_id,
-        recorded.scrolling_background_client_id,
-        corner,
-        horizontal.unwrap_or(0),
-        vertical.unwrap_or(0),
-    ]
-}
-
-/// Whether a live client is new to PrePaint's record. Chromium's
-/// DisplayItemClient::IsJustCreated holds until a paint commit validates the
-/// client (display_item_client.h:71-74), so a client PrePaint walked but
-/// Paint never committed (for example a culled one) is still just created.
-/// Client ids are process-unique tokens: a just-created client whose id the
-/// retained node recorded is that same client lifetime, not a new one.
-fn IsNewClient(recorded: &[u64; 7], id: u64, just_created: bool) -> bool {
-    just_created && !recorded.contains(&id)
-}
-
-/// IsNewClient reading the client's live just-created state only for an id
-/// the record does not name: a recorded id is the same client lifetime
-/// whatever its state, so its state is not read.
-fn IsNewClientWith(recorded: &[u64; 7], id: u64, just_created: impl FnOnce() -> bool) -> bool {
-    !recorded.contains(&id) && just_created()
-}
-
-/// Whether the selection or scrolling-background DisplayItemClient of
-/// `fragment` is just created and absent from the retained node's `recorded`
-/// client ids. The other live clients (object, PaintLayer, scroll corner and
-/// scrollbars) are the client directory; once SameClientDirectory holds, its
-/// current ids equal the recorded ones, so none of them is new.
-fn HasUnrecordedJustCreatedClientOutsideDirectory(
-    recorded: &PrePaintPrevious,
-    fragment: &FragmentPaintData,
-) -> bool {
-    let recorded = RecordedClientIds(recorded);
-    let paint = &fragment.paint;
-    IsNewClientWith(&recorded, paint.SelectionClientId(), || {
-        paint.SelectionClientState().is_just_created
-    }) || fragment
-        .ViewScrollingBackgroundClient()
-        .is_some_and(|(id, state)| IsNewClient(&recorded, id, state.is_just_created))
-}
-
-/// Whether `b` keeps the client directory of the retained node `previous`.
-/// The previous ids come from the node's record. Equal ids name the same
-/// live DisplayItemClient, so its cacheability is the same object state;
-/// only a just-created client the record does not name is new
-/// (IsNewClient). `current_clients` is ClientDirectoryIds(b), computed once
-/// per visit (VisitIdentity::CurrentClients).
-fn SameClientDirectory(
-    previous: &PaintTreeNode<'_>,
-    b: &FragmentPaintData,
-    current_clients: ClientIds,
-) -> bool {
-    let y = &b.paint;
-    let default_record;
-    let recorded = match previous.cache.as_ref() {
-        Some(cache) => &cache.record,
-        None => {
-            default_record = PrePaintPrevious::default();
-            &default_record
-        }
-    };
-    if recorded.clients != current_clients {
-        return false;
-    }
-    // Each live state is read only for an id the record does not name
-    // (IsNewClientWith); the ids equal to recorded ones need none.
-    let recorded = RecordedClientIds(recorded);
-    let mut created = IsNewClientWith(&recorded, y.DisplayItemClientId(), || {
-        y.DisplayItemClientState().is_just_created
-    }) || IsNewClientWith(&recorded, y.PaintLayerClientId(), || {
-        y.PaintLayerClientState().is_just_created
-    });
-    if let Some(bars) = &y.scrollbars {
-        created |= IsNewClientWith(&recorded, bars.corner_client_id, || {
-            y.ScrollClientState(
-                bars.corner_client_id,
-                bars.corner_client_invalidation_reason,
-                bars.corner_client_is_cacheable,
-                bars.corner_client_is_just_created.get(),
-            )
-            .is_just_created
-        });
-        for axis in [&bars.horizontal, &bars.vertical].into_iter().flatten() {
-            created |= IsNewClientWith(&recorded, axis.display_item_client_id, || {
-                y.ScrollClientState(
-                    axis.display_item_client_id,
-                    axis.display_item_client_invalidation_reason,
-                    axis.display_item_client_is_cacheable,
-                    axis.display_item_client_is_just_created.get(),
-                )
-                .is_just_created
-            });
-        }
-    }
-    !created
-}
-
-/// Source: `pre_paint_tree_walk.cc:430-437`.
-#[allow(non_snake_case)]
-fn ObjectRequiresTreeBuilderContext(object: &FragmentPaintData) -> bool {
-    let invalidation = object.pre_paint_invalidation;
-    invalidation.needs_paint_property_update
-        || invalidation.should_check_layout_for_paint_invalidation
-        || (!invalidation.child_pre_paint_blocked_by_display_lock
-            && (invalidation.descendant_needs_paint_property_update
-                || invalidation.descendant_should_check_layout_for_paint_invalidation))
-}
-
-/// Chromium still visits objects marked for paint-invalidation checking, but
-/// PaintPropertyTreeBuilder retains their FragmentData property slots when
-/// NeedsPaintPropertyUpdate is clear. The projected Rust tree mirrors those
-/// stable slots: refresh the shallow source while retaining completed
-/// geometry/property/phase data only when the direct layout inputs also prove
-/// unchanged. Any property update or geometry/topology change falls back to
-/// the complete builder comparison.
-///
-/// An object that only has a tree-builder context reason other than its own
-/// NeedsPaintPropertyUpdate (its ShouldCheckLayoutForPaintInvalidation, or a
-/// descendant's property/layout bits; pre_paint_tree_walk.cc:430-437) gets
-/// a builder context in Chromium, but PaintPropertyTreeBuilder::UpdateForSelf
-/// and UpdateForChildren (paint_property_tree_builder.cc:4220-4397) change
-/// its ObjectPaintProperties only under NeedsPaintPropertyUpdate
-/// (paint_property_tree_builder.cc:349-352: the object's bit or a forced
-/// subtree update, which reaches this node as a different inherited
-/// context). UpdateForObjectLocation (4234) runs regardless; with the
-/// recorded link offset, size and scrollable content size unchanged, the
-/// paint offset, its slots and child context
-/// are those the builder would produce. Returns None when the retained
-/// slots cannot stand, else whether the object has such a builder reason.
-fn InvalidationOnlySourceRefresh(
-    previous: &PaintTreeNode<'_>,
-    new: &FragmentPaintData,
-    current: &PrePaintPrevious,
-) -> Option<bool> {
-    let invalidation = new.pre_paint_invalidation;
-    if !invalidation.own() || invalidation.needs_paint_property_update {
-        return None;
-    }
-    // `current` already holds this visit's source identity.
-    let recorded = &previous.cache.as_ref()?.record;
-    if !SameRecordedSourceIdentity(recorded, current) {
-        return None;
-    }
-    (SamePreviousPhaseInputs(recorded, current)
-        && recorded.offset == current.offset
-        && recorded.content_size == current.content_size
-        && SamePreviousLogicalPosition(recorded, current))
-    .then(|| ObjectRequiresTreeBuilderContext(new))
 }
 
 // ViewportGeometry is a host/CSS-pixel input, while the fragment tree and
@@ -7057,14 +4743,6 @@ impl PrePaintTreeWalk {
     ) -> foundation::intersection_observation_state::IntersectionObservationState {
         self.intersection_observation_state
     }
-    fn ClipContextCovers(old: &Option<PaintRect>, new: &Option<PaintRect>) -> bool {
-        paint_model::cull::ClipContextCovers(*old, *new)
-    }
-
-    fn CullContextCovers(old: &Option<PaintRect>, new: &Option<PaintRect>) -> bool {
-        paint_model::cull::CullContextCovers(*old, *new)
-    }
-
     /// The standalone LayoutView supplies the outer layout viewport. Paint's
     /// retained Page viewport nodes supply Chromium's scale-1 visual viewport;
     /// PAC receives references to both owners and only translates them to cc.
@@ -7109,584 +4787,97 @@ impl PrePaintTreeWalk {
                 .collect(),
         })
     }
-    fn SameCanvasContents(
+    /// Source: pre_paint_tree_walk.cc:270-282,725-730. Whether the object is
+    /// inside a blocking wheel event handler region: a changed registry
+    /// (or a replacement LayoutResult) re-reads the handler targets,
+    /// otherwise the parent's bit or the stored one stands.
+    fn InsideBlockingWheelEventHandler(
         &self,
-        a: &Option<CanvasContentsContext>,
-        b: &Option<CanvasContentsContext>,
+        fragment: &FragmentPaintData,
+        inside_parent: bool,
+        handler_changed: bool,
     ) -> bool {
-        match (a, b) {
-            (None, None) => true,
-            (Some(a), Some(b)) => {
-                a.layout_object == b.layout_object
-                    && state_compare::SameBuilderStructure(
-                        &a.properties.nodes,
-                        &b.properties.nodes,
-                    )
+        let should_update = handler_changed
+            || (self.source_result_changed
+                && (fragment.paint.LayoutObjectIdentity().is_some()
+                    || !self.active_blocking_wheel_targets.is_empty()));
+        inside_parent
+            || if should_update {
+                self.active_blocking_wheel_targets
+                    .binary_search(&fragment.ViewNodeId())
+                    .is_ok()
+                    || (fragment.paint.IsLayoutView()
+                        && self.active_blocking_wheel_targets.binary_search(&0).is_ok())
+            } else {
+                fragment.paint.InsideBlockingWheelEventHandler()
             }
-            _ => false,
-        }
     }
 
-    fn SameContext(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
-        self.SameContextImpl(a, b, true)
-    }
-
-    /// The offset delta when two inherited contexts differ only by where the
-    /// parent placed this subtree (Chromium updates only PaintOffset for an
-    /// object without its own paint properties).
-    /// Also admits a moved transformed ancestor: the flat transform values a
-    /// descendant inherits change while their structure stays the same.
-    fn OffsetOnlyContextDelta(&self, a: &InheritedContext, b: &InheritedContext) -> Option<ShiftDelta> {
-        ((a.offset != b.offset || a.transforms != b.transforms)
-            && self.SameContextImpl(a, b, false))
-        .then(|| ShiftDelta {
-            offset: Offset {
-                x: b.offset.x - a.offset.x,
-                y: b.offset.y - a.offset.y,
-            },
-            paint_space: Offset {
-                x: b.paint_space.x - a.paint_space.x,
-                y: b.paint_space.y - a.paint_space.y,
-            },
-        })
-    }
-
-    fn SameContextImpl(&self, a: &InheritedContext, b: &InheritedContext, exact: bool) -> bool {
-        let cull_covers = Self::CullContextCovers(&a.cull, &b.cull);
-        a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
-            && (!exact || a.offset == b.offset)
-            && (exact || a.transforms.len() == b.transforms.len())
-            && (a.paint_space == b.paint_space
-                || (!exact
-                    && b.paint_space.x - a.paint_space.x == b.offset.x - a.offset.x
-                    && b.paint_space.y - a.paint_space.y == b.offset.y - a.offset.y))
-            // A shrinking inherited clip/cull cannot expose content omitted
-            // by the retained node. The updated ancestor still publishes its
-            // exact current clip; descendants may keep their larger recorded
-            // coverage and rebind to that same property slot, matching Blink's
-            // mutable property-node and cull-hysteresis behavior.
-            && (Self::ClipContextCovers(&a.clip, &b.clip) || cull_covers)
-            && cull_covers
-            && (!exact
-                || Arc::ptr_eq(&a.transforms, &b.transforms)
-                || a.transforms == b.transforms)
-            && a.opacity == b.opacity
-            && a.scroll == b.scroll
-            && a.fixed_background_acts_as_scroll == b.fixed_background_acts_as_scroll
-            && a.rendering_context_id == b.rendering_context_id
-            && a.should_flatten_inherited_transform == b.should_flatten_inherited_transform
-            && a.can_inherit_backface_visibility == b.can_inherit_backface_visibility
-            && a.directly_composited_container_paint_offset_subpixel_delta
-                == b.directly_composited_container_paint_offset_subpixel_delta
-            && a.subtree_should_use_infinite_cull_rect
-                == b.subtree_should_use_infinite_cull_rect
-            && a.root == b.root
-            && a.flex_or_grid_item == b.flex_or_grid_item
-            && self.SameCanvasContents(&a.canvas_contents, &b.canvas_contents)
-            && state_compare::SameBuilderStructure(
-                &a.properties.nodes,
-                &b.properties.nodes,
-            )
-    }
-
-    /// CullRectUpdater changes composited transform values and the sliding
-    /// cull window without changing descendant geometry or property slots.
-    /// Chromium retains those FragmentData records and repaints only content
-    /// newly admitted by the cull window.  The flat transform/scroll vectors
-    /// here are builder inputs mirrored by the semantic property slots below;
-    /// their values therefore do not make an otherwise clean descendant a new
-    /// object. Offsets and topology still have to match, while the retained
-    /// clip/cull window may be larger than the exact successor window.
-    fn SameRetainedContextStructure(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
-        a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
-            && a.offset == b.offset
-            && a.paint_space == b.paint_space
-            && (Self::ClipContextCovers(&a.clip, &b.clip)
-                || Self::CullContextCovers(&a.cull, &b.cull))
-            && a.transforms.len() == b.transforms.len()
-            && a.opacity == b.opacity
-            && a.fixed_background_acts_as_scroll == b.fixed_background_acts_as_scroll
-            && a.rendering_context_id == b.rendering_context_id
-            && a.should_flatten_inherited_transform == b.should_flatten_inherited_transform
-            && a.can_inherit_backface_visibility == b.can_inherit_backface_visibility
-            && a.directly_composited_container_paint_offset_subpixel_delta
-                == b.directly_composited_container_paint_offset_subpixel_delta
-            && a.subtree_should_use_infinite_cull_rect == b.subtree_should_use_infinite_cull_rect
-            && a.root == b.root
-            && a.flex_or_grid_item == b.flex_or_grid_item
-            && self.SameCanvasContents(&a.canvas_contents, &b.canvas_contents)
-            && state_compare::SameBuilderStructure(
-                &a.properties.nodes,
-                &b.properties.nodes,
-            )
-    }
-
-    fn SameGeometry(
+    /// Source: PrePaintTreeWalk::Walk (pre_paint_tree_walk.cc:1477-1482)
+    /// with NeedsTreeBuilderContextUpdate, ObjectRequiresPrePaint and
+    /// ContextRequiresChildPrePaint (pre_paint_tree_walk.cc:398-450): the walk
+    /// returns before it builds a context for the object when the parent's
+    /// context forces nothing and neither the object nor a descendant carries
+    /// a dirty bit. The object's FragmentData then keeps every value of its
+    /// last visit. `force_subtree` / `context_changed` are the parent's
+    /// force_subtree_update_reasons; the walked owner, link offset, size and
+    /// scopes are the values Chromium keeps on the persistent LayoutObject and
+    /// FragmentData (a cache-hit child the parent's relayout moved, or a
+    /// fragment the replacement LayoutResult did not reuse, is visited).
+    #[allow(clippy::too_many_arguments)]
+    fn CanSkipSubtree(
         &self,
-        a: &PaintTreeNode<'_>,
-        b: &PaintTreeNode<'_>,
-        current: &PrePaintPrevious,
-    ) -> bool {
-        self.GeometryMismatch(a, b, current).is_none()
-    }
-
-    /// The first value by which the rebuilt node `b` differs from the
-    /// retained node `a` (SameGeometry), or None.
-    fn GeometryMismatch(
-        &self,
-        a: &PaintTreeNode<'_>,
-        b: &PaintTreeNode<'_>,
-        current: &PrePaintPrevious,
-    ) -> Option<&'static str> {
-        let new = b.cache.as_ref().expect("new geometry");
-        let bf = b.fragment.as_deref().unwrap();
-        let recorded = RecordOf(a);
-        if IsNewClient(
-            &RecordedClientIds(&recorded),
-            current.display_item_client_id,
-            bf.paint.DisplayItemClientState().is_just_created,
-        ) {
-            return Some("just_created");
-        }
-        // `current` is this visit's record of the same fragment.
-        if !SameRecordedSourceIdentity(&recorded, current) {
-            return Some("identity");
-        }
-        if !SamePreviousPhaseInputs(&recorded, current) {
-            return Some("phase_inputs");
-        }
-        if !SamePreviousLogicalPosition(&recorded, current) {
-            return Some("logical_position");
-        }
-        macro_rules! first_difference {
-            ($($field:ident),* $(,)?) => {
-                $(if a.$field != b.$field { return Some(stringify!($field)); })*
-            };
-        }
-        first_difference!(
-            absolute_offset,
-            paint_offset,
-            directly_composited_container_paint_offset_subpixel_delta,
-            paint_snap_offset,
-            pixel_snap_scale,
-            root_clip,
-            local_inner_border_radius_clip,
-            local_inner_border_radius_radii,
-            local_clip,
-            local_css_clip,
-            local_clip_radius,
-            local_clip_radii,
-            local_clip_path,
-            clip_path_even_odd,
-            clip,
-            cull_rect,
-            self_cull_rect,
-            transforms,
-            local_transforms,
-            scroll_offset,
-            fixed_background_acts_as_scroll,
-            is_paint_layer,
-            paint_layer_facts_are_authoritative,
-            is_self_painting_layer,
-            invisible_for_position_visibility,
-            has_ancestor_invisible_for_position_visibility,
-            has_visible_content,
-            has_self_painting_layer_descendant,
-            is_under_svg_hidden_container,
-            supports_subsequence_caching,
-            self_or_descendant_needs_repaint,
-            paint_layer_is_fragmented,
-            known_to_clip_subtree_to_padding_box,
-            child_paint_blocked_by_display_lock,
-            is_stacking_context,
-            is_stacked,
-            is_root,
-            stacking_level,
-            is_z_order_list_visible,
-            is_in_top_or_view_transition_layer,
-            is_direct_layout_view_child,
-            can_contain_absolute_position_objects,
-            can_contain_fixed_position_objects,
-            has_overlay_overflow_controls,
-            paint_layer_order_parent_unique_id,
-            paint_layer_order,
-            applies_transform,
-            applies_clip,
-            applies_root_clip,
-            applies_overflow_clip,
-            applies_css_clip,
-            applies_clip_path,
-            applies_effect,
-            applies_opacity,
-            applies_blend,
-            applies_filter,
-            applies_backdrop_filter,
-            applies_mask,
-            mask_layers,
-            overflow_controls_properties
-        );
-        if a.opacity != b.opacity {
-            return Some("opacity");
-        }
-        if new.own_change != PaintPropertyChangeType::Unchanged {
-            return Some("own_change");
-        }
-        if !state_compare::SameBuilderState(&a.properties.nodes, &b.properties.nodes) {
-            return Some("properties");
-        }
-        if !state_compare::SameBuilderState(
-            &a.contents_properties.nodes,
-            &b.contents_properties.nodes,
-        ) {
-            return Some("contents_properties");
-        }
-        type State = paint_model::paint_property_tree::PropertyTreeState;
-        let same_optional = |a: &Option<State>, b: &Option<State>| match (a, b) {
-            (None, None) => true,
-            (Some(a), Some(b)) => state_compare::SameBuilderState(a, b),
-            _ => false,
-        };
-        if !same_optional(&a.mask_properties, &b.mask_properties) {
-            return Some("mask_properties");
-        }
-        if !same_optional(&a.fixed_background_properties, &b.fixed_background_properties) {
-            return Some("fixed_background_properties");
-        }
-        if !same_optional(
-            &a.horizontal_scrollbar_properties,
-            &b.horizontal_scrollbar_properties,
-        ) {
-            return Some("horizontal_scrollbar_properties");
-        }
-        if !same_optional(&a.vertical_scrollbar_properties, &b.vertical_scrollbar_properties) {
-            return Some("vertical_scrollbar_properties");
-        }
-        None
-    }
-
-    /// The first rule by which the retained `node` cannot stand for
-    /// `fragment`'s own PrePaint state, or None. Source:
-    /// pre_paint_tree_walk.cc:418-437 visits an object for its own dirty
-    /// bits (PrePaintInvalidation::own, read live from the LayoutObject).
-    /// Chromium also keeps, on the same LayoutObject/FragmentData, values
-    /// that change without dirtying this object; PrePaint compares its own
-    /// records of them: the link offset (a parent's relayout moves a
-    /// cache-hit child), the size, the source identity, the live
-    /// DisplayItemClients, and the document resources the object paints
-    /// with. Index: 0 own bits, 1 offset, 2 size, 3 identity, 4 owners,
-    /// 5 resources.
-    fn RetainedSelfChange(
-        &mut self,
-        node: &PaintTreeNode<'_>,
-        fragment: PaintFragmentSource<'_>,
-        identity: &VisitIdentity,
-    ) -> Option<usize> {
-        let Some(cache) = node.cache.as_ref() else {
-            return Some(3);
-        };
-        let f: &FragmentPaintData = &fragment;
-        if f.pre_paint_invalidation.own() {
-            return Some(0);
-        }
-        if cache.record.offset != fragment.Cursor().ViewOffsetInContainer() {
-            return Some(1);
-        }
-        if cache.record.size != f.ViewSize() {
-            return Some(2);
-        }
-        if !identity.SameSource(node, f) {
-            return Some(3);
-        }
-        // Recorded client ids name the same live clients; a client the
-        // record does not name must not be newly created. SameClients
-        // proves that for the client directory itself.
-        if !identity.SameClients(node, f)
-            || HasUnrecordedJustCreatedClientOutsideDirectory(&cache.record, f)
-        {
-            return Some(4);
-        }
-        let usage = || {
-            cache.resource_usage
-                | layout::paint::PaintResourceUsage(f)
-        };
-        if !self.SameDocumentResources(
-            cache.resources.as_ref(),
-            fragment.Cursor().DocumentResources(),
-            usage,
-        ) {
-            return Some(5);
-        }
-        None
-    }
-
-    /// The first rule by which `node`'s retained descendants cannot stand
-    /// for `fragment`'s, or None; RetainedSelfChange must already hold.
-    /// Source: pre_paint_tree_walk.cc:418-437 descends for descendant dirty
-    /// bits; a display-locked child walk left pending (subtree revision 0)
-    /// and the document resources of the whole subtree are the remaining
-    /// inputs. Index: 6 descendant bits, 7 pending child walk, 8 resources.
-    fn RetainedDescendantChange(
-        &mut self,
-        node: &PaintTreeNode<'_>,
-        fragment: PaintFragmentSource<'_>,
-    ) -> Option<usize> {
-        let Some(cache) = node.cache.as_ref() else {
-            return Some(7);
-        };
-        if fragment.pre_paint_invalidation.descendants() {
-            return Some(6);
-        }
-        if cache.subtree_revision == 0 {
-            return Some(7);
-        }
-        if !self.SameDocumentResources(
-            cache.resources.as_ref(),
-            fragment.Cursor().DocumentResources(),
-            || cache.subtree_resource_usage,
-        ) {
-            return Some(8);
-        }
-        None
-    }
-
-    fn RetainedSelfUnchanged(
-        &mut self,
-        node: &PaintTreeNode<'_>,
-        fragment: PaintFragmentSource<'_>,
-    ) -> bool {
-        self.RetainedSelfChange(node, fragment, &VisitIdentity::default())
-            .is_none()
-    }
-
-    fn RetainedDescendantsUnchanged(
-        &mut self,
-        node: &PaintTreeNode<'_>,
-        fragment: PaintFragmentSource<'_>,
-    ) -> bool {
-        self.RetainedDescendantChange(node, fragment).is_none()
-    }
-
-    /// Source: PrePaintTreeWalk::Walk (pre_paint_tree_walk.cc:1477-1482).
-    /// Chromium returns from an object's walk before it constructs the
-    /// object's PrePaintTreeWalkContext when NeedsTreeBuilderContextUpdate,
-    /// ObjectRequiresPrePaint and ContextRequiresChildPrePaint
-    /// (pre_paint_tree_walk.cc:411-450) are all false: the parent's context
-    /// forces nothing and the object and its descendants carry no dirty bit.
-    ///
-    /// UpdateNode retains such a child's subtree only after ContextForChild
-    /// has built a context (cloning its property-node and transform owners)
-    /// that its admission then compares with the retained one. This takes the
-    /// same admission from the parent's ChildContext without building that
-    /// context. It accepts exactly when UpdateNode would return `previous`
-    /// from its clean-subtree path, with every write of that path storing the
-    /// value already there:
-    ///
-    /// - no forced or local-frame walk, the same source owner and either the
-    ///   same LayoutResult or a replacement that reaches the child through
-    ///   its reused fragment (no rebind), no change of the blocking
-    ///   wheel-handler bit and no paint-invalidation subtree walk
-    ///   (UpdateContext returns false);
-    /// - an ordinary child (ContextForChild's last branch) whose retained
-    ///   inherited context equals, field by field and with the same
-    ///   property-node and transform owners, the context ContextForChild and
-    ///   the logical out-of-flow effect would give it now, and passes
-    ///   SameContext against it (so RefreshRetainedFlatTransforms and the
-    ///   cache's inherited context keep their values);
-    /// - RetainedSelfChange and RetainedDescendantChange find nothing.
-    ///
-    /// Any other case returns `previous` for UpdateNode.
-    fn RetainCleanChild(
-        &mut self,
-        child: PaintFragmentSource<'_>,
+        fragment: &PaintFragmentSource<'_>,
+        data: &PrePaintFragmentData,
+        force_subtree: bool,
+        context_changed: bool,
         base: &ChildContext,
-        previous: Option<Box<PaintTreeNode<'static>>>,
-        source_identity_proven: bool,
-        force: bool,
-        parent_invalidation_context: PaintInvalidatorContext,
-    ) -> Result<Box<PaintTreeNode<'static>>, Option<Box<PaintTreeNode<'static>>>> {
-        let Some(node) = previous else {
-            return Err(None);
-        };
-        // ContextRequiresChildTreeBuilderContext and
-        // ContextRequiresChildPrePaint (pre_paint_tree_walk.cc:424-450) of
-        // the parent's context, and the walk-wide inputs of UpdateNode's
-        // admission (source rebinding, wheel-handler update).
-        if force
-            || self.source_owner_changed
+        parent_invalidation: &PaintInvalidatorContext,
+        display_item_fragment: u32,
+        fragmentainer: u64,
+    ) -> bool {
+        let record = data.WalkRecord();
+        let invalidation = fragment.pre_paint_invalidation;
+        let client = fragment.paint.DisplayItemClientId();
+        if self.full_walk
+            || force_subtree
+            || context_changed
+            || !record.walked
             || base.blocking_wheel_event_handler_changed
             || base.canvas_contents.is_some()
-            || parent_invalidation_context.NeedsSubtreeWalk()
+            || parent_invalidation.NeedsSubtreeWalk()
+            || invalidation.own()
+            || invalidation.descendants()
+            || fragment.paint.IsSVGHiddenContainer()
+            || (fragment.paint.FixedToView() && fragment.ViewEstablishesPaintState())
+            || self.local_frame_views.contains_key(&client)
+            || self.must_visit_clients.contains(&client)
         {
-            return Err(Some(node));
+            return false;
         }
-        let profile = browser_tracing::enabled();
-        let t_start = profile.then(std::time::Instant::now);
-        // The dirty bits as UpdateNode reads them for this visit.
-        let fragment = unsafe { child.ReadPrePaintInvalidationForVisit() };
-        let retained = {
-            let invalidation = fragment.pre_paint_invalidation;
-            match node.cache.as_ref() {
-                None => false,
-                Some(_)
-                    if invalidation.own()
-                        || invalidation.descendants()
-                        || fragment.paint.IsSVGHiddenContainer()
-                        || (fragment.paint.FixedToView()
-                            && fragment.ViewEstablishesPaintState()) =>
-                {
-                    false
-                }
-                Some(cache) => {
-                    // UpdateNode's `inside`, which must equal the stored bit
-                    // (no new bit, no InvalidatePaintForHitTest): a
-                    // replacement LayoutResult re-reads the handler registry,
-                    // otherwise the parent's bit or the stored one stands.
-                    let stored_inside = fragment.paint.InsideBlockingWheelEventHandler();
-                    let should_update = self.source_result_changed
-                        && (fragment.paint.LayoutObjectIdentity().is_some()
-                            || !self.active_blocking_wheel_targets.is_empty());
-                    let inside = base.inside_blocking_wheel_event_handler
-                        || if should_update {
-                            self.active_blocking_wheel_targets
-                                .binary_search(&fragment.ViewNodeId())
-                                .is_ok()
-                                || (fragment.paint.IsLayoutView()
-                                    && self.active_blocking_wheel_targets.binary_search(&0).is_ok())
-                        } else {
-                            stored_inside
-                        };
-                    let logical = self.LogicalOutOfFlowEffectContext(&fragment);
-                    let (effect, effect_id, opacity) = match logical.as_ref() {
-                        Some(logical) => (&logical.effect, logical.effect_id, logical.opacity),
-                        None => (
-                            &base.properties.nodes.effect,
-                            base.properties.effect_id,
-                            base.opacity,
-                        ),
-                    };
-                    let offset = ResolveChildGeometryOrigin(
-                        &fragment,
-                        fragment.Cursor().ViewOffsetInContainer(),
-                        base.origin,
-                        base.paint_space,
-                    );
-                    let c = &cache.inherited;
-                    let cull_covers = Self::CullContextCovers(&c.cull, &base.cull);
-                    inside == stored_inside
-                        // A replacement LayoutResult reaches this clean child
-                        // only through its reused fragment (UpdateNode's
-                        // source_tree_compatible, no RebindCleanSubtree).
-                        && (!self.source_result_changed || WalkedSameSourceOwner(&node, fragment))
-                        && !cache.contains_local_frames
-                        && !self
-                            .local_frame_views
-                            .contains_key(&fragment.paint.DisplayItemClientId())
-                        // The context ContextForChild would build, compared
-                        // as stored (no field of it would change)...
-                        && c.inside_blocking_wheel_event_handler
-                            == base.inside_blocking_wheel_event_handler
-                        && !c.blocking_wheel_event_handler_changed
-                        && c.offset == offset
-                        && c.paint_space == base.paint_space
-                        && c.clip == base.clip
-                        && c.cull == base.cull
-                        && Arc::ptr_eq(&c.transforms, &base.transforms)
-                        && c.opacity == opacity
-                        && c.scroll == base.scroll
-                        && c.fixed_background_acts_as_scroll == base.fixed_background_acts_as_scroll
-                        && c.properties.transform_id == base.properties.transform_id
-                        && c.properties.clip_id == base.properties.clip_id
-                        && c.properties.effect_id == effect_id
-                        && c.properties.scroll_id == base.properties.scroll_id
-                        && Arc::ptr_eq(&c.properties.nodes.transform, &base.properties.nodes.transform)
-                        && Arc::ptr_eq(&c.properties.nodes.clip, &base.properties.nodes.clip)
-                        && Arc::ptr_eq(&c.properties.nodes.effect, effect)
-                        && c.canvas_contents.is_none()
-                        && c.rendering_context_id == base.rendering_context_id
-                        && c.should_flatten_inherited_transform
-                            == base.should_flatten_inherited_transform
-                        && c.can_inherit_backface_visibility == base.can_inherit_backface_visibility
-                        && c.directly_composited_container_paint_offset_subpixel_delta
-                            == base.directly_composited_container_paint_offset_subpixel_delta
-                        && c.subtree_should_use_infinite_cull_rect
-                            == base.subtree_should_use_infinite_cull_rect
-                        && !c.root
-                        && c.flex_or_grid_item == base.flex_or_grid_items
-                        // ...and SameContext's coverage and slot predicates
-                        // over those same values (the owners are identical,
-                        // so the stored state stands for the built one).
-                        && (Self::ClipContextCovers(&c.clip, &base.clip) || cull_covers)
-                        && cull_covers
-                        && state_compare::SameBuilderStructure(
-                            &c.properties.nodes,
-                            &c.properties.nodes,
-                        )
-                        && self
-                            .RetainedSelfChange(
-                                &node,
-                                fragment,
-                                &VisitIdentity::WithProvenSource(source_identity_proven),
-                            )
-                            .is_none()
-                        && self.RetainedDescendantChange(&node, fragment).is_none()
-                }
-            }
-        };
-        if !retained {
-            return Err(Some(node));
-        }
-        // UpdateNode's counters for a clean subtree under the same context.
-        self.stats.same_context_nodes += 1;
-        self.stats.self_unchanged_nodes += 1;
-        self.stats.subtree_unchanged_nodes += 1;
-        self.stats.source_tree_compatible_nodes += 1;
-        self.stats.reused_nodes += node.cache.as_ref().map_or(0, |cache| cache.nodes);
-        self.stats.skipped_subtrees += 1;
-        self.stats.profile_admission_ns +=
-            ProfileNs(t_start, profile.then(std::time::Instant::now));
-        Ok(node)
+        let owner = WalkedOwner(fragment.Cursor());
+        owner != (0, 0)
+            && record.walked_owner == owner
+            && record.link_offset == fragment.Cursor().ViewOffsetInContainer()
+            && record.size == fragment.ViewSize()
+            && record.display_item_fragment == display_item_fragment
+            && record.fragmentainer == fragmentainer
+            && self.InsideBlockingWheelEventHandler(
+                fragment,
+                base.inside_blocking_wheel_event_handler,
+                false,
+            ) == fragment.paint.InsideBlockingWheelEventHandler()
     }
 
-    /// Whether a fragment last proven against `recorded` document paint
-    /// resources paints the same under `current`, for its resource `usage`
-    /// (evaluated only when the two values are different allocations).
-    fn SameDocumentResources(
-        &mut self,
-        recorded: Option<&Arc<PaintResources>>,
-        current: Option<&Arc<PaintResources>>,
-        usage: impl FnOnce() -> u8,
-    ) -> bool {
-        let (recorded, current) = match (recorded, current) {
-            (None, None) => return true,
-            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => return true,
-            (Some(a), Some(b)) => (a, b),
-            _ => return false,
-        };
-        let usage = usage();
-        if let Some(&(_, _, _, same)) = self.resource_memo.iter().find(|(a, b, u, _)| {
-            *u == usage && Arc::ptr_eq(a, recorded) && Arc::ptr_eq(b, current)
-        }) {
-            return same;
-        }
-        let same = layout::paint::SamePaintResourcesFor(
-            recorded, current, usage,
-        );
-        self.resource_memo
-            .push((recorded.clone(), current.clone(), usage, same));
-        same
-    }
-
-    fn UpdateNode(
-        &mut self,
-        fragment: PaintFragmentSource<'_>,
-        mut inherited: InheritedContext,
-        parent_invalidation_context: PaintInvalidatorContext,
-        mut previous: Option<Box<PaintTreeNode<'static>>>,
-        force: bool,
-        // The parent proved SamePreviousSourceIdentity of (previous, fragment)
-        // while pairing its unchanged child list.
-        source_identity_proven: bool,
-    ) -> Box<PaintTreeNode<'static>> {
+    /// Source: PrePaintTreeWalk::WalkInternal and WalkChildren
+    /// (pre_paint_tree_walk.cc:650-760,1517-1582) for one visited fragment
+    /// occurrence: PaintPropertyTreeBuilder updates the occurrence's
+    /// FragmentData (PaintOffset, ObjectPaintProperties in place,
+    /// LocalBorderBoxProperties, cull rects), PaintInvalidator compares the
+    /// previous values Layout and the FragmentData kept, and the children
+    /// are walked with a context derived on the stack. The PaintTreeNode the
+    /// builder returns is that context and is dropped with the visit.
+    fn WalkObject(&mut self, fragment: PaintFragmentSource<'_>, mut ctx: WalkContext) -> VisitResult {
         let profile = browser_tracing::enabled();
         let checkpoint = || profile.then(std::time::Instant::now);
         let t_start = checkpoint();
@@ -7694,750 +4885,166 @@ impl PrePaintTreeWalk {
         // Source: pre_paint_tree_walk.cc:418-436. Read this object's dirty
         // bits as of this visit, through that same FragmentData.
         let fragment = unsafe { fragment.ReadPrePaintInvalidationForVisit() };
+        let cursor = fragment.Cursor();
+        let client = fragment.paint.DisplayItemClientId();
+        let display_item_fragment = self.display_item_fragment_scope.unwrap_or(0);
+        let fragmentainer = self.fragmentainer_scope.unwrap_or(0);
         // Decision D2: an out-of-flow object takes its effect state from its
-        // logical parent before admission, so a retained subtree is compared
-        // against, and a rebuilt one parented to, the logical effect.
+        // logical parent (RebindLogicalEffect fixes up the occurrences the
+        // walk reaches before their logical parent).
         if let Some(logical) = self.LogicalOutOfFlowEffectContext(&fragment) {
-            inherited.properties.nodes.effect = logical.effect;
-            inherited.properties.effect_id = logical.effect_id;
-            inherited.opacity = logical.opacity;
+            ctx.inherited.properties.nodes.effect = logical.effect;
+            ctx.inherited.properties.effect_id = logical.effect_id;
+            ctx.inherited.opacity = logical.opacity;
         }
         // Source pre_paint_tree_walk.cc:270-282,725-730. The source registry
-        // invalidates the affected native subtree; this existing walk updates
-        // its resident LayoutObject/FragmentData before paint invalidation.
-        inherited.blocking_wheel_event_handler_changed |= fragment
-            
+        // invalidates the affected native subtree; this walk updates its
+        // resident LayoutObject/FragmentData before paint invalidation.
+        ctx.inherited.blocking_wheel_event_handler_changed |= fragment
             .pre_paint_invalidation
             .blocking_wheel_event_handler_changed;
-        let has_handler = self
-            .active_blocking_wheel_targets
-            .binary_search(&fragment.ViewNodeId())
-            .is_ok()
-            || (fragment.paint.IsLayoutView()
-                && self.active_blocking_wheel_targets.binary_search(&0).is_ok());
-        let should_update = inherited.blocking_wheel_event_handler_changed
-            || (self.source_result_changed
-                && (fragment.paint.LayoutObjectIdentity().is_some()
-                    || !self.active_blocking_wheel_targets.is_empty()));
-        let inside = inherited.inside_blocking_wheel_event_handler
-            || if should_update {
-                has_handler
-            } else {
-                fragment.paint.InsideBlockingWheelEventHandler()
-            };
+        let inside = self.InsideBlockingWheelEventHandler(
+            &fragment,
+            ctx.inherited.inside_blocking_wheel_event_handler,
+            ctx.inherited.blocking_wheel_event_handler_changed,
+        );
         let mut resident = ResidentFragment::FromSource(&fragment);
         // The payload is shared copy-on-write with the previous publication.
-        // Its stored bit and the LayoutObject's are written together (and an
-        // export copies the object's), so an equal bit needs no update.
+        // Its stored bit and the LayoutObject's are written together, so an
+        // equal bit needs no update.
         let blocking_wheel_changed = resident.paint.InsideBlockingWheelEventHandler() != inside
             && resident.paint.UpdateInsideBlockingWheelEventHandler(inside);
-        if inherited.blocking_wheel_event_handler_changed || blocking_wheel_changed {
+        if ctx.inherited.blocking_wheel_event_handler_changed || blocking_wheel_changed {
             resident.paint.InvalidatePaintForHitTest();
         }
         if blocking_wheel_changed {
             resident
-                
                 .pre_paint_invalidation
                 .should_check_for_paint_invalidation = true;
         }
-        let old_paint_offset = previous.as_ref().map(|node| node.paint_offset);
-        let old_had_paint_offset_translation = previous.as_ref().is_some_and(|node| {
-            HasOwnPropertyRole(node, PaintPropertyRole::PaintOffsetTranslation)
-        });
-        let old_self_cull_rect = previous.as_ref().map(|node| node.self_cull_rect);
-        let old_contents_cull_rect = previous.as_ref().map(|node| node.cull_rect);
+        drop(resident);
+        // The previous visit's values, before the builder replaces them.
+        let previous = cursor
+            .PrePaintData::<PrePaintFragmentData>()
+            .filter(|data| data.WasWalked())
+            .map(|data| PreviousVisit::Of(data, ctx.old_parent_contents_cull));
+        let old_paint_offset = previous.as_ref().map(|previous| previous.flat_paint_offset);
+        let old_self_cull_rect = previous.as_ref().map(|previous| previous.self_cull_rect);
+        let old_contents_cull_rect = previous.as_ref().map(|previous| previous.contents_cull_rect);
         // PaintLayer::PreviousPaintResult (paint_layer.h:400-405), written by
         // PaintLayerPainter::Paint (paint_layer_painter.cc:589-596); only a
-        // painting-layer object has one. Paint no longer writes the PrePaint
-        // node's cell.
+        // painting-layer object has one.
         let old_previous_paint_result = previous
             .as_ref()
-            .filter(|node| node.is_paint_layer)
-            .and_then(|_| fragment.Cursor().OwnPaintLayer())
+            .filter(|previous| previous.record.is_paint_layer)
+            .and_then(|_| cursor.OwnPaintLayer())
             .map_or(paint_model::PaintResult::kMayBeClippedByCullRect, |layer| {
                 layer.PreviousPaintResult()
             });
-        let was_filter_origin_tainted = previous.as_deref().is_some_and(OwnFilterOriginTainted);
-        let mut invalidation_context = parent_invalidation_context;
+        let mut invalidation_context = ctx.invalidation;
         let should_run_invalidation =
             PaintInvalidator::UpdateContext(&fragment, &mut invalidation_context);
-        PaintInvalidator::UpdatePaintingLayer(fragment.Cursor(), &mut invalidation_context);
-        let same_context = !force
-            && previous.as_ref().is_some_and(|node| {
-                node.cache
-                    .as_ref()
-                    .is_some_and(|cache| self.SameContext(&cache.inherited, &inherited))
-            });
-        let retained_context = !force
-            && !same_context
-            && previous.as_ref().is_some_and(|node| {
-                node.cache.as_ref().is_some_and(|cache| {
-                    self.SameRetainedContextStructure(&cache.inherited, &inherited)
-                })
-            });
-        // Source: pre_paint_tree_walk.cc:1498-1508 and
-        // paint_property_tree_builder.cc:3769-3827. A mutable composited
-        // transform (including ScrollTranslation) keeps its property slot and
-        // does not dirty clean descendants. CullRectUpdater's sliding window
-        // is the coverage proof: descend only when the successor exposes area
-        // that the retained subtree did not record. Fixed-background geometry
-        // is the exception because its paint position is scroll-relative.
-        let retained_geometry_covered = retained_context
-            && previous.as_ref().is_some_and(|node| {
-                node.cache.as_ref().is_some_and(|cache| {
-                    Self::CullContextCovers(&cache.inherited.cull, &inherited.cull)
-                        && (!inherited.fixed_background_acts_as_scroll
-                            || cache.inherited.scroll == inherited.scroll)
-                })
-            });
-        self.stats.same_context_nodes += same_context as usize;
-        self.stats.retained_context_nodes += retained_context as usize;
-        self.stats.retained_geometry_covered_nodes += retained_geometry_covered as usize;
+        PaintInvalidator::UpdatePaintingLayer(cursor, &mut invalidation_context);
         self.stats.invalidation_nodes += should_run_invalidation as usize;
-        // PrePaint's own admission (RetainedSelfChange /
-        // RetainedDescendantChange): the live dirty bits plus this node's
-        // records, never a Layout revision.
-        // Source identity and client directory of (previous, fragment), each
-        // computed at most once for this visit and shared by every proof.
-        let identity = VisitIdentity::WithProvenSource(source_identity_proven);
-        let self_change = previous
-            .as_deref()
-            .map(|node| self.RetainedSelfChange(node, fragment, &identity));
-        let self_unchanged = self_change == Some(None);
-        let descendant_change = if self_unchanged {
-            previous
-                .as_deref()
-                .and_then(|node| self.RetainedDescendantChange(node, fragment))
-        } else {
-            None
-        };
-        let subtree_unchanged = self_unchanged && descendant_change.is_none();
-        if let Some(Some(rule)) = self_change {
-            self.stats.admission_rejects[rule] += 1;
-        }
-        if let Some(rule) = descendant_change {
-            self.stats.admission_rejects[rule] += 1;
-        }
-        // A replacement source owner forces this complete walk. Clean-subtree
-        // admission is therefore available only while the resident sidecar
-        // itself remains the owner of every raw FragmentPaintData pointer.
-        // Under the same owner, a replacement LayoutResult leaves a retained
-        // subtree's references valid exactly when its root names the same
-        // reused fragment (pre_paint_tree_walk.cc:418-437 then skips it as
-        // Chromium skips an object whose FragmentData no dirty bit reached).
-        let source_tree_compatible = !self.source_owner_changed
-            && (!self.source_result_changed
-                || previous
-                    .as_deref()
-                    .is_some_and(|node| WalkedSameSourceOwner(node, fragment)));
-        self.stats.self_unchanged_nodes += self_unchanged as usize;
-        self.stats.subtree_unchanged_nodes += subtree_unchanged as usize;
-        self.stats.source_tree_compatible_nodes += source_tree_compatible as usize;
-        let subtree_clean = !self
-            .local_frame_views
-            .contains_key(&fragment.paint.DisplayItemClientId())
-            && previous
-                .as_ref()
-                .is_none_or(|node| !node.cache.as_ref().unwrap().contains_local_frames)
-            && (same_context || retained_geometry_covered)
-            && !should_run_invalidation
-            && subtree_unchanged
-            // A replacement LayoutResult republishes the same stable sidecar
-            // slots; a clean subtree whose source topology is unchanged only
-            // needs its two owner references moved (RebindCleanSubtree).
-            && (source_tree_compatible
-                || previous
-                    .as_deref()
-                    .is_some_and(|node| CleanSubtreeRebindable(node, fragment)));
-        if subtree_clean {
-            let mut node = previous.unwrap();
-            if !source_tree_compatible {
-                self.stats.rebound_nodes +=
-                    RebindCleanSubtree(&mut node, fragment, &self.property_node_store);
-            }
-            // The clean subtree keeps its geometry, properties and cull
-            // rects, so its PrePaint FragmentData already holds them (or the
-            // rebind above wrote them into a replacement slot).
-            // Same-slot immutable snapshots need the same reference update that
-            // Blink gets from retaining a pointer to its mutable property node.
-            // CullRect::ChangedEnough keeps the old finite sliding window while
-            // it still covers the successor. Preserve that window in the
-            // retained builder context; widening it to an infinite cull rect is
-            // not a Chromium CullRectUpdater operation and defeats culling for
-            // the complete clean subtree.
-            RefreshRetainedFlatTransforms(&mut node, &inherited);
-            let mut retained_inherited = inherited;
-            if retained_context {
-                let old_cull = node.cache.as_ref().unwrap().inherited.cull;
-                if Self::CullContextCovers(&old_cull, &retained_inherited.cull) {
-                    retained_inherited.cull = old_cull;
-                }
-            }
-            node.cache.as_mut().unwrap().inherited = retained_inherited;
-            let cache = node.cache.as_ref().unwrap();
-            self.stats.reused_nodes += cache.nodes;
-            self.stats.skipped_subtrees += 1;
-            self.stats.profile_admission_ns += ProfileNs(t_start, checkpoint());
-            self.last_visit_built = false;
-            return node;
-        }
-        // A replacement LayoutResult republishes every fragment-local sidecar
-        // at a new address, but Layout's revisions are keyed by the stable
-        // FragmentData identity. An unchanged revision therefore proves the
-        // same inputs Chromium would find on its retained FragmentData; only
-        // the borrowed sidecar pointer has to move to the new owner.
-        // The values this lifecycle compares and then records on the slot
-        // (PrePaintPreviousOf), computed once per visited node.
-        let current_record = PrePaintPreviousOf(
-            &fragment,
-            fragment.Cursor().ViewOffsetInContainer(),
-            identity.CurrentClients(&fragment),
-        );
-        let previous_display_item_client_id = previous.as_ref().map(|node| {
-            node.cache
-                .as_ref()
-                .map_or(0, |cache| cache.record.display_item_client_id)
-        });
-        // The previous lifecycle's fragment, as the retained node recorded
-        // it, instead of the previous LayoutResult's sidecar copy. Owned
-        // here: the rebuild path overwrites the retained node before the
-        // invalidators below read it.
-        let old_snapshot = previous
-            .as_mut()
-            .and_then(|node| node.cache.as_mut())
-            .and_then(|cache| cache.previous_fragment.take());
-        let old_gap_rules = previous
-            .as_mut()
-            .and_then(|node| node.cache.as_mut())
-            .and_then(|cache| cache.previous_gap_rules.take());
-        let old_fragment = old_snapshot
-            .as_ref()
-            .map(|fragment| fragment as *const FragmentPaintData);
-        // self_unchanged already proves the source identity and client
-        // directory that a replacement owner's rebind requires.
-        let self_clean = (same_context || retained_geometry_covered) && self_unchanged;
-        let previous_resource_usage = previous
-            .as_ref()
-            .and_then(|node| node.cache.as_ref())
-            .map(|cache| cache.resource_usage);
-        // Both the invalidation-only and same-geometry proofs compare the
-        // values this node recorded (PrePaintPrevious, its client ids and
-        // its built geometry) with the current fragment; neither reads the
-        // preceding sidecar, so both also hold across a replacement
-        // LayoutResult, whose sidecar slot the retained node then rebinds
-        // (BindSource) like a clean node.
-        let invalidation_only_refresh = same_context
-            .then(|| {
-                previous.as_ref().and_then(|node| {
-                    identity
-                        .SameClients(node, &fragment)
-                        .then(|| InvalidationOnlySourceRefresh(node, &fragment, &current_record))
-                        .flatten()
-                })
-            })
-            .flatten();
-        // RECHROM_PREPAINT_INVALIDATION_ONLY_CHECK (diagnostic): rebuild the
-        // objects admitted only for a builder-context reason and report the
-        // first value the rebuilt node differs in.
-        let verify_invalidation_only =
-            self.invalidation_only_check && invalidation_only_refresh == Some(true);
-        let invalidation_only = invalidation_only_refresh.is_some() && !verify_invalidation_only;
         let t_admitted = checkpoint();
         self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
-        let retained_before = (
-            self.stats.reused_nodes,
-            self.stats.shifted_nodes,
-            self.stats.invalidation_only_nodes,
-        );
-        // Offset-only update: this object is unchanged and owns no paint
-        // property nodes, and its parent only moved it. Shift the retained
-        // geometry instead of rebuilding it (PaintPropertyTreeBuilder's
-        // UpdateForObjectLocation path updates just PaintOffset).
-        let shift_check = self.shift_check;
-        let mut rebased_own_states = None;
-        let shift_delta = if !self_clean && !invalidation_only && !force && self_unchanged {
-            previous.as_ref().and_then(|node| {
-                let cache = node.cache.as_ref()?;
-                if (self.source_result_changed
-                    && !(identity.SameSource(node, &fragment)
-                        && identity.SameClients(node, &fragment)))
-                    || !ShiftKeepsSvgPrefix(node, &cache.inherited, &inherited)
-                {
-                    return None;
-                }
-                if (cache.own_keys.is_empty() || RebasableOwnEffect(node, &inherited))
-                    && ShiftPreservesClips(node)
-                {
-                    return self.OffsetOnlyContextDelta(&cache.inherited, &inherited);
-                }
-                let delta = self.OffsetOnlyContextDelta(&cache.inherited, &inherited)?;
-                rebased_own_states = Some(RebaseOwnStates(node, &inherited, delta)?);
-                Some(delta)
-            })
-        } else {
-            None
-        };
-        if profile && shift_delta.is_none() && !self_clean && !invalidation_only {
-            // Why this node is rebuilt rather than shifted (trace only).
-            let reason = match previous.as_ref().and_then(|node| node.cache.as_ref().map(|c| (node, c))) {
-                None => 0,
-                _ if force => 0,
-                _ if !self_unchanged => 1,
-                Some((node, cache))
-                    if !(cache.own_keys.is_empty() || RebasableOwnEffect(node, &inherited)) =>
-                {
-                    2
-                }
-                Some((node, _))
-                    if self.source_result_changed
-                        && !(identity.SameSource(node, &fragment)
-                            && identity.SameClients(node, &fragment)) =>
-                {
-                    3
-                }
-                Some((node, _)) if node.is_paint_layer => 4,
-                Some((node, cache))
-                    if !node.local_transforms.is_empty()
-                        || cache.children.svg.is_some()
-                        || IsSvgLayoutChild(fragment.paint.SourceKind()) =>
-                {
-                    5
-                }
-                Some((node, _)) if !ShiftPreservesClips(node) => 6,
-                Some(_) => 7,
-            };
-            self.stats.shift_rejects[reason] += 1;
-        }
-        // Whether PaintPropertyTreeBuilder built this node in this visit and
-        // the build stands (walk context; see `last_visit_built`). Every
-        // other branch keeps a retained node whose PrePaint FragmentData the
-        // visit's tail rewrites from its final values.
-        let mut built_this_visit = false;
-        let mut node = if let Some(delta) = shift_delta.filter(|_| !shift_check) {
-            let t_shift = checkpoint();
-            self.stats.shifted_nodes += 1;
-            let mut node = previous.take().unwrap();
-            node.BindSource(fragment);
-            let layer_facts_before = LayerFacts(&node);
-            if ShiftRetainedNode(
-                &mut node,
-                delta,
-                &inherited,
-                old_previous_paint_result,
-                rebased_own_states.take(),
-                &self.viewport_properties.nodes,
-            ) {
-                self.stats.cull_change_repaints += 1;
-                InvalidateClientsForCullRectChange(
-                    node.fragment.as_mut().expect("shifted node keeps its fragment"),
-                );
-            }
-            // As UpdateForObjectLocation: a changed paint offset admits paint
-            // invalidation for this object.
-            if delta.offset != delta.paint_space {
-                node.fragment
-                    .as_mut()
-                    .expect("shifted node keeps its fragment")
-                    .pre_paint_invalidation
-                    .should_check_for_paint_invalidation = true;
-            }
-            // UpdateForObjectLocation moves the object only: its slots,
-            // client directory, phase structure, logical position and
-            // stacking facts are the admitted ones (self_unchanged), so the
-            // post-update results stand, as for LocalGeometryChange. Prepared
-            // inline-outline rects are in paint space, and the refreshed live
-            // PaintLayer facts can change the stacking lists.
-            if self.inline_outline_groups || LayerFacts(&node) != layer_facts_before {
-                self.needs_post_update = true;
-            }
-            // Shifted geometry is a new PrePaint state of this node.
-            node.cache.as_mut().unwrap().revision = self.revision_generation;
-            self.stats.shift_branch_ns += ProfileNs(t_shift, checkpoint());
-            node
-        } else if self_clean {
-            self.stats.reused_nodes += 1;
-            let mut node = previous.take().unwrap();
-            RefreshRetainedFlatTransforms(&mut node, &inherited);
-            // A replacement owner, or a replacement LayoutResult carrying this
-            // clean object in a new fragment: the node reads the current one.
-            if self.source_owner_changed
-                || (self.source_result_changed && !WalkedSameSourceOwner(&node, fragment))
-            {
-                self.stats.rebound_nodes += 1;
-                node.BindSource(fragment);
-            }
-            node
-        } else if invalidation_only {
-            // Blink visited this object to run paint invalidation, while
-            // retaining its FragmentData property slots. Refresh our shallow
-            // source and revisions without constructing a speculative second
-            // PaintTreeNode solely to rediscover the same property geometry.
-            self.stats.invalidation_only_nodes += 1;
-            let mut node = previous.take().unwrap();
-            node.BindSource(fragment);
-            // The visit's tail moves this inherited context into the cache;
-            // PrePaintTreeWalkContext is a stack value, never copied twice.
-            node.cache.as_mut().unwrap().revision = self.revision_generation;
-            node
-        } else {
-            built_this_visit = true;
-            let mut built = PaintPropertyTreeBuilder::new(self)
-                .with_previous_paint_result(old_previous_paint_result)
-                .with_link_offset(fragment.Cursor().ViewOffsetInContainer())
-                .with_source_cursor(fragment.Cursor())
-                .BuildNode(
-                    &fragment,
-                    inherited.offset,
-                    inherited.paint_space,
-                    inherited.clip,
-                    inherited.cull,
-                    inherited.transforms.clone(),
-                    inherited.opacity,
-                    inherited.scroll,
-                    inherited.fixed_background_acts_as_scroll,
-                    inherited.properties.clone(),
-                    inherited.canvas_contents.clone(),
-                    inherited.rendering_context_id,
-                    inherited.should_flatten_inherited_transform,
-                    inherited.can_inherit_backface_visibility,
-                    inherited.directly_composited_container_paint_offset_subpixel_delta,
-                    inherited.subtree_should_use_infinite_cull_rect,
-                    old_paint_offset,
-                    old_had_paint_offset_translation,
-                    old_self_cull_rect,
-                    old_contents_cull_rect,
-                    inherited.root,
-                    inherited.flex_or_grid_item,
-                );
-            let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
-                old_previous_paint_result,
+        let inherited = ctx.inherited;
+        let mut node = PaintPropertyTreeBuilder::new(self)
+            .with_previous_paint_result(old_previous_paint_result)
+            .with_link_offset(cursor.ViewOffsetInContainer())
+            .with_source_cursor(cursor)
+            .BuildNode(
+                &fragment,
+                inherited.offset,
+                inherited.paint_space,
+                inherited.clip,
+                inherited.cull,
+                inherited.transforms.clone(),
+                inherited.opacity,
+                inherited.scroll,
+                inherited.fixed_background_acts_as_scroll,
+                inherited.properties.clone(),
+                inherited.canvas_contents.clone(),
+                inherited.rendering_context_id,
+                inherited.should_flatten_inherited_transform,
+                inherited.can_inherit_backface_visibility,
+                inherited.directly_composited_container_paint_offset_subpixel_delta,
+                inherited.subtree_should_use_infinite_cull_rect,
+                old_paint_offset,
+                previous
+                    .as_ref()
+                    .is_some_and(|previous| previous.had_paint_offset_translation),
                 old_self_cull_rect,
                 old_contents_cull_rect,
-                built.self_cull_rect,
-                built.cull_rect,
+                inherited.root,
+                inherited.flex_or_grid_item,
             );
-            if cull_change_needs_repaint {
-                self.stats.cull_change_repaints += 1;
-                InvalidateClientsForCullRectChange(
-                    &mut built
-                        .fragment
-                        .as_mut()
-                        .expect("PrePaint node must own a fragment"),
-                );
-            }
-            built.previous_paint_result.set(old_previous_paint_result);
-            CullRectUpdater::PaintPropertiesChanged(
-                fragment.Cursor(),
-                &fragment,
-                built.cache.as_ref().map(|cache| cache.own_change).unwrap_or_default(),
-                built.cull_decision_inputs,
-                old_previous_paint_result,
+        node.display_item_fragment = Some(display_item_fragment);
+        node.fragmentainer_instance_id = Some(fragmentainer);
+        node.source_cursor = Some(unsafe {
+            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(cursor)
+        });
+        // The parent's SVG viewBox matrix opens this object's flat replay.
+        if let Some(svg) = ctx.leading_svg_matrix {
+            node.local_transforms.insert(0, svg);
+            node.applies_transform = true;
+        }
+        let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
+            old_previous_paint_result,
+            old_self_cull_rect,
+            old_contents_cull_rect,
+            node.self_cull_rect,
+            node.cull_rect,
+        );
+        if cull_change_needs_repaint {
+            self.stats.cull_change_repaints += 1;
+            InvalidateClientsForCullRectChange(
+                node.fragment
+                    .as_mut()
+                    .expect("PrePaint node must own a fragment"),
             );
-            if let Some(mut old) = previous.take() {
-                if let Some(delta) = shift_delta.filter(|_| shift_check) {
-                    // Verification: the shifted retained node must equal the
-                    // node the builder just produced. Restore it afterwards.
-                    let saved = SavedShiftFields::Save(&old);
-                    ShiftRetainedNode(
-                        &mut old,
-                        delta,
-                        &inherited,
-                        old_previous_paint_result,
-                        rebased_own_states.take(),
-                        &self.viewport_properties.nodes,
-                    );
-                    self.stats.shifted_nodes += 1;
-                    let field_mismatch = ShiftFieldMismatch(&old, &built);
-                    // Compare against the built node as the parent completes
-                    // it: a leading SVG container matrix (already verified by
-                    // ShiftFieldMismatch) is inserted after it returns.
-                    let built_local = (built.local_transforms.clone(), built.applies_transform);
-                    if field_mismatch.is_none() {
-                        built.local_transforms = old.local_transforms.clone();
-                        built.applies_transform = old.applies_transform;
-                    }
-                    let same_geometry = self.SameGeometry(&old, &built, &current_record);
-                    (built.local_transforms, built.applies_transform) = built_local;
-                    let mismatch = if let Some(field) = field_mismatch {
-                        Some(field)
-                    } else if !same_geometry {
-                        let bf = built.fragment.as_deref().unwrap();
-                        let recorded = RecordOf(&old);
-                        Some(if IsNewClient(
-                            &RecordedClientIds(&recorded),
-                            bf.paint.DisplayItemClientId(),
-                            bf.paint.DisplayItemClientState().is_just_created,
-                        ) {
-                            "SG.just_created"
-                        } else if !SamePreviousSourceIdentity(&old, bf) {
-                            "SG.identity"
-                        } else if !SamePreviousPhaseInputs(&recorded, &current_record) {
-                            "SG.phase_inputs"
-                        } else if !SamePreviousLogicalPosition(&recorded, &current_record) {
-                            "SG.logical_position"
-                        } else if old.opacity != built.opacity {
-                            "SG.opacity"
-                        } else if !state_compare::SameBuilderState(
-                            &old.properties.nodes,
-                            &built.properties.nodes,
-                        ) {
-                            "SG.properties"
-                        } else if !state_compare::SameBuilderState(
-                            &old.contents_properties.nodes,
-                            &built.contents_properties.nodes,
-                        ) {
-                            "SG.contents_properties"
-                        } else {
-                            "SG.other_field"
-                        })
-                    } else {
-                        ShiftChildrenMismatch(&old, &built)
-                    };
-                    if mismatch.is_some() {
-                        browser_tracing::instant(
-                            "prepaint",
-                            "PrePaint.ShiftMismatchValues",
-                            &[
-                                ("shift_abs_x", old.absolute_offset.x),
-                                ("built_abs_x", built.absolute_offset.x),
-                                ("shift_po_x", old.paint_offset.x),
-                                ("built_po_x", built.paint_offset.x),
-                                ("delta_x", delta.offset.x),
-                            ],
-                        );
-                    }
-                    if let Some(field) = mismatch {
-                        self.stats.shift_check_mismatches += 1;
-                        if browser_tracing::enabled() {
-                            let name = built
-                                .fragment
-                                .as_deref()
-                                .map_or_else(
-                                    || Arc::<str>::from("?"),
-                                    |f| f.paint.DisplayItemClientDebugName(),
-                                );
-                            browser_tracing::instant_with_text(
-                                "prepaint",
-                                "PrePaint.ShiftMismatch",
-                                &format!("{name}: {field}"),
-                                &[],
-                            );
-                        }
-                    }
-                    saved.Restore(&mut old);
-                }
-                let mismatch = if force {
-                    Some("forced")
-                } else {
-                    self.GeometryMismatch(&old, &built, &current_record)
-                };
-                if self.invalidation_only_check {
-                    let name = built.fragment.as_deref().map_or_else(
-                        || Arc::<str>::from("?"),
-                        |f| f.paint.DisplayItemClientDebugName(),
-                    );
-                    browser_tracing::instant_with_text(
-                        "prepaint",
-                        if verify_invalidation_only {
-                            "PrePaint.InvalidationOnlyCheck"
-                        } else {
-                            "PrePaint.GeometryMismatch"
+        }
+        node.previous_paint_result.set(old_previous_paint_result);
+        node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
+        let own_change = node
+            .cache
+            .as_ref()
+            .map(|cache| cache.own_change)
+            .unwrap_or_default();
+        CullRectUpdater::PaintPropertiesChanged(
+            cursor,
+            &fragment,
+            own_change,
+            node.cull_decision_inputs,
+            old_previous_paint_result,
+        );
+        // ObjectPaintProperties::Clear*: a slot this object no longer owns is
+        // released with its role.
+        if let Some(previous) = previous.as_ref().filter(|_| client != 0) {
+            let kept = &node.cache.as_ref().unwrap().own_keys;
+            for role in &previous.roles {
+                if !kept.iter().any(|(_, key)| key.role == *role) {
+                    self.released_property_keys.push(PaintPropertyKey {
+                        owner: PaintPropertyOwner::Fragment {
+                            client,
+                            fragment: previous.record.display_item_fragment,
                         },
-                        &format!("{name}: {}", mismatch.unwrap_or("same")),
-                        &[],
-                    );
+                        role: *role,
+                    });
                 }
-                let same_geometry = mismatch.is_none();
-                if same_geometry {
-                    self.stats.same_geometry_rebuilds += 1;
-                    // The retained finalized properties replace the built
-                    // ones below (and computed_pass reverts), so this node
-                    // counts as retained: the tail rewrites its FragmentData.
-                    built_this_visit = false;
-                    // Bit 2 of the recorded phase flags is the previous
-                    // focused image-map area (PrePaintPreviousOf).
-                    let focused_image_map_phase_changed =
-                        built.fragment.as_deref().is_some_and(|fragment| {
-                            (RecordOf(&old).phase_flags & (1 << 2) != 0)
-                                != fragment.paint.FocusedImageMapArea().is_some()
-                        });
-                    self.needs_post_update |= focused_image_map_phase_changed;
-                    // Only drawing content changed. Keep the already-finalized
-                    // properties and group/phase results; clean descendants do
-                    // not need a canonicalization or logical-tree pass.
-                    built.properties = old.properties.clone();
-                    built.contents_properties = old.contents_properties.clone();
-                    built.fixed_background_properties = old.fixed_background_properties.clone();
-                    built.horizontal_scrollbar_properties =
-                        old.horizontal_scrollbar_properties.clone();
-                    built.vertical_scrollbar_properties = old.vertical_scrollbar_properties.clone();
-                    built.mask_properties = old.mask_properties.clone();
-                    built.opacity = old.opacity;
-                    built.outline_rects = std::mem::take(&mut old.outline_rects);
-                    built.paints_outline = old.paints_outline;
-                    built.needs_float_phase = old.needs_float_phase;
-                    built.needs_outline_phase = old.needs_outline_phase;
-                    built.needs_overflow_controls_phase = old.needs_overflow_controls_phase;
-                    // GeometryMismatch compared every stacking fact, so the
-                    // PaintLayerStackingNode lists this node owns and the
-                    // overlay-control reorder bit its stacking context set
-                    // stay valid (they are dirtied only through
-                    // DirtyZOrderLists, paint_layer_stacking_node.cc:67-83).
-                    *built.hit_test_layer_order.get_mut() =
-                        old.hit_test_layer_order.get_mut().take();
-                    built
-                        .needs_reorder_overlay_overflow_controls
-                        .set(old.needs_reorder_overlay_overflow_controls.get());
-                    let old_cache = old.cache.as_ref().unwrap();
-                    let new_cache = built.cache.as_mut().unwrap();
-                    // Keep the child context computed from this lifecycle
-                    // pass. Stable property slots make old/new builder states
-                    // equivalent even when a mutable ScrollTranslation value
-                    // changed, but the flat transform and cull vectors used by
-                    // Paint's MapRectToRoot must carry that new value. Reuse
-                    // only the finalized property snapshot inside the context.
-                    new_cache.children.properties = old_cache.children.properties.clone();
-                    new_cache.own_keys = old_cache.own_keys.clone();
-                    // The completed node snapshots were retained above. If a
-                    // sibling forces the post pass, restore this node from its
-                    // raw builder cache just like any other retained node.
-                    new_cache.computed_pass = old_cache.computed_pass;
-                } else {
-                    self.stats.property_geometry_changes += 1;
-                    self.stats.property_geometry_changes_with_own_keys +=
-                        (!old.cache.as_ref().unwrap().own_keys.is_empty()) as usize;
-                    self.stats.property_geometry_changes_needing_property_update += fragment
-                        
-                        .pre_paint_invalidation
-                        .needs_paint_property_update
-                        as usize;
-                    // Source: pre_paint_tree_walk.cc:650-760 (WalkInternal).
-                    // Chromium updates this object's FragmentData and runs
-                    // PaintInvalidator::InvalidatePaint inside the one walk;
-                    // no whole-tree pass follows a geometry change. When the
-                    // change is local to this object (same identity, client
-                    // directory, paint-phase and stacking structure, logical
-                    // position and property slots), every post-update result
-                    // of the retained node still holds: keep them and leave
-                    // the post-update pass to topology and structure changes.
-                    if !force
-                        && !self.inline_outline_groups
-                        && LocalGeometryChange(&old, &built, &current_record)
-                    {
-                        self.stats.local_geometry_changes += 1;
-                        built.paints_outline = old.paints_outline;
-                        built.needs_float_phase = old.needs_float_phase;
-                        built.needs_outline_phase = old.needs_outline_phase;
-                        built.needs_overflow_controls_phase = old.needs_overflow_controls_phase;
-                        // The same PaintLayerStackingNode lists: the stacking
-                        // facts and every Box address they name are unchanged.
-                        *built.hit_test_layer_order.get_mut() =
-                            old.hit_test_layer_order.get_mut().take();
-                        built
-                            .needs_reorder_overlay_overflow_controls
-                            .set(old.needs_reorder_overlay_overflow_controls.get());
-                    } else {
-                        self.needs_post_update = true;
-                    }
-                }
-                // ObjectPaintProperties::Clear*: a slot this object no longer
-                // owns is released with its role.
-                if let (Some(old_cache), Some(new_cache)) = (old.cache.as_ref(), built.cache.as_ref()) {
-                    for (_, key) in &old_cache.own_keys {
-                        if !new_cache.own_keys.iter().any(|(_, kept)| kept == key) {
-                            self.released_property_keys.push(*key);
-                        }
-                    }
-                }
-                built.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
-                built.children = std::mem::take(&mut old.children);
-                built.physical_index = old.physical_index;
-                // Source retains FragmentData/property roots across a shallow
-                // update (paint_property_tree_builder.cc:4519-4532). The
-                // directory points to these same stable boxes; move its owner
-                // before replacing the root payload. A topology change still
-                // rebuilds it during the existing final-effects walk below.
-                built.svg_resource_nodes = old.svg_resource_nodes.take();
-                // Update dirty ancestors in place, preserving every Box address
-                // referenced by retained physical/logical ancestry.
-                *old = built;
-                old
-            } else {
-                self.needs_post_update = true;
-                Box::new(built)
             }
-        };
-        let t_built = checkpoint();
+        }
         // Source: cull_rect_updater.cc:67-89 (SetFragmentContentsCullRect,
         // reached from UpdateForSelf at :393-431) and
-        // paint_layer_scrollable_area.cc:1919-1920 (DidUpdateCullRect). When
-        // this update produced a new contents cull rect, record on the
-        // PaintLayerScrollableArea the scroll position it was computed for;
-        // HasScrolledEnough (cull_rect_updater.cc:193-206) measures from it.
+        // paint_layer_scrollable_area.cc:1919-1920 (DidUpdateCullRect).
         if old_contents_cull_rect.is_none_or(|old| old != node.cull_rect) {
             fragment
                 .paint
                 .SetLastCullRectUpdateScrollPosition(fragment.paint.ScrollOffset());
         }
+        let t_built = checkpoint();
         self.stats.profile_build_ns += ProfileNs(t_admitted, t_built);
-        if profile
-            && retained_before
-                == (
-                    self.stats.reused_nodes,
-                    self.stats.shifted_nodes,
-                    self.stats.invalidation_only_nodes,
-                )
-        {
-            let kind = BuildKind(&node, &fragment);
-            self.stats.build_kind_ns[kind] += ProfileNs(t_admitted, t_built);
-            self.stats.build_kind_nodes[kind] += 1;
-        }
-        // LayoutImage::last_paint_rect_ belongs to the retained LayoutImage,
-        // not to one immutable PhysicalFragment generation. Rechrom keeps the
-        // same lifecycle value on the fragment's shared Paint payload, so
-        // carry it across a rebuilt fragment only when the source
-        // DisplayItemClient identity is unchanged.
-        // cpp: core/layout/layout_image.h:202-203
-        // cpp: core/layout/layout_image.cc:411-421
-        RetainImagePaintedRect(
-            node.fragment
-                .as_deref()
-                .expect("PrePaint node must own a fragment"),
-            PreviousFragment(old_fragment),
-            previous_display_item_client_id,
-        );
-        // The inherited context moves into the cache below; the child
-        // context reads only these two of its values afterwards.
-        let inherited_blocking_wheel_changed = inherited.blocking_wheel_event_handler_changed;
-        let inherited_root = inherited.root;
-        {
-            // This node is now proven (RetainedSelfChange) or rebuilt
-            // against the current document resources. Its usage follows its
-            // own inputs, so an unchanged node keeps the recorded one.
-            let resources = fragment.Cursor().DocumentResources();
-            let usage = match previous_resource_usage {
-                Some(usage) if self_unchanged => usage,
-                _ => layout::paint::PaintResourceUsage(
-                    &fragment,
-                ),
-            };
-            let cache = node.cache.as_mut().unwrap();
-            cache.inherited = inherited;
-            // The document's resources are usually the same allocation as
-            // at the last visit; keep that reference instead of replacing it.
-            let same_resources = match (&cache.resources, resources) {
-                (Some(recorded), Some(current)) => Arc::ptr_eq(recorded, current),
-                (None, None) => true,
-                _ => false,
-            };
-            if !same_resources {
-                cache.resources = resources.cloned();
-            }
-            cache.resource_usage = usage;
-        }
-        if let Some(context) =
-            LogicalEffectContextOf(&node, self.fragmentainer_scope.unwrap_or(0))
-        {
+        if let Some(context) = LogicalEffectContextOf(&node, fragmentainer) {
             let entries = self
                 .logical_effect_contexts
                 .entry(fragment.ViewNodeId())
@@ -8446,13 +5053,23 @@ impl PrePaintTreeWalk {
                 .iter_mut()
                 .find(|entry| entry.fragment_instance_id == context.fragment_instance_id)
             {
-                Some(entry) => *entry = context,
-                None => entries.push(context),
+                Some(entry) => {
+                    if !Arc::ptr_eq(&entry.effect, &context.effect)
+                        || entry.effect_id != context.effect_id
+                        || entry.fragmentainer != context.fragmentainer
+                    {
+                        self.logical_effects_changed.insert(fragment.ViewNodeId());
+                    }
+                    *entry = context;
+                }
+                None => {
+                    self.logical_effects_changed.insert(fragment.ViewNodeId());
+                    entries.push(context);
+                }
             }
         }
-        // Chromium runs invalidation after property construction. The initial
-        // admission above is only a clean-subtree proof: UpdateForObjectLocation
-        // may have dirtied a previously clean object through an ancestor move.
+        // Chromium runs invalidation after property construction:
+        // UpdateForObjectLocation may have dirtied the object.
         let needs_invalidation_after_properties =
             PaintInvalidator::UpdateContext(&fragment, &mut invalidation_context);
         self.stats.invalidation_nodes +=
@@ -8463,15 +5080,18 @@ impl PrePaintTreeWalk {
             old_paint_offset,
             node.paint_offset,
         );
-        node.table_cell_geometry_changed = fragment.paint.Display() == Display::kTableCell
+        // The invalidators read the previous box geometry from the source
+        // LayoutBox (PreviousBoxGeometry); no previous fragment is retained.
+        let mut table_cell_geometry_changed = fragment.paint.Display() == Display::kTableCell
             && should_run_invalidation
             && TableCellPaintInvalidator::CellGeometryChanged(
                 &fragment,
-                PreviousFragment(old_fragment),
+                None,
                 old_paint_offset,
                 node.paint_offset,
             );
         if should_run_invalidation {
+            let old_gap_rules = previous.as_ref().and_then(|previous| previous.gap_rules.clone());
             let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
                 let fragment_data: &FragmentPaintData = &fragment;
                 let view_background_rects = self
@@ -8483,8 +5103,8 @@ impl PrePaintTreeWalk {
                 let mut background =
                     BoxPaintInvalidator::ComputeBackgroundInvalidationWithViewRects(
                         &fragment,
-                        Some(fragment.Cursor()),
-                        PreviousFragment(old_fragment),
+                        Some(cursor),
+                        None,
                         old_gap_rules.as_deref(),
                         invalidation_context,
                         view_background_rects,
@@ -8506,14 +5126,14 @@ impl PrePaintTreeWalk {
                 invalidation_context,
             );
             // Source: object_paint_invalidator.cc:49-53. The reason above read
-            // the previous visibility from the slot snapshot; save the current
-            // one on the LayoutObject for the next walk.
+            // the previous visibility; save the current one on the
+            // LayoutObject for the next walk.
             fragment.paint.UpdateSourcePreviousVisibilityVisible();
             let reason = if fragment.ViewKind() == FragmentKind::kBox {
                 if fragment.paint.Display() == Display::kTableCell {
                     TableCellPaintInvalidator::ComputePaintInvalidationReason(
                         &fragment,
-                        PreviousFragment(old_fragment),
+                        None,
                         old_paint_offset,
                         node.paint_offset,
                         invalidation_context,
@@ -8522,7 +5142,7 @@ impl PrePaintTreeWalk {
                 } else if fragment.paint.IsLayoutBlock() {
                     BlockPaintInvalidator::ComputePaintInvalidationReason(
                         &fragment,
-                        PreviousFragment(old_fragment),
+                        None,
                         old_paint_offset,
                         node.paint_offset,
                         invalidation_context,
@@ -8531,7 +5151,7 @@ impl PrePaintTreeWalk {
                 } else {
                     BoxPaintInvalidator::ComputePaintInvalidationReason(
                         &fragment,
-                        PreviousFragment(old_fragment),
+                        None,
                         old_paint_offset,
                         node.paint_offset,
                         invalidation_context,
@@ -8566,253 +5186,206 @@ impl PrePaintTreeWalk {
                 .invalidation_reason
                 .unwrap_or(foundation::PaintInvalidationReason::kNone);
             // PrePaintTreeWalk.cc:123-132: any actual paint invalidation
-            // requires the next scroll/visibility observation, even when the
-            // geometry did not change.
+            // requires the next scroll/visibility observation.
             if client_reason != foundation::PaintInvalidationReason::kNone {
-                self.intersection_observation_state=self.intersection_observation_state.max(foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly);
+                self.intersection_observation_state = self.intersection_observation_state.max(
+                    foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly,
+                );
             }
             if invalidation.should_check_layout_for_paint_invalidation
                 && (foundation::IsLayoutPaintInvalidationReason(client_reason)
                     || client_reason == foundation::PaintInvalidationReason::kJustCreated
                     || !resident_fragment.paint.style.visible())
             {
-                self.intersection_observation_state=foundation::intersection_observation_state::IntersectionObservationState::Desired;
+                self.intersection_observation_state =
+                    foundation::intersection_observation_state::IntersectionObservationState::Desired;
             }
         }
         let t_invalidated = checkpoint();
         self.stats.profile_invalidation_ns += ProfileNs(t_built, t_invalidated);
         // This visit's final cull rects, also on the occurrence's FragmentData.
         unsafe {
-            CullRectUpdater::SetFragmentCullRects(fragment.Cursor(), node.self_cull_rect, node.cull_rect)
+            CullRectUpdater::SetFragmentCullRects(cursor, node.self_cull_rect, node.cull_rect)
         };
-        // Same opaque retained lifetime as ResidentFragment; the caller keeps
-        // this result's PaintFragmentLease until replacement has been rebound.
-        node.source_cursor = Some(unsafe {
-            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
-                fragment.Cursor(),
-            )
-        });
-        // This visit's final PaintOffset and LocalBorderBoxProperties, also
-        // on the occurrence's FragmentData (paint_property_tree_builder.cc:
-        // 4143-4168 UpdateForObjectLocation ends in SetPaintOffset; 2955-2981
-        // UpdateLocalBorderBoxContext). A kept build already wrote its slots
-        // and these values in BuildNode; every retained node (shifted by
-        // ShiftRetainedNode / RebaseRetainedNode, self-clean, refreshed for
-        // invalidation only, or rebuilt with its retained properties kept)
-        // also rewrites its ObjectPaintProperties slots from the store, as
-        // its cursor may reach a replacement sidecar. The shift verification
-        // (RECHROM_PREPAINT_SHIFT_CHECK) shifts and restores its retained
-        // copy before this point, so SavedShiftFields needs no slot restore.
-        WriteRetainedFragmentData(&node, (!built_this_visit).then_some(&self.property_node_store));
-        // Source: pre_paint_tree_walk.cc (WalkChildren). Each child's
-        // PrePaintTreeWalkContext is derived from this object's context on
-        // the stack; the walk reads the retained child context by reference
-        // instead of copying it (and its property-node and transform owners)
-        // once more for every visited object.
+        // The context the children inherit (WalkChildren).
         {
             let children = &mut node.cache.as_mut().unwrap().children;
             children.inside_blocking_wheel_event_handler = inside;
-            children.blocking_wheel_event_handler_changed = inherited_blocking_wheel_changed;
+            children.blocking_wheel_event_handler_changed =
+                inherited.blocking_wheel_event_handler_changed;
         }
-        if inherited_root {
+        if inherited.root {
             let base = &node.cache.as_ref().unwrap().children;
             self.CaptureRootFixedPositionContext(base, &node);
         }
-        // This node's comparisons are complete: record the values the next
-        // lifecycle compares against (RetainedSelfChange reads them), also
-        // for a display-locked node whose children are retained below.
-        // Children record theirs in their own UpdateNode, after the identity
-        // check below has read them.
-        let snapshot = node.fragment.as_deref().map(PreviousFragmentSnapshot);
-        let gap_rules = node.fragment.as_deref().and_then(|f| f.ViewGapRules());
-        if let Some(cache) = node.cache.as_mut() {
-            cache.record = current_record;
-            cache.previous_fragment = snapshot;
-            cache.previous_gap_rules = gap_rules;
+        // Source: paint_property_tree_builder.cc:2728-2730 (a changed filter
+        // taint alters descendant Effect state across isolation) and the
+        // property change of this object's own nodes, which reaches every
+        // descendant whose context accumulates them: an isolation-piercing
+        // subtree update. A child context unlike the one the children were
+        // built with updates the children, which decide for their own.
+        let mut force_children = ctx.force_subtree
+            || own_change != PaintPropertyChangeType::Unchanged
+            || FilterTaintChanged(
+                previous
+                    .as_ref()
+                    .is_some_and(|previous| previous.filter_origin_tainted),
+                &node,
+            );
+        let digest = ChildContextDigest(&node.cache.as_ref().unwrap().children);
+        let children_context_changed = previous
+            .as_ref()
+            .is_none_or(|previous| previous.record.child_context_digest != digest);
+        let child_auto_dark_mode_paused = {
+            let paint_offset = node.paint_offset;
+            let paint_snap_offset = node.paint_snap_offset;
+            ApplyAutoDarkModeState(
+                node.fragment
+                    .as_deref_mut()
+                    .expect("PrePaint node must own a fragment"),
+                paint_offset,
+                paint_snap_offset,
+                cursor.DocumentResources(),
+                ctx.auto_dark_mode_paused,
+            )
+        };
+        let record = PrePaintWalkRecord {
+            walked: true,
+            walked_owner: WalkedOwner(cursor),
+            link_offset: cursor.ViewOffsetInContainer(),
+            size: fragment.ViewSize(),
+            display_item_fragment,
+            fragmentainer,
+            is_paint_layer: node.is_paint_layer,
+            layer_cull_rects: cursor.OwnPaintLayer().is_some(),
+            applies_opacity: node.applies_opacity,
+            cull_decision_inputs: [
+                node.cull_decision_inputs.has_filter_that_moves_pixels,
+                node.cull_decision_inputs.has_perspective,
+                node.cull_decision_inputs.has_active_transform_animation,
+                node.cull_decision_inputs.has_non_composited_transform,
+            ],
+            child_context_digest: digest,
+        };
+        if InlineOutlineCandidate(&fragment) {
+            self.visited_inline_outline = true;
         }
-        // Source: core/paint/pre_paint_tree_walk.cc:1517-1535.
-        // Display locking blocks only the child walk. WalkInternal has already
-        // updated this object, so retain its resident children exactly as they
-        // were and keep their property slots live. A zero subtree revision is
-        // the local equivalent of DisplayLockContext::SetNeedsPrePaintSubtreeWalk:
-        // it prevents an ancestor clean-subtree fast path from hiding the work
-        // after the lock opens.
-        let child_pre_paint_blocked_by_display_lock = fragment
-            
+        let mut phase = OwnPhaseNeeds(&fragment, node.is_paint_layer);
+        // Source: core/paint/pre_paint_tree_walk.cc:1517-1535. Display
+        // locking blocks only the child walk: the children keep their
+        // FragmentData. A context change they could not take is a pending
+        // child walk (DisplayLockContext::SetNeedsPrePaintSubtreeWalk),
+        // forced once the lock opens.
+        let blocked = fragment
             .pre_paint_invalidation
             .child_pre_paint_blocked_by_display_lock;
-        if CanRetainDisplayLockedChildren(
-            child_pre_paint_blocked_by_display_lock,
-            self.source_result_changed,
-        ) {
-            let mut nodes = 1;
-            let mut subtree_resource_usage = node.cache.as_ref().unwrap().resource_usage;
-            for child in &node.children {
-                let child_cache = child
-                    .cache
-                    .as_ref()
-                    .expect("resident child has builder state");
-                nodes += child_cache.nodes;
-                subtree_resource_usage |= child_cache.subtree_resource_usage;
+        let was_pending = self.previous_display_lock_walks.remove(&client).is_some();
+        if blocked {
+            if force_children || children_context_changed || was_pending {
+                self.pending_display_lock_walks
+                    .insert(client, self.walk_ancestors.clone());
             }
-            self.stats.reused_nodes += nodes.saturating_sub(1);
-            self.stats.skipped_subtrees += usize::from(nodes > 1);
-            let physical_children = node
-                .children
-                .iter_mut()
-                .map(|child| &mut **child as *mut _)
-                .collect();
-            let cache = node.cache.as_mut().unwrap();
-            cache.subtree_revision = 0;
-            cache.subtree_resource_usage = subtree_resource_usage;
-            cache.nodes = nodes;
-            cache.physical_children = physical_children;
-            cache.visited_pass = self.walk_generation;
+            for child in OrdinaryPaintSourceChildren(fragment) {
+                if let Some(data) = child
+                    .Cursor()
+                    .PrePaintData::<PrePaintFragmentData>()
+                    .filter(|data| data.WasWalked())
+                {
+                    let result = VisitResult::Stored(data);
+                    if !result.is_paint_layer {
+                        phase.Merge(result.phase);
+                    }
+                }
+            }
             self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, checkpoint());
-            // Source: pre_paint_tree_walk.cc:1517-1531,1584-1585. The child
-            // walk is blocked, but this object was visited; ClearPaintFlags
-            // keeps the descendant bits of a display-locked object.
-            self.deferred_paint_flag_clears.push(&*fragment as *const FragmentPaintData);
-            self.last_visit_built = built_this_visit;
-            return node;
+            return self.FinishVisit(&mut node, fragment, record, phase, table_cell_geometry_changed);
         }
-        // Chromium's locked subtree keeps pointers to resident LayoutObjects.
-        // Rechrom's equivalent references a result-local immutable sidecar. If
-        // Layout published an incompatible replacement tree while the lock was
-        // active, retaining the old children would require retaining both
-        // leases. Walk the replacement children instead so RetainTree can
-        // safely release the preceding lease; property/invalidation work is
-        // still skipped by the source's display-lock dirty-bit projection.
+        if was_pending {
+            force_children = true;
+        }
         let embedded_view = self
             .local_frame_views
-            .get(&fragment.paint.DisplayItemClientId())
+            .get(&client)
             .filter(|_| fragment.ViewCanPaintFragmentOccurrence())
             .cloned();
         let embedded_source = embedded_view
             .as_ref()
             .map(|view| PaintFragmentSource::FromCursor(view.root));
-        let mut old_children = std::mem::take(&mut node.children);
-        // Source: paint_property_tree_builder.cc:2728-2730. A changed filter
-        // taint alters descendant Effect state even across paint-property
-        // isolation. Reuse the existing piercing `force` channel for the
-        // descendants; the current node has already been rebuilt above.
-        let force_descendants = force || FilterTaintChanged(was_filter_origin_tainted, &node);
-        // One count of the source children serves the pairing check, the
-        // embedded-frame index and the child list's capacity.
         let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
-        let source_children = ordinary_children + usize::from(embedded_source.is_some());
-        if source_children != 0 {
-            // An emptied list buffer of an earlier visit: the rebuilt list
-            // allocates only while no buffer is free.
-            if let Some(buffer) = self.child_buffers.pop() {
-                node.children = buffer;
-            }
-            node.children.reserve_exact(source_children);
-        }
-        // The FragmentData sidecars the pairing check reaches, kept for the
-        // child loop below: FragmentDataIterator reaches each child's
-        // FragmentData once per visit, and the sidecar address is stable for
-        // the publication (PaintFragmentSource::Resolved).
-        let mut resolved_children: [Option<*const FragmentPaintData>; 8] = [None; 8];
-        let same_children = old_children.len() == source_children
-            && old_children
-                .iter()
-                .zip(OrdinaryPaintSourceChildren(fragment).chain(embedded_source))
-                .enumerate()
-                // Reach each child's FragmentData once for the identity
-                // reads below (FragmentDataIterator), not once per read.
-                .all(|(index, (old, source))| {
-                    let source = source.Resolved();
-                    if let Some(slot) = resolved_children.get_mut(index) {
-                        *slot = source.1;
-                    }
-                    SamePreviousSourceIdentity(old, &source)
-                });
-        if !same_children {
-            self.needs_post_update = true;
-        }
-        // Chromium keeps PhysicalFragment/FragmentData identity across cull
-        // rect updates.  A newly exposed fragment may be inserted before the
-        // retained range, so child position is not object identity.  Preserve
-        // the allocation fast path when the sequence is unchanged; otherwise
-        // move resident nodes by the occurrence identity read live from the
-        // resident fragment (ResidentBoxGeometry::ViewFragmentInstanceId).
-        // Hand-built trees use id zero and deliberately retain the positional
-        // behavior only while their topology is unchanged.
-        let (mut positional_children, mut children_by_instance) = if same_children {
-            (Some(old_children.drain(..)), HashMap::default())
-        } else {
-            let mut children_by_instance = HashMap::default();
-            children_by_instance.reserve(old_children.len());
-            for child in old_children.drain(..) {
-                // The instance id recorded when this child was last visited.
-                let instance_id = RecordOf(&child).fragment_instance_id;
-                if instance_id != 0 {
-                    let replaced = children_by_instance.insert(instance_id, child);
-                    debug_assert!(
-                        replaced.is_none(),
-                        "FragmentTree contains duplicate fragment_instance_id values"
-                    );
-                } else {
-                    // An anonymous retained node cannot be paired again; its
-                    // subtree's FragmentData is destroyed here.
-                    CollectReleasedSubtreeSlots(
-                        &child,
-                        &self.property_node_store,
-                        &mut self.released_property_keys,
-                        &mut self.released_slot_nodes,
-                    );
-                }
-            }
-            (None, children_by_instance)
-        };
-        let mut nodes = 1;
-        // This node's ScopedDisplayItemFragment, set by the caller before
-        // this visit; no child has been visited yet.
-        let display_item_fragment = self.display_item_fragment_scope.unwrap_or(0);
-        // Likewise the fragmentainer this node is inside (PrePaintTreeWalk's
-        // `fragmentainer_idx` context).
-        let fragmentainer = self.fragmentainer_scope.unwrap_or(0);
-        let mut contains_local_frames = embedded_source.is_some();
-        let t_loop = checkpoint();
-        self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, t_loop);
-        let mut recursion_ns = 0;
+        let old_children_contents_cull = previous
+            .as_ref()
+            .map(|previous| previous.contents_cull_rect);
         self.physical_ancestor_ids.push(if fragment.ViewEstablishesPaintState() {
             fragment.ViewNodeId()
         } else {
             0
         });
-        // Borrowed for the child loop; the loop changes only this node's
-        // children, fragment and table-cell flag, never its cache.
-        let base: &ChildContext = &node.cache.as_ref().unwrap().children;
-        // Positional pairing happens only for an unchanged child list, whose
-        // every pair the check above proved SamePreviousSourceIdentity.
-        let children_identity_proven = positional_children.is_some();
+        self.walk_ancestors.push(client);
+        if embedded_view.is_some() {
+            self.next_local_frame_ancestors
+                .extend(self.walk_ancestors.iter().copied());
+        }
+        let t_loop = checkpoint();
+        self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, t_loop);
+        let mut recursion_ns = 0;
         for (index, child) in OrdinaryPaintSourceChildren(fragment)
             .chain(embedded_source)
             .enumerate()
         {
-            let child = match resolved_children.get(index) {
-                Some(&Some(data)) => PaintFragmentSource(child.0, Some(data)),
-                _ => child.Resolved(),
-            };
-            let previous = if let Some(children) = positional_children.as_mut() {
-                children.next()
-            } else {
-                // The child's live occurrence identity (FragmentData /
-                // (client, FragmentId) / fragmentainer), as recorded above.
-                let instance_id = child.ViewFragmentInstanceId();
-                if instance_id != 0 {
-                    children_by_instance.remove(&instance_id)
-                } else {
-                    None
-                }
-            };
+            let child = child.Resolved();
             let is_local_frame = index == ordinary_children && embedded_view.is_some();
-            // An ordinary child's context is built only when RetainCleanChild
-            // below cannot retain it from the parent's ChildContext.
-            let frame_context = is_local_frame
-                .then(|| self.ContextForFrame(&node, base, embedded_view.as_ref().unwrap()));
+            // A child paints in this object's scope unless it opens its own;
+            // an embedded frame's root starts its document's walk at 0.
+            let child_display_item_fragment = child
+                .ViewOwnDisplayItemFragment()
+                .unwrap_or(if is_local_frame { 0 } else { display_item_fragment });
+            let child_fragmentainer = child
+                .ViewOwnFragmentainerInstanceId()
+                .unwrap_or(if is_local_frame { 0 } else { fragmentainer });
+            let base: &ChildContext = &node.cache.as_ref().unwrap().children;
+            if !is_local_frame {
+                // pre_paint_tree_walk.cc:1477-1482: the child's walk returns
+                // before it builds the child's context.
+                let child = unsafe { child.ReadPrePaintInvalidationForVisit() };
+                let skipped = child
+                    .Cursor()
+                    .PrePaintData::<PrePaintFragmentData>()
+                    .filter(|data| {
+                        self.CanSkipSubtree(
+                            &child,
+                            data,
+                            force_children,
+                            children_context_changed,
+                            base,
+                            &invalidation_context,
+                            child_display_item_fragment,
+                            child_fragmentainer,
+                        )
+                    });
+                if let Some(data) = skipped {
+                    self.stats.skipped_subtrees += 1;
+                    PropagateAutoDarkModeOverCursor(child.Cursor(), child_auto_dark_mode_paused);
+                    let result = VisitResult::Stored(data);
+                    if !result.is_paint_layer {
+                        phase.Merge(result.phase);
+                    }
+                    continue;
+                }
+            }
+            let child_inherited = if is_local_frame {
+                self.ContextForFrame(&node, base, embedded_view.as_ref().unwrap())
+            } else {
+                self.ContextForChild(&child, base)
+            };
+            let leading_svg_matrix = base.svg;
+            let child_context = WalkContext {
+                inherited: child_inherited,
+                invalidation: invalidation_context,
+                force_subtree: force_children,
+                old_parent_contents_cull: old_children_contents_cull,
+                auto_dark_mode_paused: child_auto_dark_mode_paused,
+                leading_svg_matrix,
+            };
             let frame_fixed_context = is_local_frame.then(|| self.root_fixed_position.take());
             let previous_wheel_targets = is_local_frame.then(|| {
                 std::mem::replace(
@@ -8825,84 +5398,23 @@ impl PrePaintTreeWalk {
                 )
             });
             self.local_frame_depth += u32::from(is_local_frame);
-            // A child paints in this node's scope unless it opens its own; an
-            // embedded frame's root starts its document's walk at 0.
-            let child_display_item_fragment = child
-                .ViewOwnDisplayItemFragment()
-                .unwrap_or(if is_local_frame { 0 } else { display_item_fragment });
             self.display_item_fragment_scope = Some(child_display_item_fragment);
-            // A column or page area opens its own fragmentainer; everything
-            // else is inside this node's. An embedded frame starts outside any.
-            let child_fragmentainer = child
-                .ViewOwnFragmentainerInstanceId()
-                .unwrap_or(if is_local_frame { 0 } else { fragmentainer });
             self.fragmentainer_scope = Some(child_fragmentainer);
             let t_child = checkpoint();
-            let mut child_node = match frame_context {
-                Some(child_context) => self.UpdateNode(
-                    child,
-                    child_context,
-                    invalidation_context,
-                    previous,
-                    force_descendants,
-                    children_identity_proven,
-                ),
-                None => match self.RetainCleanChild(
-                    child,
-                    base,
-                    previous,
-                    children_identity_proven,
-                    force_descendants,
-                    invalidation_context,
-                ) {
-                    // A clean child retained with its whole subtree keeps
-                    // every value its PrePaint FragmentData already holds.
-                    Ok(retained) => {
-                        self.last_visit_built = false;
-                        retained
-                    }
-                    Err(previous) => {
-                        let child_context = self.ContextForChild(&child, base);
-                        self.UpdateNode(
-                            child,
-                            child_context,
-                            invalidation_context,
-                            previous,
-                            force_descendants,
-                            children_identity_proven,
-                        )
-                    }
-                },
-            };
-            // Walk context of the visit that just returned (no other visit
-            // runs before this read).
-            let child_built_this_visit = std::mem::take(&mut self.last_visit_built);
-            debug_assert_eq!(
-                child_built_this_visit,
-                child_node
-                    .cache
-                    .as_ref()
-                    .is_some_and(|cache| cache.computed_pass == self.walk_generation),
-                "walk-context build flag must match NodeCache::computed_pass"
-            );
+            let result = self.WalkObject(child, child_context);
             recursion_ns += ProfileNs(t_child, checkpoint());
             self.local_frame_depth -= u32::from(is_local_frame);
             if let Some(previous) = previous_wheel_targets {
                 self.active_blocking_wheel_targets = previous;
             }
-            child_node.is_embedded_local_frame_root = is_local_frame;
-            child_node.embedded_frame_is_cross_origin =
-                is_local_frame && embedded_view.as_ref().unwrap().cross_origin_to_parent;
             if is_local_frame {
-                self.completed_local_frame_prepaint
-                    .insert(fragment.paint.DisplayItemClientId());
+                self.completed_local_frame_prepaint.insert(client);
             }
             if let Some(fixed) = frame_fixed_context {
                 self.root_fixed_position = fixed;
             }
-            contains_local_frames |= child_node.cache.as_ref().unwrap().contains_local_frames;
-            if child_node.table_cell_geometry_changed {
-                node.table_cell_geometry_changed =
+            if result.table_cell_geometry_changed {
+                table_cell_geometry_changed =
                     TableCellPaintInvalidator::InvalidateAncestorAndPropagate(
                         &mut **node
                             .fragment
@@ -8910,104 +5422,52 @@ impl PrePaintTreeWalk {
                             .expect("PrePaint node must own a fragment"),
                     );
             }
-            if let Some(svg) = base.svg {
-                // A reused node already contains this leading geometry scope.
-                // A newly built node needs it once, never once per paint pass.
-                // Whether the child was built is walk context of its visit,
-                // not retained NodeCache state.
-                if child_built_this_visit {
-                    child_node.local_transforms.insert(0, svg);
-                    child_node.applies_transform = true;
-                    WriteFlatReplayData(&child_node);
-                }
+            if !result.is_paint_layer {
+                phase.Merge(result.phase);
             }
-            child_node.physical_index = index;
-            let scope_changed = child_node
-                .display_item_fragment
-                .is_some_and(|old| old != child_display_item_fragment);
-            child_node.display_item_fragment = Some(child_display_item_fragment);
-            let fragmentainer_changed = child_node
-                .fragmentainer_instance_id
-                .is_some_and(|old| old != child_fragmentainer);
-            child_node.fragmentainer_instance_id = Some(child_fragmentainer);
-            if scope_changed || fragmentainer_changed {
-                RefreshInheritedDisplayItemFragments(&mut child_node);
-            }
-            let cache = child_node.cache.as_ref().unwrap();
-            nodes += cache.nodes;
-            node.children.push(child_node);
         }
+        self.walk_ancestors.pop();
         self.physical_ancestor_ids.pop();
-        // Every retained child has moved into the rebuilt list or the
-        // instance map; keep the emptied buffer for a later visit.
-        drop(positional_children);
-        if old_children.capacity() != 0 && self.child_buffers.len() < 64 {
-            self.child_buffers.push(old_children);
-        }
-        // Retained children no source child paired with left the tree; their
-        // objects' slots go with them.
-        for dropped in children_by_instance.values() {
-            CollectReleasedSubtreeSlots(
-                dropped,
-                &self.property_node_store,
-                &mut self.released_property_keys,
-                &mut self.released_slot_nodes,
-            );
-        }
         let t_looped = checkpoint();
         self.stats.profile_child_loop_ns +=
             ProfileNs(t_loop, t_looped).saturating_sub(recursion_ns);
-        // Refill the retained list in place: a revisited object keeps its
-        // allocation, as its FragmentData keeps its child links.
-        let mut physical_children: Vec<*mut PaintTreeNode<'static>> =
-            std::mem::take(&mut node.cache.as_mut().unwrap().physical_children);
-        physical_children.clear();
-        physical_children.extend(
-            node.children
-                .iter_mut()
-                .map(|child| &mut **child as *mut PaintTreeNode<'static>),
-        );
-        let generation = self.revision_generation;
-        let mut child_walk_pending = false;
-        let mut child_changed = false;
-        let mut subtree_resource_usage = node.cache.as_ref().unwrap().resource_usage;
-        for child in &node.children {
-            let cache = child.cache.as_ref().expect("resident child has builder state");
-            child_walk_pending |= cache.subtree_revision == 0;
-            // Generations are process-unique: a child subtree that changed
-            // in this pass carries exactly this pass's generation.
-            child_changed |= cache.subtree_revision == generation;
-            subtree_resource_usage |= cache.subtree_resource_usage;
-        }
-        let cache = node.cache.as_mut().unwrap();
-        // PrePaint's subtree revision: kept while this node and every child
-        // subtree were kept and the child list is the same; otherwise this
-        // pass's generation. Zero keeps a pending child walk visible to the
-        // ancestors' admission.
-        cache.subtree_revision = if child_walk_pending {
-            0
-        } else if same_children
-            && !child_changed
-            && cache.revision != generation
-            && cache.subtree_revision != 0
-        {
-            cache.subtree_revision
-        } else {
-            generation
-        };
-        cache.subtree_resource_usage = subtree_resource_usage;
-        cache.nodes = nodes;
-        cache.physical_children = physical_children;
-        cache.contains_local_frames = contains_local_frames;
-        cache.visited_pass = self.walk_generation;
+        let result = self.FinishVisit(&mut node, fragment, record, phase, table_cell_geometry_changed);
         self.stats.profile_tail_ns += ProfileNs(t_looped, checkpoint());
-        // Source: pre_paint_tree_walk.cc:1584-1585. The flags this visit
-        // consumed are cleared after the walk, once every fragment of the
-        // object has read them; LayoutObject bits then mean "changed since
-        // the last PrePaint", as in Chromium.
-        self.deferred_paint_flag_clears.push(&*fragment as *const FragmentPaintData);
-        self.last_visit_built = built_this_visit;
-        node
+        result
+    }
+
+    /// The end of one visit: the occurrence's flat replay values, walk record
+    /// and LayoutBox gap baseline go to its FragmentData (the builder already
+    /// stored PaintOffset, ObjectPaintProperties and LocalBorderBoxProperties),
+    /// and the object's consumed paint flags are cleared after the walk
+    /// (pre_paint_tree_walk.cc:1584-1585: once every fragment read them;
+    /// a display-locked object keeps its descendant bits).
+    fn FinishVisit(
+        &mut self,
+        node: &mut PaintTreeNode<'static>,
+        fragment: PaintFragmentSource<'_>,
+        record: PrePaintWalkRecord,
+        phase: PhaseNeeds,
+        table_cell_geometry_changed: bool,
+    ) -> VisitResult {
+        node.needs_float_phase = phase.float;
+        node.needs_outline_phase = phase.outline;
+        node.needs_overflow_controls_phase = phase.overflow_controls;
+        if let Some(slot) = fragment.Cursor().PrePaintSlot() {
+            // SAFETY: the walk is the occurrence's single PrePaint writer
+            // here; no reference into the slot is live.
+            let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
+            WriteFlatReplayDataTo(node, data);
+            data.SetWalkRecord(record);
+            data.SetPreviousGapRules(fragment.ViewGapRules());
+        }
+        self.deferred_paint_flag_clears
+            .push(&*fragment as *const FragmentPaintData);
+        VisitResult {
+            table_cell_geometry_changed,
+            is_paint_layer: node.is_paint_layer,
+            phase,
+        }
     }
 
     pub(crate) fn viewport_cull_for_special_paint(&self) -> Option<PaintRect> {
@@ -9298,9 +5758,9 @@ impl PrePaintTreeWalk {
     /// `context.current_effect` follows the LayoutObject tree while the
     /// containing-block contexts carry an out-of-flow object's transform and
     /// clip. Rechrom walks physical fragments, so an absolute or fixed
-    /// object whose logical parent occurrence (ResolveLogicalParentOccurrence)
-    /// is not a physical ancestor takes that occurrence's recorded effect
-    /// state instead of its physical parent's.
+    /// object whose logical parent occurrence is not a physical ancestor
+    /// takes that occurrence's recorded effect state instead of its physical
+    /// parent's.
     fn LogicalOutOfFlowEffectContext(
         &self,
         fragment: &FragmentPaintData,
@@ -9313,9 +5773,20 @@ impl PrePaintTreeWalk {
         if self.physical_ancestor_ids.contains(&logical_id) {
             return None;
         }
+        self.LogicalEffectContextFor(fragment, logical_id, self.fragmentainer_scope.unwrap_or(0))
+    }
+
+    /// The logical effect context the occurrence `logical_id` gives an
+    /// out-of-flow child inside `fragmentainer`: its only recorded
+    /// occurrence, preferring the child's fragmentainer.
+    fn LogicalEffectContextFor(
+        &self,
+        fragment: &FragmentPaintData,
+        logical_id: u64,
+        fragmentainer: u64,
+    ) -> Option<LogicalEffectContext> {
         let candidates = self.logical_effect_contexts.get(&logical_id)?;
         let own = fragment.ViewFragmentInstanceId();
-        let fragmentainer = self.fragmentainer_scope.unwrap_or(0);
         let unique = |same_fragmentainer: bool| {
             let mut matches = candidates.iter().filter(|candidate| {
                 (own == 0 || candidate.fragment_instance_id != own)
@@ -9353,395 +5824,29 @@ update_property!(UpdateEffectProperty, EffectPaintPropertyNode, UpdateEffect);
 update_property!(UpdateScrollProperty, ScrollPaintPropertyNode, UpdateScroll);
 
 impl PrePaintTreeWalk {
-    /// Source: PrePaintTreeWalk::WalkTree (pre_paint_tree_walk.cc:82-136):
-    /// the tree walk, then LocalFrameView::ExecuteAllPendingUpdates for the
-    /// objects whose transform change PaintLayer::StyleDidChange deferred.
-    pub fn Walk(
-        &mut self,
-        root: PaintFragmentSource<'_>,
-        source_lease: PaintFragmentLease,
-    ) -> Box<PaintTreeNode<'static>> {
-        // Source: pre_paint_tree_walk.cc:82-136 and
-        // paint_property_tree_builder.cc / paint_invalidator.cc. PrePaint runs
-        // in DocumentLifecycle::kInPrePaint, where no LayoutObject is created
-        // or destroyed; the walk, the builder and the invalidators read each
-        // visited object's LayoutObject and ComputedStyle directly. Open the
-        // same resident-source scope the paint tree walk opens
-        // (LocalFrameView::PaintTree) for the whole pass, so every
-        // PaintProperties / PaintStyle read reaches its bound source without
-        // a per-call heap membership query. The retained previous fragments
-        // the invalidators compare against are read only through their own
-        // fields and their source lease.
-        let _resident_sources = layout::paint::ResidentPaintSourceScope::new();
-        let mut tree = self.WalkTree(root, source_lease);
-        let pending = root.Cursor().TakePendingTransformUpdateClients();
-        if pending.is_empty() || self.ExecuteAllPendingUpdates(&mut tree, &pending) {
-            return tree;
-        }
-        // An object Layout scheduled fails a condition only PrePaint can
-        // see (CanDoDeferredTransformNodeUpdate reads ObjectPaintProperties),
-        // so Chromium would have marked it SetNeedsPaintPropertyUpdate.
-        // Rebuild every node from its current style instead.
-        self.retained_tree = Some(tree);
-        self.retained_tree_valid = false;
-        let source_lease = self
-            .pending_source_lease
-            .take()
-            .expect("PrePaint walk keeps its source lease until RetainTree");
-        self.WalkTree(root, source_lease)
-    }
-
-    /// Source: LocalFrameView::ExecuteAllPendingUpdates
-    /// (local_frame_view.cc:5498-5525) with
-    /// PaintPropertyTreeBuilder::DirectlyUpdateTransformMatrix
-    /// (paint_property_tree_builder.cc:4842-4888) for each pending object.
+    /// Source: PrePaintTreeWalk::WalkTree (pre_paint_tree_walk.cc:82-136).
     ///
-    /// The resident Transform node is updated in place from the current
-    /// style; nothing else of the object's property state depends on the
-    /// `transform` value. Returns false when an object cannot take the
-    /// deferred path (the PrePaint half of CanDoDeferredTransformNodeUpdate,
-    /// 4953-5002), leaving the caller to rebuild it.
-    fn ExecuteAllPendingUpdates(
-        &mut self,
-        tree: &mut PaintTreeNode<'static>,
-        pending: &[u64],
-    ) -> bool {
-        let mut trace = browser_tracing::span("prepaint", "PrePaint.ExecutePendingUpdates");
-        trace.set("transform_updates", pending.len() as f64);
-        // The client directory is current unless this walk changed the
-        // topology (RetainTree rebuilds it after a post-walk pass).
-        let use_directory = !self.stats.post_walk;
-        let mut rejection = 0u8;
-        let mut updated = 0usize;
-        // Per-phase time of the direct updates (trace only): lookup and
-        // CanDoDeferredTransformNodeUpdate checks, matrix, node update and
-        // flat-list refresh, cull rect.
-        let mut phase_ns = [0u64; 4];
-        for &client in pending {
-            // The first matching node and the match count (none, one, or
-            // fragmented) decide the outcome; no per-client list is built.
-            let mut first: Option<*mut PaintTreeNode<'static>> = None;
-            let mut matches = 0usize;
-            if use_directory {
-                if let Some(entries) = self.client_nodes.get(&client) {
-                    // The directory is owned by the retained tree that this
-                    // walk returned; its boxes did not move.
-                    for &pointer in entries {
-                        if unsafe { &*pointer }
-                            .fragment
-                            .as_deref()
-                            .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
-                        {
-                            first.get_or_insert(pointer);
-                            matches += 1;
-                        }
-                    }
-                }
-            } else {
-                fn find(
-                    node: &mut PaintTreeNode<'static>,
-                    client: u64,
-                    first: &mut Option<*mut PaintTreeNode<'static>>,
-                    matches: &mut usize,
-                ) {
-                    if node
-                        .fragment
-                        .as_deref()
-                        .is_some_and(|fragment| fragment.paint.DisplayItemClientId() == client)
-                    {
-                        first.get_or_insert(node as *mut _);
-                        *matches += 1;
-                    }
-                    for child in &mut node.children {
-                        find(child, client, first, matches);
-                    }
-                }
-                find(tree, client, &mut first, &mut matches);
-            }
-            match (first, matches) {
-                // A display:none or not-yet-painted object has no
-                // properties to update; its next build reads the style.
-                (None, _) => continue,
-                (Some(pointer), 1) => {
-                    let node = unsafe { &mut *pointer };
-                    match self.DirectlyUpdateTransformMatrix(node, &mut phase_ns) {
-                        Ok(true) => updated += 1,
-                        Ok(false) => {}
-                        Err(code) => {
-                            rejection = code;
-                            break;
-                        }
-                    }
-                }
-                // IsFragmented (CanDoDeferredTransformNodeUpdate 4974-4978).
-                _ => {
-                    rejection = 1;
-                    break;
-                }
-            }
-        }
-        trace.set("updated", updated as f64);
-        trace.set("rejection", rejection as f64);
-        trace.set("check_ms", phase_ns[0] as f64 / 1e6);
-        trace.set("matrix_ms", phase_ns[1] as f64 / 1e6);
-        trace.set("update_ms", phase_ns[2] as f64 / 1e6);
-        trace.set("cull_ms", phase_ns[3] as f64 / 1e6);
-        rejection == 0
+    /// PrePaint runs in DocumentLifecycle::kInPrePaint, where no LayoutObject
+    /// is created or destroyed; the walk, the builder and the invalidators
+    /// read each visited object's LayoutObject and ComputedStyle directly.
+    /// Open the same resident-source scope the paint tree walk opens
+    /// (LocalFrameView::PaintTree) for the whole pass. The objects whose
+    /// transform change PaintLayer::StyleDidChange deferred
+    /// (LocalFrameView::ExecuteAllPendingUpdates, local_frame_view.cc:
+    /// 5498-5525) are visited by the walk itself: their builds update the
+    /// Transform node in place from the current style.
+    pub fn Walk(&mut self, root: PaintFragmentSource<'_>, source_lease: PaintFragmentLease) {
+        let _resident_sources = layout::paint::ResidentPaintSourceScope::new();
+        self.WalkTree(root, source_lease);
     }
 
-    /// PaintPropertyTreeBuilder::DirectlyUpdateTransformMatrix for one
-    /// retained node. Ok(false): this walk already rebuilt the node from the
-    /// current style. Err: a CanDoDeferredTransformNodeUpdate condition (or
-    /// a retained-state precondition of the in-place update) fails.
-    fn DirectlyUpdateTransformMatrix(
-        &mut self,
-        node: &mut PaintTreeNode<'static>,
-        phase_ns: &mut [u64; 4],
-    ) -> Result<bool, u8> {
-        let profile = browser_tracing::enabled();
-        let checkpoint = || profile.then(std::time::Instant::now);
-        let t_start = checkpoint();
-        let Some(cache) = node.cache.as_ref() else {
-            return Err(2);
-        };
-        if cache.computed_pass == self.walk_generation {
-            return Ok(false);
-        }
-        let fragment = node.fragment.as_deref().ok_or(2u8)?;
-        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
-            return Err(2);
-        }
-        let style = &fragment.paint.style;
-        // SVG children (4959-4962) and canvas-rendered subtrees (4993-5000).
-        if IsSvgLayoutChild(fragment.paint.SourceKind())
-            || fragment.paint.SvgLocalTransform().is_some()
-            || (fragment.paint.CanvasDrawElementEnabled() && fragment.paint.IsInCanvasSubtree())
-        {
-            return Err(3);
-        }
-        if !node.applies_transform {
-            return Err(4);
-        }
-        let client = fragment.paint.DisplayItemClientId();
-        let owner = PaintPropertyOwner::Fragment {
-            client,
-            fragment: node.DisplayItemFragment(),
-        };
-        // Chromium reads the existing ObjectPaintProperties slots here
-        // (properties->Transform(), 4980-4983), not the style-derived role
-        // set. The object's own transform-space slots were created in
-        // builder order (PaintOffsetTranslation, StickyTranslation, then
-        // Translate, Rotate, Scale, Offset, Transform; paint_property_tree_
-        // builder.cc:4280-4296), and each pushed one entry of the
-        // flat matrix list, so the number of own slots before Transform is
-        // its position after the inherited prefix. Only `transform` changed
-        // since they were built (Layout schedules the deferred update for
-        // OnlyTransformPropertyChanged), and none of the preceding roles
-        // depends on its value, so recomputing them from style and the
-        // direct compositing reasons would only re-derive the same slots.
-        let mut own_preceding = 0usize;
-        let mut has_transform_slot = false;
-        for (_, key) in &cache.own_keys {
-            if key.owner != owner {
-                continue;
-            }
-            match key.role {
-                PaintPropertyRole::PaintOffsetTranslation
-                | PaintPropertyRole::StickyTranslation
-                | PaintPropertyRole::Translate
-                | PaintPropertyRole::Rotate
-                | PaintPropertyRole::Scale
-                | PaintPropertyRole::Offset => own_preceding += 1,
-                PaintPropertyRole::Transform => has_transform_slot = true,
-                _ => {}
-            }
-        }
-        if !has_transform_slot {
-            return Err(4);
-        }
-        // `transform: none` keeps the Transform slot only for an animation,
-        // 3D context, backface or direct compositing reason
-        // (NeedsTransform, paint_property_tree_builder.cc:1388-1410); the
-        // full build would remove it otherwise. Only that case needs the
-        // style-derived roles and the direct reasons
-        // (full_context_.direct_compositing_reasons, computed once).
-        if !style.has_transform() {
-            let _direct_reasons = CompositingReasonFinder::DirectReasonsScope();
-            if !TransformPropertyRoles(fragment, style).contains(&PaintPropertyRole::Transform) {
-                return Err(4);
-            }
-        }
-        let key = PaintPropertyKey {
-            owner,
-            role: PaintPropertyRole::Transform,
-        };
-        // Cannot directly update properties that were not created (4980-4983).
-        let Some(current) = self.property_node_store.TransformOwnerForKey(key).cloned() else {
-            return Err(4);
-        };
-        let effect_key = PaintPropertyKey {
-            owner,
-            role: PaintPropertyRole::Effect,
-        };
-        // An Effect allocated for a 2D scale transform (4985-4992).
-        if self.property_node_store.EffectOwnerForKey(effect_key).is_some_and(|effect| {
-            paint_model::property_cell::with_access(|access| {
-                effect.state(access).NeedsEffectFor2DScaleTransform()
-            })
-        }) {
-            return Err(5);
-        }
-        // The builder derives the node's backface visibility from whether
-        // the transform has 3D operations; keep the direct update to values
-        // that cannot change it.
-        let (old_matrix, old_backface, is_running_animation_on_compositor) =
-            paint_model::property_cell::with_access(|access| {
-                let state = current.state(access);
-                (
-                    state.matrix,
-                    state.backface_visibility,
-                    current.HasActiveTransformAnimation(access),
-                )
-            });
-        if style.has_3d_transform_operation() || old_backface == PaintBackfaceVisibility::Visible {
-            return Err(6);
-        }
-        // The flat matrix list mirrors the property chain: this object's
-        // own entries follow the inherited ones in builder order.
-        let flat_index = cache.inherited.transforms.len() + own_preceding;
-        if node.transforms.get(flat_index) != Some(&old_matrix)
-            || cache.children.transforms.get(flat_index) != Some(&old_matrix)
-        {
-            return Err(7);
-        }
-        let t_checked = checkpoint();
-        phase_ns[0] += ProfileNs(t_start, t_checked);
-
-        // ComputedStyle::ApplyTransform with kIncludeTransformOperations,
-        // kExcludeTransformOrigin, kExcludeMotionPath and
-        // kExcludeIndependentTransformProperties, around the reference box,
-        // as UpdateIndividualTransform resolves it in the builder
-        // (ComputeReferenceBox, 4849). The border box needs no border or
-        // padding edges (transform_utils.cc:17-34), so only a content-box
-        // reference reads them from the fragment.
-        let reference_box = style.transform_reference_box();
-        let (borders, padding) = match reference_box {
-            paint_input_types::paint_input::PaintTransformReferenceBox::kBorderBox => {
-                (Edges::default(), Edges::default())
-            }
-            _ => (fragment.Borders(), fragment.Padding()),
-        };
-        let reference_rect =
-            ResolveTransformReferenceRect(reference_box, fragment.ViewSize(), borders, padding);
-        let transform_origin = style.transform_origin();
-        let resolved = TransformPayloadForRole(style, PaintPropertyRole::Transform)
-            .as_ref()
-            .map_or_else(TransformMatrix::default, |transform| {
-                ResolveLocalTransformAroundReferenceBox(
-                    transform,
-                    Offset {
-                        x: node.paint_offset.x + node.paint_snap_offset.x,
-                        y: node.paint_offset.y + node.paint_snap_offset.y,
-                    },
-                    reference_rect,
-                    transform_origin.as_ref(),
-                )
-            });
-        let matrix = MultiplyTransforms(
-            &TranslationTransform(-node.paint_snap_offset.x, -node.paint_snap_offset.y),
-            &resolved,
-        );
-        let animation_state = TransformAnimationState {
-            is_running_animation_on_compositor,
-        };
-        let t_matrix = checkpoint();
-        phase_ns[1] += ProfileNs(t_checked, t_matrix);
-        let store = &mut self.property_node_store;
-        let change = paint_model::property_cell::with_writer(|writer| {
-            store.DirectlyUpdateTransform(writer, &current, matrix, [0.0; 3], animation_state)
-        });
-        if change == PaintPropertyChangeType::Unchanged {
-            phase_ns[2] += ProfileNs(t_matrix, checkpoint());
-            return Ok(true);
-        }
-        // 4873-4875.
-        self.intersection_observation_state = self
-            .intersection_observation_state
-            .max(foundation::intersection_observation_state::IntersectionObservationState::Desired);
-        // The flat list of this object and of every descendant shares the
-        // prefix ending at this matrix.
-        ReplaceFlatTransformInSubtree(node, flat_index, &old_matrix, &matrix);
-        let t_updated = checkpoint();
-        phase_ns[2] += ProfileNs(t_matrix, t_updated);
-        // Charged when this function returns, whichever exit it takes.
-        struct CullTimer<'a>(Option<std::time::Instant>, &'a mut u64);
-        impl Drop for CullTimer<'_> {
-            fn drop(&mut self) {
-                *self.1 += ProfileNs(self.0, self.0.map(|_| std::time::Instant::now()));
-            }
-        }
-        let _cull_timer = CullTimer(t_updated, &mut phase_ns[3]);
-        // CullRectUpdater::PaintPropertiesChanged (cull_rect_updater.cc:
-        // 558-620): a simple-value transform change updates this object's
-        // cull rects. Descendant cull rects are relative to its contents cull
-        // rect, so they stay valid while it does.
-        if change >= PaintPropertyChangeType::ChangedOnlySimpleValues {
-            let cache = node.cache.as_ref().expect("checked above");
-            let inputs = node.cull_decision_inputs;
-            let fragment = node.fragment.as_deref().expect("checked above");
-            let infinite = crate::cull_rect_updater::ShouldUseInfiniteCullRect(
-                fragment,
-                cache.inherited.subtree_should_use_infinite_cull_rect,
-                inputs.has_filter_that_moves_pixels,
-                inputs.has_perspective,
-                inputs.has_active_transform_animation,
-                inputs.has_non_composited_transform,
-                node.previous_paint_result.get(),
-            );
-            if !infinite.use_infinite {
-                let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(
-                    node.DocumentResources().map(|resources| &**resources),
-                );
-                let (self_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
-                    cache.inherited.cull,
-                    Some(node.self_cull_rect),
-                    &self.viewport_properties.nodes,
-                    &cache.inherited.properties.nodes,
-                    &node.properties.nodes,
-                    expansion_ratio,
-                );
-                let (contents_cull, _) = CullRectUpdater::ComputeFragmentContentsCullRect(
-                    self_cull,
-                    Some(node.cull_rect),
-                    &self.viewport_properties.nodes,
-                    &node.properties.nodes,
-                    &node.contents_properties.nodes,
-                    expansion_ratio,
-                );
-                // The cull rect moved beyond its expanded window: repaint
-                // and descendant cull updates belong to the full walk.
-                if self_cull != node.self_cull_rect || contents_cull != node.cull_rect {
-                    return Err(8);
-                }
-            }
-        }
-        Ok(true)
-    }
-
-    fn WalkTree(
-        &mut self,
-        root: PaintFragmentSource<'_>,
-        source_lease: PaintFragmentLease,
-    ) -> Box<PaintTreeNode<'static>> {
+    fn WalkTree(&mut self, root: PaintFragmentSource<'_>, source_lease: PaintFragmentLease) {
         self.active_blocking_wheel_targets = self.root_blocking_wheel_targets.clone();
         // Layout keeps its Paint publication state across a replacement
         // LayoutResult (LayoutPaintState::AdoptReplacementResult), as Chromium
         // keeps FragmentData on the LayoutObject across relayout
-        // (core/layout/layout_box.cc:2523-2561,2620-2661). Only a different
-        // state invalidates every retained reference; a replacement result of
-        // the same state leaves the retained cursors into its reused clean
-        // fragments valid, and the retained lease keeps the previous result
-        // alive until RetainTree.
+        // (core/layout/layout_box.cc:2523-2561,2620-2661). A different state
+        // has fresh FragmentData: every object is visited.
         let (source_owner_changed, source_result_changed) =
             match self.retained_source_lease.as_ref() {
                 Some(retained) => (
@@ -9751,48 +5856,50 @@ impl PrePaintTreeWalk {
                 None => (true, true),
             };
         let source_owner_changed = source_owner_changed || self.local_frame_sources_changed;
-        let source_result_changed = source_result_changed || source_owner_changed;
         self.source_owner_changed = source_owner_changed;
-        self.source_result_changed = source_result_changed;
+        self.source_result_changed = source_result_changed || source_owner_changed;
         self.pending_source_lease = Some(source_lease);
+        // The lease above keeps this root alive until CommitWalk retains it.
+        self.pending_root = Some(unsafe {
+            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
+                root.Cursor(),
+            )
+        });
         self.completed_local_frame_prepaint.clear();
         self.paint_invalidator.BeginPass();
-        // The root's dirty bits decide the clean-tree admission below.
+        // Source: LocalFrameView::ExecuteAllPendingUpdates. Taking the set
+        // makes each deferred object's style current on its sidecars; the
+        // walk must reach them although no dirty bit leads there.
+        self.must_visit_clients.clear();
+        for chain in root.Cursor().TakePendingTransformUpdateClientChains() {
+            self.must_visit_clients.extend(chain);
+        }
+        self.must_visit_clients
+            .extend(self.local_frame_ancestors.iter().copied());
+        self.previous_display_lock_walks = std::mem::take(&mut self.pending_display_lock_walks);
+        for (client, ancestors) in &self.previous_display_lock_walks {
+            self.must_visit_clients.insert(*client);
+            self.must_visit_clients.extend(ancestors.iter().copied());
+        }
+        self.next_local_frame_ancestors.clear();
+        self.walk_ancestors.clear();
         let root = unsafe { root.ReadPrePaintInvalidationForVisit() };
-        // A sliced inline box's strip is computed when it is read
-        // (ViewStitchedDecoration over the live inline cursor), as Chromium's
-        // InlineBoxFragmentPainter does; PrePaint does not pre-populate it.
         self.requires_main_thread_for_background_attachment_fixed = root
             .paint
             .RequiresMainThreadScrollingForBackgroundAttachmentFixed();
-        // Chromium clears changed bits on the persistent Paint property-node
-        // identities after PaintArtifactCompositor consumes the artifact.
-        // The compositor adapter does the same through ClearChangedToRoot().
-        // Do not clone and rebind the resident graph here: that would preserve
-        // a second snapshot-local marker model which Chromium does not have.
         self.stats = PrePaintUpdateStats::default();
-        self.stats.source_result_replaced = source_result_changed && !source_owner_changed;
+        self.stats.source_result_replaced = self.source_result_changed && !source_owner_changed;
         self.transform_world_memo.clear();
         self.intersection_observation_state = Default::default();
-        self.walk_generation = self
-            .walk_generation
-            .checked_add(1)
-            .expect("PrePaint pass exhausted");
-        // Process-unique, so no retained node of any walk already holds it.
-        static PRE_PAINT_REVISION: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
-        self.revision_generation =
-            PRE_PAINT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        self.resource_memo.clear();
         // The slots registered by this pass's builds (RegisterProperty); the
-        // builders update the resident slot nodes in place. Retained objects
-        // keep their slots without registering them again, as Chromium's
-        // clean FragmentData keeps its ObjectPaintProperties.
+        // builders update the resident slot nodes in place. Objects the walk
+        // does not visit keep their FragmentData's ObjectPaintProperties.
         self.property_keys.clear();
         self.released_property_keys.clear();
-        self.released_slot_nodes.clear();
         self.own_key_log.clear();
         self.own_change_log.clear();
+        self.logical_effects_changed.clear();
+        self.visited_inline_outline = false;
         self.property_node_store.BeginUpdate();
         let viewport = ArtifactViewport(root.Cursor().DocumentResources().map(|resources| &**resources));
         let environment_changed = viewport != self.viewport;
@@ -9808,8 +5915,7 @@ impl PrePaintTreeWalk {
             self.viewport = viewport;
             // Blink updates the viewport-owned clip node in place. Its value
             // changes as the window resizes, but the property slot remains the
-            // same node so descendants do not acquire a new clip ancestry on
-            // every source resize sample.
+            // same node so descendants keep their clip ancestry.
             self.viewport_properties = PropertyTreeState::default();
             if let Some(rect) = viewport {
                 let id = self.property_node_store.SlotId(Some(viewport_clip_key));
@@ -9836,8 +5942,6 @@ impl PrePaintTreeWalk {
         // FragmentData cull rectangles live in their corresponding property
         // state. The initial viewport rectangle is in viewport-properties
         // space; CullRectUpdater maps it once at each descendant boundary.
-        // The root ScrollTranslation already lives in the descendant chain,
-        // so no scroll offset is added to this initial window.
         let visible_root_cull = viewport;
         if self.viewport_properties.clip_id != 0 {
             self.property_keys
@@ -9847,11 +5951,7 @@ impl PrePaintTreeWalk {
         // VisualViewportPaintPropertyTreeBuilder::Update. Chromium updates
         // the visual viewport before walking the LayoutView, then starts the
         // current, absolute and fixed transform contexts at the visual
-        // viewport scroll translation. Keep the same resident nodes in the
-        // inherited state so LayoutView's paint-offset/scroll translations
-        // and every page-content chunk are descendants of overscroll and page
-        // scale. Publishing the nodes as compositor viewport metadata alone
-        // does not establish that ancestry.
+        // viewport scroll translation.
         if let Some(viewport) = viewport {
             let (scroll_offset, visual_state) =
                 (self.visual_viewport_scroll_offset, self.visual_viewport_state);
@@ -9868,6 +5968,45 @@ impl PrePaintTreeWalk {
             self.viewport_properties.transform_id = visual_scroll_translation.id;
             self.viewport_properties.nodes.transform = visual_scroll_translation;
         }
+        // A document resource change (an image or font that loaded, a new
+        // device scale) reaches every object that paints with it; Chromium
+        // marks those objects (ImageChanged, SetNeedsPaintPropertyUpdate).
+        // PrePaint compares the catalogs and visits every object instead.
+        let resources = root.Cursor().DocumentResources().cloned();
+        let mut resources_changed = match (&self.last_document_resources, &resources) {
+            (None, None) => false,
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => false,
+            (Some(a), Some(b)) => !layout::paint::SamePaintResourcesFor(a, b, u8::MAX),
+            _ => true,
+        };
+        self.last_document_resources = resources;
+        let frame_resources: Vec<(u64, Option<Arc<PaintResources>>)> = self
+            .local_frame_views
+            .iter()
+            .map(|(owner, view)| (*owner, view.root.DocumentResources().cloned()))
+            .collect();
+        for (owner, current) in frame_resources {
+            let changed = match (self.last_frame_resources.get(&owner), &current) {
+                (None, None) => false,
+                (Some(a), Some(b)) if Arc::ptr_eq(a, b) => false,
+                (Some(a), Some(b)) => !layout::paint::SamePaintResourcesFor(a, b, u8::MAX),
+                _ => true,
+            };
+            resources_changed |= changed;
+            match current {
+                Some(current) => {
+                    self.last_frame_resources.insert(owner, current);
+                }
+                None => {
+                    self.last_frame_resources.remove(&owner);
+                }
+            }
+        }
+        let local_frame_views = &self.local_frame_views;
+        self.last_frame_resources
+            .retain(|owner, _| local_frame_views.contains_key(owner));
+        self.full_walk =
+            !self.walked_once || source_owner_changed || environment_changed || resources_changed;
         let properties = self.viewport_properties.clone();
         let context = InheritedContext {
             inside_blocking_wheel_event_handler: false,
@@ -9876,9 +6015,7 @@ impl PrePaintTreeWalk {
             paint_space: Offset::default(),
             clip: viewport,
             // Blink's CullRect::ChangedEnough keeps an expanded sliding
-            // window until the visible viewport approaches its edge. This
-            // lets incremental resize update the exact viewport clip without
-            // repainting clean descendants which already have coverage.
+            // window until the visible viewport approaches its edge.
             cull: visible_root_cull,
             transforms: FlatTransforms::default(),
             opacity: 1.0,
@@ -9894,11 +6031,9 @@ impl PrePaintTreeWalk {
             root: true,
             flex_or_grid_item: false,
         };
-        let mut previous = self.retained_tree.take();
         // LayoutView::BackgroundRect() and PreviousBackgroundRect() read
-        // once per walk: Chromium reads them once, in the LayoutView's
-        // ComputeViewBackgroundInvalidation (box_paint_invalidator.cc:
-        // 257-259); nothing in PrePaint changes either before that.
+        // once per walk, as ComputeViewBackgroundInvalidation reads them
+        // (box_paint_invalidator.cc:257-259).
         let root_data: &FragmentPaintData = &root;
         let view_background_rects = ViewBackgroundRects::Read(root_data);
         self.view_background_rects = Some((
@@ -9906,106 +6041,55 @@ impl PrePaintTreeWalk {
             view_background_rects,
         ));
         self.view_background_geometry_changed =
-            BoxPaintInvalidator::ViewBackgroundGeometryChangedWithRects(
-                view_background_rects,
-                previous.as_ref().and_then(|node| node.fragment.as_deref()),
-            );
-        // A viewport value change dirties the viewport clip and LayoutView,
-        // not every descendant, while the same LayoutResult sidecar remains
-        // resident. A replacement owner is different: retained nodes contain
-        // raw references into the preceding sidecar, so Chromium's in-place
-        // FragmentData update cannot be emulated by identity-only rebinding.
-        // Force one linear old/new walk before releasing that preceding lease.
-        // A replacement LayoutResult of the same owner needs no such walk:
-        // UpdateNode visits the dirty objects and skips each clean subtree
-        // whose root still names the same reused fragment.
-        let force = RequiresFullSourceWalk(source_owner_changed, self.retained_tree_valid);
-        // Source: pre_paint_tree_walk.cc:418-437. With no dirty bit on the
-        // LayoutView and none below it, no object requires PrePaint. This is
-        // UpdateNode's clean-subtree admission applied to the root.
-        let entirely_clean = self.local_frame_views.is_empty()
-            && self.retained_local_frame_leases.is_empty()
-            && !force
-            && previous.as_deref().is_some_and(|node| {
-                (!source_result_changed || WalkedSameSourceOwner(node, root))
-                    && node
-                        .cache
-                        .as_ref()
-                        .is_some_and(|cache| self.SameContext(&cache.inherited, &context))
-                    && self.RetainedSelfUnchanged(node, root)
-                    && self.RetainedDescendantsUnchanged(node, root)
-            });
-        if entirely_clean {
-            let tree = previous.unwrap();
-            let cache = tree.cache.as_ref().unwrap();
-            self.stats.reused_nodes = cache.nodes;
-            self.stats.skipped_subtrees = 1;
-            self.stats.self_unchanged_nodes = 1;
-            self.stats.subtree_unchanged_nodes = 1;
-            self.resource_memo.clear();
-            self.next_property_id = self.property_node_store.next_id();
-            self.walked_tree_root = &*tree as *const PaintTreeNode<'static> as usize;
-            self.VerifyFragmentData(&tree);
-            return tree;
-        }
-        // Chromium's FragmentData outlives a relayout, so PrePaint visits only
-        // dirty objects. When the sole reason for the forced walk is a
-        // replacement sidecar owner, keep the per-node revision proofs and
-        // rebind clean nodes in one linear walk instead of rebuilding every
-        // property node; subtree skipping stays disabled so no node keeps a
-        // pointer into the released owner.
-        let rebind = force
-            && source_owner_changed
-            && self.retained_tree_valid
-            && previous.is_some();
-        self.stats.rebind_walk = rebind;
-        let force = force && !rebind;
-        // The walk sets needs_post_update itself when it changes topology,
-        // geometry or phase inputs. A retained tree in logical (paint) order
-        // only needs its physical order back for the walk and its logical
-        // order restored afterwards; the other post passes and the client
-        // directory stay current when the walk changed nothing (Chromium
-        // rebuilds no such resident structure per lifecycle update).
-        self.needs_post_update = force || previous.is_none();
-        // A forced or first walk rebuilds every object, so the slots it
-        // registers are the live ones; otherwise slots are released where
-        // the walk drops or rebuilds their owner.
-        self.full_slot_sweep =
-            force || previous.is_none() || std::mem::take(&mut self.slot_sweep_pending);
-        let restore_logical_tree = self.logical_tree_changed && previous.is_some();
-        if restore_logical_tree {
-            if let Some(tree) = &mut previous {
-                // Undo exactly the recorded out-of-flow moves (and the
-                // reordered child lists); a tree without a matching record
-                // takes the complete restore.
-                let root = &**tree as *const PaintTreeNode<'static> as usize;
-                let restored = self.logical_tree_record.as_ref().is_some_and(|record| {
-                    record.root == root && RestorePhysicalFromRecord(record)
-                });
-                if !restored {
-                    self.logical_tree_record = None;
-                    RestorePhysicalOwnership(tree);
-                }
-            }
-        }
+            BoxPaintInvalidator::ViewBackgroundGeometryChangedWithRects(view_background_rects, None);
         // LayoutView's own scope (its layer fragment index); a publication
-        // walk starts at 0.
+        // walk starts at 0. The document root is inside no fragmentainer
+        // unless it is one.
         let root_display_item_fragment = root.ViewOwnDisplayItemFragment().unwrap_or(0);
-        self.display_item_fragment_scope = Some(root_display_item_fragment);
-        // The document root is inside no fragmentainer unless it is one.
         let root_fragmentainer = root.ViewOwnFragmentainerInstanceId().unwrap_or(0);
+        // Source: pre_paint_tree_walk.cc:418-437. With no dirty bit on the
+        // LayoutView and none below it, no object requires PrePaint.
+        let entirely_clean = !self.full_walk
+            && self.local_frame_views.is_empty()
+            && self.must_visit_clients.is_empty()
+            && !root.pre_paint_invalidation.own()
+            && !root.pre_paint_invalidation.descendants()
+            && root
+                .Cursor()
+                .PrePaintData::<PrePaintFragmentData>()
+                .is_some_and(|data| {
+                    let record = data.WalkRecord();
+                    record.walked
+                        && record.walked_owner == WalkedOwner(root.Cursor())
+                        && record.display_item_fragment == root_display_item_fragment
+                        && record.fragmentainer == root_fragmentainer
+                        && record.size == root.ViewSize()
+                });
+        if entirely_clean {
+            self.pending_display_lock_walks = std::mem::take(&mut self.previous_display_lock_walks);
+            self.view_background_rects = None;
+            self.stats.skipped_subtrees = 1;
+            self.next_property_id = self.property_node_store.next_id();
+            return;
+        }
+        self.display_item_fragment_scope = Some(root_display_item_fragment);
         self.fragmentainer_scope = Some(root_fragmentainer);
         // This walk visits objects and clears their paint flags.
         self.consuming_walks = self.consuming_walks.wrapping_add(1);
-        let mut tree = self.UpdateNode(
+        self.WalkObject(
             root,
-            context,
-            PaintInvalidatorContext::default(),
-            previous,
-            force,
-            false,
+            WalkContext {
+                inherited: context,
+                invalidation: PaintInvalidatorContext::default(),
+                force_subtree: false,
+                old_parent_contents_cull: None,
+                auto_dark_mode_paused: false,
+                leading_svg_matrix: None,
+            },
         );
         self.view_background_rects = None;
+        self.display_item_fragment_scope = None;
+        self.fragmentainer_scope = None;
         // Source: pre_paint_tree_walk.cc:1584-1585. Clear each visited
         // object's consumed flags (children before parents, as recorded).
         for data in std::mem::take(&mut self.deferred_paint_flag_clears) {
@@ -10019,170 +6103,46 @@ impl PrePaintTreeWalk {
             .ProcessPendingDelayedPaintInvalidations();
         // Source: cull_rect_updater.cc:279-280,353-354, after the walk.
         CullRectUpdater::FinishUpdate(root.Cursor());
-        self.display_item_fragment_scope = None;
-        self.fragmentainer_scope = None;
-        let scope_changed = tree
-            .display_item_fragment
-            .is_some_and(|old| old != root_display_item_fragment)
-            || tree
-                .fragmentainer_instance_id
-                .is_some_and(|old| old != root_fragmentainer);
-        tree.display_item_fragment = Some(root_display_item_fragment);
-        tree.fragmentainer_instance_id = Some(root_fragmentainer);
-        if scope_changed {
-            RefreshInheritedDisplayItemFragments(&mut tree);
-        }
-        // Without a topology or structure change the logical parents, the
-        // escaping out-of-flow subtrees and the sibling orders are the ones
-        // recorded: redo those moves only (Chromium's walk keeps no second
-        // tree order, so it has nothing to rebuild here).
-        let tree_root = &*tree as *const PaintTreeNode<'static> as usize;
-        let mut logical_tree_replayed = false;
-        if restore_logical_tree && !self.needs_post_update {
-            if let Some(record) = self
-                .logical_tree_record
-                .as_ref()
-                .filter(|record| record.root == tree_root)
-            {
-                let mut trace = browser_tracing::span("prepaint", "PrePaint.ReplayLogicalTree");
-                if let Some(fixups) =
-                    ReplayLogicalTree(record, &mut self.property_node_store)
-                {
-                    logical_tree_replayed = true;
-                    trace.set("moves", record.moves.len() as f64);
-                    trace.set("logical_effect_fixups", fixups as f64);
-                }
-            }
-        }
-        if (self.needs_post_update || restore_logical_tree) && !logical_tree_replayed {
-            ResetLogicalEscapes(&mut tree);
-            let mut trace = browser_tracing::span("prepaint", "PrePaint.RestoreLogicalTree");
-            let (changed, fixups) =
-                RestoreLogicalOutOfFlowParents(&mut tree, &mut self.property_node_store);
-            self.logical_tree_changed = changed;
-            self.logical_tree_record = changed.then(|| RecordLogicalTree(&mut tree));
+        self.local_frame_ancestors = std::mem::take(&mut self.next_local_frame_ancestors);
+        // DisplayLockContext: a pending child walk of an object the walk did
+        // not reach went with the object.
+        self.previous_display_lock_walks.clear();
+        // Decision D2: out-of-flow occurrences the walk reached before their
+        // logical parent occurrence (or did not reach while that occurrence's
+        // effect changed) take the logical parent's effect now.
+        if !self.logical_effects_changed.is_empty() {
+            let mut trace = browser_tracing::span("prepaint", "PrePaint.LogicalEffectFixups");
+            let fixups = self.FixupLogicalOutOfFlowEffects(root.Cursor());
             trace.set("logical_effect_fixups", fixups as f64);
-            if !self.needs_post_update {
-                // A full logical restore may regroup out-of-flow layers
-                // under other stacking roots: dirty every retained z-order
-                // list (DirtyZOrderLists, paint_layer_stacking_node.cc:67-83)
-                // as the post pass below would.
-                ClearResidentLayerOrders(&mut tree);
-            }
+            self.stats.post_walk |= fixups != 0;
         }
-        if self.needs_post_update {
+        if self.inline_outline_groups || self.visited_inline_outline {
+            let _trace = browser_tracing::span("prepaint", "PrePaint.PrepareOutlines");
+            self.inline_outline_groups = self.PrepareOutlines(root.Cursor());
             self.stats.post_walk = true;
-            let mut svg_resources = HashMap::default();
-            {
-                let _trace = browser_tracing::span("prepaint", "PrePaint.GatherFinalEffects");
-                self.logical_effect_contexts.clear();
-                GatherFinalEffects(&tree, &mut self.logical_effect_contexts, &mut svg_resources);
-                tree.svg_resource_nodes = Some(Box::new(svg_resources));
-            }
-            {
-                let _trace = browser_tracing::span("prepaint", "PrePaint.ResetPostPaintData");
-                ResetPostPaintData(&mut tree);
-            }
-            {
-                let _trace = browser_tracing::span("prepaint", "PrePaint.PrepareOutlines");
-                self.inline_outline_groups = PrepareOutlines(&mut tree);
-            }
-            {
-                let _trace = browser_tracing::span("prepaint", "PrePaint.MarkPaintPhaseNeeds");
-                MarkPaintPhaseNeeds(&mut tree);
-            }
         }
-        {
-            let mut admission = browser_tracing::span("prepaint", "PrePaint.Admission");
-            admission.set("same_context", self.stats.same_context_nodes as f64);
-            admission.set("retained_context", self.stats.retained_context_nodes as f64);
-            admission.set(
-                "retained_covered",
-                self.stats.retained_geometry_covered_nodes as f64,
-            );
-            // Retained nodes admitted (or rejected) by each rule of the
-            // dirty-bit admission (UpdateNode).
-            admission.set("self_unchanged", self.stats.self_unchanged_nodes as f64);
-            admission.set(
-                "subtree_unchanged",
-                self.stats.subtree_unchanged_nodes as f64,
-            );
-            admission.set("reject_own_bits", self.stats.admission_rejects[0] as f64);
-            admission.set("reject_offset", self.stats.admission_rejects[1] as f64);
-            admission.set("reject_size", self.stats.admission_rejects[2] as f64);
-            admission.set("reject_identity", self.stats.admission_rejects[3] as f64);
-            admission.set("reject_owners", self.stats.admission_rejects[4] as f64);
-            admission.set("reject_resources", self.stats.admission_rejects[5] as f64);
-            admission.set(
-                "reject_descendant_bits",
-                self.stats.admission_rejects[6] as f64,
-            );
-            admission.set(
-                "reject_pending_child_walk",
-                self.stats.admission_rejects[7] as f64,
-            );
-            admission.set(
-                "reject_subtree_resources",
-                self.stats.admission_rejects[8] as f64,
-            );
-            // What the admitted nodes became.
-            admission.set("skipped_subtrees", self.stats.skipped_subtrees as f64);
-            admission.set(
-                "source_result_replaced",
-                self.stats.source_result_replaced as u8 as f64,
-            );
-            admission.set("rebound_nodes", self.stats.rebound_nodes as f64);
-            admission.set("shifted", self.stats.shifted_nodes as f64);
-            admission.set(
-                "invalidation_only",
-                self.stats.invalidation_only_nodes as f64,
-            );
-            self.resource_memo.clear();
-            admission.set(
-                "source_tree_compatible",
-                self.stats.source_tree_compatible_nodes as f64,
-            );
-            admission.set("invalidation_nodes", self.stats.invalidation_nodes as f64);
-            admission.set(
-                "local_geometry_changes",
-                self.stats.local_geometry_changes as f64,
-            );
-            admission.set("post_update", self.needs_post_update as u8 as f64);
-        }
-        // A rebound or rebuilt subtree reads fresh style payloads; a clean
-        // retained subtree keeps the state its last propagation stored.
-        if self.needs_post_update || self.source_owner_changed || self.stats.rebound_nodes > 0 {
-            PropagateAutoDarkModeState(&mut tree, false);
-        } else {
-            UpdateAutoDarkModeStateOnVisitedPath(&mut tree, false, self.walk_generation);
-        }
-        // No post-walk repaint fold: each client invalidation already called
-        // PaintLayer::SetNeedsRepaint on its painting layer, which marked the
-        // painting-container chain (MarkPaintingContainerChainForNeedsRepaint),
-        // and PaintLayerPainter reads those live bits at paint time.
-        // cpp: third_party/blink/renderer/core/paint/object_paint_invalidator.cc:95-121
-        // cpp: third_party/blink/renderer/core/paint/paint_layer.cc:2688-2747
         browser_tracing::instant(
             "prepaint",
             "PrePaint.Repaint",
             &[("cull_change_repaints", self.stats.cull_change_repaints as f64)],
         );
-        // Source: ObjectPaintProperties::Clear* and FragmentData destruction.
-        // A slot dies with the object (or the role) that owned it, which
-        // only the visited objects can have lost; a clean pass frees none.
         {
-            if self.full_slot_sweep {
-                let mut live: HashSet<PaintPropertyKey> =
-                    self.property_keys.values().copied().collect();
-                CollectSubtreeOwnKeys(&tree, &mut |key| {
-                    live.insert(key);
-                });
-                self.property_node_store
-                    .RetainLiveSlots(|key| live.contains(key));
-                self.released_property_keys.clear();
-            } else if !self.released_property_keys.is_empty() {
-                // A key registered again in this pass belongs to an object
-                // that took the slot over (a moved or re-created node).
+            let mut admission = browser_tracing::span("prepaint", "PrePaint.Admission");
+            admission.set("computed_nodes", self.stats.computed_nodes as f64);
+            admission.set("skipped_subtrees", self.stats.skipped_subtrees as f64);
+            admission.set("invalidation_nodes", self.stats.invalidation_nodes as f64);
+            admission.set("full_walk", self.full_walk as u8 as f64);
+            admission.set(
+                "source_result_replaced",
+                self.stats.source_result_replaced as u8 as f64,
+            );
+        }
+        // Source: ObjectPaintProperties::Clear* and FragmentData destruction.
+        // A role a visited object lost is released here unless another
+        // object registered the same key in this pass; a slot whose
+        // FragmentData Layout destroyed goes with its last reference.
+        {
+            if !self.released_property_keys.is_empty() {
                 let registered: HashSet<PaintPropertyKey> =
                     self.property_keys.values().copied().collect();
                 let released: HashSet<PaintPropertyKey> = self
@@ -10195,100 +6155,33 @@ impl PrePaintTreeWalk {
                         .RetainLiveSlots(|key| !released.contains(key));
                 }
             }
-            // The same point clears each dropped node from the
-            // ObjectPaintProperties slot of the occurrence that left the
-            // tree, so no FragmentData keeps a node the store released.
-            ClearReleasedSlotNodes(
-                std::mem::take(&mut self.released_slot_nodes),
-                &self.property_node_store,
-            );
+            // The logical effect contexts of occurrences that are gone hold
+            // the last references to their effects (besides the slot map).
+            for entries in self.logical_effect_contexts.values_mut() {
+                entries.retain(|entry| Arc::strong_count(&entry.effect) > 2);
+            }
+            self.logical_effect_contexts
+                .retain(|_, entries| !entries.is_empty());
+            self.property_node_store.ReleaseUnreferencedFragmentSlots();
             self.intersection_observation_state = self
                 .intersection_observation_state
                 .max(self.property_node_store.intersection_observation_state);
             self.next_property_id = self.property_node_store.next_id();
         }
-        self.VerifyFragmentData(&tree);
-        self.walked_tree_root = tree_root;
-        tree
+        self.walked_once = true;
     }
 
-    /// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK (diagnostic, off by default):
-    /// assert that every node of the walked tree, rebuilt or retained, has
-    /// a PrePaint FragmentData equal to its PaintTreeNode values
-    /// (FragmentDataMismatch). This is the proof that Paint may read the
-    /// FragmentData instead of the node.
-    fn VerifyFragmentData(&self, tree: &PaintTreeNode<'static>) {
-        if !self.fragment_data_check {
-            return;
-        }
-        let _trace = browser_tracing::span("prepaint", "PrePaint.VerifyFragmentData");
-        let mut stack: Vec<&PaintTreeNode<'static>> = vec![tree];
-        while let Some(node) = stack.pop() {
-            stack.extend(node.children.iter().map(|child| &**child));
-            if let Some(mismatch) = FragmentDataMismatch(node, &self.property_node_store) {
-                let name = node.fragment.as_deref().map_or_else(
-                    || Arc::<str>::from("?"),
-                    |fragment| fragment.paint.DisplayItemClientDebugName(),
-                );
-                panic!("RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: {name}: {mismatch}");
-            }
-        }
-    }
-
-    pub fn RetainTree(&mut self, mut tree: Box<PaintTreeNode<'static>>) {
-        if self.stats.post_walk {
-            // Chromium's DisplayItemClient directory is resident across
-            // lifecycle updates. Rebuild the contents without discarding the
-            // per-client storage: a resize commonly preserves the same client
-            // set, so dropping every bucket here only recreates identical
-            // allocations on the next frame.
-            for nodes in self.client_nodes.values_mut() {
-                nodes.clear();
-            }
-            self.resident_nodes.clear();
-            fn collect(
-                node: &mut PaintTreeNode<'static>,
-                clients: &mut HashMap<u64, Vec<*mut PaintTreeNode<'static>>>,
-                nodes: &mut Vec<*mut PaintTreeNode<'static>>,
-            ) {
-                let pointer = node as *mut PaintTreeNode<'static>;
-                nodes.push(pointer);
-                let f = node.fragment.as_deref().unwrap();
-                let mut add = |id| {
-                    if id != 0 {
-                        clients.entry(id).or_default().push(pointer);
-                    }
-                };
-                add(f.paint.DisplayItemClientId());
-                add(f.paint.SelectionClientId());
-                add(f.paint.PaintLayerClientId());
-                if let Some((id, _)) = f.ViewScrollingBackgroundClient() {
-                    add(id);
-                }
-                if let Some(bars) = f.ViewScrollbarClients() {
-                    for (id, _) in [bars.horizontal, bars.vertical, bars.corner]
-                        .into_iter()
-                        .flatten()
-                    {
-                        add(id);
-                    }
-                }
-                for child in &mut node.children {
-                    collect(child, clients, nodes);
-                }
-            }
-            collect(&mut tree, &mut self.client_nodes, &mut self.resident_nodes);
-            self.client_nodes.retain(|_, nodes| !nodes.is_empty());
-        }
-        if &*tree as *const PaintTreeNode<'static> as usize != self.walked_tree_root {
-            // Not the tree the last walk returned: neither its slot releases
-            // nor its logical moves are known.
-            self.slot_sweep_pending = true;
-            self.logical_tree_record = None;
-        }
-        self.retained_tree = Some(tree);
+    /// The walk's results are in use: Paint recorded from them or the
+    /// lifecycle reached PrePaintClean. The Layout result the walk visited
+    /// stays alive for the queries that read its FragmentData between walks
+    /// (hit testing, special painting, the direct property updates); no
+    /// PrePaint tree is retained.
+    pub fn CommitWalk(&mut self) {
         if let Some(lease) = self.pending_source_lease.take() {
             self.retained_source_lease = Some(lease);
+        }
+        if let Some(root) = self.pending_root.take() {
+            self.retained_root = Some(root);
         }
         self.retained_local_frame_leases = self
             .local_frame_views
@@ -10296,7 +6189,138 @@ impl PrePaintTreeWalk {
             .map(|view| view.lease.clone())
             .collect();
         self.local_frame_sources_changed = false;
-        self.retained_tree_valid = true;
+    }
+
+    /// The root of the Layout result the last committed walk visited.
+    pub fn RetainedRoot(&self) -> Option<PaintFragmentCursor<'_>> {
+        self.retained_root
+    }
+
+    /// Every occurrence a PrePaint walk produced FragmentData for, below and
+    /// including `root`, in fragment tree order; an embedded local frame's
+    /// LayoutView follows its owner's children (FramePainter's order).
+    pub fn VisitWalkedOccurrences<'a>(
+        &'a self,
+        root: PaintFragmentCursor<'a>,
+        visit: &mut dyn FnMut(PaintFragmentCursor<'a>, &'a PrePaintFragmentData),
+    ) {
+        let Some(data) = root
+            .PrePaintData::<PrePaintFragmentData>()
+            .filter(|data| data.WasWalked())
+        else {
+            return;
+        };
+        visit(root, data);
+        for child in root.Children() {
+            self.VisitWalkedOccurrences(child, visit);
+        }
+        if let Some(view) = self
+            .local_frame_views
+            .get(&root.PaintData().paint.DisplayItemClientId())
+        {
+            self.VisitWalkedOccurrences(view.Root(), visit);
+        }
+    }
+
+    /// Joins the outline of each inline continuation group onto its first
+    /// occurrence (OutlinePainter paints the united outline once). Returns
+    /// whether any group exists. Only grouped inline outlines are prepared;
+    /// Chromium collects every other outline at paint time
+    /// (BoxFragmentPainter::PaintObject -> FragmentPainter::PaintOutline ->
+    /// AddOutlineRects, core/paint/fragment_painter.cc).
+    fn PrepareOutlines(&self, root: PaintFragmentCursor<'_>) -> bool {
+        let mut groups: BTreeMap<InlineOutlineKey, Vec<PaintFragmentCursor<'_>>> = BTreeMap::new();
+        self.VisitWalkedOccurrences(root, &mut |cursor, data| {
+            let fragment = cursor.PaintData();
+            if InlineOutlineCandidate(fragment) {
+                groups
+                    .entry((fragment.ViewNodeId(), data.WalkRecord().fragmentainer))
+                    .or_default()
+                    .push(cursor);
+            }
+        });
+        let any_group = !groups.is_empty();
+        for occurrences in groups.into_values() {
+            let mut outline_rects = Vec::new();
+            for occurrence in &occurrences {
+                let paint_offset = occurrence
+                    .PrePaintData::<PrePaintFragmentData>()
+                    .map_or(Offset::default(), |data| data.FlatReplay().paint_offset);
+                AppendSelfOutlineRects(occurrence.PaintData(), paint_offset, &mut outline_rects);
+            }
+            let united: Option<Arc<[PaintRect]>> =
+                (!outline_rects.is_empty()).then(|| Arc::from(outline_rects));
+            for (index, occurrence) in occurrences.iter().enumerate() {
+                // SAFETY: the post-walk pass is the occurrence's single
+                // PrePaint writer; no reference into the slot is live.
+                let data = unsafe { occurrence.PrePaintDataMut::<PrePaintFragmentData>() };
+                let flat = data.FlatReplayMut();
+                let rects = if index == 0 { united.clone() } else { None };
+                let unchanged = flat.paints_outline == (index == 0)
+                    && flat.Rare().and_then(|rare| rare.outline_rects.as_ref()).map(|rects| &**rects)
+                        == rects.as_deref();
+                if !unchanged {
+                    flat.SetOutline(index == 0, rects);
+                }
+            }
+        }
+        any_group
+    }
+
+    /// Decision D2 fix-up over the walked tree (see RebindLogicalEffect)
+    /// for the out-of-flow occurrences whose logical parent's effect context
+    /// this walk created or changed. Returns the number of fix-ups.
+    fn FixupLogicalOutOfFlowEffects(&mut self, root: PaintFragmentCursor<'_>) -> usize {
+        let mut ancestors = Vec::new();
+        let mut fixups = 0;
+        self.FixupLogicalOutOfFlowEffectsIn(root, &mut ancestors, &mut fixups);
+        fixups
+    }
+
+    fn FixupLogicalOutOfFlowEffectsIn(
+        &mut self,
+        cursor: PaintFragmentCursor<'_>,
+        ancestors: &mut Vec<u64>,
+        fixups: &mut usize,
+    ) {
+        let Some(fragmentainer) = cursor
+            .PrePaintData::<PrePaintFragmentData>()
+            .filter(|data| data.WasWalked())
+            .map(|data| data.WalkRecord().fragmentainer)
+        else {
+            return;
+        };
+        let fragment = cursor.PaintData();
+        let position = fragment.paint.Position();
+        if position == Position::kAbsolute || position == Position::kFixed {
+            if let Some(logical_id) = fragment.paint.LogicalParentNodeId().filter(|id| {
+                self.logical_effects_changed.contains(id) && !ancestors.contains(id)
+            }) {
+                if let Some(context) =
+                    self.LogicalEffectContextFor(fragment, logical_id, fragmentainer)
+                {
+                    if RebindLogicalEffect(cursor, &context.effect, &mut self.property_node_store) {
+                        *fixups += 1;
+                    }
+                }
+            }
+        }
+        ancestors.push(if fragment.ViewEstablishesPaintState() {
+            fragment.ViewNodeId()
+        } else {
+            0
+        });
+        for child in cursor.Children() {
+            self.FixupLogicalOutOfFlowEffectsIn(child, ancestors, fixups);
+        }
+        let frame_root = self
+            .local_frame_views
+            .get(&fragment.paint.DisplayItemClientId())
+            .map(|view| view.root);
+        if let Some(frame_root) = frame_root {
+            self.FixupLogicalOutOfFlowEffectsIn(frame_root, ancestors, fixups);
+        }
+        ancestors.pop();
     }
 
     /// Source: LocalFrameView::ExecuteAllPendingUpdates and
@@ -10322,10 +6346,10 @@ impl PrePaintTreeWalk {
         let mut trace = browser_tracing::span("prepaint", "PrePaint.DirectAnimationPropertyUpdate");
         let targeted = targeted_nodes.iter().copied().collect::<BTreeSet<_>>();
         trace.set("targeted_nodes", targeted.len() as f64);
-        if targeted.is_empty() || !self.retained_tree_valid || self.retained_tree.is_none() {
+        let Some(root) = self.retained_root.filter(|_| !targeted.is_empty()) else {
             trace.set("rejection", 1.0);
             return None;
-        }
+        };
 
         let mut matched = BTreeSet::new();
         let mut active = BTreeSet::new();
@@ -10333,16 +6357,16 @@ impl PrePaintTreeWalk {
         let mut effect_proposals = BTreeMap::new();
         let mut rejection = 0u8;
 
-        for &pointer in &self.resident_nodes {
-            // RetainTree owns every pointer in this directory. It is rebuilt
-            // whenever topology changes and no Box moves during this method.
-            let node = unsafe { &*pointer };
-            let Some(fragment) = node.fragment.as_deref() else {
-                continue;
-            };
-            if !targeted.contains(&fragment.ViewNodeId()) {
-                continue;
+        // The targeted objects' occurrences, through the committed walk's
+        // FragmentData (Chromium reaches each pending LayoutObject directly).
+        let mut occurrences = Vec::new();
+        self.VisitWalkedOccurrences(root, &mut |cursor, data| {
+            if targeted.contains(&cursor.PaintData().ViewNodeId()) {
+                occurrences.push((cursor, data));
             }
+        });
+        for (cursor, data) in occurrences {
+            let fragment = cursor.PaintData();
             trace.set("fragment_opacity", fragment.paint.style.opacity() as f64);
             matched.insert(fragment.ViewNodeId());
             if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
@@ -10356,7 +6380,12 @@ impl PrePaintTreeWalk {
             }
             let owner = PaintPropertyOwner::Fragment {
                 client,
-                fragment: node.DisplayItemFragment(),
+                fragment: data.WalkRecord().display_item_fragment,
+            };
+            let flat = data.FlatReplay();
+            let local_paint_offset = Offset {
+                x: flat.paint_offset.x + flat.paint_snap_offset.x,
+                y: flat.paint_offset.y + flat.paint_snap_offset.y,
             };
 
             let active_transform_roles = [
@@ -10384,7 +6413,7 @@ impl PrePaintTreeWalk {
                 }
                 active.insert(fragment.ViewNodeId());
                 if IsSvgLayoutChild(fragment.paint.SourceKind())
-                    || !node.applies_transform
+                    || !flat.applies_transform
                     || !TransformPropertyRoles(fragment, style).contains(&role)
                 {
                     rejection = 2;
@@ -10410,17 +6439,14 @@ impl PrePaintTreeWalk {
                     |transform| {
                         ResolveLocalTransformAroundReferenceBox(
                             transform,
-                            Offset {
-                                x: node.paint_offset.x + node.paint_snap_offset.x,
-                                y: node.paint_offset.y + node.paint_snap_offset.y,
-                            },
+                            local_paint_offset,
                             reference_rect,
                             transform_origin.as_ref(),
                         )
                     },
                 );
                 let matrix = MultiplyTransforms(
-                    &TranslationTransform(-node.paint_snap_offset.x, -node.paint_snap_offset.y),
+                    &TranslationTransform(-flat.paint_snap_offset.x, -flat.paint_snap_offset.y),
                     &resolved,
                 );
                 let change = paint_model::property_cell::with_access(|access| {
@@ -10572,12 +6598,11 @@ impl PrePaintTreeWalk {
     /// (PaintLayer::ClearNeedsRepaintRecursively).
     // cpp: third_party/blink/renderer/core/frame/local_frame_view.cc:3185-3188
     // cpp: third_party/blink/renderer/core/paint/paint_layer.cc:2688-2785
-    pub fn RootNeedsRepaint(&self, root: &PaintTreeNode<'_>) -> bool {
-        !root.is_paint_layer
-            || root
-                .fragment
-                .as_deref()
-                .is_none_or(|fragment| fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint())
+    pub fn RootNeedsRepaint(&self, root: PaintFragmentCursor<'_>) -> bool {
+        !root
+            .PrePaintData::<PrePaintFragmentData>()
+            .is_some_and(|data| data.WasWalked() && data.WalkRecord().is_paint_layer)
+            || root.PaintData().paint.PaintLayerSelfOrDescendantNeedsRepaint()
     }
 
     pub fn HasLocalFrameViews(&self) -> bool {
@@ -10594,12 +6619,6 @@ impl PrePaintTreeWalk {
         self.consuming_walks != self.recorded_consuming_walks
     }
 
-    /// Return the compositor element ids created by the completed PrePaint
-    /// walk for CSS transform/opacity animation targets. Chromium creates the
-    /// KeyframeModel and its paint-property node in the same main-frame
-    /// commit. Rechrom keeps those owners in separate packages, so Page uses
-    /// this typed identity list to preserve that ordering without exposing the
-    /// resident Paint tree.
     pub fn CompositedAnimationPropertyBindings(
         &self,
         targeted_nodes: &[u64],
@@ -10656,85 +6675,57 @@ impl PrePaintTreeWalk {
             })
         }
 
-        fn walk(
-            node: &PaintTreeNode<'_>,
-            targeted: &HashSet<u64>,
-            matched: &mut HashSet<u64>,
-            seen_transforms: &mut HashSet<u64>,
-            seen_effects: &mut HashSet<u64>,
-            output: &mut Vec<CompositedAnimationPropertyBinding>,
-        ) {
-            let node_id = node
-                .fragment
-                .as_deref()
-                .map_or(0, |fragment| fragment.ViewNodeId());
-            if targeted.contains(&node_id) {
-                matched.insert(node_id);
-                browser_tracing::instant(
-                    "prepaint",
-                    "PrePaint.CompositedAnimationTarget",
-                    &[
-                        ("node_id", node_id as f64),
-                        ("present", 1.0),
-                        ("applies_transform", node.applies_transform as u8 as f64),
-                        ("applies_opacity", node.applies_opacity as u8 as f64),
-                        (
-                            "active_transform",
-                            paint_model::property_cell::with_access(|access| {
-                                node.properties.nodes.transform.HasActiveTransformAnimation(access)
-                            }) as u8 as f64,
-                        ),
-                        (
-                            "active_opacity",
-                            paint_model::property_cell::with_access(|access| {
-                                node.properties.nodes.effect.HasActiveOpacityAnimation(access)
-                            }) as u8 as f64,
-                        ),
-                    ],
-                );
-                if node.applies_transform {
-                    collect_transform(
-                        node_id,
-                        Some(&node.properties.nodes.transform),
-                        seen_transforms,
-                        output,
-                    );
-                }
-                if node.applies_opacity {
-                    collect_effect(
-                        node_id,
-                        Some(&node.properties.nodes.effect),
-                        seen_effects,
-                        output,
-                    );
-                }
-            }
-            for child in &node.children {
-                walk(
-                    child,
-                    targeted,
-                    matched,
-                    seen_transforms,
-                    seen_effects,
-                    output,
-                );
-            }
-        }
-
-        let Some(tree) = self.retained_tree.as_deref() else {
+        let Some(root) = self.retained_root else {
             return Vec::new();
         };
         let targeted = targeted_nodes.iter().copied().collect::<HashSet<_>>();
         let mut matched = HashSet::new();
         let mut output = Vec::new();
-        walk(
-            tree,
-            &targeted,
-            &mut matched,
-            &mut HashSet::new(),
-            &mut HashSet::new(),
-            &mut output,
-        );
+        let mut seen_transforms = HashSet::new();
+        let mut seen_effects = HashSet::new();
+        // The targeted objects' occurrences and their LocalBorderBoxProperties
+        // (fragment_data.h:137-142); `applies_transform` / `applies_opacity`
+        // are the builder's facts the walk recorded for the occurrence.
+        self.VisitWalkedOccurrences(root, &mut |cursor, data| {
+            let node_id = cursor.PaintData().ViewNodeId();
+            if !targeted.contains(&node_id) {
+                return;
+            }
+            matched.insert(node_id);
+            let Some(state) = data.LocalBorderBoxPropertiesRef() else {
+                return;
+            };
+            let applies_transform = data.FlatReplay().applies_transform;
+            let applies_opacity = data.WalkRecord().applies_opacity;
+            browser_tracing::instant(
+                "prepaint",
+                "PrePaint.CompositedAnimationTarget",
+                &[
+                    ("node_id", node_id as f64),
+                    ("present", 1.0),
+                    ("applies_transform", applies_transform as u8 as f64),
+                    ("applies_opacity", applies_opacity as u8 as f64),
+                    (
+                        "active_transform",
+                        paint_model::property_cell::with_access(|access| {
+                            state.transform.HasActiveTransformAnimation(access)
+                        }) as u8 as f64,
+                    ),
+                    (
+                        "active_opacity",
+                        paint_model::property_cell::with_access(|access| {
+                            state.effect.HasActiveOpacityAnimation(access)
+                        }) as u8 as f64,
+                    ),
+                ],
+            );
+            if applies_transform {
+                collect_transform(node_id, Some(&state.transform), &mut seen_transforms, &mut output);
+            }
+            if applies_opacity {
+                collect_effect(node_id, Some(&state.effect), &mut seen_effects, &mut output);
+            }
+        });
         for node_id in targeted.difference(&matched) {
             browser_tracing::instant(
                 "prepaint",
@@ -10753,113 +6744,56 @@ impl PrePaintTreeWalk {
     }
 
     /// PaintController validation changes client metadata even without a new
-    /// layout snapshot. Update only resident sources for the committed clients.
+    /// layout snapshot. Update the walked occurrences that carry a committed
+    /// client in detached payload state (live source clients were validated
+    /// by the Layout commit's PaintController cycle).
     pub fn CommitClients(&mut self, clients: impl IntoIterator<Item = u64>) {
-        for id in clients {
-            let Some(nodes) = self.client_nodes.get(&id) else {
-                continue;
-            };
-            for &pointer in nodes {
-                // This directory is rebuilt before publication whenever owners
-                // are added/removed. Box addresses survive local updates.
-                let node = unsafe { &mut *pointer };
-                let f = node.fragment.as_deref_mut().unwrap();
-                // Live source clients were validated by the Layout commit's
-                // PaintController cycle; only detached payload state is local.
-                if f.paint.DisplayItemClientId() == id
-                    && f.paint.display_item_client_is_cacheable
-                    && !f.paint.HasLiveDisplayItemClient()
-                {
-                    f.paint
-                        .display_item_client_invalidation_reason
-                        .replace(PaintInvalidationReason::kNone);
-                    f.paint.display_item_client_is_just_created.set(false);
-                }
-                if f.paint.SelectionClientId() == id
-                    && f.paint.selection_client_is_cacheable
-                    && !f.paint.HasLiveSelectionClient()
-                {
-                    f.paint
-                        .selection_client_invalidation_reason
-                        .replace(PaintInvalidationReason::kNone);
-                }
-                let live_scroll_client = f.paint.HasLiveScrollClient(id);
-                let scroll_matches = !live_scroll_client
-                    && f.ViewScrollContainer().is_some_and(|scroll| {
-                        scroll.scrolling_background_client_id == id
-                            && scroll.scrolling_background_client_is_cacheable
-                    });
-                if let Some(scroll) = scroll_matches
-                    .then(|| f.paint.scroll_container.as_mut())
-                    .flatten()
-                {
-                    if scroll.scrolling_background_client_id == id
-                        && scroll.scrolling_background_client_is_cacheable
-                    {
-                        scroll
-                            .scrolling_background_client_invalidation_reason
-                            .replace(PaintInvalidationReason::kNone);
-                        scroll
-                            .scrolling_background_client_is_just_created
-                            .set(false);
-                    }
-                }
-                let bars_match = !live_scroll_client && f.paint.scrollbars.as_ref().is_some_and(|bars| {
-                    (bars.corner_client_id == id && bars.corner_client_is_cacheable)
-                        || [&bars.horizontal, &bars.vertical]
-                            .into_iter()
-                            .flatten()
-                            .any(|axis| {
-                                axis.display_item_client_id == id
-                                    && axis.display_item_client_is_cacheable
-                            })
-                });
-                if let Some(bars) = bars_match.then(|| f.paint.scrollbars.as_mut()).flatten() {
-                    let changes = (bars.corner_client_id == id && bars.corner_client_is_cacheable)
-                        || [&bars.horizontal, &bars.vertical]
-                            .into_iter()
-                            .flatten()
-                            .any(|axis| {
-                                axis.display_item_client_id == id
-                                    && axis.display_item_client_is_cacheable
-                            });
-                    if changes {
-                        let bars = Arc::make_mut(bars);
-                        for axis in [&mut bars.horizontal, &mut bars.vertical]
-                            .into_iter()
-                            .flatten()
-                        {
-                            if axis.display_item_client_id == id
-                                && axis.display_item_client_is_cacheable
-                            {
-                                axis.display_item_client_invalidation_reason
-                                    .replace(PaintInvalidationReason::kNone);
-                                axis.display_item_client_is_just_created.set(false);
-                            }
-                        }
-                        if bars.corner_client_id == id && bars.corner_client_is_cacheable {
-                            bars.corner_client_invalidation_reason
-                                .replace(PaintInvalidationReason::kNone);
-                            bars.corner_client_is_just_created.set(false);
-                        }
-                    }
-                }
+        let clients: HashSet<u64> = clients.into_iter().collect();
+        let Some(root) = self.retained_root.filter(|_| !clients.is_empty()) else {
+            return;
+        };
+        let mut occurrences = Vec::new();
+        self.VisitWalkedOccurrences(root, &mut |cursor, _| {
+            let f = cursor.PaintData();
+            let mut ids = vec![f.paint.DisplayItemClientId(), f.paint.SelectionClientId()];
+            if let Some((id, _)) = f.ViewScrollingBackgroundClient() {
+                ids.push(id);
+            }
+            if let Some(bars) = f.ViewScrollbarClients() {
+                ids.extend(
+                    [bars.horizontal, bars.vertical, bars.corner]
+                        .into_iter()
+                        .flatten()
+                        .map(|(id, _)| id),
+                );
+            }
+            ids.retain(|id| *id != 0 && clients.contains(id));
+            ids.dedup();
+            if !ids.is_empty() {
+                occurrences.push((cursor, ids));
+            }
+        });
+        for (cursor, ids) in occurrences {
+            // SAFETY: the committed walk's lease keeps the payload alive and
+            // PrePaint is its single lifecycle writer here.
+            let f = unsafe { cursor.PaintDataMut() };
+            for id in ids {
+                CommitDetachedClient(f, id);
             }
         }
     }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CanRetainDisplayLockedChildren, ClipsOverflow, CullRectChangeNeedsRepaint,
-        EnclosingMaskClipRectInPropertySpace, FilterTaintChanged, HasFilterThatMovesPixels,
-        HasPerspective, InvalidateClientsForCullRectChange, MarkPaintPhaseNeeds, NeedsOverflowClip,
-        NeedsPaintOffsetTranslation, ObjectRequiresTreeBuilderContext, OwnFilterOriginTainted,
-        PaintPropertyRole, PaintPropertyTreeBuilder, PaintRect, PaintTreeNode, PixelSnappedRect,
-        PrePaintTreeWalk, PrepareOutlines, PropagateAutoDarkModeState,
-        PropertyTreeState, RequiresFullSourceWalk, ResidentFragment, ResolveClipPath,
-        ResolveFragmentGeometry, ResolveMaskLayers, RetainImagePaintedRect, SamePhaseInputs,
+        ClipsOverflow, CullRectChangeNeedsRepaint, EnclosingMaskClipRectInPropertySpace,
+        FilterTaintChanged, HasFilterThatMovesPixels, HasPerspective,
+        InvalidateClientsForCullRectChange, NeedsOverflowClip, NeedsPaintOffsetTranslation,
+        OwnFilterOriginTainted, PaintPropertyRole, PaintPropertyTreeBuilder, PaintRect,
+        PaintTreeNode, PixelSnappedRect, PrePaintTreeWalk, PropertyTreeState,
+        ResolveClipPath, ResolveFragmentGeometry, ResolveMaskLayers,
         SvgTransformToPixelSnappedBorderBox, TransformPropertyRoles,
     };
     use layout::fragment::FragmentKind;
@@ -10937,223 +6871,6 @@ mod tests {
             Some(expanded),
             Some(old),
         ));
-    }
-
-    #[test]
-    fn tree_builder_context_respects_descendant_dirty_bits_and_display_lock() {
-        let mut fragment = FragmentPaintData::default();
-        fragment
-            
-            .pre_paint_invalidation
-            .descendant_needs_paint_property_update = true;
-        assert!(ObjectRequiresTreeBuilderContext(&fragment));
-
-        fragment
-            
-            .pre_paint_invalidation
-            .child_pre_paint_blocked_by_display_lock = true;
-        assert!(!ObjectRequiresTreeBuilderContext(&fragment));
-
-        fragment
-            
-            .pre_paint_invalidation
-            .should_check_layout_for_paint_invalidation = true;
-        assert!(ObjectRequiresTreeBuilderContext(&fragment));
-    }
-
-    #[test]
-    fn display_locked_children_do_not_outlive_an_incompatible_source_lease() {
-        assert!(CanRetainDisplayLockedChildren(true, false));
-        assert!(!CanRetainDisplayLockedChildren(true, true));
-        assert!(!CanRetainDisplayLockedChildren(false, true));
-    }
-
-    #[test]
-    fn replacement_source_owner_forces_follow_up_outline_walks() {
-        // The regression was a retained ResidentFragment pointer surviving a
-        // replacement LayoutResult lease. A later animation repaint entered
-        // SamePhaseInputs::outline_style after the old sidecar was freed.
-        // Every replacement round must therefore take the full linear walk,
-        // even when revisions are otherwise cacheable.
-        let mut resident_source: Option<Box<FragmentPaintData>> = None;
-        let mut resident_node: Option<Box<PaintTreeNode<'static>>> = None;
-        for revision in [1, 2, 3, u64::MAX] {
-            assert!(RequiresFullSourceWalk(true, true));
-
-            let mut source = Box::new(FragmentPaintData::default());
-            source.paint.has_source = true;
-            source.paint.style.outline_style = if revision % 2 == 0 {
-                BorderLineStyle::kDashed
-            } else {
-                BorderLineStyle::kSolid
-            };
-            source.paint.style.outline_width = revision as f64;
-            let node = PaintPropertyTreeBuilder::new(&mut PrePaintTreeWalk::default()).BuildNode(
-                &source,
-                Offset::default(),
-                Offset::default(),
-                None,
-                None,
-                Vec::new(),
-                1.0,
-                Offset::default(),
-                false,
-                PropertyTreeState::default(),
-                None,
-                0,
-                true,
-                true,
-                Offset::default(),
-                false,
-                None,
-                false,
-                None,
-                None,
-                false,
-                false,
-            );
-            // Destroy the old retained node before its source owner, then
-            // install the replacement pair. This is the order enforced by
-            // Walk/RetainTree around the lease boundary.
-            resident_node = Some(Box::new(node));
-            resident_source = Some(source);
-            let current = resident_node
-                .as_deref()
-                .unwrap()
-                .fragment
-                .as_deref()
-                .unwrap();
-            assert_eq!(
-                current.paint.style.outline_style(),
-                resident_source
-                    .as_deref()
-                    .unwrap()
-                    .paint
-                    .style
-                    .outline_style()
-            );
-            assert!(SamePhaseInputs(current, current));
-        }
-        assert!(!RequiresFullSourceWalk(false, true));
-        assert!(RequiresFullSourceWalk(false, false));
-    }
-
-    #[test]
-    fn inline_outline_group_joins_exact_source_rects_in_paint_space() {
-        fn occurrence(local_rects: Vec<FragmentPaintRect>) -> FragmentPaintData {
-            let mut fragment = FragmentPaintData::default();
-            fragment.node_id = 17;
-            fragment.fragmentainer_instance_id = 3;
-            fragment.kind = FragmentKind::kBox;
-            fragment.paint.has_source = true;
-            fragment.paint.establishes_paint_state = true;
-            fragment.paint.display = Display::kInline;
-            fragment.paint.style.SetVisibleForTesting(true);
-            fragment.paint.style.outline_width = 2.0;
-            fragment.paint.style.outline_style = BorderLineStyle::kSolid;
-            fragment.paint.style.outline_color = Color {
-                alpha: 1.0,
-                ..Color::default()
-            };
-            fragment.paint.self_outline = Some(SelfOutlinePaintData {
-                rects: local_rects,
-                width: 2.0,
-                offset: 0.0,
-            });
-            fragment
-        }
-
-        // AddSelfOutlineRects returns the complete inline continuation group
-        // relative to its one source outline owner. Non-owner occurrences
-        // export authoritative empty geometry.
-        let first = occurrence(vec![
-            FragmentPaintRect {
-                offset: Offset { x: 1.0, y: 2.0 },
-                size: Size {
-                    width: 10.0,
-                    height: 20.0,
-                },
-            },
-            FragmentPaintRect {
-                offset: Offset { x: 203.0, y: 204.0 },
-                size: Size {
-                    width: 30.0,
-                    height: 40.0,
-                },
-            },
-        ]);
-        let second = occurrence(Vec::new());
-        let mut owner = PaintTreeNode::default();
-        owner.SetOwnedFragmentForTesting(&first);
-        owner.paint_offset = Offset { x: 100.0, y: 200.0 };
-        let mut child = PaintTreeNode::default();
-        child.SetOwnedFragmentForTesting(&second);
-        child.paint_offset = Offset { x: 300.0, y: 400.0 };
-        owner.children.push(Box::new(child));
-
-        PrepareOutlines(&mut owner);
-
-        assert_eq!(
-            owner.outline_rects,
-            vec![
-                PaintRect {
-                    x: 101.0,
-                    y: 202.0,
-                    width: 10.0,
-                    height: 20.0,
-                },
-                PaintRect {
-                    x: 303.0,
-                    y: 404.0,
-                    width: 30.0,
-                    height: 40.0,
-                },
-            ]
-        );
-        assert!(!owner.children[0].paints_outline);
-        assert!(owner.children[0].outline_rects.is_empty());
-    }
-
-    #[test]
-    fn rebuilt_image_fragment_retains_painted_rect_for_the_same_client() {
-        let painted_rect = FragmentPaintRect {
-            offset: Offset { x: 10.0, y: 20.0 },
-            size: Size {
-                width: 30.0,
-                height: 40.0,
-            },
-        };
-        let mut previous = FragmentPaintData::default();
-        previous.paint.replaced_is_image = true;
-        previous.paint.display_item_client_id = 7;
-        previous.paint.image_last_paint_rect.set(Some(painted_rect));
-        previous
-            .paint
-            .image_last_painted_id
-            .set(image_resource::PaintImageId(42));
-
-        let mut current = FragmentPaintData::default();
-        current.paint.replaced_is_image = true;
-        current.paint.display_item_client_id = 7;
-        RetainImagePaintedRect(&current, Some(&previous), Some(7));
-        assert_eq!(
-            current.paint.image_last_paint_rect.get(),
-            Some(painted_rect)
-        );
-        assert_eq!(
-            current.paint.image_last_painted_id.get(),
-            image_resource::PaintImageId(42)
-        );
-
-        let mut different_client = FragmentPaintData::default();
-        different_client.paint.replaced_is_image = true;
-        different_client.paint.display_item_client_id = 8;
-        RetainImagePaintedRect(&different_client, Some(&previous), Some(7));
-        assert_eq!(different_client.paint.image_last_paint_rect.get(), None);
-        assert_eq!(
-            different_client.paint.image_last_painted_id.get(),
-            image_resource::PaintImageId::INVALID
-        );
     }
 
     #[test]
@@ -12337,100 +8054,6 @@ mod tests {
     }
 
     #[test]
-    fn committed_resident_clients_become_cache_valid() {
-        let mut fragment = FragmentPaintData::default();
-        fragment.paint.display_item_client_id = 11;
-        fragment.paint.display_item_client_is_cacheable = true;
-        fragment.paint.display_item_client_invalidation_reason =
-            Some(foundation::PaintInvalidationReason::kLayout);
-        fragment.paint.selection_client_id = 12;
-        fragment.paint.selection_client_is_cacheable = true;
-        fragment.paint.selection_client_invalidation_reason =
-            Some(foundation::PaintInvalidationReason::kSelection);
-
-        let mut root = PaintTreeNode::default();
-        root.fragment = Some(ResidentFragment::FromSource(&fragment));
-        let mut walk = PrePaintTreeWalk::default();
-        walk.stats.post_walk = true;
-        walk.RetainTree(Box::new(root));
-        walk.CommitClients([11, 12]);
-
-        let paint = &walk
-            .retained_tree
-            .as_ref()
-            .unwrap()
-            .fragment
-            .as_deref()
-            .unwrap()
-            .paint;
-        assert_eq!(
-            paint.display_item_client_invalidation_reason,
-            Some(foundation::PaintInvalidationReason::kNone)
-        );
-        assert_eq!(
-            paint.selection_client_invalidation_reason,
-            Some(foundation::PaintInvalidationReason::kNone)
-        );
-    }
-
-    #[test]
-    fn phase_needs_stop_at_self_painting_layer_boundaries() {
-        let mut child_fragment = FragmentPaintData::default();
-        child_fragment.paint.has_source = true;
-        child_fragment.paint.floating = FloatSide::kLeft;
-        child_fragment.paint.scrollbars = Some(Arc::new(ScrollbarPaintData {
-            should_paint_as_overlay: true,
-            ..ScrollbarPaintData::default()
-        }));
-
-        let mut outlined_fragment = FragmentPaintData::default();
-        outlined_fragment.paint.has_source = true;
-        outlined_fragment.paint.style.outline_style =
-            paint_input_types::layout_input::BorderLineStyle::kSolid;
-        outlined_fragment.paint.style.outline_width = 1.0;
-        outlined_fragment.paint.style.outline_color.alpha = 1.0;
-        let mut outlined = PaintTreeNode::default();
-        outlined.fragment = Some(ResidentFragment::FromSource(&outlined_fragment));
-
-        let mut child = PaintTreeNode::default();
-        child.fragment = Some(ResidentFragment::FromSource(&child_fragment));
-        child.is_paint_layer = true;
-        child.children.push(Box::new(outlined));
-
-        let mut root = PaintTreeNode::default();
-        root.fragment = Some(ResidentFragment::FromSource(&FragmentPaintData::default()));
-        root.is_paint_layer = true;
-        root.children.push(Box::new(child));
-
-        MarkPaintPhaseNeeds(&mut root);
-        let child = &root.children[0];
-        assert!(child.needs_float_phase);
-        assert!(child.needs_outline_phase);
-        assert!(child.needs_overflow_controls_phase);
-        assert!(!root.needs_float_phase);
-        assert!(!root.needs_outline_phase);
-        assert!(!root.needs_overflow_controls_phase);
-    }
-
-    #[test]
-    fn phase_needs_propagate_through_non_layer_descendants() {
-        let mut child_fragment = FragmentPaintData::default();
-        child_fragment.paint.has_source = true;
-        child_fragment.paint.floating = FloatSide::kLeft;
-
-        let mut child = PaintTreeNode::default();
-        child.fragment = Some(ResidentFragment::FromSource(&child_fragment));
-
-        let mut root = PaintTreeNode::default();
-        root.fragment = Some(ResidentFragment::FromSource(&FragmentPaintData::default()));
-        root.is_paint_layer = true;
-        root.children.push(Box::new(child));
-
-        MarkPaintPhaseNeeds(&mut root);
-        assert!(root.needs_float_phase);
-    }
-
-    #[test]
     fn svg_root_overflow_clip_follows_computed_overflow() {
         let mut svg = FragmentPaintData::default();
         svg.paint.has_source = true;
@@ -13073,73 +8696,6 @@ mod tests {
                 height: 29.0,
             }
         );
-    }
-
-    #[test]
-    fn large_svg_pauses_descendant_auto_dark_and_nested_icon_reenables_it() {
-        let mut outer_fragment = FragmentPaintData::default();
-        outer_fragment.paint.source_kind = NodeKind::kSvgRoot;
-        outer_fragment.paint.style.force_dark = true;
-        outer_fragment.size = Size {
-            width: 200.0,
-            height: 100.0,
-        };
-        let mut outer = PaintTreeNode::default();
-        outer.SetOwnedFragmentForTesting(&outer_fragment);
-
-        let mut direct_fragment = FragmentPaintData::default();
-        direct_fragment.paint.source_kind = NodeKind::kSvgShape;
-        direct_fragment.paint.style.force_dark = true;
-        direct_fragment.paint.selection_style.force_dark = true;
-        let mut direct = PaintTreeNode::default();
-        direct.SetOwnedFragmentForTesting(&direct_fragment);
-
-        let mut nested_fragment = FragmentPaintData::default();
-        nested_fragment.paint.source_kind = NodeKind::kSvgRoot;
-        nested_fragment.paint.style.force_dark = true;
-        nested_fragment.size = Size {
-            width: 32.0,
-            height: 32.0,
-        };
-        let mut nested = PaintTreeNode::default();
-        nested.SetOwnedFragmentForTesting(&nested_fragment);
-
-        let mut nested_child_fragment = FragmentPaintData::default();
-        nested_child_fragment.paint.source_kind = NodeKind::kSvgShape;
-        nested_child_fragment.paint.style.force_dark = true;
-        let mut nested_child = PaintTreeNode::default();
-        nested_child.SetOwnedFragmentForTesting(&nested_child_fragment);
-        nested.children.push(Box::new(nested_child));
-
-        outer.children.push(Box::new(direct));
-        outer.children.push(Box::new(nested));
-        PropagateAutoDarkModeState(&mut outer, false);
-
-        assert!(!outer
-            .fragment
-            .as_deref()
-            .unwrap()
-            .paint
-            .style
-            .auto_dark_mode_paused());
-        let direct = outer.children[0].fragment.as_deref().unwrap();
-        assert!(direct.paint.style.auto_dark_mode_paused());
-        assert!(direct.paint.selection_style.auto_dark_mode_paused());
-        let nested = outer.children[1].as_ref();
-        assert!(nested
-            .fragment
-            .as_deref()
-            .unwrap()
-            .paint
-            .style
-            .auto_dark_mode_paused());
-        assert!(!nested.children[0]
-            .fragment
-            .as_deref()
-            .unwrap()
-            .paint
-            .style
-            .auto_dark_mode_paused());
     }
 
     #[test]

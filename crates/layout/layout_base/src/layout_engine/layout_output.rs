@@ -1249,8 +1249,13 @@ impl<'a> PaintFragmentCursor<'a> {
     /// clears the frame view's pending set. Chromium's
     /// DirectlyUpdateTransformMatrix reads each object's current style;
     /// the hand-off makes that style current on the object's sidecars, which
-    /// PrePaint's retained nodes read (no walk rebinds a deferred object).
-    pub fn TakePendingTransformUpdateClients(self) -> Vec<u64> {
+    /// the PrePaint walk then reads when it visits the object.
+    ///
+    /// Each entry is the DisplayItemClient id of the scheduled object
+    /// followed by those of its LayoutObject ancestors up to the LayoutView:
+    /// the path PrePaintTreeWalk must descend to reach the object (Chromium
+    /// reaches it through its LayoutObject pointer instead).
+    pub fn TakePendingTransformUpdateClientChains(self) -> Vec<Vec<u64>> {
         use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
         let Some(object) = (unsafe { self.source.GetLayoutObject().as_ref() }) else {
             return Vec::new();
@@ -1259,6 +1264,9 @@ impl<'a> PaintFragmentCursor<'a> {
             return Vec::new();
         };
         let state = self.state;
+        let client_id = |object: &LayoutObject| {
+            unsafe { &*(object as *const LayoutObject as *const DisplayItemClient) }.Id() as u64
+        };
         view.TakePendingTransformUpdates()
             .into_iter()
             .map(|member| {
@@ -1270,8 +1278,13 @@ impl<'a> PaintFragmentCursor<'a> {
                         state, object,
                     );
                 }
-                unsafe { &*(object as *const LayoutObject as *const DisplayItemClient) }.Id()
-                    as u64
+                let mut chain = vec![client_id(object)];
+                let mut parent = object.Parent();
+                while let Some(ancestor) = unsafe { parent.as_ref() } {
+                    chain.push(client_id(ancestor));
+                    parent = ancestor.Parent();
+                }
+                chain
             })
             .collect()
     }

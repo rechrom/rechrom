@@ -2132,23 +2132,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 flex_or_grid_items: children_are_flex_or_grid_items,
                 svg: svg_view_box,
             },
-            // A built node is a new PrePaint generation; UpdateNode records
-            // its resources and the subtree revision after its children.
-            revision: self.walk.revision_generation,
-            subtree_revision: self.walk.revision_generation,
-            resources: None,
-            resource_usage: 0,
-            subtree_resource_usage: 0,
-            record: Default::default(),
-            previous_fragment: None,
-            previous_gap_rules: None,
             own_change,
             own_keys,
-            nodes: 1,
-            computed_pass: self.walk.walk_generation,
-            visited_pass: self.walk.walk_generation,
-            physical_children: Vec::new(),
-            contains_local_frames: false,
         });
         node
     }

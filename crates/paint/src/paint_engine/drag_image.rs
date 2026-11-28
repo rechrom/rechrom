@@ -82,21 +82,13 @@ impl PaintEngine {
                     scope
                 });
                 // The special paint scope hands out the overridden layer and
-                // root occurrences; Paint reads only their fragment cursors.
-                let source = root.SourceCursor().expect("retained Layout paint source");
-                let layer_cursor = layer.SourceCursor().expect("retained Layout paint source");
+                // root occurrences' fragment cursors.
+                let source = root;
+                let layer_cursor = layer;
                 let mut output = PaintRecording::default();
                 output.resources = source.DocumentResources().cloned();
                 let mut paint_context = PaintContext::WithEditing(&mut output, editing);
                 paint_context.BindForeignLayers(foreign_layers);
-                // RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the same oracle as
-                // normal recording. No fragment payload/tree is materialized.
-                let traversal_check =
-                    paint_walk::paint_layer_painter::TraversalCheckEnabled();
-                if traversal_check {
-                    paint_context
-                        .BindSvgResourceTree(paint_record::paint_object::PaintObject::new(root));
-                }
                 paint_context.SetDocumentElementIsInvisible(source.paint.style.opacity() == 0.0);
                 paint_context.SetNextPropertyId(next_property_id);
                 let context = RefCell::new(paint_context);
@@ -108,7 +100,6 @@ impl PaintEngine {
                     Some(frames),
                 )
                 .WithFlags(flags)
-                .WithOracle(traversal_check.then_some(layer))
                 .Paint();
                 context.borrow_mut().Finish();
                 drop(context);

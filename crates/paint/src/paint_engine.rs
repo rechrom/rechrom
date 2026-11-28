@@ -364,116 +364,31 @@ fn WalkPrePaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
     source_lease: layout::paint::PaintFragmentLease,
-) -> Box<crate::pre_paint_tree_walk::PaintTreeNode<'static>> {
+) {
     // Chromium refreshes PaintLayer descendant-dependent flags immediately
     // before PrePaint. Doing this at Layout publication alone is too early:
     // later lifecycle work may dirty the layer tree before this walk.
     fragments.Cursor().UpdateRootLayerDescendantDependentFlags();
-    {
-        let mut trace = browser_tracing::span("prepaint", "PrePaint.Walk");
-        let tree = pre_paint.Walk(fragments, source_lease);
-        let stats = pre_paint.stats;
-        trace.set("computed_nodes", stats.computed_nodes as f64);
-        trace.set("reused_nodes", stats.reused_nodes as f64);
-        trace.set(
-            "invalidation_only_nodes",
-            stats.invalidation_only_nodes as f64,
-        );
-        trace.set(
-            "same_geometry_rebuilds",
-            stats.same_geometry_rebuilds as f64,
-        );
-        trace.set(
-            "property_geometry_changes",
-            stats.property_geometry_changes as f64,
-        );
-        trace.set(
-            "property_geometry_changes_with_own_keys",
-            stats.property_geometry_changes_with_own_keys as f64,
-        );
-        trace.set(
-            "property_geometry_changes_needing_property_update",
-            stats.property_geometry_changes_needing_property_update as f64,
-        );
-        trace.set("skipped_subtrees", stats.skipped_subtrees as f64);
-        trace.set("post_walk", stats.post_walk as u8 as f64);
-        browser_tracing::instant(
-            "prepaint",
-            "PrePaint.Rebind",
-            &[
-                ("rebind_walk", stats.rebind_walk as u8 as f64),
-                ("rebound_nodes", stats.rebound_nodes as f64),
-                ("post_walk", stats.post_walk as u8 as f64),
-            ],
-        );
-        let ms = |ns: u64| ns as f64 / 1e6;
-        let shift_parts = prepaint::pre_paint_tree_walk::TakeShiftPartNs();
-        browser_tracing::instant(
-            "prepaint",
-            "PrePaint.NodeProfile",
-            &[
-                ("admission_ms", ms(stats.profile_admission_ns)),
-                ("build_ms", ms(stats.profile_build_ns)),
-                ("invalidation_ms", ms(stats.profile_invalidation_ns)),
-                ("children_setup_ms", ms(stats.profile_children_setup_ns)),
-                ("child_loop_ms", ms(stats.profile_child_loop_ns)),
-                ("tail_ms", ms(stats.profile_tail_ns)),
-            ],
-        );
-        browser_tracing::instant(
-            "prepaint",
-            "PrePaint.Shift",
-            &[
-                ("shifted_nodes", stats.shifted_nodes as f64),
-                ("check_mismatches", stats.shift_check_mismatches as f64),
-                ("branch_ms", ms(stats.shift_branch_ns)),
-                ("refresh_ms", ms(shift_parts[0])),
-                ("context_ms", ms(shift_parts[1])),
-                ("rest_ms", ms(shift_parts[2])),
-            ],
-        );
-        let r = stats.shift_rejects;
-        browser_tracing::instant(
-            "prepaint",
-            "PrePaint.ShiftRejects",
-            &[
-                ("no_basis", r[0] as f64),
-                ("own_inputs_changed", r[1] as f64),
-                ("own_property_nodes", r[2] as f64),
-                ("identity", r[3] as f64),
-                ("paint_layer", r[4] as f64),
-                ("svg", r[5] as f64),
-                ("own_clip_cull_transform", r[6] as f64),
-                ("other_context", r[7] as f64),
-            ],
-        );
-        let (k, c) = (stats.build_kind_ns, stats.build_kind_nodes);
-        browser_tracing::instant(
-            "prepaint",
-            "PrePaint.BuildKinds",
-            &[
-                ("transform_ms", ms(k[0])),
-                ("transform_n", c[0] as f64),
-                ("clip_ms", ms(k[1])),
-                ("clip_n", c[1] as f64),
-                ("effect_ms", ms(k[2])),
-                ("effect_n", c[2] as f64),
-                ("svg_ms", ms(k[3])),
-                ("svg_n", c[3] as f64),
-            ],
-        );
-        browser_tracing::instant(
-            "prepaint",
-            "PrePaint.BuildKinds2",
-            &[
-                ("layer_ms", ms(k[4])),
-                ("layer_n", c[4] as f64),
-                ("plain_ms", ms(k[5])),
-                ("plain_n", c[5] as f64),
-            ],
-        );
-        tree
-    }
+    let mut trace = browser_tracing::span("prepaint", "PrePaint.Walk");
+    pre_paint.Walk(fragments, source_lease);
+    let stats = pre_paint.stats;
+    trace.set("computed_nodes", stats.computed_nodes as f64);
+    trace.set("skipped_subtrees", stats.skipped_subtrees as f64);
+    trace.set("invalidation_nodes", stats.invalidation_nodes as f64);
+    trace.set("post_walk", stats.post_walk as u8 as f64);
+    let ms = |ns: u64| ns as f64 / 1e6;
+    browser_tracing::instant(
+        "prepaint",
+        "PrePaint.NodeProfile",
+        &[
+            ("admission_ms", ms(stats.profile_admission_ns)),
+            ("build_ms", ms(stats.profile_build_ns)),
+            ("invalidation_ms", ms(stats.profile_invalidation_ns)),
+            ("children_setup_ms", ms(stats.profile_children_setup_ns)),
+            ("child_loop_ms", ms(stats.profile_child_loop_ns)),
+            ("tail_ms", ms(stats.profile_tail_ns)),
+        ],
+    );
 }
 
 /// A completed resident PrePaint pass. This token carries the same layout
@@ -524,7 +439,8 @@ fn OwnAnimatedPropertyStarts(
 }
 
 fn CollectCompositedAnimationPropertyUpdate(
-    tree: &crate::pre_paint_tree_walk::PaintTreeNode<'_>,
+    pre_paint: &PrePaintTreeWalk,
+    root: layout::paint::PaintFragmentCursor<'_>,
     targeted_nodes: &[u64],
 ) -> Option<CompositedAnimationPropertyUpdate> {
     use paint_model::paint_property_tree::{
@@ -646,42 +562,24 @@ fn CollectCompositedAnimationPropertyUpdate(
             }
         }
 
-        fn tree(
+        /// One walked occurrence of a targeted object: only the local slots
+        /// it applies, its FragmentData's ObjectPaintProperties
+        /// (fragment_data.h:104-110; object_paint_properties.h:503-523
+        /// update the object's own Transform and Effect nodes). Blink's
+        /// pending sets contain LayoutObjects, not every property ancestor
+        /// reachable through their state.
+        fn occurrence(
             &mut self,
-            node: &crate::pre_paint_tree_walk::PaintTreeNode<'_>,
-            targeted_nodes: &HashSet<u64>,
+            node_id: u64,
+            data: &prepaint::fragment_data::PrePaintFragmentData,
         ) {
-            let node_id = node
-                .fragment
-                .as_deref()
-                .map_or(0, |fragment| fragment.ViewNodeId());
-            if targeted_nodes.contains(&node_id) {
-                self.matched_targets.insert(node_id);
-                // Blink's pending sets contain LayoutObjects, not every
-                // property ancestor reachable through their state. Inspect
-                // only the local slots this object applies: its
-                // FragmentData's ObjectPaintProperties (fragment_data.h:
-                // 104-110; object_paint_properties.h:503-523 update the
-                // object's own Transform and Effect nodes). Hand-built nodes
-                // without FragmentData keep their own copies.
-                let (transform, effect) = match node.FragmentData() {
-                    Some(data) => OwnAnimatedPropertyStarts(data),
-                    None => (
-                        node.applies_transform
-                            .then(|| node.properties.nodes.transform.clone()),
-                        node.applies_opacity
-                            .then(|| node.properties.nodes.effect.clone()),
-                    ),
-                };
-                if let Some(transform) = &transform {
-                    self.transform(node_id, transform);
-                }
-                if let Some(effect) = &effect {
-                    self.effect(node_id, effect);
-                }
+            self.matched_targets.insert(node_id);
+            let (transform, effect) = OwnAnimatedPropertyStarts(data);
+            if let Some(transform) = &transform {
+                self.transform(node_id, transform);
             }
-            for child in &node.children {
-                self.tree(child, targeted_nodes);
+            if let Some(effect) = &effect {
+                self.effect(node_id, effect);
             }
         }
     }
@@ -691,7 +589,12 @@ fn CollectCompositedAnimationPropertyUpdate(
         valid: true,
         ..Default::default()
     };
-    collector.tree(tree, &targeted_nodes);
+    pre_paint.VisitWalkedOccurrences(root, &mut |cursor, data| {
+        let node_id = cursor.PaintData().ViewNodeId();
+        if targeted_nodes.contains(&node_id) {
+            collector.occurrence(node_id, data);
+        }
+    });
     if collector.matched_targets.len() != targeted_nodes.len() {
         collector.valid = false;
         collector.rejection = 3;
@@ -734,26 +637,21 @@ fn RecordPaint(
 ) {
     let mut trace = browser_tracing::span("paint", "Paint.RecordPaint");
     ValidateReplayResources(fragments.Cursor().DocumentResources().map(|resources| &**resources));
-    let paint_tree = if let Some(prepared) = prepared {
+    if let Some(prepared) = prepared {
         assert!(
             prepared.source.PtrEq(&source_lease),
             "Paint uses the exact prepared Layout result"
         );
-        pre_paint
-            .retained_tree
-            .take()
-            .expect("completed PrePaint retains its native tree")
     } else {
         if let Some(lifecycle) = lifecycle {
             lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
         }
-        let tree = WalkPrePaint(pre_paint, fragments, source_lease);
+        WalkPrePaint(pre_paint, fragments, source_lease);
         if let Some(lifecycle) = lifecycle {
             lifecycle.SetIntersectionObservationState(pre_paint.IntersectionObservationState());
             lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
         }
-        tree
-    };
+    }
     if let Some(lifecycle) = lifecycle {
         lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
     }
@@ -834,7 +732,7 @@ fn RecordPaint(
     //      PrePaint's values, so a property-only frame records nothing.
     if previous.as_ref().is_some_and(|previous| {
         reuse_admissible
-            && !pre_paint.RootNeedsRepaint(&paint_tree)
+            && !pre_paint.RootNeedsRepaint(fragments.Cursor())
             && previous.compositor_viewport == output.compositor_viewport
             && match (&previous.resources, &output.resources) {
                 (None, None) => true,
@@ -843,10 +741,7 @@ fn RecordPaint(
             }
     }) {
         trace.set("reused_artifact", 1.0);
-        {
-            let _trace = browser_tracing::span("prepaint", "PrePaint.RetainTree");
-            pre_paint.RetainTree(paint_tree);
-        }
+        pre_paint.CommitWalk();
         // No PaintController ran, so nothing is committed: the persistent
         // data keeps the very same artifact object (`None` here), which is
         // what RasterInvalidator's identity check relies on
@@ -881,14 +776,6 @@ fn RecordPaint(
     // its exact computed opacity as the document-global Paint Timing fact used
     // by every nested PaintLayerPainter scope.
     paint_context.SetDocumentElementIsInvisible(fragments.paint.style.opacity() == 0.0);
-    // RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the resident PrePaint nodes are
-    // lent to the paint walk as its oracle (the SVG resource directory
-    // included); production painting reads only the fragment cursor.
-    let traversal_check = crate::paint_layer_painter::TraversalCheckEnabled();
-    if traversal_check {
-        paint_context
-            .BindSvgResourceTree(paint_record::paint_object::PaintObject::new(&paint_tree));
-    }
     paint_context.BindPaintTimingRoot(paint_record::paint_object::PaintObject::FromCursor(
         fragments.Cursor(),
         paint_record::paint_object::PaintWalkContext::default(),
@@ -914,9 +801,7 @@ fn RecordPaint(
             // layer, the embedded same-Page frames through PrePaint's
             // LocalFrameViews.
             let frames: &dyn crate::paint_layer_painter::LocalFrameRoots = &*pre_paint;
-            PaintLayerPainter::new(fragments.Cursor(), &context, Some(frames))
-                .WithOracle(traversal_check.then_some(&*paint_tree))
-                .Paint();
+            PaintLayerPainter::new(fragments.Cursor(), &context, Some(frames)).Paint();
         }
         let walk = context.borrow().walk_metrics;
         trace.set("layers", walk.layer_visits as f64);
@@ -1034,20 +919,15 @@ fn RecordPaint(
         let _trace = browser_tracing::span("paint_commit", "PaintCommit.BuildMetadata");
         paint_commit::FinalizeArtifact(&mut output);
     }
-    {
-        let _trace = browser_tracing::span("prepaint", "PrePaint.RetainTree");
-        pre_paint.RetainTree(paint_tree);
-    }
+    pre_paint.CommitWalk();
     trace.set("items", output.items.len() as f64);
     trace.set("display_items", record.display_items as f64);
     trace.set("chunks", chunk.chunks as f64);
     if browser_tracing::profile_input() {
         let stats = pre_paint.stats;
         eprintln!(
-            "prepaint-update computed_nodes={} reused_nodes={} invalidation_only_nodes={} skipped_subtrees={} post_walk={}",
+            "prepaint-update computed_nodes={} skipped_subtrees={} post_walk={}",
             stats.computed_nodes,
-            stats.reused_nodes,
-            stats.invalidation_only_nodes,
             stats.skipped_subtrees,
             stats.post_walk
         );
@@ -1140,7 +1020,12 @@ impl PaintEngine {
         // This recording consumed every PrePaint walk so far; the retained
         // scroll path may again trust the live dirty bits against it.
         self.pre_paint.MarkPrePaintRecorded();
-        if self.pre_paint.stats.post_walk || self.retained_scroll_state.is_none() {
+        // The retained scroll coverage was captured from FragmentData values
+        // a visited object may have replaced.
+        if self.pre_paint.stats.post_walk
+            || self.pre_paint.stats.computed_nodes != 0
+            || self.retained_scroll_state.is_none()
+        {
             self.retained_scroll_state = None;
             self.retained_scroll_state_initialized = false;
         }
@@ -1361,12 +1246,12 @@ impl PaintLifecycle for PaintEngine {
         lifecycle: &dyn PaintLifecycleObserver,
     ) -> PreparedPrePaint {
         lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
-        let tree = WalkPrePaint(
+        WalkPrePaint(
             &mut self.pre_paint,
             PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
             layout_output.PaintLease(),
         );
-        self.pre_paint.RetainTree(tree);
+        self.pre_paint.CommitWalk();
         lifecycle.SetIntersectionObservationState(self.pre_paint.IntersectionObservationState());
         lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
         PreparedPrePaint {
@@ -1632,13 +1517,17 @@ impl PaintPropertyUpdates for PaintEngine {
                 }),
             );
         }
-        let tree = WalkPrePaint(
+        WalkPrePaint(
             &mut self.pre_paint,
             PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
             layout_output.PaintLease(),
         );
-        let update = CollectCompositedAnimationPropertyUpdate(&tree, targeted_nodes);
-        self.pre_paint.RetainTree(tree);
+        let update = CollectCompositedAnimationPropertyUpdate(
+            &self.pre_paint,
+            layout_output.PaintCursor(),
+            targeted_nodes,
+        );
+        self.pre_paint.CommitWalk();
         lifecycle.SetIntersectionObservationState(self.pre_paint.IntersectionObservationState());
         lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
         (

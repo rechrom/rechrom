@@ -2852,6 +2852,55 @@ impl PaintPropertyNodeStore {
         self.change_markers_cleared = self.changed == PaintPropertyChangeType::Unchanged;
     }
 
+    /// Source: FragmentData destruction (fragment_data.cc,
+    /// ObjectPaintProperties' destructor). A fragment-owned slot node lives
+    /// in its occurrence's ObjectPaintProperties; once Layout destroyed that
+    /// FragmentData and nothing else (an artifact, a descendant node, the
+    /// compositor) holds the node, the key map's reference is the last one
+    /// and the slot is released, as RetainLiveSlots releases a key. Repeats
+    /// until no node is released, since a released node may have held the
+    /// last reference to its parent. Returns the number of released slots.
+    pub fn ReleaseUnreferencedFragmentSlots(&mut self) -> usize {
+        fn unreferenced<T>(key: &PaintPropertyKey, node: &Arc<T>) -> bool {
+            matches!(key.owner, PaintPropertyOwner::Fragment { .. }) && Arc::strong_count(node) == 1
+        }
+        let mut released: Vec<PaintPropertyKey> = Vec::new();
+        loop {
+            let before = released.len();
+            released.extend(
+                self.transforms
+                    .iter()
+                    .filter(|(key, node)| unreferenced(key, node))
+                    .map(|(key, _)| *key),
+            );
+            released.extend(
+                self.clips
+                    .iter()
+                    .filter(|(key, node)| unreferenced(key, node))
+                    .map(|(key, _)| *key),
+            );
+            released.extend(
+                self.effects
+                    .iter()
+                    .filter(|(key, node)| unreferenced(key, node))
+                    .map(|(key, _)| *key),
+            );
+            released.extend(
+                self.scrolls
+                    .iter()
+                    .filter(|(key, node)| unreferenced(key, node))
+                    .map(|(key, _)| *key),
+            );
+            if released.len() == before {
+                break;
+            }
+            let round: std::collections::BTreeSet<PaintPropertyKey> =
+                released[before..].iter().copied().collect();
+            self.RetainLiveSlots(|key| !round.contains(key));
+        }
+        released.len()
+    }
+
     /// Borrow an ObjectPaintProperties slot by its existing owner and role.
     /// Query adapters retain neither another property graph nor a snapshot.
     pub fn TransformForKey(&self, key: PaintPropertyKey) -> Option<&TransformPaintPropertyNode> {

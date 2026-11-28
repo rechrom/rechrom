@@ -1,8 +1,9 @@
 //! Borrowed hit-test access to the committed FragmentData/ObjectPaintProperties.
 //!
-//! This cursor does not expose the retained PrePaint tree, its child storage,
-//! or a mutable owner. Lookup uses the existing DisplayItemClient directory
-//! and verifies source identity; hit testing must prepare lifecycle first.
+//! This cursor exposes no mutable owner. Lookup reads the queried fragment
+//! occurrence's FragmentData (or, for a PaintLayer, its LayoutObject's first
+//! fragment through Layout) and verifies the walked owner identity; hit
+//! testing must prepare lifecycle first.
 
 use layout::fragment::ResidentBoxGeometry as _;
 use foundation::{Member, PhysicalOffset};
@@ -11,8 +12,8 @@ use layout::paint::{FragmentPaintData, PaintFragmentCursor};
 use layout::views::paint_layer::PaintLayer;
 use paint_model::{
     paint_property_tree::{
-        ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey, PaintPropertyNodeStore,
-        PaintPropertyOwner, PaintPropertyRole, PropertyTreeState, TransformPaintPropertyNode,
+        ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyRole, PropertyTreeState,
+        TransformPaintPropertyNode,
     },
     PaintRect,
 };
@@ -309,13 +310,23 @@ impl DoubleEndedIterator for ResidentPaintLayerOrderCursor<'_> {
     }
 }
 
+/// One committed occurrence for hit testing: its fragment cursor and the
+/// FragmentData the last PrePaint walk produced for it.
 #[derive(Clone, Copy)]
 pub struct ResidentPaintHitTest<'a> {
-    node: &'a PaintTreeNode<'static>,
-    slots: &'a PaintPropertyNodeStore,
+    cursor: PaintFragmentCursor<'a>,
+    data: &'a PrePaintFragmentData,
 }
 
-/// Whether `node` was walked for exactly the live Layout owner `query` names.
+/// A query cursor at the lifetime of the PrePaint borrow. The committed
+/// walk's Layout lease keeps every FragmentData a lookup reaches alive while
+/// PrePaint is borrowed, as it kept the nodes of the former retained tree.
+unsafe fn AtWalkLifetime<'a>(cursor: PaintFragmentCursor<'_>) -> PaintFragmentCursor<'a> {
+    unsafe { std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'a>>(cursor) }
+}
+
+/// Whether the occurrence's FragmentData was walked for exactly the live
+/// Layout owner `query` names.
 ///
 /// Chromium hit tests read committed FragmentData/ObjectPaintProperties only
 /// after LocalFrameView::UpdateLifecycleToPrePaintClean
@@ -324,47 +335,30 @@ pub struct ResidentPaintHitTest<'a> {
 /// per-object freshness test: PrePaintTreeWalk consumed and cleared the
 /// LayoutObject dirty bits of every object it visited
 /// (pre_paint_tree_walk.cc:1584-1585). Freshness is that lifecycle gate,
-/// which Rechrom's callers hold (LayoutViewHitTestQuery checks
-/// IsPrePaintClean and the prepared revision; Page pointer geometry runs
-/// PrePaint below PrePaintClean). This lookup proves owner identity: the
-/// same resident sidecar slot (checked by the caller) and the same
-/// PhysicalFragment / FragmentItem and LayoutObject the walk visited. A
-/// relayout that replaces the fragment therefore rejects the resident node.
-fn WalkedSameSourceOwner(node: &PaintTreeNode<'_>, query: PaintFragmentCursor<'_>) -> bool {
-    // Hand-built fixture nodes have no source cursor; the exact sidecar slot
-    // identity checked by the caller is their only owner.
-    let Some(walked) = node.SourceCursor() else {
-        return true;
+/// which Rechrom's callers hold. This proves owner identity: the walk
+/// recorded the same PhysicalFragment / FragmentItem the query names, so a
+/// relayout that replaced the fragment rejects the stale FragmentData.
+/// Container offsets are not compared: call-scoped cursors rebound with
+/// ForPhysicalFragment carry no link offset.
+fn WalkedSameSourceOwner(data: &PrePaintFragmentData, query: PaintFragmentCursor<'_>) -> bool {
+    let owner = match query.Cursor() {
+        FragmentCursor::Physical { fragment, .. } => fragment as *const _ as usize,
+        FragmentCursor::Inline { item, .. } => item as *const _ as usize,
+        #[allow(unreachable_patterns)]
+        _ => return false,
     };
-    // Compare owner addresses only; the walked cursor is never dereferenced,
-    // since it may name a fragment a later Layout publication replaced. The
-    // PhysicalFragment / FragmentItem owner determines its LayoutObject.
-    // Container offsets are not compared: call-scoped cursors rebound with
-    // ForPhysicalFragment carry no link offset, unlike the walk's traversal.
-    match (walked.Cursor(), query.Cursor()) {
-        (
-            FragmentCursor::Physical { fragment: walked, .. },
-            FragmentCursor::Physical { fragment: query, .. },
-        ) => std::ptr::eq(walked, query),
-        (
-            FragmentCursor::Inline { item: walked, .. },
-            FragmentCursor::Inline { item: query, .. },
-        ) => std::ptr::eq(walked, query),
-        _ => false,
-    }
+    owner != 0 && data.WalkRecord().walked_owner.0 == owner
 }
 
 /// Whether the walked object changed what a hit test reads after the
-/// PrePaint walk that produced its resident node.
+/// PrePaint walk that produced its FragmentData.
 ///
 /// PrePaint clears each visited object's flags (pre_paint_tree_walk.cc:
 /// 1584-1585; PaintProperties::ClearSourcePaintFlags), so a live bit means a
-/// mutation since that walk: a stale node even when the lifecycle gate was
-/// not rewound. Only the bits that nothing but a walk turns into hit-test
-/// state are checked (PrePaintInvalidation::own_hit_test_inputs, which also
-/// documents the excluded paint-invalidation, delayed-invalidation and
-/// directly applied property-update bits). Hand-built fixtures have no live
-/// source.
+/// mutation since that walk: stale FragmentData even when the lifecycle gate
+/// was not rewound. Only the bits that nothing but a walk turns into
+/// hit-test state are checked (PrePaintInvalidation::own_hit_test_inputs).
+/// Hand-built fixtures have no live source.
 fn ChangedSinceWalk(fragment: &FragmentPaintData) -> bool {
     fragment
         .paint
@@ -373,111 +367,56 @@ fn ChangedSinceWalk(fragment: &FragmentPaintData) -> bool {
 }
 
 impl PrePaintTreeWalk {
-    /// Internal Paint assembly port. The facade uses this only to run the
-    /// canonical PaintWalk stacking collector; it never exports this owner.
-    pub fn WithResidentPaintNode<'a, T>(
-        &'a self,
-        source: PaintFragmentCursor<'_>,
-        query: impl FnOnce(&'a PaintTreeNode<'static>) -> T,
-    ) -> Option<T> {
-        self.ResidentHitTest(source)
-            .map(|source| query(source.node))
-    }
-
-    /// WithResidentPaintNode for a PaintLayer query. A PaintLayer belongs to
-    /// its LayoutObject (paint_layer.h), so the layer's resident node is
-    /// resolved by object identity like ResidentLayerHitTest: an inline-level
-    /// layer reached through its FragmentItem cursor names the node PrePaint
-    /// recorded for its box fragment.
-    pub fn WithResidentLayerNode<'a, T>(
-        &'a self,
-        source: PaintFragmentCursor<'_>,
-        query: impl FnOnce(&'a PaintTreeNode<'static>) -> T,
-    ) -> Option<T> {
-        self.ResidentLayerHitTest(source)
-            .map(|layer| query(layer.node))
-    }
-
+    /// The committed FragmentData of the occurrence `source` names, read in
+    /// place through the fragment cursor (no client directory).
     pub fn ResidentHitTest(
         &self,
         source: PaintFragmentCursor<'_>,
     ) -> Option<ResidentPaintHitTest<'_>> {
-        let query = source;
-        let source = source.PaintData();
-        let candidates = self
-            .client_nodes
-            .get(&source.paint.DisplayItemClientId())?;
-        for pointer in candidates {
-            // RetainTree populates this directory after restoring resident
-            // ownership. Its boxes cannot move or disappear during this borrow.
-            let node = unsafe { &**pointer };
-            if !node
-                .fragment
-                .as_deref()
-                .is_some_and(|fragment| std::ptr::eq(fragment, source))
-            {
-                continue;
-            }
-            if !WalkedSameSourceOwner(node, query) || ChangedSinceWalk(source) {
-                return None;
-            }
-            return Some(ResidentPaintHitTest {
-                node,
-                slots: &self.property_node_store,
-            });
+        let source = unsafe { AtWalkLifetime(source) };
+        let data = source
+            .PrePaintData::<PrePaintFragmentData>()
+            .filter(|data| data.WasWalked() && data.HasLocalBorderBoxProperties())?;
+        if !WalkedSameSourceOwner(data, source) || ChangedSinceWalk(source.PaintData()) {
+            return None;
         }
-        None
+        Some(ResidentPaintHitTest { cursor: source, data })
     }
 
-    /// Resolve a source PaintLayer for an inline replaced fragment. LayoutNG
-    /// keeps the FragmentItem and its linked PhysicalFragment as distinct
-    /// paint sidecars even though both name the same DisplayItemClient and
-    /// LayoutObject. Use the existing client directory and verify the object
-    /// identity; this neither walks nor duplicates the resident paint tree.
+    /// Resolve a source PaintLayer for a fragment occurrence. A PaintLayer
+    /// belongs to its LayoutObject (paint_layer.h): LayoutNG keeps the
+    /// FragmentItem and its linked PhysicalFragment as distinct paint
+    /// occurrences of the same LayoutObject, so an inline-level layer
+    /// reached through its FragmentItem cursor resolves, through Layout's
+    /// LayoutObject lookup (ForPaintObject), to the box fragment the walk
+    /// built the layer's properties on.
     pub fn ResidentLayerHitTest(
         &self,
         source: PaintFragmentCursor<'_>,
     ) -> Option<ResidentPaintHitTest<'_>> {
+        let source = unsafe { AtWalkLifetime(source) };
         if let Some(exact) = self.ResidentHitTest(source) {
-            if exact.node.is_paint_layer {
+            if exact.data.WalkRecord().is_paint_layer {
                 return Some(exact);
             }
         }
-        let source = source.PaintData();
-        let identity = source.paint.LayoutObjectIdentity()?;
-        let candidates = self
-            .client_nodes
-            .get(&source.paint.DisplayItemClientId())?;
-        for pointer in candidates {
-            let node = unsafe { &**pointer };
-            if !node.is_paint_layer {
-                continue;
-            }
-            let Some(fragment) = node.fragment.as_deref() else {
-                continue;
-            };
-            if !fragment
-                .paint
-                .LayoutObjectIdentity()
-                .is_some_and(|candidate| candidate.PtrEq(identity))
-            {
-                continue;
-            }
-            // The layer node is found through its LayoutObject, not through
-            // the queried fragment, so there is no queried owner to compare;
-            // it must have been visited by the PrePaint walk that produced
-            // this resident tree (presence of its walk cache, not a revision
-            // comparison) and not changed since (ChangedSinceWalk). Otherwise
-            // freshness is the caller's PrePaintClean gate.
-            if node.RecordedRevisions().is_none() || ChangedSinceWalk(fragment) {
-                return None;
-            }
-            return Some(ResidentPaintHitTest {
-                node,
-                slots: &self.property_node_store,
-            });
+        let identity = source.PaintData().paint.LayoutObjectIdentity()?;
+        let layer = source.ForPaintObject(identity)?;
+        let data = layer
+            .PrePaintData::<PrePaintFragmentData>()
+            .filter(|data| {
+                data.WasWalked()
+                    && data.HasLocalBorderBoxProperties()
+                    && data.WalkRecord().is_paint_layer
+            })?;
+        // The layer occurrence is found through its LayoutObject, not
+        // through the queried fragment; it must have been visited by a walk
+        // and not changed since (ChangedSinceWalk). Otherwise freshness is
+        // the caller's PrePaintClean gate.
+        if ChangedSinceWalk(layer.PaintData()) {
+            return None;
         }
-        None
+        Some(ResidentPaintHitTest { cursor: layer, data })
     }
 }
 
@@ -589,20 +528,17 @@ fn ClipSlot(
 }
 
 impl<'a> ResidentPaintHitTest<'a> {
-    /// The occurrence's committed FragmentData (fragment_data.h), which
-    /// PrePaint keeps current for every visited and retained object. None
-    /// only for hand-built nodes, which keep their own copies.
-    fn Data(self) -> Option<&'a PrePaintFragmentData> {
-        self.node.FragmentData()
+    /// The occurrence's committed FragmentData (fragment_data.h).
+    fn Data(self) -> &'a PrePaintFragmentData {
+        self.data
     }
 
     /// PaintLayer::NeedsReorderOverlayOverflowControls (paint_layer.h:
     /// 427-431), written by the layer's stacking node.
     pub fn NeedsReorderOverlayControls(self) -> bool {
-        match self.node.SourceCursor().and_then(|cursor| cursor.OwnPaintLayer()) {
-            Some(layer) => layer.NeedsReorderOverlayOverflowControls(),
-            None => self.node.needs_reorder_overlay_overflow_controls.get(),
-        }
+        self.cursor
+            .OwnPaintLayer()
+            .is_some_and(|layer| layer.NeedsReorderOverlayOverflowControls())
     }
 
     pub fn LayoutObjectIdentity(
@@ -627,83 +563,53 @@ impl<'a> ResidentPaintHitTest<'a> {
         })
     }
 
-
     /// fragment_data.h:104-110 `PaintProperties()` holds a node.
     pub fn HasPaintProperties(self) -> bool {
-        match self.Data() {
-            Some(data) => data.HasPaintProperties(),
-            None => self.node.HasOwnPaintProperties(),
-        }
+        self.Data().HasPaintProperties()
     }
 
+    /// The identity of the occurrence: its FragmentData's address.
     pub fn Identity(self) -> usize {
-        self.node as *const _ as usize
+        self.data as *const PrePaintFragmentData as usize
     }
 
     pub fn Fragment(self) -> &'a FragmentPaintData {
-        self.node
-            .fragment
-            .as_deref()
-            .expect("resident paint node has a source")
+        self.cursor.PaintData()
     }
 
     /// FragmentData::PaintOffset() (fragment_data.h:32-38) in the flat
-    /// replay space hit testing shares with the recorded ops
-    /// (`PaintTreeNode::FlatPaintOffset`).
+    /// replay space hit testing shares with the recorded ops: the local
+    /// offset moved back by the flat-to-property delta.
     pub fn PaintOffset(self) -> PhysicalOffset {
-        let offset = self.node.FlatPaintOffsetOf(self.Data());
+        let data = self.Data();
+        let local = data.PaintOffset();
+        let snap = data.FlatReplay().paint_snap_offset;
+        let x = local.left.ToDouble() - snap.x;
+        let y = local.top.ToDouble() - snap.y;
         PhysicalOffset::new(
-            foundation::LayoutUnit::FromFloatRound(offset.x as f32),
-            foundation::LayoutUnit::FromFloatRound(offset.y as f32),
+            foundation::LayoutUnit::FromFloatRound(x as f32),
+            foundation::LayoutUnit::FromFloatRound(y as f32),
         )
     }
 
-    /// fragment_data.h:137-142.
+    /// fragment_data.h:137-142. The lookup admits only occurrences whose
+    /// LocalBorderBoxProperties were set.
     pub fn LocalBorderBoxProperties(self) -> &'a PropertyTreeState {
-        match self.Data().and_then(PrePaintFragmentData::LocalBorderBoxPropertiesRef) {
-            Some(state) => state,
-            None => &self.node.properties.nodes,
-        }
+        self.Data()
+            .LocalBorderBoxPropertiesRef()
+            .expect("resident hit test occurrence has LocalBorderBoxProperties")
     }
     /// fragment_data.h:170-177.
     pub fn ContentsProperties(self) -> PropertyTreeState {
-        match self.Data() {
-            Some(data) => data.ContentsProperties(),
-            None => self.node.contents_properties.nodes.clone(),
-        }
+        self.Data().ContentsProperties()
     }
     // Source: fragment_data.cc:89-109. Property parents keep their exact owner.
     pub fn PreClip(self) -> Arc<ClipPaintPropertyNode> {
-        if let Some(data) = self.Data() {
-            return paint_model::property_cell::with_access(|access| data.PreClip(access));
-        }
-        for role in [
-            PaintPropertyRole::ClipPathClip,
-            PaintPropertyRole::MaskClip,
-            PaintPropertyRole::CssClip,
-            PaintPropertyRole::PixelMovingFilterClipExpander,
-        ] {
-            if let Some(clip) = self.Clip(role) {
-                return paint_model::property_cell::with_access(|access| {
-                    clip.Parent(access).expect("non-root own clip has parent").clone()
-                });
-            }
-        }
-        self.node.properties.nodes.clip.clone()
+        paint_model::property_cell::with_access(|access| self.Data().PreClip(access))
     }
     // Source: fragment_data.cc:123-135.
     pub fn PreEffect(self) -> Arc<EffectPaintPropertyNode> {
-        if let Some(data) = self.Data() {
-            return paint_model::property_cell::with_access(|access| data.PreEffect(access));
-        }
-        for role in [PaintPropertyRole::Effect, PaintPropertyRole::Filter] {
-            if let Some(effect) = self.slots.EffectForKey(self.Key(role)) {
-                return paint_model::property_cell::with_access(|access| {
-                    effect.Parent(access).expect("non-root own effect has parent").clone()
-                });
-            }
-        }
-        self.node.properties.nodes.effect.clone()
+        paint_model::property_cell::with_access(|access| self.Data().PreEffect(access))
     }
 
     pub fn LocalBorderTransform(self) -> &'a Arc<TransformPaintPropertyNode> {
@@ -713,10 +619,8 @@ impl<'a> ResidentPaintHitTest<'a> {
     /// fragment_data.cc:67-87 `ContentsTransform`, borrowed from the slot
     /// that owns it.
     pub fn ContentsTransform(self) -> &'a Arc<TransformPaintPropertyNode> {
-        let Some(data) = self.Data() else {
-            return &self.node.contents_properties.nodes.transform;
-        };
-        data.PaintProperties()
+        self.Data()
+            .PaintProperties()
             .and_then(|properties| {
                 properties
                     .ScrollTranslation()
@@ -734,10 +638,8 @@ impl<'a> ResidentPaintHitTest<'a> {
     /// fragment_data.cc:111-121 `ContentsClip`, borrowed from the slot that
     /// owns it.
     pub fn ContentsClip(self) -> &'a ClipPaintPropertyNode {
-        let Some(data) = self.Data() else {
-            return &self.node.contents_properties.nodes.clip;
-        };
-        data.PaintProperties()
+        self.Data()
+            .PaintProperties()
             .and_then(|properties| {
                 properties
                     .OverflowClip()
@@ -748,51 +650,39 @@ impl<'a> ResidentPaintHitTest<'a> {
 
     /// fragment_data.cc:55-65 `PreTransform`. The parent link of the
     /// outermost CSS transform node can only be read under the property
-    /// access proof, so the borrowed form still reads the walk's copy.
+    /// access proof, so the borrowed form reads the node the walk stored
+    /// beside the occurrence's flat replay values.
     pub fn PreTransform(self) -> &'a Arc<TransformPaintPropertyNode> {
-        &self.node.pre_transform
-    }
-
-    fn Key(self, role: PaintPropertyRole) -> PaintPropertyKey {
-        let fragment = self.Fragment();
-        PaintPropertyKey {
-            owner: PaintPropertyOwner::Fragment {
-                client: fragment.paint.DisplayItemClientId(),
-                fragment: fragment.ViewDisplayItemFragment(),
-            },
-            role,
-        }
+        self.Data()
+            .FlatReplay()
+            .Rare()
+            .and_then(|rare| rare.pre_transform.as_ref())
+            .unwrap_or_else(|| self.LocalBorderTransform())
     }
 
     /// The object's own transform node of `role`: its ObjectPaintProperties
     /// slot (object_paint_properties.h:117-139).
     pub fn Transform(self, role: PaintPropertyRole) -> Option<&'a Arc<TransformPaintPropertyNode>> {
-        match self.Data() {
-            Some(data) => TransformSlot(
-                data.PaintProperties()?,
-                ObjectPaintPropertySlot::FromRole(role)?,
-            ),
-            None => self.slots.TransformOwnerForKey(self.Key(role)),
-        }
+        TransformSlot(
+            self.Data().PaintProperties()?,
+            ObjectPaintPropertySlot::FromRole(role)?,
+        )
     }
 
     /// The object's own clip node of `role`: its ObjectPaintProperties slot
     /// (object_paint_properties.h:161-174).
     pub fn Clip(self, role: PaintPropertyRole) -> Option<&'a ClipPaintPropertyNode> {
-        match self.Data() {
-            Some(data) => ClipSlot(
-                data.PaintProperties()?,
-                ObjectPaintPropertySlot::FromRole(role)?,
-            )
-            .map(|clip| &**clip),
-            None => self.slots.ClipForKey(self.Key(role)),
-        }
+        ClipSlot(
+            self.Data().PaintProperties()?,
+            ObjectPaintPropertySlot::FromRole(role)?,
+        )
+        .map(|clip| &**clip)
     }
 
     /// The flat accumulated background clip the walk computed for this
     /// object (PaintLayerClipper's background rect source).
     pub fn BackgroundClip(self) -> Option<PaintRect> {
-        self.node.clip
+        self.Data().FlatReplay().clip
     }
 
     pub fn ForegroundClip(self) -> Option<PaintRect> {

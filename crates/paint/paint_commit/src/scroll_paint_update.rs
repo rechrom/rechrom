@@ -21,12 +21,11 @@ use paint_record::{
 };
 use prepaint::fragment_data::PrePaintFragmentData;
 use prepaint::pre_paint_tree_walk::{
-    PaintFragmentSource, PaintTreeNode, PrePaintTreeWalk,
-    PropertyTreeState as PrePaintPropertyTreeState,
+    PaintFragmentSource, PrePaintTreeWalk,
 };
 
 use crate::PaintArtifact;
-use layout::paint::{FragmentPaintData, StickyPositionPaintData};
+use layout::paint::{FragmentPaintData, PaintFragmentCursor, StickyPositionPaintData};
 use paint_input_types::layout_input::{Offset, Size, TransformMatrix};
 use paint_input_types::paint_input::BackgroundAttachment;
 use std::{
@@ -57,13 +56,8 @@ struct FragmentCoverage {
 /// Ordinary descendants retain their property-space coverage, not another tree.
 #[derive(Clone)]
 struct OverflowControlGeometry {
-    paint_snap_offset: Offset,
-    properties: PrePaintPropertyTreeState,
-    contents_properties: PrePaintPropertyTreeState,
     transforms: std::sync::Arc<[TransformMatrix]>,
     phase: PaintPhase,
-    is_self_painting_layer: bool,
-    needs_reorder_overlay_overflow_controls: bool,
 }
 
 #[derive(Clone)]
@@ -135,48 +129,65 @@ fn collect_source_physical_ranges(
     ranges.insert(key, (start, *next)).is_none()
 }
 
-/// The cull rect Paint tested this occurrence's drawings against when it
-/// recorded them: a PaintLayer object's FragmentData cull rect
-/// (CullRectUpdater::SetFragmentCullRect, cull_rect_updater.cc:51-90; read
-/// by BoxFragmentPainter), else the PaintInfo cull the walk carried.
-fn recorded_self_cull_rect(
-    node: &PaintTreeNode<'_>,
-    data: Option<&PrePaintFragmentData>,
-) -> Option<PaintRect> {
-    if node.is_paint_layer
-        && node
-            .SourceCursor()
-            .is_some_and(|cursor| cursor.OwnPaintLayer().is_some())
-    {
-        if let Some(data) = data {
-            return data.GetCullRect().Rect();
-        }
-    }
-    node.self_cull_rect
+/// One occurrence the last PrePaint walk produced FragmentData for, with
+/// the values the retained coverage records.
+struct CapturedOccurrence<'a> {
+    cursor: PaintFragmentCursor<'a>,
+    data: &'a PrePaintFragmentData,
+    /// The paint offset the recorded ops use: FragmentData's, in the flat
+    /// replay space (local offset less the flat-to-property delta).
+    flat_paint_offset: Offset,
+    /// The cull rect Paint tested this occurrence's drawings against when it
+    /// recorded them: a PaintLayer object's FragmentData cull rect
+    /// (CullRectUpdater::SetFragmentCullRect, cull_rect_updater.cc:51-90;
+    /// read by BoxFragmentPainter), else the PaintInfo cull the walk carried
+    /// (its own rects, or its paint parent's contents cull rect).
+    self_cull_rect: Option<PaintRect>,
+    applies_mask: bool,
 }
 
-/// The object's own Mask effect: its ObjectPaintProperties Mask slot
-/// (object_paint_properties.h:370-381), whose parent is the masked content's
-/// effect. Hand-built nodes without FragmentData keep their own state.
-fn own_mask_effect(
-    node: &PaintTreeNode<'_>,
-    data: Option<&PrePaintFragmentData>,
-) -> Option<Arc<EffectPaintPropertyNode>> {
-    match data {
-        Some(data) => data.PaintProperties()?.Mask().cloned(),
-        None => node.mask_properties.as_ref().map(|mask| mask.effect.clone()),
+/// The walked occurrences below `cursor` in fragment tree order (an
+/// embedded frame's LayoutView after its owner's children), each with the
+/// cull rect it painted with; `parent_contents_cull` is the paint parent's.
+fn gather<'a>(
+    prepaint: &'a PrePaintTreeWalk,
+    cursor: PaintFragmentCursor<'a>,
+    parent_contents_cull: Option<PaintRect>,
+    nodes: &mut Vec<CapturedOccurrence<'a>>,
+) {
+    let Some(data) = cursor
+        .PrePaintData::<PrePaintFragmentData>()
+        .filter(|data| data.WasWalked())
+    else {
+        return;
+    };
+    let record = data.WalkRecord();
+    let (self_cull_rect, contents_cull_rect) = if record.layer_cull_rects {
+        (data.GetCullRect().Rect(), data.GetContentsCullRect().Rect())
+    } else {
+        data.FlatReplay()
+            .Rare()
+            .and_then(|rare| rare.non_layer_cull_rects)
+            .unwrap_or((parent_contents_cull, parent_contents_cull))
+    };
+    let local = data.PaintOffset();
+    let snap = data.FlatReplay().paint_snap_offset;
+    let object = paint_record::paint_object::PaintObject::FromCursor(cursor, Default::default());
+    nodes.push(CapturedOccurrence {
+        cursor,
+        data,
+        flat_paint_offset: Offset {
+            x: local.left.ToDouble() - snap.x,
+            y: local.top.ToDouble() - snap.y,
+        },
+        self_cull_rect,
+        applies_mask: object.applies_mask(),
+    });
+    for child in cursor.Children() {
+        gather(prepaint, child, contents_cull_rect, nodes);
     }
-}
-
-/// FragmentData::LocalBorderBoxProperties() (fragment_data.h:137-142);
-/// hand-built nodes without FragmentData keep their own state.
-fn local_border_box_properties(
-    node: &PaintTreeNode<'_>,
-    data: Option<&PrePaintFragmentData>,
-) -> PropertyTreeState {
-    match data {
-        Some(data) => data.LocalBorderBoxProperties(),
-        None => node.properties.nodes.clone(),
+    if let Some(view) = prepaint.LocalFrameView(cursor.PaintData().paint.DisplayItemClientId()) {
+        gather(prepaint, view.Root(), contents_cull_rect, nodes);
     }
 }
 
@@ -287,26 +298,6 @@ fn rebase_rect(
     .then_some((result, roundoff))
 }
 
-fn identity(node: &PaintTreeNode<'_>) -> (u64, u64, u64, u32) {
-    let f = node
-        .fragment
-        .as_deref()
-        .expect("PrePaint owns a real fragment");
-    (
-        f.ViewNodeId(),
-        f.ViewFragmentInstanceId(),
-        f.paint.DisplayItemClientId(),
-        f.ViewDisplayItemFragment(),
-    )
-}
-
-fn gather<'a, 'f>(node: &'a PaintTreeNode<'f>, nodes: &mut Vec<&'a PaintTreeNode<'f>>) {
-    nodes.push(node);
-    for child in &node.children {
-        gather(child, nodes);
-    }
-}
-
 fn intersection(a: PaintRect, b: PaintRect) -> PaintRect {
     let x = a.x.max(b.x);
     let y = a.y.max(b.y);
@@ -318,13 +309,19 @@ fn intersection(a: PaintRect, b: PaintRect) -> PaintRect {
     }
 }
 
-fn mask_outputs(nodes: &[&PaintTreeNode<'_>]) -> Option<BTreeMap<u64, PaintRect>> {
+fn mask_outputs(nodes: &[CapturedOccurrence<'_>]) -> Option<BTreeMap<u64, PaintRect>> {
     let mut outputs = BTreeMap::new();
     for node in nodes {
         if !node.applies_mask {
             continue;
         }
-        let mut masks = node.mask_layers.iter();
+        let mask_layers = node
+            .data
+            .FlatReplay()
+            .Rare()
+            .and_then(|rare| rare.mask_layers.as_deref())
+            .unwrap_or(&[]);
+        let mut masks = mask_layers.iter();
         let mut rect = masks.next()?.clip_rect;
         for mask in masks {
             // Same rectangle union as PrePaint's mask cull, including empty
@@ -338,11 +335,17 @@ fn mask_outputs(nodes: &[&PaintTreeNode<'_>]) -> Option<BTreeMap<u64, PaintRect>
                 height: (rect.y + rect.height).max(mask.clip_rect.y + mask.clip_rect.height) - y,
             };
         }
-        let mask_effect = own_mask_effect(node, node.FragmentData())?;
+        // The object's own Mask effect: its ObjectPaintProperties Mask slot
+        // (object_paint_properties.h:370-381), whose parent is the masked
+        // content's effect.
+        let mask_effect = node.data.PaintProperties()?.Mask().cloned()?;
         let content_effect_id = paint_model::property_cell::with_access(|access| {
             mask_effect.Parent(access).map(|parent| parent.id)
         })?;
-        outputs.insert(content_effect_id, MapRectToRoot(rect, &node.transforms)?);
+        outputs.insert(
+            content_effect_id,
+            MapRectToRoot(rect, &node.data.FlatReplay().transforms)?,
+        );
     }
     Some(outputs)
 }
@@ -467,13 +470,13 @@ fn visible_output(
 
 impl RetainedScrollPaintState {
     pub(crate) fn capture(
-        tree: &PaintTreeNode<'_>,
+        prepaint: &PrePaintTreeWalk,
         source: PaintFragmentSource<'_>,
         store: &PaintPropertyNodeStore,
         artifact: &PaintArtifact,
     ) -> Option<Self> {
         let mut nodes = Vec::new();
-        gather(tree, &mut nodes);
+        gather(prepaint, source.Cursor(), None, &mut nodes);
         let mut fragments = Vec::with_capacity(nodes.len());
         let mut fragment_indices = HashMap::with_capacity(nodes.len());
         let mut worlds = BTreeMap::new();
@@ -493,17 +496,22 @@ impl RetainedScrollPaintState {
             .collect();
         let has_scroll_dependent_background = nodes
             .iter()
-            .any(|node| has_scroll_dependent_background(node));
+            .any(|node| {
+                has_scroll_dependent_background(
+                    node.cursor.PaintData(),
+                    node.data.FlatReplay().fixed_background_acts_as_scroll,
+                )
+            });
         for node in &nodes {
             if !node.applies_mask {
                 continue;
             }
-            let data = node.FragmentData();
-            let mask_effect = own_mask_effect(node, data)?;
+            let data = node.data;
+            let mask_effect = data.PaintProperties()?.Mask().cloned()?;
             let effect_id = paint_model::property_cell::with_access(|access| {
                 mask_effect.Parent(access).map(|parent| parent.id)
             })?;
-            let state = local_border_box_properties(node, data);
+            let state = data.LocalBorderBoxProperties();
             let world = property_world(&state, &mut worlds)?;
             retained_masks.push(MaskOutput {
                 effect_id,
@@ -513,25 +521,18 @@ impl RetainedScrollPaintState {
             });
         }
         for node in nodes {
-            let f = node.fragment.as_deref()?;
-            let data = node.FragmentData();
+            let f = node.cursor.PaintData();
+            let data = node.data;
             // Only objects PrePaint actually reached can be retained: their
             // FragmentData carries the LocalBorderBoxProperties the builder
             // set (fragment_data.h:137-146). This is a presence gate; no
             // revision is compared (see collect_current_fragments).
-            // Hand-built nodes without FragmentData use their walk cache.
-            match data {
-                Some(data) if !data.HasLocalBorderBoxProperties() => return None,
-                Some(_) => {}
-                None => {
-                    node.RecordedRevisions()?;
-                }
+            if !data.HasLocalBorderBoxProperties() {
+                return None;
             }
-            let properties = local_border_box_properties(node, data);
-            // The paint offset the recorded ops use: FragmentData's, in the
-            // flat replay space (PaintTreeNode::FlatPaintOffset).
-            let paint_offset = node.FlatPaintOffsetOf(data);
-            let self_cull_rect = recorded_self_cull_rect(node, data);
+            let properties = data.LocalBorderBoxProperties();
+            let paint_offset = node.flat_paint_offset;
+            let self_cull_rect = node.self_cull_rect;
             // Pixel-moving effects are retained property-tree effects. Their
             // unsupported coverage mapping is isolated below to that state;
             // it must not disable retained scrolling for unrelated layers.
@@ -552,7 +553,7 @@ impl RetainedScrollPaintState {
                     0.0,
                 )
             });
-            let identity = identity(node);
+            let identity = fragment_identity(f);
             if fragment_indices.insert(identity, fragments.len()).is_some() {
                 return None;
             }
@@ -627,9 +628,7 @@ impl RetainedScrollPaintState {
                 }
             }
             fragments.push(FragmentCoverage {
-                offset: node
-                    .SourceCursor()
-                    .map_or(f.offset, |cursor| cursor.ViewOffsetInContainer()),
+                offset: node.cursor.ViewOffsetInContainer(),
                 size: f.ViewSize(),
                 sticky_offset: f.paint.StickyOffset(),
                 paint_offset: paint_offset,
@@ -638,26 +637,25 @@ impl RetainedScrollPaintState {
                 unrecorded_visual_rect,
                 controls: f
                     .ViewScrollbars()
-                    .map(|scrollbars| OverflowControlGeometry {
-                        paint_snap_offset: node.paint_snap_offset,
-                        properties: node.properties.clone(),
-                        contents_properties: node.contents_properties.clone(),
-                        transforms: node.transforms.clone(),
-                        phase: if scrollbars.should_paint_as_overlay {
-                            if node.is_self_painting_layer
-                                || node.needs_reorder_overlay_overflow_controls.get()
-                            {
-                                PaintPhase::kOverlayOverflowControls
+                    .map(|scrollbars| {
+                        let object = paint_record::paint_object::PaintObject::FromCursor(
+                            node.cursor,
+                            Default::default(),
+                        );
+                        OverflowControlGeometry {
+                            transforms: data.FlatReplay().transforms.clone(),
+                            phase: if scrollbars.should_paint_as_overlay {
+                                if object.is_self_painting_layer()
+                                    || object.needs_reorder_overlay_overflow_controls()
+                                {
+                                    PaintPhase::kOverlayOverflowControls
+                                } else {
+                                    PaintPhase::kForeground
+                                }
                             } else {
-                                PaintPhase::kForeground
-                            }
-                        } else {
-                            PaintPhase::kSelfBlockBackgroundOnly
-                        },
-                        is_self_painting_layer: node.is_self_painting_layer,
-                        needs_reorder_overlay_overflow_controls: node
-                            .needs_reorder_overlay_overflow_controls
-                            .get(),
+                                PaintPhase::kSelfBlockBackgroundOnly
+                            },
+                        }
                     }),
             });
         }
@@ -696,7 +694,7 @@ impl RetainedScrollPaintState {
 fn collect_current_fragments<'a>(
     source: PaintFragmentSource<'a>,
     retained: &RetainedScrollPaintState,
-    nodes: &mut [Option<&'a FragmentPaintData>],
+    nodes: &mut [Option<PaintFragmentSource<'a>>],
     offsets: &mut BTreeMap<PaintPropertyOwner, Offset>,
     sticky: &mut BTreeMap<PaintPropertyOwner, (Offset, StickyPositionPaintData)>,
     dirty_offsets: &mut BTreeMap<PaintPropertyOwner, Offset>,
@@ -833,7 +831,7 @@ fn collect_current_fragments<'a>(
         return false;
     }
     if !self_clean {
-        nodes[index] = Some(f);
+        nodes[index] = Some(source);
     }
     *collected += 1;
     if f.paint.DisplayItemClientId() != 0 {
@@ -903,10 +901,10 @@ fn collect_current_fragments<'a>(
         })
 }
 
-fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
-    let Some(fragment) = node.fragment.as_deref() else {
-        return false;
-    };
+fn has_scroll_dependent_background(
+    fragment: &FragmentPaintData,
+    fixed_background_acts_as_scroll: bool,
+) -> bool {
     if !fragment.paint.HasSource() || fragment.paint.BackgroundTransfersToView() {
         return false;
     }
@@ -919,11 +917,11 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
             BackgroundAttachment::kFixed => {
                 let independently_recorded =
                     fragment.paint.CanCompositeBackgroundAttachmentFixed()
-                        && !node.fixed_background_acts_as_scroll
+                        && !fixed_background_acts_as_scroll
                         && fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
                         && background_images.len() == 1
                         && (layer.shader.is_some() || layer.resource_id != 0);
-                !node.fixed_background_acts_as_scroll && !independently_recorded
+                !fixed_background_acts_as_scroll && !independently_recorded
             }
         })
 }
@@ -983,14 +981,12 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             .as_ref()
             .is_some_and(|state| state.recording_revision != artifact.recording_revision);
         if !*retained_scroll_state_initialized || stale {
-            *retained_scroll_state = prepaint.retained_tree.as_deref().and_then(|tree| {
-                RetainedScrollPaintState::capture(
-                    tree,
-                    fragments,
-                    &prepaint.property_node_store,
-                    artifact,
-                )
-            });
+            *retained_scroll_state = RetainedScrollPaintState::capture(
+                prepaint,
+                fragments,
+                &prepaint.property_node_store,
+                artifact,
+            );
             *retained_scroll_state_initialized = true;
         }
     }
@@ -1009,7 +1005,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         return Err(PropertyChanged);
     }
     // This path is admitted only by Page's retained source-layout proof. No
-    // property builder or temporary PaintTreeNode is needed for clean content.
+    // property builder or temporary PrePaint state is needed for clean content.
     // Verify current geometry independently and carry Layout's resolved sticky
     // values into its existing property slot before validating recorded coverage.
     let mut nodes = vec![None; retained.fragments.len()];
@@ -1234,19 +1230,14 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         let geometry = old.controls.as_ref().ok_or(ScrollbarChanged)?;
         // Record controls in the original flat coordinate basis. Chunk
         // properties/scroll translations are refreshed separately below.
-        let mut node = PaintTreeNode::default();
-        node.paint_offset = old.paint_offset;
-        node.paint_snap_offset = geometry.paint_snap_offset;
-        node.properties = geometry.properties.clone();
-        node.contents_properties = geometry.contents_properties.clone();
-        node.is_self_painting_layer = geometry.is_self_painting_layer;
-        node.needs_reorder_overlay_overflow_controls
-            .set(geometry.needs_reorder_overlay_overflow_controls);
-        node.SetOwnedFragmentForTesting(f);
+        // No PrePaint walk ran since the capture (PrePaintConsumedSince-
+        // Recording rejects it), so the occurrence's FragmentData still holds
+        // the paint offset, flat-to-property delta and property states the
+        // capture recorded.
         let mut controls = PaintRecording::default();
         let context = RefCell::new(paint_context::PaintContext::WithCaret(&mut controls, None));
         scrollable_area_painter::ScrollableAreaPainter::new(
-            paint_record::paint_object::PaintObject::new(&node),
+            paint_record::paint_object::PaintObject::FromCursor(f.Cursor(), Default::default()),
             &context,
         )
         .PaintOverflowControls(&paint_info::PaintInfo::new(&context, geometry.phase));
