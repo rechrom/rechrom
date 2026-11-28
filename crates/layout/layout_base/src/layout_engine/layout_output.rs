@@ -1511,6 +1511,51 @@ impl<'a> PaintFragmentCursor<'a> {
         self.source
     }
 
+    /// Whether `other` is this same cursor value: the same resident fragment
+    /// or item at the same offset, over the same paint state, in the same
+    /// display-item fragment scope. Compared by address, never dereferenced.
+    pub fn IsSameCursor(self, other: PaintFragmentCursor<'_>) -> bool {
+        let same_source = match (self.source, other.source) {
+            (
+                FragmentCursor::Physical { fragment, offset },
+                FragmentCursor::Physical {
+                    fragment: other_fragment,
+                    offset: other_offset,
+                },
+            ) => std::ptr::eq(fragment, other_fragment) && offset == other_offset,
+            (
+                FragmentCursor::Inline {
+                    item,
+                    items,
+                    container,
+                    index,
+                    offset,
+                },
+                FragmentCursor::Inline {
+                    item: other_item,
+                    items: other_items,
+                    container: other_container,
+                    index: other_index,
+                    offset: other_offset,
+                },
+            ) => {
+                std::ptr::eq(item, other_item)
+                    && std::ptr::eq(items, other_items)
+                    && std::ptr::eq(container, other_container)
+                    && index == other_index
+                    && offset == other_offset
+            }
+            _ => false,
+        };
+        same_source
+            && match (self.state, other.state) {
+                (Some(a), Some(b)) => std::ptr::eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.display_item_fragment == other.display_item_fragment
+    }
+
     pub fn LayerForPaintObject(
         self,
         identity: PaintLayoutObjectIdentity<'a>,

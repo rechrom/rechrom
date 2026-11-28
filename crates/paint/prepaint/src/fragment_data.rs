@@ -139,6 +139,11 @@ pub struct PrePaintWalkRecord {
     /// transform animation, non-composited transform).
     pub cull_decision_inputs: [bool; 4],
     pub child_context_digest: u64,
+    /// The walk's child-context generation when this occurrence was last
+    /// built. A leaf keeps no child context (`CachedChildContext`); its own
+    /// flat values stay current under the same conditions as a kept
+    /// context, which this records.
+    pub context_generation: u64,
 }
 
 /// Not Chromium. The values Rechrom's flat replay stream (PaintContext

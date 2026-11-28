@@ -46,9 +46,11 @@ fn SelectedFragmentBackground<'a>(
     cursor: crate::layout_engine::PaintFragmentCursor<'a>,
 ) -> CanvasBackgroundPaintView<'a> {
     let data = cursor.PaintData();
+    // LayoutBox::StitchedSize() of the resident box (the slot's stored
+    // `size` is fixture-only; production never writes it).
     let size = data
         .ViewStitchedDecoration()
-        .map_or(data.size, |decoration| decoration.size);
+        .map_or_else(|| data.ViewSize(), |decoration| decoration.size);
     let border = data.Borders();
     let padding = data.Padding();
     CanvasBackgroundPaintView {

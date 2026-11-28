@@ -150,6 +150,22 @@ impl PrePaintTreeWalk {
         let (ids, len) = CarriedClientIds(fragment);
         let ids = &ids[..len];
         let carried = data.CarriedClientsMut();
+        // The occurrence's last registration still stands when it carries
+        // the same ids and every entry still names this cursor with its
+        // token (no other occurrence took an id, no Clear).
+        if carried.Ids() == ids {
+            if let Some(token) = carried.token.as_ref() {
+                let token = Arc::as_ptr(token);
+                let directory = &self.committed_clients;
+                if ids.iter().all(|id| {
+                    directory.occurrences.get(id).is_some_and(|entry| {
+                        std::ptr::eq(entry.alive.as_ptr(), token) && entry.cursor.IsSameCursor(cursor)
+                    })
+                }) {
+                    return;
+                }
+            }
+        }
         let token = carried.Token();
         // SAFETY: the walk's lease keeps the fragment resident; the entry is
         // replaced by the visit of any new fragment of this occurrence and

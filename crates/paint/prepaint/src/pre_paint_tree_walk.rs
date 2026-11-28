@@ -4684,6 +4684,38 @@ fn ReparentEffect(
     true
 }
 
+/// Decision D2 for an out-of-flow occurrence the walk advances without a
+/// build: whether its last build already took `effect`, its logical parent
+/// occurrence's effect, in the state RebindLogicalEffect would leave (the
+/// outermost own effect parented to it, else LocalBorderBoxProperties and
+/// the kept child context naming it; a fix-up after that build replaced
+/// LocalBorderBoxProperties and dropped the kept context).
+fn LogicalEffectIsCurrent(
+    cursor: PaintFragmentCursor<'_>,
+    effect: &Arc<EffectPaintPropertyNode>,
+) -> bool {
+    let Some(data) = cursor
+        .PrePaintData::<PrePaintFragmentData>()
+        .filter(|data| data.WasWalked())
+    else {
+        return false;
+    };
+    if let Some(outermost) = OutermostOwnEffect(data) {
+        return paint_model::property_cell::with_access(|access| {
+            outermost
+                .state(access)
+                .parent
+                .as_ref()
+                .is_some_and(|parent| Arc::ptr_eq(parent, effect))
+        });
+    }
+    data.LocalBorderBoxPropertiesRef()
+        .is_some_and(|state| Arc::ptr_eq(&state.effect, effect))
+        && data
+            .CachedChildContext()
+            .is_none_or(|cached| Arc::ptr_eq(&cached.context.properties.nodes.effect, effect))
+}
+
 /// Decision D2 fix-up of one out-of-flow occurrence whose logical parent
 /// occurrence gives it `parent_effect`. The builder parents an out-of-flow
 /// object's effects to its logical parent occurrence when the walk visited
@@ -5153,7 +5185,12 @@ impl PrePaintTreeWalk {
         // subtree update: the builder only advances the context past the
         // object's existing nodes. Such an object is visited for a
         // descendant's dirty bit or its own paint invalidation check.
-        let clean = if has_logical_effect {
+        // Decision D2 on the context-only path: the logical parent's effect
+        // must be the one the last build took, which the occurrence's nodes
+        // and kept child context name.
+        let clean = if has_logical_effect
+            && !LogicalEffectIsCurrent(cursor, &ctx.inherited.properties.nodes.effect)
+        {
             Err(CLEAN_REJECT_WALK_STATE)
         } else {
             self.CleanVisitChildContext(&fragment, &ctx, inside, display_item_fragment, fragmentainer)
@@ -5441,6 +5478,7 @@ impl PrePaintTreeWalk {
                 node.cull_decision_inputs.has_non_composited_transform,
             ],
             child_context_digest: digest,
+            context_generation: self.child_context_generation,
         };
         if InlineOutlineCandidate(&fragment) {
             self.visited_inline_outline = true;
@@ -5698,7 +5736,7 @@ impl PrePaintTreeWalk {
         inside: bool,
         display_item_fragment: u32,
         fragmentainer: u64,
-    ) -> Result<(ChildContext, bool), usize> {
+    ) -> Result<(Option<ChildContext>, bool), usize> {
         let invalidation = fragment.pre_paint_invalidation;
         let client = fragment.paint.DisplayItemClientId();
         if self.full_walk
@@ -5760,11 +5798,26 @@ impl PrePaintTreeWalk {
         }
         let cached = data
             .CachedChildContext()
-            .filter(|cached| cached.generation == self.child_context_generation)
-            .ok_or(CLEAN_REJECT_CACHED_CONTEXT)?;
-        let delta = cached
-            .context
-            .directly_composited_container_paint_offset_subpixel_delta;
+            .filter(|cached| cached.generation == self.child_context_generation);
+        // A leaf kept no child context (its last build walked no child); its
+        // own values are current while that build's generation is, and the
+        // subpixel movement a rebuild would reset is the one it inherits.
+        let leaf = cached.is_none()
+            && !ctx.inherited.root
+            && record.context_generation == self.child_context_generation
+            && OrdinaryPaintSourceChildren(*fragment).next().is_none();
+        if cached.is_none() && !leaf {
+            return Err(CLEAN_REJECT_CACHED_CONTEXT);
+        }
+        let delta = cached.map_or(
+            ctx.inherited
+                .directly_composited_container_paint_offset_subpixel_delta,
+            |cached| {
+                cached
+                    .context
+                    .directly_composited_container_paint_offset_subpixel_delta
+            },
+        );
         if delta.x != 0.0 || delta.y != 0.0 {
             return Err(CLEAN_REJECT_SUBPIXEL_DELTA);
         }
@@ -5785,7 +5838,7 @@ impl PrePaintTreeWalk {
         if invalidate && fragment.paint.Display() == Display::kTableCell {
             return Err(CLEAN_REJECT_WALK_STATE);
         }
-        Ok((cached.context.clone(), invalidate))
+        Ok((cached.map(|cached| cached.context.clone()), invalidate))
     }
 
     /// Source: PrePaintTreeWalk::WalkInternal and WalkChildren
@@ -5802,7 +5855,7 @@ impl PrePaintTreeWalk {
         &mut self,
         fragment: PaintFragmentSource<'_>,
         ctx: WalkContext,
-        mut base: ChildContext,
+        mut base: Option<ChildContext>,
         invalidate: bool,
         inside: bool,
         display_item_fragment: u32,
@@ -5843,17 +5896,20 @@ impl PrePaintTreeWalk {
         // The values of the context a build takes from the walk rather than
         // from the object: the wheel-handler state (WalkChildren) and the
         // accumulated opacity, which no digest covers.
-        base.inside_blocking_wheel_event_handler = inside;
-        base.blocking_wheel_event_handler_changed =
-            ctx.inherited.blocking_wheel_event_handler_changed;
-        base.opacity = ctx.inherited.opacity
-            * if fragment.ViewEstablishesPaintState() && fragment.paint.HasSource() {
-                MaskAdjustedOpacity(&fragment.paint.style)
-            } else {
-                1.0
-            };
-        if ctx.inherited.root {
-            self.CaptureRootFixedPositionContext(&base, None);
+        // A leaf (`base` None) hands no child a context.
+        if let Some(base) = base.as_mut() {
+            base.inside_blocking_wheel_event_handler = inside;
+            base.blocking_wheel_event_handler_changed =
+                ctx.inherited.blocking_wheel_event_handler_changed;
+            base.opacity = ctx.inherited.opacity
+                * if fragment.ViewEstablishesPaintState() && fragment.paint.HasSource() {
+                    MaskAdjustedOpacity(&fragment.paint.style)
+                } else {
+                    1.0
+                };
+            if ctx.inherited.root {
+                self.CaptureRootFixedPositionContext(base, None);
+            }
         }
         let mut owner = ResidentFragment::FromSource(&fragment);
         let t_admitted = checkpoint();
@@ -5884,22 +5940,24 @@ impl PrePaintTreeWalk {
         );
         let mut phase = OwnPhaseNeeds(&fragment, record.is_paint_layer);
         let mut table_cell_geometry_changed = false;
-        self.WalkChildren(
-            fragment,
-            &mut owner,
-            paint_offset,
-            &base,
-            invalidation_context,
-            false,
-            false,
-            old_children_contents_cull,
-            child_auto_dark_mode_paused,
-            display_item_fragment,
-            fragmentainer,
-            &mut phase,
-            &mut table_cell_geometry_changed,
-            t_invalidated,
-        );
+        if let Some(base) = base.as_ref() {
+            self.WalkChildren(
+                fragment,
+                &mut owner,
+                paint_offset,
+                base,
+                invalidation_context,
+                false,
+                false,
+                old_children_contents_cull,
+                child_auto_dark_mode_paused,
+                display_item_fragment,
+                fragmentainer,
+                &mut phase,
+                &mut table_cell_geometry_changed,
+                t_invalidated,
+            );
+        }
         let t_looped = checkpoint();
         if let Some(slot) = cursor.PrePaintSlot() {
             // SAFETY: the walk is the occurrence's single PrePaint writer
@@ -5919,7 +5977,7 @@ impl PrePaintTreeWalk {
             flat.skip_outline_phase = !phase.outline;
             flat.skip_overflow_controls_phase = !phase.overflow_controls;
             data.SetPreviousGapRules(fragment.ViewGapRules());
-            if let Some(cached) = data.CachedChildContextMut() {
+            if let (Some(cached), Some(base)) = (data.CachedChildContextMut(), base.as_ref()) {
                 cached.context.opacity = base.opacity;
                 cached.context.inside_blocking_wheel_event_handler = inside;
             }

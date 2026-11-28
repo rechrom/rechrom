@@ -996,8 +996,17 @@ impl PaintStyle {
         self.has_translate()
             || self.has_rotate()
             || self.has_scale()
-            || self.Data().offset_transform.is_some()
             || self.has_transform()
+            || self.has_offset_transform()
+    }
+
+    /// The resolved motion-path matrix exists only for a style with an
+    /// offset (ApplyResolvedOffsetTransform), so a live style without one
+    /// answers without resolving the projection.
+    fn has_offset_transform(&self) -> bool {
+        self.Source()
+            .is_none_or(|style| style.HasOffset())
+            && self.Data().offset_transform.is_some()
     }
 
     pub fn has_translate(&self) -> bool {
