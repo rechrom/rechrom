@@ -44,13 +44,20 @@ fn BodyLayoutObject(root_object: &LayoutObject) -> *const LayoutObject {
 /// size come from the resident fragment.
 fn SelectedFragmentBackground<'a>(
     cursor: crate::layout_engine::PaintFragmentCursor<'a>,
+    live_size: bool,
 ) -> CanvasBackgroundPaintView<'a> {
     let data = cursor.PaintData();
-    // LayoutBox::StitchedSize() of the resident box (the slot's stored
-    // `size` is fixture-only; production never writes it).
-    let size = data
-        .ViewStitchedDecoration()
-        .map_or_else(|| data.ViewSize(), |decoration| decoration.size);
+    // LayoutBox::StitchedSize() of the resident box. The slot's stored
+    // `size` is fixture-only (production never writes it), but painting
+    // still positions root backgrounds with it to keep output unchanged:
+    // Rechrom's root fragment is the LayoutView, whose live size is the
+    // viewport rather than the document element's box, so switching the
+    // painted size needs the document element's own box first. LayoutView
+    // invalidation (`live_size`) compares the resident box size.
+    let size = data.ViewStitchedDecoration().map_or_else(
+        || if live_size { data.ViewSize() } else { data.size },
+        |decoration| decoration.size,
+    );
     let border = data.Borders();
     let padding = data.Padding();
     CanvasBackgroundPaintView {
@@ -100,11 +107,12 @@ fn SourceFragment<'a>(
 fn RootFragmentBackground<'a>(
     root_object: &'a LayoutObject,
     output: crate::layout_engine::PaintFragmentCursor<'a>,
+    live_size: bool,
 ) -> Option<CanvasBackgroundPaintView<'a>> {
     if !root_object.IsDocumentElement() {
         return None;
     }
-    SourceFragment(output, root_object).map(SelectedFragmentBackground)
+    SourceFragment(output, root_object).map(|cursor| SelectedFragmentBackground(cursor, live_size))
 }
 
 /// The element whose background the canvas paints: the body when it
@@ -149,9 +157,9 @@ pub(crate) fn ViewBackgroundForRoot<'a>(
     if !root_object.ShouldApplyRootBackgroundBehaviorForLayout() {
         return None;
     }
-    let root_geometry = RootFragmentBackground(root_object, output)?;
+    let root_geometry = RootFragmentBackground(root_object, output, false)?;
     let source = CanvasBackgroundSource(root_object);
-    let mut canvas = SelectedFragmentBackground(SourceFragment(output, source)?);
+    let mut canvas = SelectedFragmentBackground(SourceFragment(output, source)?, false);
     canvas.document_element_node_id = InputId(root_object);
     canvas.document_element_size = root_geometry.document_element_size;
     // RootBox::FirstFragment().PaintOffset(), in LayoutView contents space.
@@ -179,7 +187,7 @@ pub(crate) fn ViewBackgroundRootGeometryForRoot<'a>(
     if !root_object.ShouldApplyRootBackgroundBehaviorForLayout() {
         return None;
     }
-    let mut root = RootFragmentBackground(root_object, output)?;
+    let mut root = RootFragmentBackground(root_object, output, true)?;
     root.document_element_has_transform = root_object.HasTransform();
     Some(root)
 }
@@ -221,7 +229,7 @@ pub(crate) fn DocumentElementBackgroundForObject<'a>(
     output: crate::layout_engine::PaintFragmentCursor<'a>,
 ) -> Option<CanvasBackgroundPaintView<'a>> {
     let view = unsafe { (object.View() as *const LayoutObject).as_ref() }?;
-    RootFragmentBackground(view, output)
+    RootFragmentBackground(view, output, false)
 }
 
 /// LayoutView-global BoxBackgroundPaintContext facts of a paginated document
