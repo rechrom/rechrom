@@ -17,12 +17,12 @@
 //! PaintLayer cull rects) and, for Rechrom's flat replay stream only, the
 //! FragmentData's `FlatReplayData`. A PaintObject is built three ways:
 //!
-//! - `FromCursor(cursor, walk)`: no PrePaint node at all.
-//! - `Walked(node, walk)`: the paint walk's occurrence. The values come from
-//!   the cursor, FragmentData and walk context exactly as for `FromCursor`;
-//!   the resident PrePaint node the walk still traverses is attached only
-//!   as the equivalence oracle (`Verify*`) and for the node-only reads
-//!   listed under "PrePaint node".
+//! - `FromCursor(cursor, walk)`: the paint walk's occurrence; no PrePaint
+//!   node at all.
+//! - `Walked(node, walk)`: the same occurrence under
+//!   RECHROM_PREPAINT_FRAGMENT_DATA_CHECK. The values come from the cursor,
+//!   FragmentData and walk context exactly as for `FromCursor`; the resident
+//!   PrePaint node is attached only as the equivalence oracle (`Verify*`).
 //! - `new(node)`: hand-built fixtures (no FragmentData: every value is the
 //!   node's copy) and the synthetic nodes of scroll_paint_update / special
 //!   paint, whose walk-context values (inherited cull rect, previous paint
@@ -62,6 +62,76 @@ use crate::PaintRect;
 fn SourceCheckEnabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("RECHROM_PREPAINT_FRAGMENT_DATA_CHECK").is_some())
+}
+
+/// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the paint walk also lends the
+/// resident PrePaint nodes to its objects as their equivalence oracle and
+/// checks its cursor traversal against the node traversal.
+#[doc(hidden)]
+pub fn FragmentDataCheckEnabled() -> bool {
+    SourceCheckEnabled()
+}
+
+/// The first resident document-order position in a fragment subtree: the
+/// fragment's own source LayoutObject's (LayoutObject::LogicalTreeOrder), else
+/// the smallest of its children's, else 0 (no source with a Node).
+fn FirstLogicalTreeOrder(cursor: PaintFragmentCursor<'_>) -> u64 {
+    let order = cursor.PaintData().paint.LogicalTreeOrder();
+    if order != 0 {
+        return order;
+    }
+    let mut first = u64::MAX;
+    for child in cursor.Children() {
+        let child_order = FirstLogicalTreeOrder(child);
+        if child_order != 0 {
+            first = first.min(child_order);
+        }
+    }
+    if first == u64::MAX {
+        0
+    } else {
+        first
+    }
+}
+
+/// The painted children of a fragment in paint order: the fragment cursor's
+/// children (box children, then FragmentItems; BoxFragmentPainter's
+/// PaintBlockChildren / PaintInlineItems traversal), with the children that
+/// have a document-order position stably sorted by it in their own slots.
+///
+/// Not Chromium: Chromium paints fragment children in fragment order. The
+/// sort keeps the paint order PrePaint gave its node tree
+/// (RestoreLogicalSiblingOrder) until that order is retired; children
+/// already in order (nearly always) are returned without sorting.
+pub fn LogicalPaintChildren<'a>(cursor: PaintFragmentCursor<'a>) -> Vec<PaintFragmentCursor<'a>> {
+    let mut children: Vec<PaintFragmentCursor<'a>> = cursor.Children().collect();
+    if children.len() < 2 {
+        return children;
+    }
+    let keys: Vec<u64> = children.iter().map(|child| FirstLogicalTreeOrder(*child)).collect();
+    let mut previous = 0;
+    let already_ordered = keys.iter().all(|&order| {
+        if order == 0 {
+            return true;
+        }
+        if order < previous {
+            return false;
+        }
+        previous = order;
+        true
+    });
+    if already_ordered {
+        return children;
+    }
+    let slots: Vec<usize> = (0..children.len()).filter(|&index| keys[index] != 0).collect();
+    let mut ordered: Vec<(u64, PaintFragmentCursor<'a>)> =
+        slots.iter().map(|&index| (keys[index], children[index])).collect();
+    // Stable, as the node tree's sort_by_key.
+    ordered.sort_by_key(|(order, _)| *order);
+    for (slot, (_, child)) in slots.into_iter().zip(ordered) {
+        children[slot] = child;
+    }
+    children
 }
 
 /// The equivalence proof of a re-sourced accessor whose production value
@@ -208,12 +278,18 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         }
     }
 
-    /// The walk-side node, for paint_walk while its own traversal still runs
-    /// over PrePaint nodes. Painters never use it.
+    /// The PrePaint node attached as this object's equivalence oracle
+    /// (RECHROM_PREPAINT_FRAGMENT_DATA_CHECK), or a fixture's node. The paint
+    /// walk reads it only to check its cursor traversal; painters never use
+    /// it.
     #[doc(hidden)]
-    pub fn BackingNode(self) -> &'n PaintTreeNode<'f> {
+    pub fn CheckNode(self) -> Option<&'n PaintTreeNode<'f>> {
         self.node
-            .expect("paint_walk traverses PrePaint nodes; this object has none")
+    }
+
+    /// The walk context this object paints with.
+    pub fn Walk(self) -> PaintWalkContext<'n> {
+        self.walk.unwrap_or_default()
     }
 
     // -----------------------------------------------------------------
@@ -448,12 +524,11 @@ impl<'n, 'f> PaintObject<'n, 'f> {
     // Tree access.
     // -----------------------------------------------------------------
 
-    /// The painted children of this object in paint order: the walk's
-    /// resident children while it still traverses PrePaint nodes (the
-    /// fragment cursor's children, then an embedded local frame's root),
-    /// else the fragment cursor's children (box children and FragmentItems,
-    /// BoxFragmentPainter's traversal). Each child paints with this
-    /// object's contents cull rect.
+    /// The painted children of this object in paint order: the fragment
+    /// cursor's children (box children and FragmentItems, BoxFragmentPainter's
+    /// traversal; LogicalPaintChildren), or, for a node-backed object (a
+    /// fixture, or the check oracle), the PrePaint node's children. Each child
+    /// paints with this object's contents cull rect.
     pub fn Children(self) -> PaintObjectChildren<'n, 'f> {
         let inherited_cull_rect = if self.walk.is_some() {
             self.cull_rect()
@@ -462,9 +537,7 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         };
         let source = match (self.node, self.cursor) {
             (Some(node), _) => ChildSource::Nodes(node.children.iter()),
-            (None, Some(cursor)) if self.walk.is_some() => {
-                ChildSource::Cursors(cursor.Children().collect::<Vec<_>>().into_iter())
-            }
+            (None, Some(cursor)) => ChildSource::Cursors(LogicalPaintChildren(cursor).into_iter()),
             _ => ChildSource::Cursors(Vec::new().into_iter()),
         };
         PaintObjectChildren {
@@ -474,9 +547,9 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         }
     }
 
-    /// The painted SVG resource subtree root registered for `client`. The
-    /// resource subtree is painted by the paint walk's node traversal
-    /// (PaintSvgResourceSubtree), so it is the PrePaint node's directory.
+    /// The PrePaint node of the SVG resource subtree root registered for
+    /// `client` (the root node's directory): the check oracle of a resource
+    /// subtree the paint walk reaches through Layout.
     pub fn SvgResourceNode(self, client: u64) -> Option<PaintObject<'n, 'static>> {
         self.node?.SvgResourceNode(client).map(PaintObject::new)
     }
@@ -1088,6 +1161,39 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         };
         let value = flat.paints_outline;
         self.Verify("paints_outline", |node| value == node.paints_outline);
+        value
+    }
+    /// Whether this object's non-layer subtree paints the float phase (the
+    /// walk's phase pruning, FlatReplayData).
+    pub fn needs_float_phase(self) -> bool {
+        let Some(flat) = self.Flat() else {
+            return self.node.is_none_or(|node| node.needs_float_phase);
+        };
+        let value = !flat.skip_float_phase;
+        self.Verify("needs_float_phase", |node| value == node.needs_float_phase);
+        value
+    }
+    /// Whether this object's non-layer subtree paints an outline phase.
+    pub fn needs_outline_phase(self) -> bool {
+        let Some(flat) = self.Flat() else {
+            return self.node.is_none_or(|node| node.needs_outline_phase);
+        };
+        let value = !flat.skip_outline_phase;
+        self.Verify("needs_outline_phase", |node| value == node.needs_outline_phase);
+        value
+    }
+    /// Whether this object's non-layer subtree paints overlay overflow
+    /// controls.
+    pub fn needs_overflow_controls_phase(self) -> bool {
+        let Some(flat) = self.Flat() else {
+            return self
+                .node
+                .is_none_or(|node| node.needs_overflow_controls_phase);
+        };
+        let value = !flat.skip_overflow_controls_phase;
+        self.Verify("needs_overflow_controls_phase", |node| {
+            value == node.needs_overflow_controls_phase
+        });
         value
     }
     pub fn outline_rects(self) -> &'n [PaintRect] {

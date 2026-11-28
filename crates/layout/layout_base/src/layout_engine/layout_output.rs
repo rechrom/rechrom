@@ -1460,12 +1460,38 @@ impl<'a> PaintFragmentCursor<'a> {
     /// svg_shape_painter.cc:256-280. Return only native resource identities
     /// and derived instance transforms; no resource or geometry tree is copied.
     pub fn SvgMarkerPaints(self) -> Option<Vec<crate::internal::paint_input::SvgMarkerPaint>> {
+        Some(
+            self.SvgMarkers()?
+                .into_iter()
+                .map(|(paint, _)| paint)
+                .collect(),
+        )
+    }
+
+    /// svg_shape_painter.cc:282-323 PaintMarker: each painted marker with
+    /// the resident fragment of its LayoutSVGResourceMarker, whose subtree
+    /// SVGObjectPainter::PaintResourceSubtree paints. None for a marker
+    /// resource without a fragment in this result.
+    pub fn SvgMarkers(
+        self,
+    ) -> Option<Vec<(crate::internal::paint_input::SvgMarkerPaint, Option<Self>)>> {
         let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
         if !object.IsSVGShape() {
             return Some(Vec::new());
         }
         let query = unsafe { object.FactorySet().as_ref() }?.svg_marker_paints?;
-        Some(query(object))
+        Some(
+            query(object)
+                .into_iter()
+                .map(|(paint, resource)| {
+                    // The resource LayoutObject lives in this result's tree
+                    // (LayoutPassScope's resource tree query).
+                    let resource = unsafe { resource.as_ref() }
+                        .and_then(|resource| self.ForLayoutObject(resource));
+                    (paint, resource)
+                })
+                .collect(),
+        )
     }
 
     pub fn Cursor(self) -> FragmentCursor<'a> {

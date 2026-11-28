@@ -881,8 +881,18 @@ fn RecordPaint(
     // its exact computed opacity as the document-global Paint Timing fact used
     // by every nested PaintLayerPainter scope.
     paint_context.SetDocumentElementIsInvisible(fragments.paint.style.opacity() == 0.0);
-    paint_context.BindSvgResourceTree(paint_record::paint_object::PaintObject::new(&paint_tree));
-    paint_context.BindPaintTimingRoot(paint_record::paint_object::PaintObject::new(&paint_tree));
+    // RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the resident PrePaint nodes are
+    // lent to the paint walk as its oracle (the SVG resource directory
+    // included); production painting reads only the fragment cursor.
+    let traversal_check = crate::paint_layer_painter::TraversalCheckEnabled();
+    if traversal_check {
+        paint_context
+            .BindSvgResourceTree(paint_record::paint_object::PaintObject::new(&paint_tree));
+    }
+    paint_context.BindPaintTimingRoot(paint_record::paint_object::PaintObject::FromCursor(
+        fragments.Cursor(),
+        paint_record::paint_object::PaintWalkContext::default(),
+    ));
     if let Some((rect, shape)) = caret_geometry {
         paint_context.caret_local_rect = Some(rect);
         paint_context.caret_shape = Some(shape);
@@ -900,7 +910,13 @@ fn RecordPaint(
             // LocalFrameView::PaintTree walks the live tree under the source
             // lease; painters read each fragment's LayoutObject directly.
             let _resident_sources = layout::paint::ResidentPaintSourceScope::new();
-            PaintLayerPainter::new(&paint_tree, &context, Vec::new()).Paint();
+            // FramePainter::Paint of the root LocalFrameView: its LayoutView
+            // layer, the embedded same-Page frames through PrePaint's
+            // LocalFrameViews.
+            let frames: &dyn crate::paint_layer_painter::LocalFrameRoots = &*pre_paint;
+            PaintLayerPainter::new(fragments.Cursor(), &context, Some(frames))
+                .WithOracle(traversal_check.then_some(&*paint_tree))
+                .Paint();
         }
         let walk = context.borrow().walk_metrics;
         trace.set("layers", walk.layer_visits as f64);

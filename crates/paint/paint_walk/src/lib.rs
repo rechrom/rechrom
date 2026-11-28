@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
-//! Paint-order and phase traversal over caller-owned PrePaint trees.
+//! Paint-order and phase traversal over Layout's PaintLayer tree and the
+//! resident fragment cursor.
 //!
 //! This package classifies recording traversal and paint phases. It does not
 //! build property nodes, record paint operations, group chunks, or commit an

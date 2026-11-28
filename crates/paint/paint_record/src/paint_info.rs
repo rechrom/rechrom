@@ -24,8 +24,8 @@ pub struct PaintInfo<'c, 'o> {
     svg_context_paints: Option<&'c crate::svg_context_paints::SvgContextPaints<'c>>,
     svg_resource_root: u64,
     pub svg_resource_painter: Option<
-        for<'n, 'f, 'p, 'r> fn(
-            crate::paint_object::PaintObject<'n, 'f>,
+        for<'n, 'p, 'r> fn(
+            crate::paint_object::PaintObject<'n, 'static>,
             &PaintInfo<'p, 'r>,
         ),
     >,

@@ -382,9 +382,11 @@ impl LayoutSVGShape {
     }
     // cpp: svg_shape_painter.cc:256-280. Query the same retained positions,
     // native resources and source cycle owner at Paint time.
+    /// Each painted marker with its LayoutSVGResourceMarker, which
+    /// SVGShapePainter::PaintMarker paints (svg_shape_painter.cc:282-323).
     pub(crate) fn MarkerPaints(
         &self,
-    ) -> Vec<layout_base::internal::paint_input::SvgMarkerPaint> {
+    ) -> Vec<(layout_base::internal::paint_input::SvgMarkerPaint, *const LayoutObject)> {
         if self.marker_positions.is_empty() {
             return Vec::new();
         }
@@ -407,7 +409,7 @@ impl LayoutSVGShape {
                 let client = unsafe { &*(object as *const LayoutObject as *const
                     foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient) };
                 let viewport = marker.Viewport();
-                Some(layout_base::internal::paint_input::SvgMarkerPaint {
+                Some((layout_base::internal::paint_input::SvgMarkerPaint {
                     resource_client_id: client.Id() as u64,
                     transform: crate::svg_viewport::Matrix(marker.MarkerTransformation(position, width)),
                     viewport_clip: matches!(marker.StyleRef().OverflowX(), foundation::EOverflow::kHidden | foundation::EOverflow::kClip | foundation::EOverflow::kScroll).then(||
@@ -415,7 +417,7 @@ impl LayoutSVGShape {
                             offset: layout_base::internal::layout_input::Offset {x: viewport.x() as f64,y:viewport.y() as f64},
                             size: layout_base::internal::layout_input::Size {width:viewport.width() as f64,height:viewport.height() as f64},
                         }),
-                })
+                }, object as *const LayoutObject))
             }).collect()
         }).expect("SVG marker Paint borrows the native resource tree query scope")
     }

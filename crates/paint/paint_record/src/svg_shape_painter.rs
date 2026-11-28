@@ -589,9 +589,7 @@ fn PaintNativeMarkers(node: PaintObject<'_, '_>, info: &PaintInfo<'_, '_>) -> bo
     let Some(cursor) = node.SourceCursor() else {
         return false;
     };
-    let markers = cursor
-        .SvgMarkerPaints()
-        .expect("native SVG marker provider");
+    let markers = cursor.SvgMarkers().expect("native SVG marker provider");
     if markers.is_empty() {
         return true;
     }
@@ -609,12 +607,35 @@ fn PaintNativeMarkers(node: PaintObject<'_, '_>, info: &PaintInfo<'_, '_>) -> bo
         width: shape.bounds_width,
         height: shape.bounds_height,
     };
-    for marker in markers {
-        let resource = info
+    for (marker, resource_cursor) in markers {
+        // SVGShapePainter::PaintMarker paints the LayoutSVGResourceMarker's
+        // own subtree (svg_shape_painter.cc:282-323), reached through Layout.
+        let resource_cursor =
+            resource_cursor.expect("native marker resource must have a resident fragment");
+        let resource = match info
             .context
             .borrow()
             .SvgResourceNode(marker.resource_client_id)
-            .expect("native marker resource must have PrePaint state");
+        {
+            // RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the resource's PrePaint
+            // node is the oracle of the same occurrence.
+            Some(oracle) => {
+                assert!(
+                    oracle
+                        .Fragment()
+                        .is_some_and(|fragment| std::ptr::eq(fragment, resource_cursor.PaintData())),
+                    "SVG marker resource: the Layout resource fragment differs from its PrePaint node"
+                );
+                PaintObject::Walked(
+                    oracle.CheckNode().expect("resource oracle node"),
+                    crate::paint_object::PaintWalkContext::default(),
+                )
+            }
+            None => PaintObject::FromCursor(
+                resource_cursor,
+                crate::paint_object::PaintWalkContext::default(),
+            ),
+        };
         let command = |kind, transform, rect| DisplayItem {
             r#type: kind,
             phase: info.phase,

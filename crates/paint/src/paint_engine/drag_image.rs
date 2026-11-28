@@ -72,7 +72,7 @@ impl PaintEngine {
             layer_client_id,
             rect,
             layer_client_id != 0,
-            |layer, root| {
+            |layer, root, walk| {
                 let _trace = browser_tracing::span("paint", "Paint.RecordDragImage");
                 // LocalFrameView::PaintOutsideOfLifecycle, source.cc:4521-4530;
                 // pinned kPaintTimingIngnoreOutOfLifecyclePaints is enabled.
@@ -81,24 +81,34 @@ impl PaintEngine {
                     paint_record::ignore_paint_timing_scope::IgnorePaintTimingScope::IncrementIgnoreDepth();
                     scope
                 });
+                // The special paint scope hands out the overridden layer and
+                // root occurrences; Paint reads only their fragment cursors.
                 let source = root.SourceCursor().expect("retained Layout paint source");
+                let layer_cursor = layer.SourceCursor().expect("retained Layout paint source");
                 let mut output = PaintRecording::default();
                 output.resources = source.DocumentResources().cloned();
                 let mut paint_context = PaintContext::WithEditing(&mut output, editing);
                 paint_context.BindForeignLayers(foreign_layers);
-                // Same SVG resource directory as normal recording. No fragment
-                // payload/tree is materialized here.
-                paint_context.BindSvgResourceTree(paint_record::paint_object::PaintObject::new(root));
+                // RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the same oracle as
+                // normal recording. No fragment payload/tree is materialized.
+                let traversal_check =
+                    paint_walk::paint_layer_painter::TraversalCheckEnabled();
+                if traversal_check {
+                    paint_context
+                        .BindSvgResourceTree(paint_record::paint_object::PaintObject::new(root));
+                }
                 paint_context.SetDocumentElementIsInvisible(source.paint.style.opacity() == 0.0);
                 paint_context.SetNextPropertyId(next_property_id);
                 let context = RefCell::new(paint_context);
                 lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
+                let frames: &dyn paint_walk::paint_layer_painter::LocalFrameRoots = walk;
                 paint_walk::paint_layer_painter::PaintLayerPainter::new(
-                    layer,
+                    layer_cursor,
                     &context,
-                    Vec::new(),
+                    Some(frames),
                 )
                 .WithFlags(flags)
+                .WithOracle(traversal_check.then_some(layer))
                 .Paint();
                 context.borrow_mut().Finish();
                 drop(context);
@@ -115,18 +125,22 @@ impl PaintEngine {
                     // data_transfer.cc:131-134 adds FirstFragment().PaintOffset().
                     // The recorded ops are in the flat replay space, so read
                     // the FragmentData offset in that convention.
-                    let layer_paint_offset = layer.FlatPaintOffset();
+                    let layer_paint_offset = paint_record::paint_object::PaintObject::FromCursor(
+                        layer_cursor,
+                        paint_record::paint_object::PaintWalkContext::default(),
+                    )
+                    .FlatPaintOffset();
                     Offset {
                         x: rect.x + layer_paint_offset.x,
                         y: rect.y + layer_paint_offset.y,
                     }
                 };
                 // data_transfer.cc:136-137 FirstFragment().LocalBorderBoxProperties().
-                // Hand-built nodes without FragmentData keep their own state.
-                let border_box_properties = layer.FragmentData().map_or_else(
-                    || layer.properties.nodes.clone(),
-                    |data| data.LocalBorderBoxProperties(),
-                );
+                let border_box_properties = layer_cursor
+                    .PrePaintData::<prepaint::fragment_data::PrePaintFragmentData>()
+                    .map_or_else(PropertyTreeState::default, |data| {
+                        data.LocalBorderBoxProperties()
+                    });
                 DragImageRecording {
                     artifact: paint_commit::CommitArtifact(output),
                     layout_size: Size {

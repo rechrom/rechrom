@@ -132,7 +132,17 @@ impl OverriddenCullRectScope {
             facts.has_perspective,
             facts.has_active_transform_animation,
             facts.has_non_composited_transform,
-            node.previous_paint_result.get(),
+            // PaintLayer::PreviousPaintResult (cull_rect_updater.cc:221-230),
+            // which PaintLayerPainter writes; Paint no longer writes the node.
+            if node.is_paint_layer {
+                node.SourceCursor()
+                    .and_then(|cursor| cursor.OwnPaintLayer())
+                    .map_or(node.previous_paint_result.get(), |layer| {
+                        layer.PreviousPaintResult()
+                    })
+            } else {
+                node.previous_paint_result.get()
+            },
         );
         let self_cull = if infinite.use_infinite {
             None
@@ -236,7 +246,11 @@ impl PrePaintTreeWalk {
         layer_client_id: u64,
         mut input_rect: PaintRect,
         offset_input_by_paint_offset: bool,
-        query: impl for<'n> FnOnce(&'n PaintTreeNode<'static>, &'n PaintTreeNode<'static>) -> T,
+        query: impl for<'n> FnOnce(
+            &'n PaintTreeNode<'static>,
+            &'n PaintTreeNode<'static>,
+            &'n PrePaintTreeWalk,
+        ) -> T,
     ) -> Option<T> {
         let root = self.retained_tree.as_deref_mut()? as *mut PaintTreeNode<'static>;
         let layer = if layer_client_id == 0 {
@@ -305,7 +319,9 @@ impl PrePaintTreeWalk {
         );
         // Both references are read-only while the guard has overridden culls.
         // Restoring starts only after the callback and its temporary borrows end.
-        let result = query(unsafe { &*layer }, unsafe { &*root });
+        // The walk is lent back read-only (its LocalFrameViews for the paint
+        // walk); the scope holds raw pointers only.
+        let result = query(unsafe { &*layer }, unsafe { &*root }, &*self);
         drop(scope);
         Some(result)
     }

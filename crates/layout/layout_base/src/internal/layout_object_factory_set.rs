@@ -194,7 +194,9 @@ pub type StitchedRowGapIndex = fn(
 #[derive(Clone, Copy, Default)]
 pub struct LayoutObjectFactorySet {
     pub svg_context_reference_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
-    pub svg_marker_paints: Option<fn(&LayoutObject) -> Vec<super::paint_input::SvgMarkerPaint>>,
+    /// Each painted marker with its LayoutSVGResourceMarker (svg_shape_painter.cc:256-280).
+    pub svg_marker_paints:
+        Option<fn(&LayoutObject) -> Vec<(super::paint_input::SvgMarkerPaint, *const LayoutObject)>>,
     /// Injected platform Path construction; SVG Layout owns the returned path.
     pub svg_shape_path: Option<
         fn(

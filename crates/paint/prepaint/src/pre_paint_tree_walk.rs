@@ -4941,6 +4941,25 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
             node.needs_overflow_controls_phase |= child.needs_overflow_controls_phase;
         }
     }
+    WriteFlatReplayPhaseNeeds(node);
+}
+
+/// The aggregated phase needs MarkPaintPhaseNeeds computed, onto the
+/// occurrence's FragmentData FlatReplayData (the paint walk reads them there).
+fn WriteFlatReplayPhaseNeeds(node: &PaintTreeNode<'_>) {
+    let Some(slot) = node
+        .source_cursor
+        .and_then(|cursor| cursor.PrePaintSlotIfCurrent())
+    else {
+        return;
+    };
+    // SAFETY: the post-walk pass is the occurrence's single PrePaint writer;
+    // no reference into the slot is live.
+    let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
+    let flat = data.FlatReplayMut();
+    flat.skip_float_phase = !node.needs_float_phase;
+    flat.skip_outline_phase = !node.needs_outline_phase;
+    flat.skip_overflow_controls_phase = !node.needs_overflow_controls_phase;
 }
 
 /// The SVG resource directory and, for decision D2, the effect state every
@@ -5494,6 +5513,9 @@ fn WriteFlatReplayDataTo(node: &PaintTreeNode<'_>, data: &mut PrePaintFragmentDa
     flat.fixed_background_acts_as_scroll = node.fixed_background_acts_as_scroll;
     flat.applies_root_clip = node.applies_root_clip;
     flat.paints_outline = node.paints_outline;
+    flat.skip_float_phase = !node.needs_float_phase;
+    flat.skip_outline_phase = !node.needs_outline_phase;
+    flat.skip_overflow_controls_phase = !node.needs_overflow_controls_phase;
     let old = flat.Rare();
     let rare = crate::fragment_data::FlatReplayRareData {
         local_transforms: SharedSlice(
@@ -7719,10 +7741,16 @@ impl PrePaintTreeWalk {
         });
         let old_self_cull_rect = previous.as_ref().map(|node| node.self_cull_rect);
         let old_contents_cull_rect = previous.as_ref().map(|node| node.cull_rect);
+        // PaintLayer::PreviousPaintResult (paint_layer.h:400-405), written by
+        // PaintLayerPainter::Paint (paint_layer_painter.cc:589-596); only a
+        // painting-layer object has one. Paint no longer writes the PrePaint
+        // node's cell.
         let old_previous_paint_result = previous
             .as_ref()
-            .map_or(paint_model::PaintResult::kMayBeClippedByCullRect, |node| {
-                node.previous_paint_result.get()
+            .filter(|node| node.is_paint_layer)
+            .and_then(|_| fragment.Cursor().OwnPaintLayer())
+            .map_or(paint_model::PaintResult::kMayBeClippedByCullRect, |layer| {
+                layer.PreviousPaintResult()
             });
         let was_filter_origin_tainted = previous.as_deref().is_some_and(OwnFilterOriginTainted);
         let mut invalidation_context = parent_invalidation_context;

@@ -108,6 +108,16 @@ pub struct FlatReplayData {
     /// Whether the object paints its outline (false for every occurrence of
     /// an inline continuation group but the one painting the united outline).
     pub paints_outline: bool,
+    /// The paint walk's per-subtree phase pruning (MarkPaintPhaseNeeds): no
+    /// object of this occurrence's non-layer subtree paints the float,
+    /// outline or overlay-overflow-controls phase, so the walk skips the
+    /// phase visit with its flat replay scopes. Chromium has no such pruning
+    /// below the painting layer (PaintLayer::NeedsPaintPhaseFloat /
+    /// NeedsPaintPhaseDescendantOutlines gate the layer only); it goes away
+    /// with the flat replay stream. False (no skip) until PrePaint writes it.
+    pub skip_float_phase: bool,
+    pub skip_outline_phase: bool,
+    pub skip_overflow_controls_phase: bool,
     rare: Option<Box<FlatReplayRareData>>,
 }
 
