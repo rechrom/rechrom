@@ -297,7 +297,7 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        HTMLCanvasPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -336,7 +336,7 @@ mod tests {
             PaintFlag::kPrivacyPreserving,
         );
 
-        HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        HTMLCanvasPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -355,7 +355,7 @@ mod tests {
             crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IncrementIgnoreDepth();
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+            HTMLCanvasPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
         }
 
         assert!(!recording.first_contentful_painted);
@@ -372,7 +372,7 @@ mod tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+            HTMLCanvasPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
         }
 
         assert!(!recording.first_contentful_painted);
@@ -389,7 +389,7 @@ mod tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+            HTMLCanvasPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
             context.borrow_mut().Finish();
         }
 
@@ -434,7 +434,7 @@ mod tests {
         context.borrow_mut().BindForeignLayers(&layers);
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        HTMLCanvasPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        HTMLCanvasPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
         context.borrow_mut().Finish();
 
         drop(paint_info);

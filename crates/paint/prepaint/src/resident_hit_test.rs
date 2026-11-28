@@ -5,7 +5,6 @@
 //! fragment through Layout) and verifies the walked owner identity; hit
 //! testing must prepare lifecycle first.
 
-use layout::fragment::ResidentBoxGeometry as _;
 use foundation::{Member, PhysicalOffset};
 use layout::output::FragmentCursor;
 use layout::paint::{FragmentPaintData, PaintFragmentCursor};
@@ -20,143 +19,8 @@ use paint_model::{
 
 use crate::fragment_data::PrePaintFragmentData;
 use crate::object_paint_properties::{ObjectPaintProperties, ObjectPaintPropertySlot};
-use crate::pre_paint_tree_walk::{PaintTreeNode, PrePaintTreeWalk};
-use std::{cell::Ref, collections::HashMap, sync::Arc};
-
-/// Source PaintLayerStackingNode vectors. These are references to resident
-/// derived Paint owners, not copies of fragments or a hit-test-only tree.
-///
-/// Like PaintLayerStackingNode's lists they are retained until dirtied
-/// (z_order_lists_dirty_, paint_layer_stacking_node.h:191): PrePaint drops
-/// them (ResetPostPaintData, the DirtyZOrderLists of
-/// paint_layer_stacking_node.cc:67-83) before a topology or stacking change
-/// is observable, and the paint walk and hit testing rebuild them only when
-/// absent (UpdateZOrderLists, paint_layer_stacking_node.cc:436-439).
-pub(crate) struct ResidentPaintLayerOrder {
-    layers: Vec<*const ()>,
-    controls_after: HashMap<u64, Vec<*const ()>>,
-    paint: ResidentPaintOrderLists,
-}
-
-/// The paint walk's form of the same lists: each z-order entry's property
-/// ancestors (the non-layer PrePaint nodes between the stacking root and the
-/// child layer, which PaintLayerPainter re-enters), and
-/// layer_to_overlay_overflow_controls_painting_after_ keyed by the target
-/// layer node. Ancestors are one flattened buffer addressed by ranges, so a
-/// retained list owns a fixed number of allocations however many layers it
-/// names.
-#[derive(Default)]
-pub struct ResidentPaintOrderLists {
-    ancestors: Vec<*const ()>,
-    /// Parallel to `ResidentPaintLayerOrder::layers`.
-    entry_ancestors: Vec<(u32, u32)>,
-    controls_after: HashMap<*const (), Vec<(*const (), (u32, u32))>>,
-}
-
-impl ResidentPaintOrderLists {
-    /// Append one entry's property ancestors; returns their range.
-    pub fn PushAncestors(&mut self, ancestors: impl IntoIterator<Item = *const ()>) -> (u32, u32) {
-        let start = self.ancestors.len() as u32;
-        self.ancestors.extend(ancestors);
-        (start, self.ancestors.len() as u32)
-    }
-
-    /// Record the ancestor range of the z-order entry at the next layer index.
-    pub fn PushEntry(&mut self, ancestors: (u32, u32)) {
-        self.entry_ancestors.push(ancestors);
-    }
-
-    /// Record a scroller whose overlay controls paint after `target`.
-    pub fn PushControlsAfter(
-        &mut self,
-        target: *const (),
-        scroller: *const (),
-        ancestors: (u32, u32),
-    ) {
-        self.controls_after
-            .entry(target)
-            .or_default()
-            .push((scroller, ancestors));
-    }
-}
-
-/// Borrowed view of one stacking root's retained lists. Values are the
-/// resident PrePaint node addresses PaintWalk published; the borrow keeps the
-/// lists from being dropped or rebuilt while it is held.
-pub struct ResidentPaintOrderView<'a> {
-    order: Ref<'a, ResidentPaintLayerOrder>,
-}
-
-impl ResidentPaintOrderView<'_> {
-    /// The z-order list in paint order: negative z, normal flow and positive
-    /// z, then overscroll-area parents and top-layer layers.
-    pub fn Layers(&self) -> &[*const ()] {
-        &self.order.layers
-    }
-
-    /// The property ancestors of the entry at `index` in `Layers()`.
-    pub fn EntryAncestors(&self, index: usize) -> &[*const ()] {
-        self.Ancestors(self.order.paint.entry_ancestors[index])
-    }
-
-    pub fn Ancestors(&self, (start, end): (u32, u32)) -> &[*const ()] {
-        &self.order.paint.ancestors[start as usize..end as usize]
-    }
-
-    /// layer_to_overlay_overflow_controls_painting_after_[target]: scrollers
-    /// with their ancestor ranges, in collection order.
-    pub fn ControlsAfter(&self, target: *const ()) -> &[(*const (), (u32, u32))] {
-        self.order
-            .paint
-            .controls_after
-            .get(&target)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-}
-
-impl PaintTreeNode<'_> {
-    /// Borrow the retained lists for the paint walk
-    /// (PaintLayerPaintOrderIterator over the stacking node's PosZOrderList /
-    /// NegZOrderList, paint_layer_paint_order_iterator.cc:39-79). None while
-    /// dirty.
-    pub fn ResidentPaintOrder(&self) -> Option<ResidentPaintOrderView<'_>> {
-        Ref::filter_map(self.hit_test_layer_order.borrow(), Option::as_ref)
-            .ok()
-            .map(|order| ResidentPaintOrderView { order })
-    }
-
-    /// PaintLayerStackingNode::DirtyZOrderLists (paint_layer_stacking_node.cc:
-    /// 67-83) for this root alone: the next paint or hit-test query rebuilds.
-    pub fn DirtyZOrderLists(&mut self) {
-        *self.hit_test_layer_order.get_mut() = None;
-    }
-
-    pub fn HasResidentLayerOrder(&self) -> bool {
-        self.hit_test_layer_order.borrow().is_some()
-    }
-
-    /// Publish the source stacking collector's pointers into their canonical
-    /// resident owner. This is an internal Paint assembly operation.
-    ///
-    /// # Safety
-    /// Every pointer must be a PaintTreeNode in this retained tree. Its Box
-    /// address must remain stationary until PrePaint clears this ordering
-    /// before a topology mutation is observable to a query.
-    pub unsafe fn PublishResidentLayerOrder(
-        &self,
-        layers: Vec<*const ()>,
-        controls_after: HashMap<u64, Vec<*const ()>>,
-        paint: ResidentPaintOrderLists,
-    ) {
-        debug_assert_eq!(layers.len(), paint.entry_ancestors.len());
-        *self.hit_test_layer_order.borrow_mut() = Some(ResidentPaintLayerOrder {
-            layers,
-            controls_after,
-            paint,
-        });
-    }
-}
+use crate::pre_paint_tree_walk::PrePaintTreeWalk;
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct ResidentLayerSelection {

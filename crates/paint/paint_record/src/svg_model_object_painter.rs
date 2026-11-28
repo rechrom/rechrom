@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn transforms_and_pixel_moving_filters_disable_svg_culling() {
         let mut node = node();
-        assert!(SVGModelObjectPainter::CanUseCullRect(crate::paint_object::PaintObject::new(&node)));
+        assert!(SVGModelObjectPainter::CanUseCullRect(crate::paint_object::PaintObject::Fixture(&node)));
 
         node.fragment
             .as_mut()
@@ -259,7 +259,7 @@ mod tests {
                 r#type: PaintFilterType::kReference,
                 ..PaintFilterOperation::default()
             });
-        assert!(!SVGModelObjectPainter::CanUseCullRect(crate::paint_object::PaintObject::new(&node)));
+        assert!(!SVGModelObjectPainter::CanUseCullRect(crate::paint_object::PaintObject::Fixture(&node)));
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            let _recorder = SVGDrawingRecorder::for_phase(&context, crate::paint_object::PaintObject::new(&node), PaintPhase::kForeground);
+            let _recorder = SVGDrawingRecorder::for_phase(&context, crate::paint_object::PaintObject::Fixture(&node), PaintPhase::kForeground);
         }
         assert_eq!(output.display_items.get(&crate::artifact_access::artifact_access()).len(), 1);
         assert_eq!(
@@ -316,7 +316,7 @@ mod tests {
         node.SetOwnedFragmentForTesting(&fragment);
 
         assert_eq!(
-            SVGModelObjectPainter::VisualRect(crate::paint_object::PaintObject::new(&node)),
+            SVGModelObjectPainter::VisualRect(crate::paint_object::PaintObject::Fixture(&node)),
             Some(PaintRect {
                 x: 3.0,
                 y: 10.0,

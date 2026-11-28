@@ -8,7 +8,6 @@
 //! artifact.
 
 mod paint_layer_paint_order_iterator;
-pub use paint_layer_paint_order_iterator::EnsureResidentHitTestLayerOrder;
 pub mod paint_layer_painter;
 pub mod phase;
 

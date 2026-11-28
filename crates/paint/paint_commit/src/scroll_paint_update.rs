@@ -39,7 +39,6 @@ struct FragmentCoverage {
     offset: Offset,
     size: Size,
     sticky_offset: Offset,
-    paint_offset: Offset,
     // None means painting was uncullable, not an empty recorded region.
     // Keep coverage in the exact root coordinate basis used during recording.
     // A retained scroll changes only translation, even below a fixed rotation.
@@ -631,7 +630,6 @@ impl RetainedScrollPaintState {
                 offset: node.cursor.ViewOffsetInContainer(),
                 size: f.ViewSize(),
                 sticky_offset: f.paint.StickyOffset(),
-                paint_offset: paint_offset,
                 recorded_world: world.unwrap_or(raw_world),
                 properties: properties,
                 unrecorded_visual_rect,

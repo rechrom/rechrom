@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use layout::fragment::ResidentBoxGeometry as _;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -37,16 +37,14 @@ use crate::box_paint_invalidator::{
 use crate::compositing_reason_finder::CompositingReasonFinder;
 use crate::cull_rect_updater::CullRectUpdater;
 use crate::fragment_data::{PrePaintFragmentData, PrePaintWalkRecord};
-use crate::object_paint_properties::{
-    ObjectPaintPropertySlot, PaintPropertyNodeKind, PaintPropertySlotNodeRef,
-};
+use crate::object_paint_properties::ObjectPaintPropertySlot;
 use crate::nine_piece_geometry::NinePieceImageGeometry;
 use crate::object_paint_invalidator::ObjectPaintInvalidator;
 use crate::paint_invalidator::{PaintInvalidator, PaintInvalidatorContext};
 use crate::table_cell_paint_invalidator::TableCellPaintInvalidator;
 use crate::contoured_border_geometry::{
     ConicRoundedRectPath, ExpandCornerRadiiEdges, IncludedBorderEdges,
-    OutsetCornerRadiiWithCorrection, ResolveCornerRadii, UniformCornerRadius,
+    OutsetCornerRadiiWithCorrection, ResolveCornerRadii,
 };
 use paint_model::geometry_mapper::{
     MapRectToRoot, MultiplyTransforms, ResolveLocalTransformAroundReferenceBox,
@@ -436,19 +434,12 @@ impl std::ops::DerefMut for ResidentFragment {
 pub struct PaintTreeNode<'a> {
     // This cursor borrows the exact source retained by PaintFragmentLease.
     source_cursor: Option<PaintFragmentCursor<'static>>,
-    // Same boxed resource Paint nodes, indexed during the existing effects walk.
-    svg_resource_nodes: Option<Box<HashMap<u64, *const PaintTreeNode<'static>>>>,
 
     pub fragment: Option<ResidentFragment>,
     pub source_lifetime: std::marker::PhantomData<&'a FragmentPaintData>,
-    physical_index: usize,
     /// The ScopedDisplayItemFragment this node paints in: traversal state the
     /// PrePaint walk derives from the paint parent (see DisplayItemFragment).
     display_item_fragment: Option<u32>,
-    /// The fragmentainer (column / page area) this node is inside: traversal
-    /// state the walk derives from the paint parent, as PrePaintTreeWalk
-    /// carries `fragmentainer_idx` (see FragmentainerInstanceId).
-    fragmentainer_instance_id: Option<u64>,
     cache: Option<NodeCache>,
     pub absolute_offset: Offset,
     pub paint_offset: Offset,
@@ -470,7 +461,6 @@ pub struct PaintTreeNode<'a> {
     pub local_inner_border_radius_radii: PaintCornerRadii,
     pub local_clip: Option<PaintRect>,
     pub local_css_clip: Option<PaintRect>,
-    pub local_clip_radius: f64,
     pub local_clip_radii: PaintCornerRadii,
     pub local_clip_path: Vec<PaintPathCommand>,
     pub local_clip_path_children: Vec<PaintClipPathChild>,
@@ -493,50 +483,17 @@ pub struct PaintTreeNode<'a> {
     /// keeps the viewport attachment and applies the root transform to it.
     pub fixed_background_acts_as_scroll: bool,
     pub is_paint_layer: bool,
-    /// True when the PaintLayer admission facts below came from the source
-    /// Layout/PaintLayer owner. Standalone test fragments have no such owner
-    /// and retain their existing fragment-driven traversal.
-    pub paint_layer_facts_are_authoritative: bool,
     pub is_self_painting_layer: bool,
-    pub invisible_for_position_visibility: bool,
-    pub has_ancestor_invisible_for_position_visibility: bool,
-    pub has_visible_content: bool,
-    pub has_self_painting_layer_descendant: bool,
-    pub is_under_svg_hidden_container: bool,
-    pub supports_subsequence_caching: bool,
-    pub self_or_descendant_needs_repaint: bool,
     pub paint_layer_is_fragmented: bool,
-    pub known_to_clip_subtree_to_padding_box: bool,
-    pub child_paint_blocked_by_display_lock: bool,
     pub is_stacking_context: bool,
-    pub is_stacked: bool,
     pub is_root: bool,
-    /// LocalFrameView owns a separate PaintLayer tree, painted by FramePainter.
-    pub is_embedded_local_frame_root: bool,
-    pub embedded_frame_is_cross_origin: bool,
-    pub escapes_ancestor_geometry: bool,
-    pub physical_ancestors: Vec<*const PaintTreeNode<'a>>,
-    pub stacking_level: i32,
-    pub is_z_order_list_visible: bool,
-    pub is_in_top_or_view_transition_layer: bool,
-    pub is_direct_layout_view_child: bool,
-    pub can_contain_absolute_position_objects: bool,
-    pub can_contain_fixed_position_objects: bool,
-    pub has_overlay_overflow_controls: bool,
     /// PaintLayer::NeedsReorderOverlayOverflowControls(). The stacking-node
     /// rebuild mutates this paint-lifecycle bit before any foreground pass.
     pub needs_reorder_overlay_overflow_controls: Cell<bool>,
     /// PaintLayer::PreviousPaintResult for the current traversal. Persistent
     /// cache reuse is carried by SubsequenceMarkers at the recording boundary.
     pub previous_paint_result: Cell<paint_model::PaintResult>,
-    /// PaintLayerStackingNode's canonical derived lists. PaintWalk publishes
-    /// the exact lists it draws; hit testing only borrows them.
-    pub(crate) hit_test_layer_order:
-        RefCell<Option<crate::resident_hit_test::ResidentPaintLayerOrder>>,
-    pub paint_layer_order_parent_unique_id: Option<u64>,
-    pub paint_layer_order: i32,
     pub applies_transform: bool,
-    pub applies_clip: bool,
     pub applies_root_clip: bool,
     pub applies_overflow_clip: bool,
     pub applies_css_clip: bool,
@@ -551,10 +508,6 @@ pub struct PaintTreeNode<'a> {
     pub needs_float_phase: bool,
     pub needs_outline_phase: bool,
     pub needs_overflow_controls_phase: bool,
-    // Upward result of TableCellPaintInvalidator. Chromium mutates already
-    // visited row/section/table clients through parent contexts; the retained
-    // physical fragment tree applies the same result while unwinding.
-    table_cell_geometry_changed: bool,
     pub outline_rects: Vec<PaintRect>,
     pub mask_layers: Vec<DisplayMaskLayer>,
     /// The independent SaveLayerFilter drawing-record payload. Effect property
@@ -626,21 +579,6 @@ impl<'a> Default for PaintTreeNode<'a> {
 }
 
 impl<'a> PaintTreeNode<'a> {
-    /// PaintLayer::SelfOrDescendantNeedsRepaint() as PaintLayerPainter reads
-    /// it at paint time: the live bits on the source PaintLayer, which
-    /// SetNeedsRepaint / MarkPaintingContainerChainForNeedsRepaint set when a
-    /// client was invalidated and the committed Paint clears. A fragment
-    /// without a source layer always repaints; a hand-built node without a
-    /// fragment keeps its own bit.
-    // cpp: third_party/blink/renderer/core/paint/paint_layer.h:451-457
-    // cpp: third_party/blink/renderer/core/paint/paint_layer_painter.cc:412-424
-    pub fn SelfOrDescendantNeedsRepaint(&self) -> bool {
-        match self.fragment.as_deref() {
-            Some(fragment) => fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint(),
-            None => self.self_or_descendant_needs_repaint,
-        }
-    }
-
     /// A node whose property slots start at `properties`. PrePaint seeds a
     /// built node with its parent's state instead of referencing the shared
     /// root sentinels and replacing them moments later, which cost contended
@@ -650,13 +588,10 @@ impl<'a> PaintTreeNode<'a> {
         let contents_properties = properties.clone();
         Self {
             source_cursor: None,
-            svg_resource_nodes: None,
 
             fragment: None,
             source_lifetime: std::marker::PhantomData,
-            physical_index: 0,
             display_item_fragment: None,
-            fragmentainer_instance_id: None,
             cache: None,
             absolute_offset: Offset::default(),
             paint_offset: Offset::default(),
@@ -668,7 +603,6 @@ impl<'a> PaintTreeNode<'a> {
             local_inner_border_radius_radii: PaintCornerRadii::default(),
             local_clip: None,
             local_css_clip: None,
-            local_clip_radius: 0.0,
             local_clip_radii: PaintCornerRadii::default(),
             local_clip_path: Vec::new(),
             local_clip_path_children: Vec::new(),
@@ -685,41 +619,15 @@ impl<'a> PaintTreeNode<'a> {
             scroll_offset: Offset::default(),
             fixed_background_acts_as_scroll: false,
             is_paint_layer: false,
-            paint_layer_facts_are_authoritative: false,
             is_self_painting_layer: false,
-            invisible_for_position_visibility: false,
-            has_ancestor_invisible_for_position_visibility: false,
-            has_visible_content: false,
-            has_self_painting_layer_descendant: false,
-            is_under_svg_hidden_container: false,
-            supports_subsequence_caching: false,
-            self_or_descendant_needs_repaint: true,
             paint_layer_is_fragmented: false,
-            known_to_clip_subtree_to_padding_box: false,
-            child_paint_blocked_by_display_lock: false,
             is_stacking_context: false,
-            is_stacked: false,
             is_root: false,
-            is_embedded_local_frame_root: false,
-            embedded_frame_is_cross_origin: false,
-            escapes_ancestor_geometry: false,
-            physical_ancestors: Vec::new(),
-            stacking_level: 0,
-            is_z_order_list_visible: false,
-            is_in_top_or_view_transition_layer: false,
-            is_direct_layout_view_child: false,
-            can_contain_absolute_position_objects: false,
-            can_contain_fixed_position_objects: false,
-            has_overlay_overflow_controls: false,
             needs_reorder_overlay_overflow_controls: Cell::new(false),
             // Source: paint_layer.cc:187. A new layer is conservative until
             // its first complete PaintLayerPainter traversal finishes.
             previous_paint_result: Cell::new(paint_model::PaintResult::kMayBeClippedByCullRect),
-            hit_test_layer_order: RefCell::new(None),
-            paint_layer_order_parent_unique_id: None,
-            paint_layer_order: 0,
             applies_transform: false,
-            applies_clip: false,
             applies_root_clip: false,
             applies_overflow_clip: false,
             applies_css_clip: false,
@@ -736,7 +644,6 @@ impl<'a> PaintTreeNode<'a> {
             needs_float_phase: true,
             needs_outline_phase: true,
             needs_overflow_controls_phase: true,
-            table_cell_geometry_changed: false,
             outline_rects: Vec::new(),
             mask_layers: Vec::new(),
             recording_filters: Vec::new(),
@@ -786,21 +693,6 @@ impl PaintTreeNode<'_> {
         }
     }
 
-    /// The fragmentainer identity this node is inside (0 outside any): a
-    /// column or page area is its own (fragment_tree::FragmentainerInstanceId),
-    /// everything else inherits its paint parent's. The PrePaint walk records
-    /// it per node; hand-built nodes outside a walk read the fragment's own.
-    pub fn FragmentainerInstanceId(&self) -> u64 {
-        match self.fragmentainer_instance_id {
-            Some(fragmentainer) => fragmentainer,
-            None => self
-                .fragment
-                .as_deref()
-                .and_then(|fragment| fragment.ViewOwnFragmentainerInstanceId())
-                .unwrap_or(0),
-        }
-    }
-
     /// The paint resources of the document this node's fragment belongs to
     /// (Chromium reads them from the LayoutObject's Document / LocalFrameView).
     /// Production nodes resolve them through their source result; hand-built
@@ -813,26 +705,8 @@ impl PaintTreeNode<'_> {
             None => self.fragment.as_deref()?.resources.as_ref(),
         }
     }
-    pub fn SvgResourceNode(&self, client: u64) -> Option<&PaintTreeNode<'static>> {
-        let pointer = *self.svg_resource_nodes.as_ref()?.get(&client)?;
-        // Directory rebuilt whenever topology changes; root owns every box.
-        unsafe { pointer.as_ref() }
-    }
     pub fn SetFragment(&mut self, source: &FragmentPaintData) {
         self.fragment = Some(ResidentFragment::FromSource(source));
-    }
-
-    /// Rebind a retained node to its replacement source: the sidecar slot and
-    /// the cursor through which it reads its document's paint resources.
-    pub(crate) fn BindSource(&mut self, source: PaintFragmentSource<'_>) {
-        self.fragment = Some(ResidentFragment::FromSource(&source));
-        // Same opaque retained lifetime as ResidentFragment; the caller keeps
-        // this result's PaintFragmentLease until replacement has been rebound.
-        self.source_cursor = Some(unsafe {
-            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
-                source.Cursor(),
-            )
-        });
     }
 
     #[doc(hidden)]
@@ -893,62 +767,8 @@ pub fn ResolveFlatMaskClipRect(
 }
 
 impl PaintTreeNode<'_> {
-    /// The paint offset Paint records this occurrence with, in the flat
-    /// replay space every paint_record op, DrawingRecorder visual rect, hit
-    /// test rect and chunk bound uses (the space of `paint_offset`): the
-    /// occurrence's FragmentData::PaintOffset() (fragment_data.h:32-38, LOCAL
-    /// to its LocalBorderBoxProperties transform, LayoutUnit-rounded) moved
-    /// back by the flat-to-property delta `paint_snap_offset`. The snapping
-    /// helpers below project into property space and back with the same
-    /// delta. Fixture nodes without FragmentData use their own flat offset.
-    ///
-    /// Paint stays flat until the flat whole-recording replay
-    /// (PaintRecordForArtifact) and the per-item PaintChunksToCcLayer
-    /// consumer agree on Chromium's local space; then this becomes
-    /// FragmentData::PaintOffset() and the delta disappears.
-    pub fn FlatPaintOffset(&self) -> Offset {
-        self.FlatPaintOffsetOf(self.FragmentData())
-    }
-
-    /// FlatPaintOffset with this occurrence's FragmentData already resolved.
-    pub fn FlatPaintOffsetOf(&self, data: Option<&PrePaintFragmentData>) -> Offset {
-        let Some(data) = data else {
-            return self.paint_offset;
-        };
-        let local = data.PaintOffset();
-        let flat = Offset {
-            x: local.left.ToDouble() - self.paint_snap_offset.x,
-            y: local.top.ToDouble() - self.paint_snap_offset.y,
-        };
-        // PaintPropertyTreeBuilder stores round(paint_offset + delta) in
-        // LayoutUnit (FragmentDataPaintOffset); only that rounding may
-        // separate the two copies.
-        debug_assert!(
-            (flat.x - self.paint_offset.x).abs() <= 1.0 / 128.0 + 1e-9
-                && (flat.y - self.paint_offset.y).abs() <= 1.0 / 128.0 + 1e-9,
-            "FragmentData PaintOffset is stale for its paint node"
-        );
-        flat
-    }
-
     pub fn PixelSnappedRect(&self, rect: &PaintRect) -> PaintRect {
         PixelSnappedRectInPropertySpace(rect, self.paint_snap_offset, self.pixel_snap_scale)
-    }
-
-    pub fn EnclosingRect(&self, rect: PaintRect) -> PaintRect {
-        // DrawingRecorder bounds are enclosed in property space, where
-        // Chromium encloses the local rect, and returned in the flat replay
-        // space of the recorded ops (see FlatPaintOffset).
-        EnclosingRectInPropertySpace(rect, self.paint_snap_offset)
-    }
-
-    pub fn PixelSnappedOffset(&self, offset: Offset) -> Offset {
-        Offset {
-            x: SnapToPixel(offset.x + self.paint_snap_offset.x, self.pixel_snap_scale)
-                - self.paint_snap_offset.x,
-            y: SnapToPixel(offset.y + self.paint_snap_offset.y, self.pixel_snap_scale)
-                - self.paint_snap_offset.y,
-        }
     }
 
     pub fn RoundedPaintY(&self, y: f64) -> f64 {
@@ -960,7 +780,6 @@ impl PaintTreeNode<'_> {
     }
 }
 
-use paint_reuse::pre_paint_state_compare as state_compare;
 
 /// The physical parent's actual builder context. A dirty bit permits work;
 /// these values decide whether that work must propagate into clean children.
@@ -1094,12 +913,6 @@ fn HasOwnPropertyRole(node: &PaintTreeNode<'_>, role: PaintPropertyRole) -> bool
 }
 
 impl PaintTreeNode<'_> {
-    pub fn HasOwnPaintProperties(&self) -> bool {
-        self.cache
-            .as_ref()
-            .is_some_and(|cache| !cache.own_keys.is_empty())
-    }
-
     /// ObjectPaintProperties slot query for Paint consumers that must
     /// distinguish an own node from an inherited final PropertyTreeState.
     pub fn HasOwnPropertyRole(&self, role: PaintPropertyRole) -> bool {
@@ -5282,7 +5095,6 @@ impl PrePaintTreeWalk {
                 inherited.flex_or_grid_item,
             );
         node.display_item_fragment = Some(display_item_fragment);
-        node.fragmentainer_instance_id = Some(fragmentainer);
         node.source_cursor = Some(unsafe {
             std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(cursor)
         });
@@ -5307,7 +5119,6 @@ impl PrePaintTreeWalk {
             );
         }
         node.previous_paint_result.set(old_previous_paint_result);
-        node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
         let own_change = node
             .cache
             .as_ref()

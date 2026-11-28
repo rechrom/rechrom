@@ -82,10 +82,10 @@ mod tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        assert!(SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
 
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = true;
-        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = false;
 
         node.fragment
@@ -96,7 +96,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .disabled = true;
-        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
         node.fragment
             .as_mut()
             .unwrap()
@@ -108,7 +108,7 @@ mod tests {
 
         let mut blocked = paint_info;
         blocked.SetDescendantPaintingBlocked();
-        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &blocked));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node), &blocked));
     }
 
     #[test]
@@ -125,6 +125,6 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!SVGRootPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
     }
 }

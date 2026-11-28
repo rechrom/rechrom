@@ -219,13 +219,13 @@ mod tests {
             ..PaintRect::default()
         });
 
-        assert!(ScopedSVGPaintState::OwnsPaintScope(crate::paint_object::PaintObject::new(&node)));
+        assert!(ScopedSVGPaintState::OwnsPaintScope(crate::paint_object::PaintObject::Fixture(&node)));
         assert!(ScopedSVGPaintState::PaintsPhase(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             PaintPhase::kForeground
         ));
         assert!(!ScopedSVGPaintState::PaintsPhase(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             PaintPhase::kOutline
         ));
         assert!(!node.is_paint_layer);
@@ -233,11 +233,11 @@ mod tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            context.borrow_mut().BeginNode(crate::paint_object::PaintObject::new(&node));
-            context.borrow_mut().EndEscapableGeometry(crate::paint_object::PaintObject::new(&node));
-            ScopedSVGPaintState::FinishEffectsAfterContents(crate::paint_object::PaintObject::new(&node), &context);
-            crate::svg_model_object_painter::SVGModelObjectPainter::PaintOutline(crate::paint_object::PaintObject::new(&node), &context);
-            context.borrow_mut().EndGeometry(crate::paint_object::PaintObject::new(&node));
+            context.borrow_mut().BeginNode(crate::paint_object::PaintObject::Fixture(&node));
+            context.borrow_mut().EndEscapableGeometry(crate::paint_object::PaintObject::Fixture(&node));
+            ScopedSVGPaintState::FinishEffectsAfterContents(crate::paint_object::PaintObject::Fixture(&node), &context);
+            crate::svg_model_object_painter::SVGModelObjectPainter::PaintOutline(crate::paint_object::PaintObject::Fixture(&node), &context);
+            context.borrow_mut().EndGeometry(crate::paint_object::PaintObject::Fixture(&node));
             context.borrow_mut().Finish();
         }
 
@@ -288,7 +288,7 @@ mod tests {
         let mut output = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         let paint_info = crate::paint_info::PaintInfo::new(&context, PaintPhase::kForeground);
-        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
 
         let shape = std::sync::Arc::make_mut(
             node.fragment
@@ -302,10 +302,10 @@ mod tests {
         shape.geometry = SvgShapeGeometry::kRectangle;
         shape.bounds_width = 10.0;
         shape.bounds_height = 10.0;
-        assert!(ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &paint_info));
-        assert!(!ScopedSVGPaintState::PaintsContent(crate::paint_object::PaintObject::new(&node)));
+        assert!(ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
+        assert!(!ScopedSVGPaintState::PaintsContent(crate::paint_object::PaintObject::Fixture(&node)));
         assert!(ScopedSVGPaintState::NeedsReferenceFilterChunk(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &paint_info
         ));
 
@@ -315,12 +315,12 @@ mod tests {
             false,
             PaintFlag::kPaintingClipPathAsMask,
         );
-        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &clip_info));
+        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::Fixture(&node), &clip_info));
         assert!(!ScopedSVGPaintState::NeedsReferenceFilterChunk(
-            crate::paint_object::PaintObject::new(&node), &clip_info
+            crate::paint_object::PaintObject::Fixture(&node), &clip_info
         ));
 
         node.fragment.as_mut().unwrap().paint.style.filters.clear();
-        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!ScopedSVGPaintState::ShouldPaint(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
     }
 }

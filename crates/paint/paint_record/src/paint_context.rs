@@ -278,10 +278,6 @@ impl Drop for ScopedTextPaintAggregation<'_, '_, '_, '_> {
 pub struct PaintContext<'o> {
     output: &'o mut PaintRecording,
     paint_controller: crate::PaintController,
-    /// Borrowed source text sources exist only for this synchronous Paint
-    /// recording. The committed PaintArtifact retains final immutable drawing
-    /// payloads, never LayoutResult or FragmentItem pointers.
-    svg_resource_root: Option<PaintObject<'o, 'static>>,
     /// Multiple paint phases and decorations for one FragmentItem share the
     /// single payload built from ShapeResult during this recording.
     text_runs: HashMap<u64, Arc<Vec<PaintGlyphRun>>>,
@@ -504,7 +500,6 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             paint_controller: crate::PaintController::default(),
-            svg_resource_root: None,
             text_runs: HashMap::default(),
             walk_metrics: Default::default(),
             caret: None,
@@ -562,7 +557,6 @@ impl<'o> PaintContext<'o> {
         Self {
             output,
             paint_controller,
-            svg_resource_root: None,
             text_runs: HashMap::default(),
             walk_metrics: Default::default(),
             caret: editing.caret,
@@ -658,15 +652,6 @@ impl<'o> PaintContext<'o> {
         self.output.caret = Some(geometry);
     }
 
-    /// Index source FragmentItem cursors without copying their shape or child
-    /// topology. The cursor lifetime is deliberately tied to this PaintContext
-    /// and therefore cannot escape into the committed artifact.
-    pub fn BindSvgResourceTree(&mut self, root: PaintObject<'o, 'static>) {
-        self.svg_resource_root = Some(root);
-    }
-    pub fn SvgResourceNode(&self, client: u64) -> Option<PaintObject<'o, 'static>> {
-        self.svg_resource_root?.SvgResourceNode(client)
-    }
     /// The text fragment's own source cursor, which its PrePaint node holds.
     /// TextFragmentPainter paints from the InlineCursor it is constructed
     /// with (text_fragment_painter.h); it never searches the fragment tree.

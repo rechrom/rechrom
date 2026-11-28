@@ -124,7 +124,7 @@ mod tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            SVGMaskPainter::Paint(crate::paint_object::PaintObject::new(&node), &context);
+            SVGMaskPainter::Paint(crate::paint_object::PaintObject::Fixture(&node), &context);
             context.borrow_mut().Finish();
         }
         let mask = output

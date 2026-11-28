@@ -208,14 +208,24 @@ Trace categories: `prepaint`, `paint_walk`, `paint_reuse`, `paint_record`,
 - Output is the `PaintArtifact` (display items, paint chunks naming the live
   property nodes, resource-dependency indices), borrowed by Layerize. Paint owns no network,
   DOM/Layout mutation, tiles, raster resources or render target.
-- PrePaint reads and updates the canonical fragment-local Paint sidecars owned
-  by the Layout result. Keep their addresses and client identities stable
-  across targeted updates; pass references plus an opaque lifetime owner. Do
-  not clone `FragmentPaintData`, publish a second Paint-input snapshot, or run
-  an extra whole-fragment validation walk.
+- PrePaint walks the Layout fragment cursor and writes each occurrence's
+  FragmentData (`PrePaintFragmentData`: paint offset, ObjectPaintProperties,
+  local border box state, cull rects) into its slot on the Layout-owned paint
+  sidecar. PaintLayer state and stacking lists live on Layout's PaintLayer.
+  There is no retained PrePaint tree; the builder's per-visit node is scratch
+  output. Keep sidecar addresses and client identities stable across targeted
+  updates; pass references plus an opaque lifetime owner. Do not clone
+  `FragmentPaintData`, publish a second Paint-input snapshot, or run an extra
+  whole-fragment validation walk.
+- Paint walks the PaintLayer stacking lists and the fragment cursor's
+  children, and reads only those owners: each painted `PaintObject` is a
+  cursor, its FragmentData and the walk context.
 - Retained PrePaint data is limited to Chromium's derived FragmentData,
   ObjectPaintProperties, PaintLayer, invalidation and cache state. It must
-  never become another copy of Layout's geometry or fragment payload.
+  never become another copy of Layout's geometry or fragment payload. Until
+  recording moves to the local property space, FragmentData also carries
+  Rechrom-only `FlatReplayData` and per-object cached child contexts for the
+  flat replay stream.
 - Paint property nodes belong to the document sequence that built them.
   Their mutable members (change markers, cc node ids), the GeometryMapper
   cache generations and the root sentinels are sequence-confined

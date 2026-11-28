@@ -184,8 +184,8 @@ mod tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            let box_painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context);
-            LineBoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info, &box_painter);
+            let box_painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context);
+            LineBoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info, &box_painter);
             context.borrow_mut().Finish();
         }
 

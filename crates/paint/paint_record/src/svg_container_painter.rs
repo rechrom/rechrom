@@ -136,9 +136,9 @@ mod tests {
     #[test]
     fn container_identity_does_not_capture_shapes() {
         let mut node = container();
-        assert!(SVGContainerPainter::IsContainer(crate::paint_object::PaintObject::new(&node)));
+        assert!(SVGContainerPainter::IsContainer(crate::paint_object::PaintObject::Fixture(&node)));
         node.fragment.as_mut().unwrap().paint.source_kind = NodeKind::kSvgShape;
-        assert!(!SVGContainerPainter::IsContainer(crate::paint_object::PaintObject::new(&node)));
+        assert!(!SVGContainerPainter::IsContainer(crate::paint_object::PaintObject::Fixture(&node)));
     }
 
     #[test]
@@ -160,7 +160,7 @@ mod tests {
         let mut empty_output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut empty_output));
-            SVGContainerPainter::PaintOutlineAfterEffects(crate::paint_object::PaintObject::new(&node), &context);
+            SVGContainerPainter::PaintOutlineAfterEffects(crate::paint_object::PaintObject::Fixture(&node), &context);
             context.borrow_mut().Finish();
         }
         assert!(!empty_output
@@ -172,7 +172,7 @@ mod tests {
         let mut populated_output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut populated_output));
-            SVGContainerPainter::PaintOutlineAfterEffects(crate::paint_object::PaintObject::new(&node), &context);
+            SVGContainerPainter::PaintOutlineAfterEffects(crate::paint_object::PaintObject::Fixture(&node), &context);
             context.borrow_mut().Finish();
         }
         assert!(populated_output
@@ -186,11 +186,11 @@ mod tests {
         let mut node = container();
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = true;
         node.children.push(Box::new(PaintTreeNode::default()));
-        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
+        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node)));
 
         node.fragment.as_mut().unwrap().paint.svg_view_box_is_empty = false;
         node.children.clear();
-        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
+        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node)));
 
         node.fragment
             .as_mut()
@@ -202,8 +202,8 @@ mod tests {
                 r#type: PaintFilterType::kReference,
                 ..PaintFilterOperation::default()
             });
-        assert!(SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
-        assert!(SVGContainerPainter::NeedsReferenceFilterChunk(crate::paint_object::PaintObject::new(&node)));
+        assert!(SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node)));
+        assert!(SVGContainerPainter::NeedsReferenceFilterChunk(crate::paint_object::PaintObject::Fixture(&node)));
     }
 
     #[test]
@@ -223,13 +223,13 @@ mod tests {
                 height: 10.0,
             },
         });
-        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
+        assert!(!SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node)));
 
         node.fragment
             .as_mut()
             .unwrap()
             .paint
             .svg_descendant_may_have_transform_related_operations = true;
-        assert!(SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::new(&node)));
+        assert!(SVGContainerPainter::ShouldPaintSubtree(crate::paint_object::PaintObject::Fixture(&node)));
     }
 }

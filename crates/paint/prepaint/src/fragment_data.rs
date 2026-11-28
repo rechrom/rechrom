@@ -398,7 +398,7 @@ impl PrePaintFragmentData {
     }
 
     /// Whether this occurrence owns any paint property node (replaces
-    /// `PaintTreeNode::HasOwnPaintProperties`).
+    /// the PrePaint node's former own-key check).
     pub fn HasPaintProperties(&self) -> bool {
         self.PaintProperties()
             .is_some_and(ObjectPaintProperties::HasAnyNode)

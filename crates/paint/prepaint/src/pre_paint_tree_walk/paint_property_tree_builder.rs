@@ -360,8 +360,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let is_in_drawable_canvas_subtree = inherited_drawable_canvas_subtree
             || CompositingReasonFinder::DirectReasonsForPaintProperties(fragment)
                 .Has(foundation::CompositingReason::kCanvasChild);
-        node.applies_clip = is_root && parent_clip.is_some();
-        node.applies_root_clip = node.applies_clip;
+        node.applies_root_clip = is_root && parent_clip.is_some();
         if node.applies_root_clip {
             node.root_clip = parent_clip;
         }
@@ -396,43 +395,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             Position::kStatic
         };
         let layer = ClassifyFragmentPaintLayer(fragment, is_root, is_flex_or_grid_item);
-        node.stacking_level = layer.stacking_level;
         node.is_paint_layer = layer.is_paint_layer;
         let facts = fragment.paint.LivePaintLayerFacts();
-        node.paint_layer_facts_are_authoritative = facts.authoritative;
         node.is_self_painting_layer = if facts.authoritative {
             facts.is_self_painting
         } else {
             layer.is_paint_layer
         };
-        node.invisible_for_position_visibility = facts.invisible_for_position_visibility;
-        node.has_ancestor_invisible_for_position_visibility =
-            facts.has_ancestor_invisible_for_position_visibility;
-        node.has_visible_content = facts.has_visible_content;
-        node.has_self_painting_layer_descendant = facts.has_self_painting_layer_descendant;
-        node.is_under_svg_hidden_container = facts.is_under_svg_hidden_container;
-        node.supports_subsequence_caching = facts.supports_subsequence_caching;
-        node.self_or_descendant_needs_repaint = facts.self_or_descendant_needs_repaint;
         node.paint_layer_is_fragmented = facts.is_fragmented;
-        node.known_to_clip_subtree_to_padding_box = facts.known_to_clip_subtree_to_padding_box;
-        node.child_paint_blocked_by_display_lock = facts.child_paint_blocked_by_display_lock;
         node.is_stacking_context = layer.is_stacking_context;
-        node.is_stacked = layer.is_stacked;
-        node.is_z_order_list_visible = facts.is_z_order_list_visible;
-        node.is_in_top_or_view_transition_layer = fragment
-            .paint
-            .PaintLayerIsInTopOrViewTransitionLayer();
-        node.is_direct_layout_view_child = fragment.paint.PaintLayerIsDirectLayoutViewChild();
-        node.can_contain_absolute_position_objects = fragment
-            .paint
-            .PaintLayerCanContainAbsolutePositionObjects();
-        node.can_contain_fixed_position_objects = fragment
-            .paint
-            .PaintLayerCanContainFixedPositionObjects();
-        node.has_overlay_overflow_controls =
-            fragment.paint.PaintLayerHasOverlayOverflowControls();
-        (node.paint_layer_order_parent_unique_id, node.paint_layer_order) =
-            fragment.paint.PaintLayerOrder();
 
         let mut has_active_transform_animation = false;
         let mut has_non_composited_transform = false;
@@ -842,7 +813,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         })
                         .with_layout_clips(),
                     );
-                    node.applies_clip = true;
                     node.applies_clip_path = true;
                 }
             }
@@ -1116,7 +1086,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     })
                     .with_layout_clips(),
                 );
-                node.applies_clip = true;
                 node.applies_css_clip = true;
             }
         }
@@ -1566,7 +1535,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             } else {
                 PaintCornerRadii::default()
             };
-            node.local_clip_radius = UniformCornerRadius(&resolved_clip_radii);
             if let Some(mapped) = MapRectToRoot(local, &node.transforms) {
                 node.clip = Some(node.clip.map_or(mapped, |clip| Intersect(clip, &mapped)));
             }
@@ -1609,7 +1577,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         .then_some(PropertySpaceRect(excluding_overlay, property_space_delta)),
                 ),
             );
-            node.applies_clip = true;
             node.applies_overflow_clip = true;
             if fragment.paint.SourceKind() != NodeKind::kSvgViewportContainer
                 && NeedsScrollAndScrollTranslation(fragment)

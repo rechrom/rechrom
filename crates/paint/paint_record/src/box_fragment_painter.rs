@@ -241,6 +241,7 @@ fn PaintsSelfOutlineAfterChildren(phase: PaintPhase) -> bool {
 // PhysicalFragment/FragmentItem IsHiddenForPaint result and is deliberately
 // distinct from CSS visibility. Hidden table parts still supply their
 // background to visible cells.
+#[cfg(test)]
 fn IsVisibleToPaint(fragment: &FragmentPaintData) -> bool {
     !fragment.ViewHidden() && IsVisibleToPaintNotHidden(fragment)
 }
@@ -8619,7 +8620,7 @@ mod background_attachment_tests {
         node.paint_offset = Offset { x: -0.25, y: 0.0 };
         assert_eq!(
             PixelSnappedBorderBoxRect(
-                crate::paint_object::PaintObject::new(&node),
+                crate::paint_object::PaintObject::Fixture(&node),
                 None,
                 Size {
                     width: 200.0,
@@ -8775,7 +8776,7 @@ mod background_attachment_tests {
                 .borrow_mut()
                 .SetPaintUnderInvalidationCheckingForTesting(true);
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
 
@@ -8807,20 +8808,20 @@ mod background_attachment_tests {
         let mut line = PaintTreeNode::default();
         line.SetOwnedFragmentForTesting(&line_fragment);
         assert!(!BoxFragmentPainter::ShouldPaintChildFragment(
-            crate::paint_object::PaintObject::new(&parent), crate::paint_object::PaintObject::new(&line)
+            crate::paint_object::PaintObject::Fixture(&parent), crate::paint_object::PaintObject::Fixture(&line)
         ));
 
         let box_fragment = FragmentPaintData::default();
         let mut box_child = PaintTreeNode::default();
         box_child.SetOwnedFragmentForTesting(&box_fragment);
         assert!(BoxFragmentPainter::ShouldPaintChildFragment(
-            crate::paint_object::PaintObject::new(&parent), crate::paint_object::PaintObject::new(&box_child)
+            crate::paint_object::PaintObject::Fixture(&parent), crate::paint_object::PaintObject::Fixture(&box_child)
         ));
 
         Arc::make_mut(parent_fragment.paint.mathml.as_mut().unwrap()).kind =
             MathMLPaintKind::kRadical;
         parent.SetOwnedFragmentForTesting(&parent_fragment);
-        assert!(BoxFragmentPainter::ShouldPaintChildFragment(crate::paint_object::PaintObject::new(&parent), crate::paint_object::PaintObject::new(&line)));
+        assert!(BoxFragmentPainter::ShouldPaintChildFragment(crate::paint_object::PaintObject::Fixture(&parent), crate::paint_object::PaintObject::Fixture(&line)));
     }
 
     #[test]
@@ -8858,7 +8859,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context)
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context)
                 .PaintBackground(&paint_info, BackgroundBleedAvoidance::kBackgroundBleedNone);
             context.borrow_mut().Finish();
         }
@@ -8872,7 +8873,7 @@ mod background_attachment_tests {
         assert_ne!(background.color, anonymous_page_color);
 
         fragment.paint.page_document_background_style = None;
-        assert!(BackgroundStyleForPainting(crate::paint_object::PaintObject::new(&PaintTreeNode::default()), &fragment).is_none());
+        assert!(BackgroundStyleForPainting(crate::paint_object::PaintObject::Fixture(&PaintTreeNode::default()), &fragment).is_none());
     }
 
     #[test]
@@ -8904,7 +8905,7 @@ mod background_attachment_tests {
         node.SetOwnedFragmentForTesting(&fragment);
 
         assert_eq!(
-            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kBorderBox),
+            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kBorderBox),
             PaintRect {
                 x: 80.0,
                 y: -200.0,
@@ -8913,7 +8914,7 @@ mod background_attachment_tests {
             }
         );
         assert_eq!(
-            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kPaddingBox),
+            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kPaddingBox),
             PaintRect {
                 x: 85.0,
                 y: -193.0,
@@ -8922,7 +8923,7 @@ mod background_attachment_tests {
             }
         );
         assert_eq!(
-            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kContentBox),
+            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kContentBox),
             PaintRect {
                 x: 87.0,
                 y: -190.0,
@@ -8936,7 +8937,7 @@ mod background_attachment_tests {
             ..BackgroundImageLayer::default()
         };
         assert_eq!(
-            EffectiveBackgroundAttachment(crate::paint_object::PaintObject::new(&node), &fixed),
+            EffectiveBackgroundAttachment(crate::paint_object::PaintObject::Fixture(&node), &fixed),
             BackgroundAttachment::kScroll
         );
         node.fragment
@@ -8948,7 +8949,7 @@ mod background_attachment_tests {
             .unwrap()
             .has_background_fixed_to_viewport = true;
         assert_eq!(
-            EffectiveBackgroundAttachment(crate::paint_object::PaintObject::new(&node), &fixed),
+            EffectiveBackgroundAttachment(crate::paint_object::PaintObject::Fixture(&node), &fixed),
             BackgroundAttachment::kFixed
         );
     }
@@ -9005,7 +9006,7 @@ mod background_attachment_tests {
         node.SetOwnedFragmentForTesting(&fragment);
 
         assert_eq!(
-            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kBorderBox),
+            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kBorderBox),
             PaintRect {
                 x: 120.0,
                 y: 160.0,
@@ -9014,7 +9015,7 @@ mod background_attachment_tests {
             }
         );
         assert_eq!(
-            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kContentBox),
+            BackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kContentBox),
             PaintRect {
                 x: 127.0,
                 y: 170.0,
@@ -9027,7 +9028,7 @@ mod background_attachment_tests {
             ..BackgroundImageLayer::default()
         };
         assert_eq!(
-            EffectiveBackgroundAttachment(crate::paint_object::PaintObject::new(&node), &fixed),
+            EffectiveBackgroundAttachment(crate::paint_object::PaintObject::Fixture(&node), &fixed),
             BackgroundAttachment::kScroll
         );
 
@@ -9035,7 +9036,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         let draw = recording
@@ -9067,7 +9068,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut fallback_recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         let fallback_draws = fallback_recording
@@ -9114,7 +9115,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         assert!(recording.items.is_empty());
@@ -9244,7 +9245,7 @@ mod background_attachment_tests {
             false,
             PaintFlag::kPrivacyPreserving,
         );
-        let painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context);
+        let painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context);
         let mut layer = BackgroundImageLayer {
             resource_id: 7,
             can_render: true,
@@ -9285,7 +9286,7 @@ mod background_attachment_tests {
         };
 
         let destination = ResolveBackgroundDestinationRects(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             None,
             &layer,
             PaintPhase::kSelfBlockBackgroundOnly,
@@ -9348,7 +9349,7 @@ mod background_attachment_tests {
         };
 
         let destination = ResolveBackgroundDestinationRects(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             None,
             &layer,
             PaintPhase::kSelfBlockBackgroundOnly,
@@ -9454,7 +9455,7 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context)
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context)
             .PaintBoxShadows(PaintPhase::kSelfBlockBackgroundOnly, false);
 
         drop(context);
@@ -9521,7 +9522,7 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context)
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context)
             .PaintGapRules(PaintPhase::kSelfBlockBackgroundOnly);
         drop(context);
 
@@ -9566,9 +9567,9 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
         let mut paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-        assert!(BoxDecorationData::new(crate::paint_object::PaintObject::new(&node), &paint_info).ShouldPaintGapDecorations());
+        assert!(BoxDecorationData::new(crate::paint_object::PaintObject::Fixture(&node), &paint_info).ShouldPaintGapDecorations());
         paint_info.SetSkipsGapDecorations(true);
-        assert!(!BoxDecorationData::new(crate::paint_object::PaintObject::new(&node), &paint_info).ShouldPaintGapDecorations());
+        assert!(!BoxDecorationData::new(crate::paint_object::PaintObject::Fixture(&node), &paint_info).ShouldPaintGapDecorations());
     }
 
     #[test]
@@ -9620,7 +9621,7 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context)
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context)
             .PaintGapRules(PaintPhase::kSelfBlockBackgroundOnly);
         drop(context);
 
@@ -9697,7 +9698,7 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context)
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context)
             .PaintGapRules(PaintPhase::kSelfBlockBackgroundOnly);
         drop(context);
 
@@ -9889,7 +9890,7 @@ mod background_attachment_tests {
             width: 10.0,
             height: 10.0,
         });
-        assert!(!BoxFragmentPainter::ShouldPaintFragment(crate::paint_object::PaintObject::new(&node), &paint_info));
+        assert!(!BoxFragmentPainter::ShouldPaintFragment(crate::paint_object::PaintObject::Fixture(&node), &paint_info));
 
         let mut paginated_fragment = FragmentPaintData::default();
         paginated_fragment.paint.filtered_ink_overflow = Some(filtered);
@@ -9898,7 +9899,7 @@ mod background_attachment_tests {
         paginated_node.SetOwnedFragmentForTesting(&paginated_fragment);
         paginated_node.self_cull_rect = node.self_cull_rect;
         assert!(BoxFragmentPainter::ShouldPaintFragment(
-            crate::paint_object::PaintObject::new(&paginated_node),
+            crate::paint_object::PaintObject::Fixture(&paginated_node),
             &paint_info
         ));
     }
@@ -9933,13 +9934,13 @@ mod background_attachment_tests {
         node.SetOwnedFragmentForTesting(&fragment);
         node.paint_offset = Offset { x: 20.0, y: 30.0 };
         assert!(BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &paint_info
         ));
 
         node.paint_offset = Offset { x: 100.0, y: 100.0 };
         assert!(!BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &paint_info
         ));
 
@@ -9950,7 +9951,7 @@ mod background_attachment_tests {
         line_break_node.SetOwnedFragmentForTesting(&line_break);
         line_break_node.paint_offset = node.paint_offset;
         assert!(BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&line_break_node),
+            crate::paint_object::PaintObject::Fixture(&line_break_node),
             &paint_info
         ));
     }
@@ -9987,12 +9988,12 @@ mod background_attachment_tests {
 
         node.paint_offset = Offset { x: 100.0, y: 5.0 };
         assert!(BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &paint_info
         ));
         node.paint_offset.y = 100.0;
         assert!(!BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &paint_info
         ));
 
@@ -10003,12 +10004,12 @@ mod background_attachment_tests {
         vertical_node.SetOwnedFragmentForTesting(&vertical_fragment);
         vertical_node.paint_offset = Offset { x: 5.0, y: 100.0 };
         assert!(BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&vertical_node),
+            crate::paint_object::PaintObject::Fixture(&vertical_node),
             &paint_info
         ));
         vertical_node.paint_offset.x = 100.0;
         assert!(!BoxFragmentPainter::ChildIntersectsCullRect(
-            crate::paint_object::PaintObject::new(&vertical_node),
+            crate::paint_object::PaintObject::Fixture(&vertical_node),
             &paint_info
         ));
     }
@@ -10062,7 +10063,7 @@ mod background_attachment_tests {
         root.children.push(atomic);
 
         assert_eq!(
-            BuildBackplates(crate::paint_object::PaintObject::new(&root)),
+            BuildBackplates(crate::paint_object::PaintObject::Fixture(&root)),
             vec![
                 crate::PaintRect {
                     x: 10.0,
@@ -10116,7 +10117,7 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForcedColorsModeBackplate);
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&root), &context).Paint(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&root), &context).Paint(&paint_info);
         drop(paint_info);
         drop(context);
 
@@ -10175,7 +10176,7 @@ mod background_attachment_tests {
 
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context)
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context)
             .PaintRootGroup(PaintPhase::kSelfBlockBackgroundOnly);
         drop(context);
 
@@ -10225,7 +10226,7 @@ mod background_attachment_tests {
             let context = RefCell::new(PaintContext::new(&mut skipped));
             let mut paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
             paint_info.SetSkipsBackground(true);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         assert!(skipped.items.is_empty());
@@ -10272,7 +10273,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut ordinary));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         assert!(ordinary.chunks.get(&crate::artifact_access::artifact_access()).iter().all(|chunk| {
@@ -10293,7 +10294,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut special));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         let access = crate::artifact_access::artifact_access();
@@ -10360,7 +10361,7 @@ mod background_attachment_tests {
             let context = RefCell::new(PaintContext::new(&mut contents));
             let mut paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
             paint_info.SetIsPaintingBackgroundInContentsSpace(true);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         let expected_contents = PaintRect {
@@ -10547,7 +10548,7 @@ mod background_attachment_tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -10575,7 +10576,7 @@ mod background_attachment_tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -10631,7 +10632,7 @@ mod background_attachment_tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
 
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(context);
         let placeholder = recording
@@ -10664,7 +10665,7 @@ mod background_attachment_tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kSelectionDragImage);
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -10725,7 +10726,7 @@ mod background_attachment_tests {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelectionDragImage);
 
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
 
             drop(context);
             assert_eq!(
@@ -10771,7 +10772,7 @@ mod background_attachment_tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintAfterChildren(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintAfterChildren(&paint_info);
 
         drop(context);
         let tint = recording
@@ -10841,7 +10842,7 @@ mod background_attachment_tests {
                 PaintFlag::kPrivacyPreserving,
             );
 
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
             drop(paint_info);
             drop(context);
@@ -10930,7 +10931,7 @@ mod background_attachment_tests {
                 .SetPaintUnderInvalidationCheckingForTesting(true);
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
             drop(paint_info);
             drop(context);
@@ -10993,7 +10994,7 @@ mod background_attachment_tests {
             width: 30.0,
             height: 40.0,
         };
-        assert!(UpdateImagePaintedRect(crate::paint_object::PaintObject::new(&node), first));
+        assert!(UpdateImagePaintedRect(crate::paint_object::PaintObject::Fixture(&node), first));
         assert_eq!(
             fragment.paint.image_last_paint_rect.get(),
             Some(FragmentPaintRect {
@@ -11004,9 +11005,9 @@ mod background_attachment_tests {
                 },
             })
         );
-        assert!(!UpdateImagePaintedRect(crate::paint_object::PaintObject::new(&node), first));
+        assert!(!UpdateImagePaintedRect(crate::paint_object::PaintObject::Fixture(&node), first));
         assert!(UpdateImagePaintedRect(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             crate::PaintRect {
                 width: 20.0,
                 ..first
@@ -11028,7 +11029,7 @@ mod background_attachment_tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
 
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(context);
         assert!(recording.display_items.get(&crate::artifact_access::artifact_access()).is_empty());
@@ -11098,7 +11099,7 @@ mod background_attachment_tests {
         ));
         assert!(UseCachedImageDrawingIfPossible(
             &context,
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             PaintPhase::kForeground,
             false,
         ));
@@ -11113,7 +11114,7 @@ mod background_attachment_tests {
         ));
         assert!(!UseCachedImageDrawingIfPossible(
             &context,
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             PaintPhase::kForeground,
             true,
         ));
@@ -11231,7 +11232,7 @@ mod background_attachment_tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintOutline(PaintPhase::kSelfOutlineOnly);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintOutline(PaintPhase::kSelfOutlineOnly);
             context.borrow_mut().Finish();
         }
 
@@ -11293,7 +11294,7 @@ mod background_attachment_tests {
         let mut output = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut output));
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintMask(
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintMask(
                 DisplayItemIdType::PaintPhaseToDrawingType(PaintPhase::kMask),
             );
             context.borrow_mut().Finish();
@@ -11366,9 +11367,9 @@ mod background_attachment_tests {
         let mut recording = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut recording));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        context.borrow_mut().BeginGeometry(crate::paint_object::PaintObject::new(&node));
+        context.borrow_mut().BeginGeometry(crate::paint_object::PaintObject::Fixture(&node));
 
-        let painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context);
+        let painter = BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context);
         painter.Paint(&paint_info);
         context.borrow_mut().Append(
             DisplayItem {
@@ -11376,9 +11377,9 @@ mod background_attachment_tests {
                 phase: PaintPhase::kForeground,
                 ..Default::default()
             },
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
         );
-        context.borrow_mut().EndGeometry(crate::paint_object::PaintObject::new(&node));
+        context.borrow_mut().EndGeometry(crate::paint_object::PaintObject::Fixture(&node));
         painter.PaintAfterChildren(&paint_info);
         drop(context);
 
@@ -11417,7 +11418,7 @@ mod background_attachment_tests {
         fixed.SetOwnedFragmentForTesting(&fixed_fragment);
         fixed.scroll_offset = Offset { x: 7.0, y: 11.0 };
         fixed.transforms = std::sync::Arc::from([TranslationTransform(5.0, 9.0)]);
-        let viewport = FixedBackgroundPositioningArea(crate::paint_object::PaintObject::new(&fixed)).unwrap();
+        let viewport = FixedBackgroundPositioningArea(crate::paint_object::PaintObject::Fixture(&fixed)).unwrap();
         assert_eq!((viewport.x, viewport.y), (2.0, 2.0));
         assert_eq!((viewport.width, viewport.height), (480.0, 300.0));
 
@@ -11468,13 +11469,13 @@ mod background_attachment_tests {
         let mut local = PaintTreeNode::default();
         local.SetOwnedFragmentForTesting(&local_fragment);
         local.paint_offset = Offset { x: 50.0, y: 40.0 };
-        let contents = LocalBackgroundBorderRect(crate::paint_object::PaintObject::new(&local), None);
+        let contents = LocalBackgroundBorderRect(crate::paint_object::PaintObject::Fixture(&local), None);
         assert_eq!((contents.x, contents.y), (37.0, 23.0));
         assert_eq!((contents.width, contents.height), (245.0, 189.0));
-        let visual = ScrollingBackgroundVisualRect(crate::paint_object::PaintObject::new(&local), None);
+        let visual = ScrollingBackgroundVisualRect(crate::paint_object::PaintObject::Fixture(&local), None);
         assert_eq!((visual.x, visual.y), (53.0, 45.0));
         assert_eq!((visual.width, visual.height), (97.0, 71.0));
-        let content_clip = BackgroundBoxRectWithin(crate::paint_object::PaintObject::new(&local), BackgroundBox::kContentBox, contents);
+        let content_clip = BackgroundBoxRectWithin(crate::paint_object::PaintObject::Fixture(&local), BackgroundBox::kContentBox, contents);
         assert_eq!((content_clip.x, content_clip.y), (45.0, 35.0));
         assert_eq!((content_clip.width, content_clip.height), (227.0, 163.0));
     }
@@ -11535,7 +11536,7 @@ mod background_attachment_tests {
         node.SetOwnedFragmentForTesting(&fragment);
 
         assert_eq!(
-            CanvasBackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kBorderBox),
+            CanvasBackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kBorderBox),
             PaintRect {
                 x: 25.0,
                 y: 30.0,
@@ -11544,7 +11545,7 @@ mod background_attachment_tests {
             }
         );
         assert_eq!(
-            CanvasBackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kPaddingBox),
+            CanvasBackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kPaddingBox),
             PaintRect {
                 x: 30.0,
                 y: 32.0,
@@ -11553,7 +11554,7 @@ mod background_attachment_tests {
             }
         );
         assert_eq!(
-            CanvasBackgroundPositioningBoxRect(crate::paint_object::PaintObject::new(&node), None, BackgroundBox::kContentBox),
+            CanvasBackgroundPositioningBoxRect(crate::paint_object::PaintObject::Fixture(&node), None, BackgroundBox::kContentBox),
             PaintRect {
                 x: 39.0,
                 y: 38.0,
@@ -11566,7 +11567,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintCanvasBackground(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintCanvasBackground(&paint_info);
             context.borrow_mut().Finish();
         }
         assert!(recording.first_painted);
@@ -11581,7 +11582,7 @@ mod background_attachment_tests {
             crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IncrementIgnoreDepth();
             let context = RefCell::new(PaintContext::new(&mut ignored));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintCanvasBackground(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintCanvasBackground(&paint_info);
             context.borrow_mut().Finish();
         }
         assert!(!ignored.first_painted);
@@ -11660,7 +11661,7 @@ mod background_attachment_tests {
         document.pre_transform = document_pre_transform.clone();
         root.children.push(Box::new(document));
 
-        let background_state = CanvasBackgroundPaintState(crate::paint_object::PaintObject::new(&root), None);
+        let background_state = CanvasBackgroundPaintState(crate::paint_object::PaintObject::Fixture(&root), None);
         assert!(Arc::ptr_eq(
             &background_state.transform,
             &document_pre_transform,
@@ -11670,7 +11671,7 @@ mod background_attachment_tests {
             &document_css_transform,
         ));
         assert_eq!(
-            CanvasBackgroundRectInState(crate::paint_object::PaintObject::new(&root), None, false, &background_state),
+            CanvasBackgroundRectInState(crate::paint_object::PaintObject::Fixture(&root), None, false, &background_state),
             Some(PaintRect {
                 x: -10.0,
                 y: -20.0,
@@ -11680,7 +11681,7 @@ mod background_attachment_tests {
         );
         assert_eq!(
             CanvasBackgroundPositioningBoxRectInState(
-                crate::paint_object::PaintObject::new(&root),
+                crate::paint_object::PaintObject::Fixture(&root),
                 None,
                 BackgroundBox::kBorderBox,
                 &background_state,
@@ -11708,7 +11709,7 @@ mod background_attachment_tests {
         {
             let context = RefCell::new(crate::paint_context::PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kSelfBlockBackgroundOnly);
-            BoxFragmentPainter::new(crate::paint_object::PaintObject::new(&root), &context).Paint(&paint_info);
+            BoxFragmentPainter::new(crate::paint_object::PaintObject::Fixture(&root), &context).Paint(&paint_info);
             context.borrow_mut().Finish();
         }
         assert!(recording.display_items.get(&crate::artifact_access::artifact_access()).iter().all(|item| {

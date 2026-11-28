@@ -690,31 +690,31 @@ mod tests {
     fn overflow_controls_follow_chromium_paint_phases() {
         let layer = node(true);
         assert!(ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&layer),
+            crate::paint_object::PaintObject::Fixture(&layer),
             false,
             PaintPhase::kSelfBlockBackgroundOnly,
         ));
         assert!(!ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&layer),
+            crate::paint_object::PaintObject::Fixture(&layer),
             false,
             PaintPhase::kOverlayOverflowControls,
         ));
         let mut self_painting_layer = node(true);
         self_painting_layer.is_self_painting_layer = true;
         assert!(ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&self_painting_layer),
+            crate::paint_object::PaintObject::Fixture(&self_painting_layer),
             true,
             PaintPhase::kOverlayOverflowControls,
         ));
 
         let non_self_painting_layer = node(true);
         assert!(ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&non_self_painting_layer),
+            crate::paint_object::PaintObject::Fixture(&non_self_painting_layer),
             true,
             PaintPhase::kForeground,
         ));
         assert!(!ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&non_self_painting_layer),
+            crate::paint_object::PaintObject::Fixture(&non_self_painting_layer),
             true,
             PaintPhase::kOverlayOverflowControls,
         ));
@@ -722,12 +722,12 @@ mod tests {
             .needs_reorder_overlay_overflow_controls
             .set(true);
         assert!(ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&non_self_painting_layer),
+            crate::paint_object::PaintObject::Fixture(&non_self_painting_layer),
             true,
             PaintPhase::kOverlayOverflowControls,
         ));
         assert!(!ShouldPaintOverflowControls(
-            crate::paint_object::PaintObject::new(&non_self_painting_layer),
+            crate::paint_object::PaintObject::Fixture(&non_self_painting_layer),
             true,
             PaintPhase::kForeground,
         ));
@@ -739,7 +739,7 @@ mod tests {
         node.paint_offset = Offset { x: 10.6, y: 20.4 };
         assert_eq!(
             AbsoluteRoundedRect(
-                crate::paint_object::PaintObject::new(&node),
+                crate::paint_object::PaintObject::Fixture(&node),
                 Offset { x: 70.0, y: 30.0 },
                 Size {
                     width: 30.0,

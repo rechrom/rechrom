@@ -612,30 +612,10 @@ fn PaintNativeMarkers(node: PaintObject<'_, '_>, info: &PaintInfo<'_, '_>) -> bo
         // own subtree (svg_shape_painter.cc:282-323), reached through Layout.
         let resource_cursor =
             resource_cursor.expect("native marker resource must have a resident fragment");
-        let resource = match info
-            .context
-            .borrow()
-            .SvgResourceNode(marker.resource_client_id)
-        {
-            // RECHROM_PREPAINT_FRAGMENT_DATA_CHECK: the resource's PrePaint
-            // node is the oracle of the same occurrence.
-            Some(oracle) => {
-                assert!(
-                    oracle
-                        .Fragment()
-                        .is_some_and(|fragment| std::ptr::eq(fragment, resource_cursor.PaintData())),
-                    "SVG marker resource: the Layout resource fragment differs from its PrePaint node"
-                );
-                PaintObject::Walked(
-                    oracle.CheckNode().expect("resource oracle node"),
-                    crate::paint_object::PaintWalkContext::default(),
-                )
-            }
-            None => PaintObject::FromCursor(
-                resource_cursor,
-                crate::paint_object::PaintWalkContext::default(),
-            ),
-        };
+        let resource = PaintObject::FromCursor(
+            resource_cursor,
+            crate::paint_object::PaintWalkContext::default(),
+        );
         let command = |kind, transform, rect| DisplayItem {
             r#type: kind,
             phase: info.phase,
@@ -1087,7 +1067,7 @@ mod tests {
             ..SvgShapeData::default()
         };
         let items = BuildShapeItems(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1122,7 +1102,7 @@ mod tests {
         };
 
         let items = BuildShapeItems(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1160,7 +1140,7 @@ mod tests {
         };
 
         let rejected = BuildShapeItems(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1178,7 +1158,7 @@ mod tests {
         fragment.paint.style.svg_fill_server = Some(server);
         node.SetOwnedFragmentForTesting(&fragment);
         let admitted = BuildShapeItems(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             &shape,
             &MainStyle(&fragment.paint.style),
             Offset::default(),
@@ -1262,7 +1242,7 @@ mod tests {
             false,
             PaintFlag::kPaintingClipPathAsMask | PaintFlag::kOmitCompositingInfo,
         );
-        SVGShapePainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+        SVGShapePainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
         drop(paint_info);
         drop(context);
 
@@ -1321,7 +1301,7 @@ mod tests {
             let mut recording = PaintRecording::default();
             let context = RefCell::new(PaintContext::new(&mut recording));
             let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-            SVGShapePainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+            SVGShapePainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
             drop(paint_info);
             drop(context);
 
@@ -1456,7 +1436,7 @@ mod tests {
             Some(Arc::new(previous)),
         ));
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
-        SVGShapePainter::new(crate::paint_object::PaintObject::new(&node), &context).Paint(&paint_info);
+        SVGShapePainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).Paint(&paint_info);
         assert_eq!(
             context.borrow().CacheMetrics(),
             PaintReuseMetrics {

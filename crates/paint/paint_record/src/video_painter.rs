@@ -289,7 +289,7 @@ mod tests {
             PaintFlag::kOmitCompositingInfo,
         );
 
-        VideoPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        VideoPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -320,7 +320,7 @@ mod tests {
             PaintFlag::kPrivacyPreserving,
         );
 
-        VideoPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        VideoPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
 
         drop(paint_info);
         drop(context);
@@ -349,7 +349,7 @@ mod tests {
         context.borrow_mut().BindForeignLayers(&layers);
         let paint_info = PaintInfo::new(&context, PaintPhase::kForeground);
 
-        VideoPainter::new(crate::paint_object::PaintObject::new(&node), &context).PaintReplaced(&paint_info);
+        VideoPainter::new(crate::paint_object::PaintObject::Fixture(&node), &context).PaintReplaced(&paint_info);
         context.borrow_mut().Finish();
 
         drop(paint_info);

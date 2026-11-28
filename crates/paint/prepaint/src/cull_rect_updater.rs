@@ -198,9 +198,9 @@ pub(super) fn ShouldUseInfiniteCullRect(
 
 /// PrePaint cull updater.
 ///
-/// Blink stores retained cull rectangles on `FragmentData`. Rechrom's
-/// `PaintTreeNode` still holds the rects Paint reads; `SetFragmentCullRects`
-/// also stores them on the occurrence's `PrePaintFragmentData`.
+/// Blink stores retained cull rectangles on `FragmentData`;
+/// `SetFragmentCullRects` stores them on the occurrence's
+/// `PrePaintFragmentData`, which Paint reads.
 #[derive(Default)]
 pub struct CullRectUpdater;
 
@@ -281,10 +281,9 @@ impl CullRectUpdater {
     /// the contents cull rect changed (UpdateForSelf's
     /// `force_update_children`).
     ///
-    /// Dual write: the walk still computes the rects (PaintPropertyTreeBuilder,
-    /// ShiftRetainedNode) and keeps them on PaintTreeNode, which Paint reads;
-    /// this stores the same values (`None` is infinite) on the occurrence's
-    /// FragmentData. As in Chromium only PaintLayer objects get cull rects
+    /// The walk computes the rects (PaintPropertyTreeBuilder) and this stores
+    /// them (`None` is infinite) on the occurrence's FragmentData, which
+    /// Paint reads. As in Chromium only PaintLayer objects get cull rects
     /// here; every other FragmentData keeps its default empty CullRect
     /// (cull_rect.h). Not repeated here, so behaviour stays the walk's:
     /// SetLayerNeedsRepaintOnCullRectChange (cc:44-49), raised by the walk's

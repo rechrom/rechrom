@@ -447,7 +447,7 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut output));
         {
             let info = PaintInfo::new(&context, PaintPhase::kForeground);
-            let _scope = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::new(&clipped));
+            let _scope = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::Fixture(&clipped));
         }
         assert_eq!(
             clipped.previous_paint_result.get(),
@@ -457,7 +457,7 @@ mod tests {
         let contained = layer_with_contents(10.0, 20.0);
         {
             let info = PaintInfo::new(&context, PaintPhase::kForeground);
-            let _scope = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::new(&contained));
+            let _scope = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::Fixture(&contained));
         }
         assert_eq!(
             contained.previous_paint_result.get(),
@@ -484,7 +484,7 @@ mod tests {
         let input = context.borrow().chunk_properties();
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
         {
-            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::Fixture(&node), &info);
             assert!(Arc::ptr_eq(
                 &context.borrow().chunk_properties().transform,
                 &node.properties.nodes.transform
@@ -495,7 +495,7 @@ mod tests {
         node.is_paint_layer = true;
         node.is_self_painting_layer = true;
         {
-            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::Fixture(&node), &info);
             assert!(context.borrow().chunk_properties().same_nodes(&input));
         }
 
@@ -503,7 +503,7 @@ mod tests {
         node.is_self_painting_layer = false;
         node.fragment.as_mut().unwrap().paint.source_kind = NodeKind::kSvgShape;
         {
-            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::Fixture(&node), &info);
             assert!(context.borrow().chunk_properties().same_nodes(&input));
         }
 
@@ -511,7 +511,7 @@ mod tests {
         node.fragment.as_mut().unwrap().paint.is_page_border_box = true;
         node.applies_transform = false;
         {
-            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::Fixture(&node), &info);
             assert!(Arc::ptr_eq(
                 &context.borrow().chunk_properties().transform,
                 &node.properties.nodes.transform
@@ -541,13 +541,13 @@ mod tests {
         let mut output = crate::PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         context.borrow_mut().BeginDrawingRecorder(
-            crate::paint_object::PaintObject::new(&node),
+            crate::paint_object::PaintObject::Fixture(&node),
             DisplayItemIdType::kBoxDecorationBackground,
             PaintRect::default(),
         );
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
         {
-            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
+            let _state = ScopedPaintState::new(crate::paint_object::PaintObject::Fixture(&node), &info);
         }
         context.borrow_mut().EndDrawingRecorder();
         drop(context);
@@ -585,7 +585,7 @@ mod tests {
         let mut output = crate::PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
-        let state = ScopedPaintState::new(crate::paint_object::PaintObject::new(&node), &info);
+        let state = ScopedPaintState::new(crate::paint_object::PaintObject::Fixture(&node), &info);
         assert_eq!(state.GetPaintInfo().GetCullRect().Rect(), Some(local_cull));
         assert!(state.LocalRectIntersectsCullRect(PaintRect {
             x: 0.0,
@@ -643,7 +643,7 @@ mod tests {
         let mut output = crate::PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
         let info = PaintInfo::new(&context, PaintPhase::kForeground);
-        let state = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::new(&node));
+        let state = ScopedBoxContentsPaintState::new(&info, crate::paint_object::PaintObject::Fixture(&node));
         assert_eq!(state.PaintOffset(), Offset { x: 10.0, y: 16.0 });
         assert!(state.LocalRectIntersectsCullRect(PaintRect {
             width: 1.0,
