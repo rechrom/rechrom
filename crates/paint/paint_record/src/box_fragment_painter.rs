@@ -7083,21 +7083,23 @@ fn CanvasBackgroundRect(
     ViewBackgroundRect(node, fragment_data, scrolling)
 }
 
-fn FindPaintNodeById<'n, 'f>(
-    node: PaintObject<'n, 'f>,
+/// The Layout fragment cursor whose fragment is DOM node `node_id`.
+fn FindCursorByNodeId(
+    cursor: layout::paint::PaintFragmentCursor<'_>,
     node_id: u64,
-) -> Option<PaintObject<'n, 'f>> {
+) -> Option<layout::paint::PaintFragmentCursor<'_>> {
     if node_id == 0 {
         return None;
     }
-    if node
-        .Fragment()
+    if cursor
+        .PaintDataOption()
         .is_some_and(|fragment| fragment.ViewNodeId() == node_id)
     {
-        return Some(node);
+        return Some(cursor);
     }
-    node.Children()
-        .find_map(|child| FindPaintNodeById(child, node_id))
+    cursor
+        .Children()
+        .find_map(|child| FindCursorByNodeId(child, node_id))
 }
 
 /// ViewPainter uses the document element's LocalBorderBoxProperties but
@@ -7126,27 +7128,28 @@ fn CanvasBackgroundPaintStateFor(
     // LayoutView fragment carries the same DOM input identity (its node is the
     // document), so search below it; matching the LayoutView itself would
     // substitute its border-box (non-scrolling) state for the root element's.
-    let Some(document_element) = node
-        .Children()
-        .find_map(|child| FindPaintNodeById(child, document_element_node_id))
-    else {
+    // The lookup walks Layout's fragment cursor directly: it only needs the
+    // element's FragmentData, as Chromium reads documentElement's
+    // LayoutObject without traversing paint objects.
+    let Some(document_element) = node.SourceCursor().and_then(|cursor| {
+        cursor
+            .Children()
+            .find_map(|child| FindCursorByNodeId(child, document_element_node_id))
+    }) else {
         return FragmentContentsProperties(node, fragment_data);
     };
     // view_painter.cc:181-188: the document element's
     // FirstFragment().LocalBorderBoxProperties() with PreTransform()
     // (fragment_data.cc:55-65) as its transform.
-    match document_element.FragmentData() {
+    match document_element.PrePaintData::<PrePaintFragmentData>() {
         Some(data) => {
             let mut state = data.LocalBorderBoxProperties();
             state.transform =
                 paint_model::property_cell::with_access(|access| data.PreTransform(access));
             state
         }
-        None => {
-            let mut state = document_element.properties().clone();
-            state.transform = document_element.pre_transform();
-            state
-        }
+        // Only a hand-built fixture has no PrePaint FragmentData.
+        None => FragmentContentsProperties(node, fragment_data),
     }
 }
 

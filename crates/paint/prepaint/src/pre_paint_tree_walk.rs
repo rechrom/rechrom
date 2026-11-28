@@ -116,6 +116,11 @@ impl EmbeddedLocalFrameView {
     pub fn Root(&self) -> PaintFragmentCursor<'_> {
         self.root
     }
+    /// Whether this frame is cross-origin to its parent frame
+    /// (FramePainter paints it privacy-preserving).
+    pub fn CrossOriginToParent(&self) -> bool {
+        self.cross_origin_to_parent
+    }
     pub fn WithBlockingWheelEventHandlerTargets(mut self, targets: Arc<[u64]>) -> Self {
         self.blocking_wheel_targets = targets;
         self
@@ -9050,6 +9055,13 @@ impl PrePaintTreeWalk {
 
     pub fn LocalFrameViews(&self) -> impl Iterator<Item = &EmbeddedLocalFrameView> {
         self.local_frame_views.values()
+    }
+
+    /// The same-Page child LocalFrameView embedded by the object whose
+    /// DisplayItemClient is `owner_client` (LayoutEmbeddedContent::
+    /// ChildFrameView, as EmbeddedContentPainter reaches it).
+    pub fn LocalFrameView(&self, owner_client: u64) -> Option<&EmbeddedLocalFrameView> {
+        self.local_frame_views.get(&owner_client)
     }
 
     // Source: pre_paint_tree_walk.cc:1538-1575 and

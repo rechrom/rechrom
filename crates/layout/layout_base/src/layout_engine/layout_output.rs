@@ -1884,7 +1884,8 @@ impl<'a> PaintFragmentCursor<'a> {
         }
     }
 
-    pub(crate) fn PaintDataOption(self) -> Option<&'a FragmentPaintData> {
+    /// `PaintData`, or None for a cursor without a result state.
+    pub fn PaintDataOption(self) -> Option<&'a FragmentPaintData> {
         let state = self.state?;
         Some(unsafe { &*state.Slot(self.source.PaintOwner(), self.display_item_fragment) })
     }
