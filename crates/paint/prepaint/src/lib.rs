@@ -47,6 +47,32 @@ pub use pre_paint_tree_walk::{
 };
 pub use table_cell_paint_invalidator::TableCellPaintInvalidator;
 
+/// Trace field names of `PrePaintUpdateStats::clean_rejects`
+/// (PrePaint.CleanRejects).
+pub const PRE_PAINT_CLEAN_REJECT_FIELDS: [&str; 8] = [
+    "forced",
+    "own_property",
+    "own_layout",
+    "walk_state",
+    "record_owner",
+    "record_geometry",
+    "cached_context",
+    "subpixel_delta",
+];
+
+/// Trace field names of `PrePaintUpdateStats::skip_rejects`
+/// (PrePaint.SkipRejects).
+pub const PRE_PAINT_SKIP_REJECT_FIELDS: [&str; 8] = [
+    "forced",
+    "own",
+    "descendants",
+    "walk_state",
+    "record_owner",
+    "record_geometry",
+    "wheel_inside",
+    "no_data",
+];
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PrePaintUpdateStats {
     /// Objects PaintPropertyTreeBuilder built (visited) this pass.
@@ -71,6 +97,13 @@ pub struct PrePaintUpdateStats {
     pub source_result_replaced: bool,
     /// Objects whose cull-rect change forced a layer repaint this pass.
     pub cull_change_repaints: usize,
+    /// Visited objects the builder's context-only path refused, by the first
+    /// failing condition group (PRE_PAINT_CLEAN_REJECT_FIELDS).
+    pub clean_rejects: [u32; 8],
+    /// Children the walk could not return from before building their
+    /// context, by the first failing condition group
+    /// (PRE_PAINT_SKIP_REJECT_FIELDS).
+    pub skip_rejects: [u32; 8],
     /// Walk self time by section, excluding child recursion. Recorded only
     /// while tracing is enabled.
     pub profile_admission_ns: u64,

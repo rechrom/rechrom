@@ -31,7 +31,8 @@ use layout::paint::{PaintFragmentCursor, PaintFragmentLease};
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::block_paint_invalidator::BlockPaintInvalidator;
 use crate::box_paint_invalidator::{
-    BackgroundInvalidation, BackgroundInvalidationType, BoxPaintInvalidator, ViewBackgroundRects,
+    BackgroundInvalidation, BackgroundInvalidationType, BoxGeometryMatchesPrevious,
+    BoxPaintInvalidator, ViewBackgroundRects,
 };
 use crate::compositing_reason_finder::CompositingReasonFinder;
 use crate::cull_rect_updater::CullRectUpdater;
@@ -4392,6 +4393,26 @@ impl FlatTransformMemo {
     }
 }
 
+// Indices of PrePaintUpdateStats::clean_rejects (crate::PRE_PAINT_CLEAN_REJECT_FIELDS).
+const CLEAN_REJECT_FORCED: usize = 0;
+const CLEAN_REJECT_OWN_PROPERTY: usize = 1;
+const CLEAN_REJECT_OWN_LAYOUT: usize = 2;
+const CLEAN_REJECT_WALK_STATE: usize = 3;
+const CLEAN_REJECT_RECORD_OWNER: usize = 4;
+const CLEAN_REJECT_RECORD_GEOMETRY: usize = 5;
+const CLEAN_REJECT_CACHED_CONTEXT: usize = 6;
+const CLEAN_REJECT_SUBPIXEL_DELTA: usize = 7;
+
+// Indices of PrePaintUpdateStats::skip_rejects (crate::PRE_PAINT_SKIP_REJECT_FIELDS).
+const SKIP_REJECT_FORCED: usize = 0;
+const SKIP_REJECT_OWN: usize = 1;
+const SKIP_REJECT_DESCENDANTS: usize = 2;
+const SKIP_REJECT_WALK_STATE: usize = 3;
+const SKIP_REJECT_RECORD_OWNER: usize = 4;
+const SKIP_REJECT_RECORD_GEOMETRY: usize = 5;
+const SKIP_REJECT_WHEEL_INSIDE: usize = 6;
+const SKIP_REJECT_NO_DATA: usize = 7;
+
 /// The PhysicalFragment (or FragmentItem and container) a cursor names, as
 /// addresses: the identity a skipped subtree's root must keep (a clean
 /// FragmentData keeps naming the fragment the walk visited).
@@ -5016,6 +5037,9 @@ impl PrePaintTreeWalk {
             }
     }
 
+    /// Returns the PRE_PAINT_SKIP_REJECT_FIELDS index of the first failing
+    /// condition group when the subtree must be visited.
+    ///
     /// Source: PrePaintTreeWalk::Walk (pre_paint_tree_walk.cc:1477-1482)
     /// with NeedsTreeBuilderContextUpdate, ObjectRequiresPrePaint and
     /// ContextRequiresChildPrePaint (pre_paint_tree_walk.cc:398-450): the walk
@@ -5038,38 +5062,49 @@ impl PrePaintTreeWalk {
         parent_invalidation: &PaintInvalidatorContext,
         display_item_fragment: u32,
         fragmentainer: u64,
-    ) -> bool {
+    ) -> Result<(), usize> {
         let record = data.WalkRecord();
         let invalidation = fragment.pre_paint_invalidation;
         let client = fragment.paint.DisplayItemClientId();
-        if self.full_walk
-            || force_subtree
-            || context_changed
-            || !record.walked
-            || base.blocking_wheel_event_handler_changed
+        if self.full_walk || force_subtree || context_changed || !record.walked {
+            return Err(SKIP_REJECT_FORCED);
+        }
+        if invalidation.own() {
+            return Err(SKIP_REJECT_OWN);
+        }
+        if invalidation.descendants() {
+            return Err(SKIP_REJECT_DESCENDANTS);
+        }
+        if base.blocking_wheel_event_handler_changed
             || base.canvas_contents.is_some()
             || parent_invalidation.NeedsSubtreeWalk()
-            || invalidation.own()
-            || invalidation.descendants()
             || fragment.paint.IsSVGHiddenContainer()
             || (fragment.paint.FixedToView() && fragment.ViewEstablishesPaintState())
             || self.local_frame_views.contains_key(&client)
             || self.must_visit_clients.contains(&client)
         {
-            return false;
+            return Err(SKIP_REJECT_WALK_STATE);
         }
         let owner = WalkedOwner(fragment.Cursor());
-        owner != (0, 0)
-            && record.walked_owner == owner
-            && record.link_offset == fragment.Cursor().ViewOffsetInContainer()
-            && record.size == fragment.ViewSize()
-            && record.display_item_fragment == display_item_fragment
-            && record.fragmentainer == fragmentainer
-            && self.InsideBlockingWheelEventHandler(
-                fragment,
-                base.inside_blocking_wheel_event_handler,
-                false,
-            ) == fragment.paint.InsideBlockingWheelEventHandler()
+        if owner == (0, 0) || record.walked_owner != owner {
+            return Err(SKIP_REJECT_RECORD_OWNER);
+        }
+        if record.link_offset != fragment.Cursor().ViewOffsetInContainer()
+            || record.size != fragment.ViewSize()
+            || record.display_item_fragment != display_item_fragment
+            || record.fragmentainer != fragmentainer
+        {
+            return Err(SKIP_REJECT_RECORD_GEOMETRY);
+        }
+        if self.InsideBlockingWheelEventHandler(
+            fragment,
+            base.inside_blocking_wheel_event_handler,
+            false,
+        ) != fragment.paint.InsideBlockingWheelEventHandler()
+        {
+            return Err(SKIP_REJECT_WHEEL_INSIDE);
+        }
+        Ok(())
     }
 
     /// Source: PrePaintTreeWalk::WalkInternal and WalkChildren
@@ -5116,26 +5151,27 @@ impl PrePaintTreeWalk {
         // Source: paint_property_tree_builder.cc UpdateForSelf /
         // UpdateForChildren without NeedsPaintPropertyUpdate or a forced
         // subtree update: the builder only advances the context past the
-        // object's existing nodes. Such an object is visited only for a
-        // descendant's dirty bit.
-        if !has_logical_effect {
-            if let Some(base) = self.CleanVisitChildContext(
-                &fragment,
-                &ctx,
-                inside,
-                display_item_fragment,
-                fragmentainer,
-            ) {
+        // object's existing nodes. Such an object is visited for a
+        // descendant's dirty bit or its own paint invalidation check.
+        let clean = if has_logical_effect {
+            Err(CLEAN_REJECT_WALK_STATE)
+        } else {
+            self.CleanVisitChildContext(&fragment, &ctx, inside, display_item_fragment, fragmentainer)
+        };
+        match clean {
+            Ok((base, invalidate)) => {
                 return self.WalkCleanObject(
                     fragment,
                     ctx,
                     base,
+                    invalidate,
                     inside,
                     display_item_fragment,
                     fragmentainer,
                     t_start,
                 );
             }
+            Err(reason) => self.stats.clean_rejects[reason] += 1,
         }
         let mut resident = ResidentFragment::FromSource(&fragment);
         // The payload is shared copy-on-write with the previous publication.
@@ -5321,114 +5357,17 @@ impl PrePaintTreeWalk {
             );
         if should_run_invalidation {
             let old_gap_rules = previous.as_ref().and_then(|previous| previous.gap_rules.clone());
-            let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
-                let fragment_data: &FragmentPaintData = &fragment;
-                let view_background_rects = self
-                    .view_background_rects
-                    .filter(|(owner, _)| {
-                        *owner == fragment_data as *const FragmentPaintData as usize
-                    })
-                    .map(|(_, rects)| rects);
-                let mut background =
-                    BoxPaintInvalidator::ComputeBackgroundInvalidationWithViewRects(
-                        &fragment,
-                        Some(cursor),
-                        None,
-                        old_gap_rules.as_deref(),
-                        invalidation_context,
-                        view_background_rects,
-                    );
-                if self.view_background_geometry_changed
-                    && fragment.paint.IsBackgroundAttachmentFixedObject()
-                {
-                    background = BackgroundInvalidation {
-                        kind: BackgroundInvalidationType::Full,
-                        invalidate_both_spaces: true,
-                    };
-                }
-                background
-            });
-            let reason = ObjectPaintInvalidator::ComputePaintInvalidationReason(
-                &fragment,
+            let new_paint_offset = node.paint_offset;
+            self.InvalidatePaintForVisit(
+                fragment,
+                node.fragment
+                    .as_mut()
+                    .expect("PrePaint node must own a fragment"),
+                old_gap_rules.as_deref(),
                 old_paint_offset,
-                node.paint_offset,
+                new_paint_offset,
                 invalidation_context,
             );
-            // Source: object_paint_invalidator.cc:49-53. The reason above read
-            // the previous visibility; save the current one on the
-            // LayoutObject for the next walk.
-            fragment.paint.UpdateSourcePreviousVisibilityVisible();
-            let reason = if fragment.ViewKind() == FragmentKind::kBox {
-                if fragment.paint.Display() == Display::kTableCell {
-                    TableCellPaintInvalidator::ComputePaintInvalidationReason(
-                        &fragment,
-                        None,
-                        old_paint_offset,
-                        node.paint_offset,
-                        invalidation_context,
-                        reason,
-                    )
-                } else if fragment.paint.IsLayoutBlock() {
-                    BlockPaintInvalidator::ComputePaintInvalidationReason(
-                        &fragment,
-                        None,
-                        old_paint_offset,
-                        node.paint_offset,
-                        invalidation_context,
-                        reason,
-                    )
-                } else {
-                    BoxPaintInvalidator::ComputePaintInvalidationReason(
-                        &fragment,
-                        None,
-                        old_paint_offset,
-                        node.paint_offset,
-                        invalidation_context,
-                        reason,
-                    )
-                }
-            } else {
-                reason
-            };
-            let resident_fragment = &mut **node
-                .fragment
-                .as_mut()
-                .expect("PrePaint node must own a fragment");
-            let reason = background_invalidation.map_or(reason, |background| {
-                BoxPaintInvalidator::InvalidateBackground(resident_fragment, background, reason)
-            });
-            ObjectPaintInvalidator::InvalidatePaintWithComputedReason(resident_fragment, reason);
-            // Source: box_paint_invalidator.cc:416-427. Every invalidator of
-            // this object has read the previous box geometry; save the
-            // current one for the next walk ("must be at the end").
-            if fragment.ViewKind() == FragmentKind::kBox {
-                resident_fragment.paint.SaveSourcePreviousBoxGeometries();
-            }
-            self.paint_invalidator
-                .TrackPendingDelayedPaintInvalidation(resident_fragment);
-            // PaintInvalidator.cc:278-285. Visibility:hidden clients still
-            // invalidate observations even when they do not invalidate paint.
-            let invalidation = resident_fragment.pre_paint_invalidation;
-            let client_reason = resident_fragment
-                .paint
-                .DisplayItemClientState()
-                .invalidation_reason
-                .unwrap_or(foundation::PaintInvalidationReason::kNone);
-            // PrePaintTreeWalk.cc:123-132: any actual paint invalidation
-            // requires the next scroll/visibility observation.
-            if client_reason != foundation::PaintInvalidationReason::kNone {
-                self.intersection_observation_state = self.intersection_observation_state.max(
-                    foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly,
-                );
-            }
-            if invalidation.should_check_layout_for_paint_invalidation
-                && (foundation::IsLayoutPaintInvalidationReason(client_reason)
-                    || client_reason == foundation::PaintInvalidationReason::kJustCreated
-                    || !resident_fragment.paint.style.visible())
-            {
-                self.intersection_observation_state =
-                    foundation::intersection_observation_state::IntersectionObservationState::Desired;
-            }
         }
         let t_invalidated = checkpoint();
         self.stats.profile_invalidation_ns += ProfileNs(t_built, t_invalidated);
@@ -5591,23 +5530,167 @@ impl PrePaintTreeWalk {
         result
     }
 
+    /// Source: PaintInvalidator::InvalidatePaint (paint_invalidator.cc:
+    /// 217-290) for a visited object UpdateContext admitted, after the
+    /// builder updated its PaintOffset or advanced the context past it:
+    /// the box and object invalidators compare the previous values the
+    /// LayoutBox and FragmentData kept (`old_paint_offset`, the LayoutBox
+    /// gap baseline `old_gap_rules`) with the current ones, invalidate the
+    /// object's clients and save the current geometry for the next walk.
+    /// `resident` is the object's resident fragment.
+    #[allow(clippy::too_many_arguments)]
+    fn InvalidatePaintForVisit(
+        &mut self,
+        fragment: PaintFragmentSource<'_>,
+        resident: &mut ResidentFragment,
+        old_gap_rules: Option<&layout::paint::GapRulePaintData>,
+        old_paint_offset: Option<Offset>,
+        new_paint_offset: Offset,
+        invalidation_context: PaintInvalidatorContext,
+    ) {
+        let cursor = fragment.Cursor();
+        let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
+            let fragment_data: &FragmentPaintData = &fragment;
+            let view_background_rects = self
+                .view_background_rects
+                .filter(|(owner, _)| {
+                    *owner == fragment_data as *const FragmentPaintData as usize
+                })
+                .map(|(_, rects)| rects);
+            let mut background =
+                BoxPaintInvalidator::ComputeBackgroundInvalidationWithViewRects(
+                    &fragment,
+                    Some(cursor),
+                    None,
+                    old_gap_rules,
+                    invalidation_context,
+                    view_background_rects,
+                );
+            if self.view_background_geometry_changed
+                && fragment.paint.IsBackgroundAttachmentFixedObject()
+            {
+                background = BackgroundInvalidation {
+                    kind: BackgroundInvalidationType::Full,
+                    invalidate_both_spaces: true,
+                };
+            }
+            background
+        });
+        let reason = ObjectPaintInvalidator::ComputePaintInvalidationReason(
+            &fragment,
+            old_paint_offset,
+            new_paint_offset,
+            invalidation_context,
+        );
+        // Source: object_paint_invalidator.cc:49-53. The reason above read
+        // the previous visibility; save the current one on the
+        // LayoutObject for the next walk.
+        fragment.paint.UpdateSourcePreviousVisibilityVisible();
+        let reason = if fragment.ViewKind() == FragmentKind::kBox {
+            if fragment.paint.Display() == Display::kTableCell {
+                TableCellPaintInvalidator::ComputePaintInvalidationReason(
+                    &fragment,
+                    None,
+                    old_paint_offset,
+                    new_paint_offset,
+                    invalidation_context,
+                    reason,
+                )
+            } else if fragment.paint.IsLayoutBlock() {
+                BlockPaintInvalidator::ComputePaintInvalidationReason(
+                    &fragment,
+                    None,
+                    old_paint_offset,
+                    new_paint_offset,
+                    invalidation_context,
+                    reason,
+                )
+            } else {
+                BoxPaintInvalidator::ComputePaintInvalidationReason(
+                    &fragment,
+                    None,
+                    old_paint_offset,
+                    new_paint_offset,
+                    invalidation_context,
+                    reason,
+                )
+            }
+        } else {
+            reason
+        };
+        let resident_fragment = &mut **resident;
+        let reason = background_invalidation.map_or(reason, |background| {
+            BoxPaintInvalidator::InvalidateBackground(resident_fragment, background, reason)
+        });
+        ObjectPaintInvalidator::InvalidatePaintWithComputedReason(resident_fragment, reason);
+        // Source: box_paint_invalidator.cc:416-427. Every invalidator of
+        // this object has read the previous box geometry; save the
+        // current one for the next walk ("must be at the end").
+        if fragment.ViewKind() == FragmentKind::kBox {
+            resident_fragment.paint.SaveSourcePreviousBoxGeometries();
+        }
+        self.paint_invalidator
+            .TrackPendingDelayedPaintInvalidation(resident_fragment);
+        // PaintInvalidator.cc:278-285. Visibility:hidden clients still
+        // invalidate observations even when they do not invalidate paint.
+        let invalidation = resident_fragment.pre_paint_invalidation;
+        let client_reason = resident_fragment
+            .paint
+            .DisplayItemClientState()
+            .invalidation_reason
+            .unwrap_or(foundation::PaintInvalidationReason::kNone);
+        // PrePaintTreeWalk.cc:123-132: any actual paint invalidation
+        // requires the next scroll/visibility observation.
+        if client_reason != foundation::PaintInvalidationReason::kNone {
+            self.intersection_observation_state = self.intersection_observation_state.max(
+                foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly,
+            );
+        }
+        if invalidation.should_check_layout_for_paint_invalidation
+            && (foundation::IsLayoutPaintInvalidationReason(client_reason)
+                || client_reason == foundation::PaintInvalidationReason::kJustCreated
+                || !resident_fragment.paint.style.visible())
+        {
+            self.intersection_observation_state =
+                foundation::intersection_observation_state::IntersectionObservationState::Desired;
+        }
+    }
+
     /// Whether the visited object `fragment` takes the builder's
     /// context-only path, and the context its children inherit then.
     ///
     /// Source: PaintPropertyTreeBuilder (paint_property_tree_builder.cc
     /// UpdateForSelf / UpdateForChildren) with neither NeedsPaintPropertyUpdate
     /// nor force_subtree_update_reasons, and PrePaintTreeWalk::WalkInternal
-    /// (pre_paint_tree_walk.cc:650-760) without paint invalidation work: the
-    /// object is visited only because a descendant carries a dirty bit
-    /// (NeedsTreeBuilderContextUpdate for the descendant), so its own
+    /// (pre_paint_tree_walk.cc:650-760): the object is visited for a
+    /// descendant's dirty bit (NeedsTreeBuilderContextUpdate for the
+    /// descendant) or for its own paint invalidation only, so its own
     /// FragmentData stays as its last build left it and the context it hands
     /// its children is the one that build produced. The conditions are those
     /// under which the walk would skip the object's whole subtree
-    /// (CanSkipSubtree), except the descendant bits, plus the inputs a build
+    /// (CanSkipSubtree), except the descendant and paint-check bits, plus the inputs a build
     /// reads beside the context: the previous paint result of a
     /// non-composited transform (ShouldUseInfiniteCullRect) and the composited
     /// container's subpixel movement, which a rebuild of an unmoved object
     /// resets.
+    ///
+    /// Paint invalidation is not a reason to build. Chromium marks the whole
+    /// container chain of a paint-dirtied object ShouldCheckForPaintInvalidation
+    /// (LayoutObject::SetShouldCheckForPaintInvalidation*,
+    /// layout_object.cc), and a relaid-out object
+    /// ShouldCheckLayoutForPaintInvalidation (ClearNeedsLayout); neither is
+    /// NeedsPaintPropertyUpdate, so the builder only advances its context past
+    /// the object (ObjectRequiresTreeBuilderContext without a property update)
+    /// and PaintInvalidator::InvalidatePaint runs on the unchanged
+    /// PaintOffset. The second value says whether that invalidation runs.
+    /// Neither is the PhysicalFragment the last visit walked: Chromium keys
+    /// FragmentData on the LayoutObject, so a box the replacement LayoutResult
+    /// re-created with the same link offset, size and saved box geometry keeps
+    /// its FragmentData, as one without layout change does; the dirty bits
+    /// Layout set (NeedsPaintPropertyUpdate) decide whether it is rebuilt.
+    ///
+    /// The error is the PRE_PAINT_CLEAN_REJECT_FIELDS index of the first
+    /// failing condition group.
     fn CleanVisitChildContext(
         &self,
         fragment: &PaintFragmentSource<'_>,
@@ -5615,18 +5698,32 @@ impl PrePaintTreeWalk {
         inside: bool,
         display_item_fragment: u32,
         fragmentainer: u64,
-    ) -> Option<ChildContext> {
+    ) -> Result<(ChildContext, bool), usize> {
         let invalidation = fragment.pre_paint_invalidation;
         let client = fragment.paint.DisplayItemClientId();
         if self.full_walk
             || ctx.force_subtree
             || ctx.context_changed
-            || invalidation.own()
-            || invalidation.child_pre_paint_blocked_by_display_lock
+            || (ctx.inherited.root && (self.local_frame_depth != 0 || self.root_context_changed))
+        {
+            return Err(CLEAN_REJECT_FORCED);
+        }
+        if invalidation.needs_paint_property_update
+            || invalidation.blocking_wheel_event_handler_changed
+        {
+            return Err(CLEAN_REJECT_OWN_PROPERTY);
+        }
+        let is_box = fragment.ViewKind() == FragmentKind::kBox && fragment.paint.HasSource();
+        if invalidation.subtree_should_check_for_paint_invalidation
+            || invalidation.subtree_should_do_full_paint_invalidation
+            || (invalidation.should_check_layout_for_paint_invalidation && !is_box)
+        {
+            return Err(CLEAN_REJECT_OWN_LAYOUT);
+        }
+        if invalidation.child_pre_paint_blocked_by_display_lock
             || ctx.inherited.blocking_wheel_event_handler_changed
             || ctx.inherited.canvas_contents.is_some()
             || ctx.invalidation.NeedsSubtreeWalk()
-            || (ctx.inherited.root && (self.local_frame_depth != 0 || self.root_context_changed))
             || fragment.paint.IsSVGHiddenContainer()
             || (fragment.paint.FixedToView() && fragment.ViewEstablishesPaintState())
             || self.local_frame_views.contains_key(&client)
@@ -5634,17 +5731,15 @@ impl PrePaintTreeWalk {
             || self.previous_display_lock_walks.contains_key(&client)
             || inside != fragment.paint.InsideBlockingWheelEventHandler()
         {
-            return None;
+            return Err(CLEAN_REJECT_WALK_STATE);
         }
         let data = fragment
             .Cursor()
             .PrePaintData::<PrePaintFragmentData>()
-            .filter(|data| data.WasWalked())?;
+            .filter(|data| data.WasWalked())
+            .ok_or(CLEAN_REJECT_RECORD_GEOMETRY)?;
         let record = data.WalkRecord();
-        let owner = WalkedOwner(fragment.Cursor());
-        if owner == (0, 0)
-            || record.walked_owner != owner
-            || record.link_offset != fragment.Cursor().ViewOffsetInContainer()
+        if record.link_offset != fragment.Cursor().ViewOffsetInContainer()
             || record.size != fragment.ViewSize()
             || record.display_item_fragment != display_item_fragment
             || record.fragmentainer != fragmentainer
@@ -5652,24 +5747,45 @@ impl PrePaintTreeWalk {
             // the PaintLayer's previous paint result.
             || record.cull_decision_inputs[3]
         {
-            return None;
+            return Err(CLEAN_REJECT_RECORD_GEOMETRY);
+        }
+        let owner = WalkedOwner(fragment.Cursor());
+        let owner_replaced = record.walked_owner != owner;
+        // Only a box fragment's FragmentData is the LayoutObject's across
+        // relayout (a FragmentItem's is keyed on its inline container).
+        if owner == (0, 0)
+            || (owner_replaced && !(is_box && owner.1 == 0 && record.walked_owner.1 == 0))
+        {
+            return Err(CLEAN_REJECT_RECORD_OWNER);
         }
         let cached = data
             .CachedChildContext()
-            .filter(|cached| cached.generation == self.child_context_generation)?;
+            .filter(|cached| cached.generation == self.child_context_generation)
+            .ok_or(CLEAN_REJECT_CACHED_CONTEXT)?;
         let delta = cached
             .context
             .directly_composited_container_paint_offset_subpixel_delta;
         if delta.x != 0.0 || delta.y != 0.0 {
-            return None;
+            return Err(CLEAN_REJECT_SUBPIXEL_DELTA);
         }
-        // PaintInvalidator::UpdateContext: an object it would invalidate is
-        // built (PaintInvalidator::InvalidatePaint runs after the builder).
+        // A replaced or relaid-out box keeps the values its last build
+        // derived from its geometry only while that geometry is the one its
+        // last paint invalidation saved (SavePreviousBoxGeometriesIfNeeded).
+        if (owner_replaced || invalidation.should_check_layout_for_paint_invalidation)
+            && !BoxGeometryMatchesPrevious(fragment)
+        {
+            return Err(CLEAN_REJECT_RECORD_GEOMETRY);
+        }
+        // PaintInvalidator::UpdateContext: whether InvalidatePaint runs for
+        // the object. A table cell's invalidation also propagates its
+        // geometry change to the row and table (CellGeometryChanged), which
+        // the build path runs.
         let mut probe = ctx.invalidation;
-        if PaintInvalidator::UpdateContext(fragment, &mut probe) {
-            return None;
+        let invalidate = PaintInvalidator::UpdateContext(fragment, &mut probe);
+        if invalidate && fragment.paint.Display() == Display::kTableCell {
+            return Err(CLEAN_REJECT_WALK_STATE);
         }
-        Some(cached.context.clone())
+        Ok((cached.context.clone(), invalidate))
     }
 
     /// Source: PrePaintTreeWalk::WalkInternal and WalkChildren
@@ -5677,14 +5793,17 @@ impl PrePaintTreeWalk {
     /// CleanVisitChildContext: the builder's context-only path. No property
     /// node, PaintOffset, LocalBorderBoxProperties, cull rect or flat replay
     /// value of the object changes and no PaintTreeNode is built; the
-    /// painting layer and the paint phase needs of its subtree are updated
-    /// and the children are walked with `base`.
+    /// painting layer and the paint phase needs of its subtree are updated,
+    /// PaintInvalidator::InvalidatePaint runs on the unchanged PaintOffset
+    /// when `invalidate` (UpdateContext admitted it), and the children are
+    /// walked with `base`.
     #[allow(clippy::too_many_arguments)]
     fn WalkCleanObject(
         &mut self,
         fragment: PaintFragmentSource<'_>,
         ctx: WalkContext,
         mut base: ChildContext,
+        invalidate: bool,
         inside: bool,
         display_item_fragment: u32,
         fragmentainer: u64,
@@ -5695,15 +5814,16 @@ impl PrePaintTreeWalk {
         self.stats.clean_visits += 1;
         let cursor = fragment.Cursor();
         let mut invalidation_context = ctx.invalidation;
-        // CleanVisitChildContext admitted no invalidation work; the subtree
-        // flags and the painting layer still advance for the children.
+        // The subtree flags and the painting layer advance for the children;
+        // CleanVisitChildContext already probed whether InvalidatePaint runs.
         let _ = PaintInvalidator::UpdateContext(&fragment, &mut invalidation_context);
         PaintInvalidator::UpdatePaintingLayer(cursor, &mut invalidation_context);
+        self.stats.invalidation_nodes += invalidate as usize;
         // The first step of every build (BuildNode).
         fragment
             .paint
             .UpdateSourcePaintLayerDescendantDependentFlags();
-        let (record, paint_offset, paint_snap_offset, old_children_contents_cull) = {
+        let (record, paint_offset, paint_snap_offset, old_children_contents_cull, old_gap_rules) = {
             let data = cursor
                 .PrePaintData::<PrePaintFragmentData>()
                 .expect("a clean visit has FragmentData");
@@ -5713,6 +5833,11 @@ impl PrePaintTreeWalk {
                 flat.paint_offset,
                 flat.paint_snap_offset,
                 Some(StoredCullRects(data, ctx.old_parent_contents_cull).1),
+                if invalidate {
+                    data.PreviousGapRules().cloned()
+                } else {
+                    None
+                },
             )
         };
         // The values of the context a build takes from the walk rather than
@@ -5731,6 +5856,25 @@ impl PrePaintTreeWalk {
             self.CaptureRootFixedPositionContext(&base, None);
         }
         let mut owner = ResidentFragment::FromSource(&fragment);
+        let t_admitted = checkpoint();
+        self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
+        if invalidate {
+            // The PaintOffset the builder would recompute is the stored one:
+            // the context, link offset and size are those of the last build.
+            self.InvalidatePaintForVisit(
+                fragment,
+                &mut owner,
+                old_gap_rules.as_deref(),
+                Some(paint_offset),
+                paint_offset,
+                invalidation_context,
+            );
+        }
+        if InlineOutlineCandidate(&fragment) {
+            self.visited_inline_outline = true;
+        }
+        let t_invalidated = checkpoint();
+        self.stats.profile_invalidation_ns += ProfileNs(t_admitted, t_invalidated);
         let child_auto_dark_mode_paused = ApplyAutoDarkModeState(
             &mut owner,
             paint_offset,
@@ -5740,8 +5884,6 @@ impl PrePaintTreeWalk {
         );
         let mut phase = OwnPhaseNeeds(&fragment, record.is_paint_layer);
         let mut table_cell_geometry_changed = false;
-        let t_admitted = checkpoint();
-        self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
         self.WalkChildren(
             fragment,
             &mut owner,
@@ -5756,13 +5898,22 @@ impl PrePaintTreeWalk {
             fragmentainer,
             &mut phase,
             &mut table_cell_geometry_changed,
-            t_admitted,
+            t_invalidated,
         );
         let t_looped = checkpoint();
         if let Some(slot) = cursor.PrePaintSlot() {
             // SAFETY: the walk is the occurrence's single PrePaint writer
             // here; no reference into the slot is live.
             let data = unsafe { slot.Ensure::<PrePaintFragmentData>() };
+            // The FragmentData now describes the fragment this visit walked
+            // (a replacement LayoutResult's box with unchanged geometry).
+            let walked_owner = WalkedOwner(cursor);
+            if record.walked_owner != walked_owner {
+                data.SetWalkRecord(PrePaintWalkRecord {
+                    walked_owner,
+                    ..record
+                });
+            }
             let flat = data.FlatReplayMut();
             flat.skip_float_phase = !phase.float;
             flat.skip_outline_phase = !phase.outline;
@@ -5852,21 +6003,27 @@ impl PrePaintTreeWalk {
                 // pre_paint_tree_walk.cc:1477-1482: the child's walk returns
                 // before it builds the child's context.
                 let child = unsafe { child.ReadPrePaintInvalidationForVisit() };
-                let skipped = child
-                    .Cursor()
-                    .PrePaintData::<PrePaintFragmentData>()
-                    .filter(|data| {
-                        self.CanSkipSubtree(
-                            &child,
-                            data,
-                            force_children,
-                            children_context_changed,
-                            base,
-                            &invalidation_context,
-                            child_display_item_fragment,
-                            child_fragmentainer,
-                        )
-                    });
+                let stored = child.Cursor().PrePaintData::<PrePaintFragmentData>();
+                let verdict = match stored {
+                    Some(data) => self.CanSkipSubtree(
+                        &child,
+                        data,
+                        force_children,
+                        children_context_changed,
+                        base,
+                        &invalidation_context,
+                        child_display_item_fragment,
+                        child_fragmentainer,
+                    ),
+                    None => Err(SKIP_REJECT_NO_DATA),
+                };
+                let skipped = match verdict {
+                    Ok(()) => stored,
+                    Err(reason) => {
+                        self.stats.skip_rejects[reason] += 1;
+                        None
+                    }
+                };
                 if let Some(data) = skipped {
                     self.stats.skipped_subtrees += 1;
                     PropagateAutoDarkModeOverCursor(child.Cursor(), child_auto_dark_mode_paused);

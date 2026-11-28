@@ -378,6 +378,22 @@ fn WalkPrePaint(
     trace.set("clean_visits", stats.clean_visits as f64);
     trace.set("direct_transform_updates", stats.direct_transform_updates as f64);
     trace.set("post_walk", stats.post_walk as u8 as f64);
+    // Why visited objects were built rather than advanced (CleanRejects) and
+    // why visited children were not skipped (SkipRejects); a span keeps at
+    // most 8 fields, so each breakdown is its own instant.
+    let rejects = |names: [&'static str; 8], counts: [u32; 8]| -> [(&'static str, f64); 8] {
+        std::array::from_fn(|index| (names[index], counts[index] as f64))
+    };
+    browser_tracing::instant(
+        "prepaint",
+        "PrePaint.CleanRejects",
+        &rejects(prepaint::PRE_PAINT_CLEAN_REJECT_FIELDS, stats.clean_rejects),
+    );
+    browser_tracing::instant(
+        "prepaint",
+        "PrePaint.SkipRejects",
+        &rejects(prepaint::PRE_PAINT_SKIP_REJECT_FIELDS, stats.skip_rejects),
+    );
     let ms = |ns: u64| ns as f64 / 1e6;
     browser_tracing::instant(
         "prepaint",

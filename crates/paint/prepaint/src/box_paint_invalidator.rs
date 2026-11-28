@@ -408,6 +408,33 @@ pub(crate) fn PreviousGeometry(
     })
 }
 
+/// Whether the box's current geometry is the one its last paint invalidation
+/// saved on the LayoutBox (SavePreviousBoxGeometriesIfNeeded,
+/// box_paint_invalidator.cc:416-427): the values every comparison of
+/// ComputePaintInvalidationReason and ComputeBackgroundInvalidation reads
+/// (size, content box, self visual overflow, scrollable overflow, replaced
+/// content rect). False for an object without a LayoutBox.
+pub(crate) fn BoxGeometryMatchesPrevious(fragment: &FragmentPaintData) -> bool {
+    let Some(previous) = fragment.paint.PreviousBoxGeometry() else {
+        return false;
+    };
+    previous.size == StitchedSize(fragment)
+        && (previous.content_box.offset, previous.content_box.size)
+            == PhysicalContentBoxSignature(fragment)
+        && previous.self_visual_overflow == SelfVisualOverflow(fragment)
+        && fragment
+            .paint
+            .ScrollableOverflow()
+            .is_none_or(|current| current == previous.scrollable_overflow)
+        && fragment.ViewReplacedContent().is_none_or(|current| {
+            previous.replaced_content
+                == Some(FragmentPaintRect {
+                    offset: current.offset,
+                    size: current.size,
+                })
+        })
+}
+
 fn SelfVisualOverflow(fragment: &FragmentPaintData) -> FragmentPaintRect {
     fragment
         .ViewBoxSelfVisualOverflow()
