@@ -375,6 +375,8 @@ fn WalkPrePaint(
     trace.set("computed_nodes", stats.computed_nodes as f64);
     trace.set("skipped_subtrees", stats.skipped_subtrees as f64);
     trace.set("invalidation_nodes", stats.invalidation_nodes as f64);
+    trace.set("clean_visits", stats.clean_visits as f64);
+    trace.set("direct_transform_updates", stats.direct_transform_updates as f64);
     trace.set("post_walk", stats.post_walk as u8 as f64);
     let ms = |ns: u64| ns as f64 / 1e6;
     browser_tracing::instant(

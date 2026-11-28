@@ -1089,6 +1089,8 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     // ordinary lifecycle, which computes these same values.
     let store = &mut prepaint.property_node_store;
     paint_model::property_cell::with_writer(|writer| store.ApplyRetainedScrollUpdate(writer, &updates));
+    // The ScrollTranslation values the walk's flat child contexts carry.
+    prepaint.PropertyValuesChangedOutsideWalk();
     drop(property_trace);
     let viewport_clip = prepaint.property_node_store.viewport_clip().cloned();
     let artifact_to_device_scale = fragments

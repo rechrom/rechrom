@@ -34,6 +34,7 @@ use paint_model::property_cell::PropertyAccess;
 use paint_model::{CullRect, DisplayMaskLayer, PaintRect};
 
 use crate::committed_paint_clients::CarriedClients;
+use crate::pre_paint_tree_walk::CachedChildContext;
 use crate::object_paint_properties::{ObjectPaintProperties, ObjectPaintPropertySlot};
 
 /// Source: fragment_data.h:205-235 `FragmentData::RareData`, fragment
@@ -86,6 +87,9 @@ pub struct PrePaintFragmentData {
     /// directory (see `committed_paint_clients`). Chromium's PaintController
     /// holds the client pointers themselves.
     carried_clients: CarriedClients,
+    /// Not Chromium: the context this occurrence's last build handed its
+    /// children (see `CachedChildContext`).
+    child_context: Option<Box<CachedChildContext>>,
 }
 
 impl std::fmt::Debug for PrePaintFragmentData {
@@ -248,6 +252,11 @@ impl FlatReplayData {
         self.rare.as_deref()
     }
 
+    /// The rare values in place (PrePaint's direct transform update).
+    pub(crate) fn RareMut(&mut self) -> Option<&mut FlatReplayRareData> {
+        self.rare.as_deref_mut()
+    }
+
     /// Replaces the rare values; no allocation while all of them are empty.
     pub fn SetRare(&mut self, rare: FlatReplayRareData) {
         if rare == FlatReplayRareData::default() {
@@ -335,6 +344,19 @@ impl PrePaintFragmentData {
     /// Not Chromium: see `carried_clients`.
     pub(crate) fn CarriedClientsMut(&mut self) -> &mut CarriedClients {
         &mut self.carried_clients
+    }
+
+    /// Not Chromium: the child context of this occurrence's last build.
+    pub(crate) fn CachedChildContext(&self) -> Option<&CachedChildContext> {
+        self.child_context.as_deref()
+    }
+
+    pub(crate) fn CachedChildContextMut(&mut self) -> Option<&mut CachedChildContext> {
+        self.child_context.as_deref_mut()
+    }
+
+    pub(crate) fn SetCachedChildContext(&mut self, context: Option<Box<CachedChildContext>>) {
+        self.child_context = context;
     }
 
     /// Not Chromium: the flat replay values of this occurrence.
@@ -429,6 +451,8 @@ impl PrePaintFragmentData {
 
     /// Source: fragment_data.h:147-151.
     pub fn ClearLocalBorderBoxProperties(&mut self) {
+        // The cached child context names the replaced border-box nodes.
+        self.child_context = None;
         if let Some(rare_data) = &mut self.rare_data {
             rare_data.local_border_box_properties = None;
         }
@@ -436,6 +460,9 @@ impl PrePaintFragmentData {
 
     /// Source: fragment_data.h:152-155.
     pub fn SetLocalBorderBoxProperties(&mut self, state: PropertyTreeState) {
+        // The cached child context names the replaced border-box nodes; the
+        // walk stores the new one after the build that sets them.
+        self.child_context = None;
         self.EnsureRareData().local_border_box_properties = Some(state);
     }
 

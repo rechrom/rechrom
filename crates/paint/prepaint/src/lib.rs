@@ -55,8 +55,16 @@ pub struct PrePaintUpdateStats {
     /// root (pre_paint_tree_walk.cc:1477-1482).
     pub skipped_subtrees: usize,
     pub invalidation_nodes: usize,
+    /// Visited objects that needed no property update: the walk advanced
+    /// their children's context from their FragmentData without a build
+    /// (paint_property_tree_builder.cc, !NeedsPaintPropertyUpdate).
+    pub clean_visits: usize,
+    /// Deferred transform updates applied in place before the walk
+    /// (PaintPropertyTreeBuilder::DirectlyUpdateTransformMatrix).
+    pub direct_transform_updates: usize,
     /// A post-walk pass (logical out-of-flow effect fix-ups, inline outline
-    /// groups) rewrote FragmentData outside the walk.
+    /// groups) or a direct transform update rewrote FragmentData outside the
+    /// walk.
     pub post_walk: bool,
     /// The walk's source is a replacement LayoutResult of the committed
     /// Paint publication state.
