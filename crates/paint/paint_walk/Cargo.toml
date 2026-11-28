@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 browser_tracing = { path = "../../tracing" }
+foundation = { path = "../../foundation" }
 layout = { path = "../../layout/layout" }
 paint_input_types = { path = "../../layout/paint_input_types" }
 paint_model = { path = "../paint_model" }

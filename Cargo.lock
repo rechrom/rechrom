@@ -3377,6 +3377,7 @@ name = "paint_walk"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "foundation",
  "layout",
  "paint_input_types",
  "paint_model",

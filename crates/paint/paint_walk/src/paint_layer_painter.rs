@@ -53,7 +53,10 @@ use paint_record::{
     box_fragment_painter::GetHitTestOpaqueness,
     paint_chunker::DisplayItemClientInfo,
     paint_engine::PaintHitTestOpaqueness,
-    paint_object::{FragmentDataCheckEnabled, LogicalPaintChildren, PaintObject, PaintWalkContext},
+    paint_object::{
+        FragmentDataCheckEnabled, LogicalPaintChildren, PaintObject, PaintWalkContext,
+        ResolvedFragment,
+    },
     scoped_paint_state::ContentsVisualRect,
     SubsequenceRecorder,
 };
@@ -89,19 +92,20 @@ fn SameNodeFragment(node: &PaintTreeNode<'_>, fragment: &FragmentPaintData) -> b
         .is_some_and(|node_fragment| std::ptr::eq(node_fragment, fragment))
 }
 
-/// The painted object of `cursor` with `walk`; under the check, with the
-/// PrePaint node of the same occurrence attached as its oracle.
+/// The painted object of the resolved occurrence `fragment` with `walk`;
+/// under the check, with the PrePaint node of the same occurrence attached
+/// as its oracle.
 fn Object<'x>(
-    cursor: PaintFragmentCursor<'x>,
+    fragment: ResolvedFragment<'x>,
     oracle: Option<&'x PaintTreeNode<'static>>,
     walk: PaintWalkContext<'x>,
 ) -> PaintObject<'x, 'static> {
     match oracle {
         Some(node) => {
-            CheckTraversal("object", SameNodeFragment(node, cursor.PaintData()));
+            CheckTraversal("object", SameNodeFragment(node, fragment.fragment));
             PaintObject::Walked(node, walk)
         }
-        None => PaintObject::FromCursor(cursor, walk),
+        None => fragment.Object(walk),
     }
 }
 
@@ -387,7 +391,7 @@ fn NodeEntryEscapesCurrentGeometry(
 /// children of its last unlocked walk, which Paint does not traverse.
 fn CheckChildren<'n>(
     node: &'n PaintTreeNode<'static>,
-    children: &[PaintFragmentCursor<'_>],
+    children: &[ResolvedFragment<'_>],
     blocked: bool,
 ) -> HashMap<*const FragmentPaintData, &'n PaintTreeNode<'static>> {
     let mut map = HashMap::new();
@@ -408,13 +412,13 @@ fn CheckChildren<'n>(
         let cursor_sequence = children
             .iter()
             .filter(|child| {
-                !map.get(&(child.PaintData() as *const FragmentPaintData))
+                !map.get(&(child.fragment as *const FragmentPaintData))
                     .map_or_else(
-                        || PaintObject::FromCursor(**child, PaintWalkContext::default()).is_paint_layer(),
+                        || child.Object(PaintWalkContext::default()).is_paint_layer(),
                         |node| node.is_paint_layer,
                     )
             })
-            .map(|child| child.PaintData() as *const FragmentPaintData);
+            .map(|child| child.fragment as *const FragmentPaintData);
         CheckTraversal("non-layer children", node_sequence.eq(cursor_sequence));
     }
     map
@@ -427,7 +431,7 @@ fn CheckOccurrence<'s, 'n>(
     occurrence: &LayerOccurrence<'_, '_>,
     entries: &[PaintLayerPaintOrderEntry<'s, 'n, 'static>],
 ) -> PaintLayerPaintOrderEntry<'s, 'n, 'static> {
-    let fragment = occurrence.layer.PaintData();
+    let fragment = occurrence.layer.fragment;
     let entry = entries
         .iter()
         .find(|entry| SameNodeFragment(entry.layer, fragment))
@@ -441,7 +445,7 @@ fn CheckOccurrence<'s, 'n>(
                 .property_ancestors
                 .iter()
                 .zip(occurrence.property_ancestors)
-                .all(|(node, cursor)| SameNodeFragment(node, cursor.PaintData())),
+                .all(|(node, ancestor)| SameNodeFragment(node, ancestor.fragment)),
     );
     CheckTraversal(
         "escapes ancestor geometry",
@@ -475,8 +479,9 @@ struct ChildLayers<'p, 'a> {
 
 pub struct PaintLayerPainter<'g, 'a, 'c, 'o> {
     /// The painted layer occurrence: a PhysicalBoxFragment of `paint_layer_`'s
-    /// LayoutObject, a frame's LayoutView, or an SVG resource subtree root.
-    layer: PaintFragmentCursor<'a>,
+    /// LayoutObject, a frame's LayoutView, or an SVG resource subtree root;
+    /// its sidecar and FragmentData resolved once for the painter's lifetime.
+    layer: ResolvedFragment<'a>,
     /// Chromium's `paint_layer_`. None for an SVG resource root.
     paint_layer: Option<&'a PaintLayer>,
     context: &'c RefCell<PaintContext<'o>>,
@@ -486,7 +491,7 @@ pub struct PaintLayerPainter<'g, 'a, 'c, 'o> {
     /// the fragments between the painting parent layer and this one. A child
     /// painter borrows its parent's occurrence list (PaintLayerPainter is a
     /// stack object over the parent's z-order list in Chromium).
-    inherited_geometry: &'g [PaintFragmentCursor<'a>],
+    inherited_geometry: &'g [ResolvedFragment<'a>],
     escapes_ancestor_geometry: bool,
     /// How many leading `inherited_geometry` entries this layer re-enters the
     /// escapable geometry of.
@@ -512,7 +517,7 @@ impl<'g, 'a, 'c, 'o> PaintLayerPainter<'g, 'a, 'c, 'o> {
         frames: Option<&'a dyn LocalFrameRoots>,
     ) -> Self {
         Self {
-            layer: root,
+            layer: ResolvedFragment::new(root),
             paint_layer: root.OwnPaintLayer(),
             context,
             frames,
@@ -536,7 +541,7 @@ impl<'g, 'a, 'c, 'o> PaintLayerPainter<'g, 'a, 'c, 'o> {
     /// RECHROM_PREPAINT_FRAGMENT_DATA_CHECK as the traversal's oracle.
     pub fn WithOracle(mut self, oracle: Option<&'a PaintTreeNode<'static>>) -> Self {
         if let Some(node) = oracle {
-            CheckTraversal("root", SameNodeFragment(node, self.layer.PaintData()));
+            CheckTraversal("root", SameNodeFragment(node, self.layer.fragment));
         }
         self.oracle = oracle;
         self
@@ -550,7 +555,7 @@ impl<'g, 'a, 'c, 'o> PaintLayerPainter<'g, 'a, 'c, 'o> {
     ) -> PaintLayerPainter<'s, 'a, 'c, 'o> {
         PaintLayerPainter {
             layer: occurrence.layer,
-            paint_layer: occurrence.layer.OwnPaintLayer(),
+            paint_layer: occurrence.layer.cursor.OwnPaintLayer(),
             context: self.context,
             frames: self.frames,
             inherited_geometry: occurrence.property_ancestors,
@@ -625,7 +630,7 @@ impl<'g, 'a, 'c, 'o> PaintLayerPainter<'g, 'a, 'c, 'o> {
     fn IsLayerObject(&self, object: PaintObject<'_, '_>) -> bool {
         object
             .Fragment()
-            .is_some_and(|fragment| std::ptr::eq(fragment, self.layer.PaintData()))
+            .is_some_and(|fragment| std::ptr::eq(fragment, self.layer.fragment))
     }
 
     /// Property ancestor `index` as a painted object (its scopes only).
@@ -1258,7 +1263,7 @@ impl<'g, 'a, 'c, 'o> PaintLayerPainter<'g, 'a, 'c, 'o> {
 
         for &child in &children {
             let child_oracle = oracle_children.as_ref().and_then(|map| {
-                map.get(&(child.PaintData() as *const FragmentPaintData))
+                map.get(&(child.fragment as *const FragmentPaintData))
                     .copied()
             });
             let child_object = Object(

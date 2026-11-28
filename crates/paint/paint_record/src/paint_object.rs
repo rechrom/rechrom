@@ -76,7 +76,12 @@ pub fn FragmentDataCheckEnabled() -> bool {
 /// fragment's own source LayoutObject's (LayoutObject::LogicalTreeOrder), else
 /// the smallest of its children's, else 0 (no source with a Node).
 fn FirstLogicalTreeOrder(cursor: PaintFragmentCursor<'_>) -> u64 {
-    let order = cursor.PaintData().paint.LogicalTreeOrder();
+    FirstLogicalTreeOrderOf(cursor, cursor.PaintData())
+}
+
+/// FirstLogicalTreeOrder with the fragment's paint sidecar already resolved.
+fn FirstLogicalTreeOrderOf(cursor: PaintFragmentCursor<'_>, fragment: &FragmentPaintData) -> u64 {
+    let order = fragment.paint.LogicalTreeOrder();
     if order != 0 {
         return order;
     }
@@ -94,37 +99,85 @@ fn FirstLogicalTreeOrder(cursor: PaintFragmentCursor<'_>) -> u64 {
     }
 }
 
-/// The painted children of a fragment in paint order: the fragment cursor's
-/// children (box children, then FragmentItems; BoxFragmentPainter's
-/// PaintBlockChildren / PaintInlineItems traversal), with the children that
-/// have a document-order position stably sorted by it in their own slots.
-///
-/// Not Chromium: Chromium paints fragment children in fragment order. The
-/// sort keeps the paint order PrePaint gave its node tree
-/// (RestoreLogicalSiblingOrder) until that order is retired; children
-/// already in order (nearly always) are returned without sorting.
-pub fn LogicalPaintChildren<'a>(cursor: PaintFragmentCursor<'a>) -> Vec<PaintFragmentCursor<'a>> {
-    let mut children: Vec<PaintFragmentCursor<'a>> = cursor.Children().collect();
-    if children.len() < 2 {
-        return children;
+/// A fragment cursor with its paint sidecar and FragmentData resolved once
+/// (one sidecar lookup), as a Chromium painter holds its PhysicalFragment
+/// and reads its FragmentData once per Paint call. Building a `PaintObject`
+/// from it reads nothing again.
+#[derive(Clone, Copy)]
+pub struct ResolvedFragment<'a> {
+    pub cursor: PaintFragmentCursor<'a>,
+    pub fragment: &'a FragmentPaintData,
+    pub data: Option<&'a PrePaintFragmentData>,
+}
+
+impl<'a> ResolvedFragment<'a> {
+    pub fn new(cursor: PaintFragmentCursor<'a>) -> Self {
+        let (fragment, data) = cursor.PaintDataAndPrePaintData::<PrePaintFragmentData>();
+        Self {
+            cursor,
+            fragment,
+            data,
+        }
     }
-    let keys: Vec<u64> = children.iter().map(|child| FirstLogicalTreeOrder(*child)).collect();
+
+    /// The painted object of this occurrence with `walk`
+    /// (`PaintObject::FromCursor` without its lookups).
+    pub fn Object<'f>(self, walk: PaintWalkContext<'a>) -> PaintObject<'a, 'f> {
+        PaintObject {
+            cursor: Some(self.cursor),
+            fragment: Some(self.fragment),
+            data: self.data,
+            walk: Some(walk),
+            node: None,
+        }
+    }
+
+    /// Whether `other` is the same fragment occurrence (the same sidecar).
+    pub fn IsSameFragment(self, other: ResolvedFragment<'_>) -> bool {
+        std::ptr::eq(self.fragment, other.fragment)
+    }
+}
+
+/// Whether nonzero `keys` are already in non-decreasing order.
+fn KeysOrdered(keys: impl Iterator<Item = u64>) -> bool {
     let mut previous = 0;
-    let already_ordered = keys.iter().all(|&order| {
+    for order in keys {
         if order == 0 {
-            return true;
+            continue;
         }
         if order < previous {
             return false;
         }
         previous = order;
-        true
-    });
-    if already_ordered {
+    }
+    true
+}
+
+/// The painted children of a fragment in paint order: the fragment cursor's
+/// children (box children, then FragmentItems; BoxFragmentPainter's
+/// PaintBlockChildren / PaintInlineItems traversal), each resolved once,
+/// with the children that have a document-order position stably sorted by
+/// it in their own slots.
+///
+/// Not Chromium: Chromium paints fragment children in fragment order. The
+/// sort keeps the paint order PrePaint gave its node tree
+/// (RestoreLogicalSiblingOrder) until that order is retired; children
+/// already in order (nearly always) are returned without sorting. The order
+/// test reads each child's own LogicalTreeOrder from the sidecar already
+/// resolved for painting; only a child without a source Node descends.
+pub fn LogicalPaintChildren<'a>(cursor: PaintFragmentCursor<'a>) -> Vec<ResolvedFragment<'a>> {
+    let mut children: Vec<ResolvedFragment<'a>> =
+        cursor.Children().map(ResolvedFragment::new).collect();
+    if children.len() < 2 {
         return children;
     }
+    let key = |child: &ResolvedFragment<'a>| FirstLogicalTreeOrderOf(child.cursor, child.fragment);
+    if KeysOrdered(children.iter().map(key)) {
+        return children;
+    }
+    let keys: Vec<u64> = children.iter().map(key).collect();
     let slots: Vec<usize> = (0..children.len()).filter(|&index| keys[index] != 0).collect();
-    let mut ordered: Vec<(u64, PaintFragmentCursor<'a>)> =
+    let mut ordered: Vec<(u64, ResolvedFragment<'a>)> =
         slots.iter().map(|&index| (keys[index], children[index])).collect();
     // Stable, as the node tree's sort_by_key.
     ordered.sort_by_key(|(order, _)| *order);
@@ -269,13 +322,7 @@ impl<'n, 'f> PaintObject<'n, 'f> {
 
     /// An occurrence reached through the fragment cursor alone.
     pub fn FromCursor(cursor: PaintFragmentCursor<'n>, walk: PaintWalkContext<'n>) -> Self {
-        Self {
-            cursor: Some(cursor),
-            fragment: Some(cursor.PaintData()),
-            data: cursor.PrePaintData::<PrePaintFragmentData>(),
-            walk: Some(walk),
-            node: None,
-        }
+        ResolvedFragment::new(cursor).Object(walk)
     }
 
     /// The PrePaint node attached as this object's equivalence oracle
@@ -537,8 +584,8 @@ impl<'n, 'f> PaintObject<'n, 'f> {
         };
         let source = match (self.node, self.cursor) {
             (Some(node), _) => ChildSource::Nodes(node.children.iter()),
-            (None, Some(cursor)) => ChildSource::Cursors(LogicalPaintChildren(cursor).into_iter()),
-            _ => ChildSource::Cursors(Vec::new().into_iter()),
+            (None, Some(cursor)) => ChildSource::Fragments(LogicalPaintChildren(cursor).into_iter()),
+            _ => ChildSource::Fragments(Vec::new().into_iter()),
         };
         PaintObjectChildren {
             source,
@@ -1233,8 +1280,8 @@ impl<'n, 'f> From<&'n PaintTreeNode<'f>> for PaintObject<'n, 'f> {
 enum ChildSource<'n, 'f> {
     /// The paint walk's resident children.
     Nodes(std::slice::Iter<'n, Box<PaintTreeNode<'f>>>),
-    /// The fragment cursor's children.
-    Cursors(std::vec::IntoIter<PaintFragmentCursor<'n>>),
+    /// The fragment cursor's children, each resolved once.
+    Fragments(std::vec::IntoIter<ResolvedFragment<'n>>),
 }
 
 /// Iterator over a painted object's children.
@@ -1252,17 +1299,16 @@ impl<'n, 'f> PaintObjectChildren<'n, 'f> {
         self.len() == 0
     }
 
-    fn Child(&self, node: Option<&'n PaintTreeNode<'f>>, cursor: Option<PaintFragmentCursor<'n>>) -> PaintObject<'n, 'f> {
-        match (node, cursor) {
+    fn Child(&self, node: Option<&'n PaintTreeNode<'f>>, child: Option<ResolvedFragment<'n>>) -> PaintObject<'n, 'f> {
+        match (node, child) {
             (Some(node), _) if self.walked => PaintObject::Walked(
                 node,
                 PaintWalkContext::new(self.inherited_cull_rect, Some(&node.previous_paint_result)),
             ),
             (Some(node), _) => PaintObject::new(node),
-            (None, Some(cursor)) => PaintObject::FromCursor(
-                cursor,
-                PaintWalkContext::new(self.inherited_cull_rect, None),
-            ),
+            (None, Some(child)) => {
+                child.Object(PaintWalkContext::new(self.inherited_cull_rect, None))
+            }
             (None, None) => unreachable!("a paint child has a node or a cursor"),
         }
     }
@@ -1272,28 +1318,28 @@ impl<'n, 'f> Iterator for PaintObjectChildren<'n, 'f> {
     type Item = PaintObject<'n, 'f>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (node, cursor) = match &mut self.source {
+        let (node, child) = match &mut self.source {
             ChildSource::Nodes(nodes) => (Some(&**nodes.next()?), None),
-            ChildSource::Cursors(cursors) => (None, Some(cursors.next()?)),
+            ChildSource::Fragments(fragments) => (None, Some(fragments.next()?)),
         };
-        Some(self.Child(node, cursor))
+        Some(self.Child(node, child))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match &self.source {
             ChildSource::Nodes(nodes) => nodes.size_hint(),
-            ChildSource::Cursors(cursors) => cursors.size_hint(),
+            ChildSource::Fragments(fragments) => fragments.size_hint(),
         }
     }
 }
 
 impl DoubleEndedIterator for PaintObjectChildren<'_, '_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let (node, cursor) = match &mut self.source {
+        let (node, child) = match &mut self.source {
             ChildSource::Nodes(nodes) => (Some(&**nodes.next_back()?), None),
-            ChildSource::Cursors(cursors) => (None, Some(cursors.next_back()?)),
+            ChildSource::Fragments(fragments) => (None, Some(fragments.next_back()?)),
         };
-        Some(self.Child(node, cursor))
+        Some(self.Child(node, child))
     }
 }
 

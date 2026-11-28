@@ -22,9 +22,10 @@ use std::collections::HashMap;
 
 use layout::fragment::ResidentBoxGeometry as _;
 use layout::input::Position;
-use layout::paint::PaintFragmentCursor;
+use foundation::TrustedIdentityHashMap;
+use layout::paint::FragmentPaintData;
 use layout::views::paint_layer::{PaintLayer, PaintLayers};
-use paint_record::paint_object::{PaintObject, PaintWalkContext};
+use paint_record::paint_object::{PaintObject, PaintWalkContext, ResolvedFragment};
 use prepaint::resident_hit_test::ResidentPaintOrderLists;
 
 use crate::pre_paint_tree_walk::PaintTreeNode;
@@ -293,11 +294,11 @@ impl<'n, 'f> ResidentLayerNodes<'n, 'f> {
 /// child in its LocalBorderBoxProperties and needs none of them).
 #[derive(Clone, Copy)]
 pub(crate) struct LayerOccurrence<'s, 'a> {
-    pub(crate) layer: PaintFragmentCursor<'a>,
+    pub(crate) layer: ResolvedFragment<'a>,
     /// Root first. For an out-of-flow child whose logical (DOM) parent is not
     /// one of its physical (containing-block) ancestors, the logical chain:
     /// the effects follow the DOM, the clips the containing block.
-    pub(crate) property_ancestors: &'s [PaintFragmentCursor<'a>],
+    pub(crate) property_ancestors: &'s [ResolvedFragment<'a>],
     /// The child's logical parent is not a physical ancestor.
     pub(crate) escapes_ancestor_geometry: bool,
     /// How many leading property ancestors the child re-enters the
@@ -321,7 +322,7 @@ impl LayerOccurrence<'_, '_> {
 }
 
 struct CursorOccurrence<'a> {
-    cursor: PaintFragmentCursor<'a>,
+    cursor: ResolvedFragment<'a>,
     ancestors: (u32, u32),
     escapes: bool,
     uses: u32,
@@ -333,12 +334,8 @@ struct CursorOccurrence<'a> {
 /// parent: its node id, cursor and physical path below the painting layer.
 struct LogicalParentOccurrence<'a> {
     node_id: u64,
-    cursor: PaintFragmentCursor<'a>,
+    cursor: ResolvedFragment<'a>,
     path: (u32, u32),
-}
-
-fn SameFragment(a: PaintFragmentCursor<'_>, b: PaintFragmentCursor<'_>) -> bool {
-    std::ptr::eq(a.PaintData(), b.PaintData())
 }
 
 /// Whether `object` stops the layer collection as a stacking context
@@ -358,8 +355,7 @@ pub(crate) fn IsStackingContextObject(object: PaintObject<'_, '_>) -> bool {
 
 /// An out-of-flow positioned object's logical parent node id
 /// (LayoutObject::Parent() up to the first object with a Node).
-fn OutOfFlowLogicalParentId(cursor: PaintFragmentCursor<'_>) -> Option<u64> {
-    let fragment = cursor.PaintData();
+fn OutOfFlowLogicalParentId(fragment: &FragmentPaintData) -> Option<u64> {
     if !fragment.paint.HasSource() {
         return None;
     }
@@ -399,9 +395,12 @@ fn CollectOutOfFlowLayers<'a>(layer: &'a PaintLayer, out: &mut Vec<&'a PaintLaye
 /// PrePaint's paint order placed it (RestoreLogicalOutOfFlowParents). A
 /// fragmented PaintLayer keeps all its occurrences in fragment order.
 pub(crate) struct LayerOccurrences<'a> {
-    ancestors: Vec<PaintFragmentCursor<'a>>,
+    /// Every fragment is resolved once, when the collection walk reaches it;
+    /// the painters of the listed layers and of their property ancestors
+    /// reuse that resolution.
+    ancestors: Vec<ResolvedFragment<'a>>,
     occurrences: Vec<CursorOccurrence<'a>>,
-    layers: HashMap<*const PaintLayer, (u32, u32)>,
+    layers: TrustedIdentityHashMap<*const PaintLayer, (u32, u32)>,
     has_escaping_layer: bool,
 }
 
@@ -411,7 +410,7 @@ impl<'a> LayerOccurrences<'a> {
     /// `resolve_escaping`: also resolve the escaping out-of-flow layers of
     /// the logical subtree (for HasEscapingLayer) when not `through_layers`.
     pub(crate) fn Collect(
-        root: PaintFragmentCursor<'a>,
+        root: ResolvedFragment<'a>,
         root_layer: &'a PaintLayer,
         through_layers: bool,
         resolve_escaping: bool,
@@ -424,14 +423,15 @@ impl<'a> LayerOccurrences<'a> {
         let wanted: Vec<u64> = out_of_flow
             .iter()
             .filter_map(|&layer| {
-                root.ForLayoutObject(layer.GetLayoutObject())
-                    .and_then(OutOfFlowLogicalParentId)
+                root.cursor
+                    .ForLayoutObject(layer.GetLayoutObject())
+                    .and_then(|cursor| OutOfFlowLogicalParentId(cursor.PaintData()))
             })
             .collect();
         let mut occurrences = Self {
             ancestors: Vec::new(),
             occurrences: Vec::new(),
-            layers: HashMap::new(),
+            layers: TrustedIdentityHashMap::default(),
             has_escaping_layer: false,
         };
         let mut logical_parents = Vec::new();
@@ -451,14 +451,15 @@ impl<'a> LayerOccurrences<'a> {
 
     fn Visit(
         &mut self,
-        parent: PaintFragmentCursor<'a>,
-        path: &mut Vec<PaintFragmentCursor<'a>>,
+        parent: ResolvedFragment<'a>,
+        path: &mut Vec<ResolvedFragment<'a>>,
         through_layers: bool,
         wanted: &[u64],
         logical_parents: &mut Vec<LogicalParentOccurrence<'a>>,
     ) {
-        for child in parent.Children() {
-            let fragment = child.PaintData();
+        for child in parent.cursor.Children() {
+            let child = ResolvedFragment::new(child);
+            let fragment = child.fragment;
             if !wanted.is_empty()
                 && fragment.paint.HasSource()
                 && fragment.ViewEstablishesPaintState()
@@ -472,9 +473,9 @@ impl<'a> LayerOccurrences<'a> {
                     path: (start, self.ancestors.len() as u32),
                 });
             }
-            let object = PaintObject::FromCursor(child, PaintWalkContext::default());
+            let object = child.Object(PaintWalkContext::default());
             if object.is_paint_layer() {
-                if let Some(layer) = child.OwnPaintLayer() {
+                if let Some(layer) = child.cursor.OwnPaintLayer() {
                     self.Push(layer, child, path, path.len() as u32, true, false);
                 }
                 if !through_layers || IsStackingContextObject(object) {
@@ -490,8 +491,8 @@ impl<'a> LayerOccurrences<'a> {
     fn Push(
         &mut self,
         layer: &PaintLayer,
-        cursor: PaintFragmentCursor<'a>,
-        path: &[PaintFragmentCursor<'a>],
+        cursor: ResolvedFragment<'a>,
+        path: &[ResolvedFragment<'a>],
         uses: u32,
         painting_layer_is_physical_ancestor: bool,
         escapes: bool,
@@ -526,11 +527,11 @@ impl<'a> LayerOccurrences<'a> {
     fn UniqueLogicalParent<'l>(
         logical_parents: &'l [LogicalParentOccurrence<'a>],
         node_id: u64,
-        child: PaintFragmentCursor<'_>,
+        child: ResolvedFragment<'_>,
     ) -> Option<&'l LogicalParentOccurrence<'a>> {
         let mut matches = logical_parents
             .iter()
-            .filter(|candidate| candidate.node_id == node_id && !SameFragment(candidate.cursor, child));
+            .filter(|candidate| candidate.node_id == node_id && !candidate.cursor.IsSameFragment(child));
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
     }
@@ -540,7 +541,7 @@ impl<'a> LayerOccurrences<'a> {
     fn LogicalPath(
         &self,
         logical_parent: Option<&LogicalParentOccurrence<'a>>,
-    ) -> Vec<PaintFragmentCursor<'a>> {
+    ) -> Vec<ResolvedFragment<'a>> {
         match logical_parent {
             Some(parent) => {
                 let (start, end) = parent.path;
@@ -560,11 +561,11 @@ impl<'a> LayerOccurrences<'a> {
     /// fragments lie outside the painting layer's fragment subtree.
     fn ResolveEscaping(
         &mut self,
-        root: PaintFragmentCursor<'a>,
+        root: ResolvedFragment<'a>,
         out_of_flow: &[&'a PaintLayer],
         logical_parents: &[LogicalParentOccurrence<'a>],
     ) {
-        let root_fragment = root.PaintData();
+        let root_fragment = root.fragment;
         let root_is_logical_parent = |node_id: u64| {
             root_fragment.ViewNodeId() == node_id
                 && root_fragment.paint.HasSource()
@@ -573,14 +574,14 @@ impl<'a> LayerOccurrences<'a> {
         // Occurrences found below the painting layer.
         for index in 0..self.occurrences.len() {
             let cursor = self.occurrences[index].cursor;
-            let Some(node_id) = OutOfFlowLogicalParentId(cursor) else {
+            let Some(node_id) = OutOfFlowLogicalParentId(cursor.fragment) else {
                 continue;
             };
             let (start, end) = self.occurrences[index].ancestors;
             let physical = self.ancestors[start as usize..end as usize].to_vec();
-            let is_logical_parent = |candidate: &PaintFragmentCursor<'_>| {
-                candidate.PaintData().ViewNodeId() == node_id
-                    && candidate.PaintData().ViewEstablishesPaintState()
+            let is_logical_parent = |candidate: &ResolvedFragment<'_>| {
+                candidate.fragment.ViewNodeId() == node_id
+                    && candidate.fragment.ViewEstablishesPaintState()
             };
             if is_logical_parent(&root) || physical.iter().any(is_logical_parent) {
                 continue;
@@ -592,7 +593,7 @@ impl<'a> LayerOccurrences<'a> {
             let path = self.LogicalPath(Some(logical_parent));
             let uses = path
                 .iter()
-                .rposition(|entry| physical.iter().any(|candidate| SameFragment(*candidate, *entry)))
+                .rposition(|entry| physical.iter().any(|candidate| candidate.IsSameFragment(*entry)))
                 .map_or(0, |last| last + 1);
             let start = self.ancestors.len() as u32;
             self.ancestors.extend_from_slice(&path);
@@ -608,11 +609,12 @@ impl<'a> LayerOccurrences<'a> {
             if self.layers.contains_key(&(layer as *const PaintLayer)) {
                 continue;
             }
-            for cursor in root.FragmentsForLayoutObject(layer.GetLayoutObject()) {
-                if !PaintObject::FromCursor(cursor, PaintWalkContext::default()).is_paint_layer() {
+            for cursor in root.cursor.FragmentsForLayoutObject(layer.GetLayoutObject()) {
+                let cursor = ResolvedFragment::new(cursor);
+                if !cursor.Object(PaintWalkContext::default()).is_paint_layer() {
                     continue;
                 }
-                let Some(node_id) = OutOfFlowLogicalParentId(cursor) else {
+                let Some(node_id) = OutOfFlowLogicalParentId(cursor.fragment) else {
                     continue;
                 };
                 let logical_parent = if root_is_logical_parent(node_id) {

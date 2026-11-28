@@ -1823,6 +1823,19 @@ impl<'a> PaintFragmentCursor<'a> {
         self.PrePaintSlot()?.Get::<T>()
     }
 
+    /// `PaintData()` and `PrePaintData::<T>()` resolved through one sidecar
+    /// lookup, as a painter reaches its object's FragmentData once per Paint
+    /// call (core/paint/box_fragment_painter.cc PaintObject reads
+    /// `box_fragment_.GetFragmentData()` once).
+    pub fn PaintDataAndPrePaintData<T: std::any::Any>(
+        self,
+    ) -> (&'a FragmentPaintData, Option<&'a T>) {
+        let state = self.state.expect("source fragment has no committed paint input");
+        let sidecar: &'a FragmentPaintSidecar =
+            unsafe { &*state.SlotSidecar(self.source.PaintOwner(), self.display_item_fragment) };
+        (unsafe { &*sidecar.Data() }, sidecar.PrePaint().Get::<T>())
+    }
+
     /// The occurrence's PrePaint state for writing, created on first use as
     /// FragmentData::EnsureRareData creates its rare data
     /// (core/paint/fragment_data.cc:43-47).
